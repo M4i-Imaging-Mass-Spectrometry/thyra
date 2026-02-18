@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.14.1 (2026-02-18)
+
+### Bug Fixes
+
+- Resolve all 287 mypy type errors across codebase
+  ([#65](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/65),
+  [`899d81f`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/899d81f499fb1218e46fd94a7cf58b22c3768cdf))
+
+
 ## v1.14.0 (2026-02-13)
 
 ### Bug Fixes
