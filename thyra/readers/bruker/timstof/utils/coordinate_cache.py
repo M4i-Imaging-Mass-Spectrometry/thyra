@@ -371,12 +371,12 @@ class CoordinateCache:
             with sqlite3.connect(str(self.db_path)) as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT COUNT(*) FROM Frames")
-                return cursor.fetchone()[0]
+                return int(cursor.fetchone()[0])
         except Exception as e:
             logger.error(f"Error getting frame count: {e}")
             return len(self._coordinates)
 
-    def get_coverage_stats(self) -> Dict[str, int]:
+    def get_coverage_stats(self) -> Dict[str, float]:
         """Get statistics about coordinate cache coverage."""
         total_frames = self.get_frame_count()
         cached_frames = len(self._coordinates)

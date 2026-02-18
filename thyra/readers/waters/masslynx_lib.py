@@ -188,8 +188,18 @@ class MassLynxLib:
             f"WATERS_SDK_PATH environment variable."
         )
 
+    def _ensure_loaded(self) -> ctypes.CDLL:
+        """Assert that the API library is loaded and return it.
+
+        This is a type-narrowing helper that converts Optional[ctypes.CDLL]
+        to ctypes.CDLL for mypy.
+        """
+        assert self._api_lib is not None, "API library not loaded"
+        return self._api_lib
+
     def _setup_function_signatures(self) -> None:
         """Define argtypes/restype for all DLL functions."""
+        assert self._api_lib is not None, "API library not loaded"
         dll = self._api_lib
 
         # -- File open/close --
@@ -288,11 +298,12 @@ class MassLynxLib:
         Retries up to 10 times on failure (matching mzmine pattern,
         MassLynxDataAccess.java lines 149-161).
         """
+        api = self._ensure_loaded()
         for attempt in range(10):
-            handle = self._api_lib.openFile(raw_path.encode("utf-8"))
+            handle = api.openFile(raw_path.encode("utf-8"))
             if handle and handle != 0:
                 logger.info(f"Opened Waters file: {raw_path}")
-                return handle
+                return ctypes.c_void_p(handle)
             logger.debug(f"Open attempt {attempt + 1}/10 failed for {raw_path}")
             time.sleep(0.05)
         raise WatersLibError(
@@ -301,31 +312,31 @@ class MassLynxLib:
 
     def close_file(self, handle) -> None:
         """Close a previously opened file handle."""
-        self._api_lib.closeFile(handle)
+        self._ensure_loaded().closeFile(handle)
 
     def is_imaging_file(self, handle) -> bool:
         """Check if the file contains imaging (MSI) data."""
-        return self._api_lib.isImagingFile(handle) > 0
+        return bool(self._ensure_loaded().isImagingFile(handle) > 0)
 
     def is_ion_mobility_file(self, handle) -> bool:
         """Check if the file contains ion mobility data."""
-        return self._api_lib.isIonMobilityFile(handle) > 0
+        return bool(self._ensure_loaded().isIonMobilityFile(handle) > 0)
 
     def is_dda_file(self, handle) -> bool:
         """Check if the file is a DDA acquisition."""
-        return self._api_lib.isDdaFile(handle) > 0
+        return bool(self._ensure_loaded().isDdaFile(handle) > 0)
 
     def get_number_of_functions(self, handle) -> int:
         """Get the total number of acquisition functions."""
-        return int(self._api_lib.getNumberOfFunctions(handle))
+        return int(self._ensure_loaded().getNumberOfFunctions(handle))
 
     def get_number_of_scans(self, handle) -> int:
         """Get the total number of scans across all functions."""
-        return int(self._api_lib.getNumberOfScans(handle))
+        return int(self._ensure_loaded().getNumberOfScans(handle))
 
     def get_number_of_scans_in_function(self, handle, function: int) -> int:
         """Get the number of scans in a specific function."""
-        return int(self._api_lib.getNumberOfScansInFunction(handle, function))
+        return int(self._ensure_loaded().getNumberOfScansInFunction(handle, function))
 
     def classify_function(self, handle, function: int) -> FunctionType:
         """Classify a function's type.
@@ -337,25 +348,26 @@ class MassLynxLib:
         4. MS if isMsFunction > 0
         5. NOT_MS otherwise
         """
-        lockmass_func = self._api_lib.getLockmassFunction(handle)
+        api = self._ensure_loaded()
+        lockmass_func = api.getLockmassFunction(handle)
         if function == lockmass_func:
             return FunctionType.LOCKMASS
-        if self._api_lib.isIonMobilityFunction(handle, function) == 1:
+        if api.isIonMobilityFunction(handle, function) == 1:
             return FunctionType.IMS_MS
-        if self._api_lib.getNumberOfMrmsInFunction(handle, function) > 0:
+        if api.getNumberOfMrmsInFunction(handle, function) > 0:
             return FunctionType.MRM
-        if self._api_lib.isMsFunction(handle, function) > 0:
+        if api.isMsFunction(handle, function) > 0:
             return FunctionType.MS
         return FunctionType.NOT_MS
 
     def set_centroid(self, handle, centroid: bool) -> None:
         """Configure whether getDataPoints returns centroided or profile data."""
-        self._api_lib.setCentroid(handle, 1 if centroid else 0)
+        self._ensure_loaded().setCentroid(handle, 1 if centroid else 0)
 
     def get_scan_info(self, handle, function: int, scan: int) -> ScanInfoData:
         """Get scan metadata. Returns a frozen dataclass."""
         info = ScanInfoStruct()
-        self._api_lib.getScanInfo(handle, function, scan, ctypes.byref(info))
+        self._ensure_loaded().getScanInfo(handle, function, scan, ctypes.byref(info))
         return ScanInfoData(
             ms_level=info.msLevel,
             polarity=info.polarity,
@@ -383,10 +395,11 @@ class MassLynxLib:
         Returns:
             Tuple of (mzs, intensities) as float64 numpy arrays.
         """
+        api = self._ensure_loaded()
         mz_buf = np.empty(initial_buf_size, dtype=np.float64)
         int_buf = np.empty(initial_buf_size, dtype=np.float64)
 
-        num_dp = self._api_lib.getDataPoints(
+        num_dp = api.getDataPoints(
             handle,
             function,
             scan,
@@ -400,7 +413,7 @@ class MassLynxLib:
             buf_size = num_dp * 2
             mz_buf = np.empty(buf_size, dtype=np.float64)
             int_buf = np.empty(buf_size, dtype=np.float64)
-            self._api_lib.getDataPoints(
+            api.getDataPoints(
                 handle,
                 function,
                 scan,
@@ -418,30 +431,31 @@ class MassLynxLib:
         self, handle, function: int
     ) -> Optional[Tuple[float, float]]:
         """Get m/z acquisition range for a function. Returns None if unavailable."""
-        start = self._api_lib.getAcquisitionRangeStart(handle, function)
-        end = self._api_lib.getAcquisitionRangeEnd(handle, function)
+        api = self._ensure_loaded()
+        start = api.getAcquisitionRangeStart(handle, function)
+        end = api.getAcquisitionRangeEnd(handle, function)
         if start < end and start != DEFAULT_FLOAT:
             return (start, end)
         return None
 
     def is_raw_spectrum_profile(self, handle, function: int) -> bool:
         """Check if the raw (original) spectrum is profile/continuum data."""
-        return self._api_lib.isRawSpectrumContinuum(handle, function) > 0
+        return bool(self._ensure_loaded().isRawSpectrumContinuum(handle, function) > 0)
 
     def get_acquisition_date(self, handle) -> str:
         """Get acquisition date string."""
         buf = ctypes.create_string_buffer(64)
-        self._api_lib.getAcquisitionDate(handle, buf, 64)
+        self._ensure_loaded().getAcquisitionDate(handle, buf, 64)
         return buf.value.decode("utf-8", errors="replace")
 
     def is_lockmass_corrected(self, handle) -> bool:
         """Check if lockmass correction has already been applied."""
-        return self._api_lib.isLockmassCorrected(handle) > 0
+        return bool(self._ensure_loaded().isLockmassCorrected(handle) > 0)
 
     def apply_auto_lockmass_correction(self, handle) -> bool:
         """Apply automatic lockmass correction. Returns True if successful."""
-        return self._api_lib.applyAutoLockmassCorrection(handle) > 0
+        return bool(self._ensure_loaded().applyAutoLockmassCorrection(handle) > 0)
 
     def get_lockmass_function(self, handle) -> int:
         """Get the lockmass function index, or -1 if none."""
-        return self._api_lib.getLockmassFunction(handle)
+        return int(self._ensure_loaded().getLockmassFunction(handle))

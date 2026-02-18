@@ -12,6 +12,7 @@ from numpy.typing import NDArray
 from ...alignment import AreaAlignmentResult, TeachingPointAlignment
 from ...core.base_converter import BaseMSIConverter, PixelSizeSource
 from ...core.base_reader import BaseMSIReader
+from ...metadata.types import ComprehensiveMetadata, EssentialMetadata
 from ...resampling import ResamplingDecisionTree, ResamplingMethod
 from ...resampling.types import ResamplingConfig
 
@@ -22,7 +23,7 @@ try:
     import geopandas as gpd
     import tifffile
     import xarray as xr
-    from anndata import AnnData  # type: ignore
+    from anndata import AnnData
     from shapely.geometry import box
     from spatialdata import SpatialData
     from spatialdata.models import Image2DModel, ShapesModel, TableModel
@@ -35,11 +36,7 @@ except (ImportError, NotImplementedError) as e:
     SPATIALDATA_AVAILABLE = False
 
     # Create dummy classes for registration
-    class AnnData:
-        """Dummy AnnData class for when SpatialData is not available."""
-
-        pass
-
+    AnnData = None
     SpatialData = None
     TableModel = None
     ShapesModel = None
@@ -145,6 +142,12 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # Optical-MSI alignment (computed from FlexImaging Area definitions)
         self._alignment_result: Optional[AreaAlignmentResult] = None
 
+        # Metadata caches (populated lazily during conversion)
+        self._essential_metadata_cached: Optional[EssentialMetadata] = None
+        self._comprehensive_metadata_cached: Optional[ComprehensiveMetadata] = None
+        self._spectrum_metadata_cached: Optional[Dict[str, Any]] = None
+        self._resampling_metadata_cached: Optional[Dict[str, Any]] = None
+
     def _setup_resampling(self) -> None:
         """Set up resampling configuration and strategy."""
         if not self._resampling_config:
@@ -156,17 +159,19 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             method = self._resampling_config.method
             axis_type = self._resampling_config.axis_type
         elif isinstance(self._resampling_config, dict):
-            method = self._resampling_config.get("method", "auto")
-            axis_type = self._resampling_config.get("axis_type", "auto")
+            method_raw = self._resampling_config.get("method", "auto")
+            axis_type_raw = self._resampling_config.get("axis_type", "auto")
             # Convert string to enum if needed
-            if isinstance(method, str):
+            if isinstance(method_raw, str):
                 method_map = {
                     "nearest_neighbor": ResamplingMethod.NEAREST_NEIGHBOR,
                     "tic_preserving": ResamplingMethod.TIC_PRESERVING,
                 }
-                method = method_map.get(method, None)
+                method = method_map.get(method_raw, None)
+            else:
+                method = method_raw
             # Convert axis_type string to enum if needed
-            if isinstance(axis_type, str):
+            if isinstance(axis_type_raw, str):
                 from ...resampling.types import AxisType
 
                 axis_type_map = {
@@ -176,10 +181,9 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                     "orbitrap": AxisType.ORBITRAP,
                     "fticr": AxisType.FTICR,
                 }
-                axis_type = axis_type_map.get(axis_type, None)
-        else:
-            method = self._resampling_config.method
-            axis_type = self._resampling_config.axis_type
+                axis_type = axis_type_map.get(axis_type_raw, None)
+            else:
+                axis_type = axis_type_raw
 
         # If method is None or "auto", use DecisionTree to determine strategy
         if method is None:
@@ -220,7 +224,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
     def _get_cached_metadata_for_resampling(self) -> Dict[str, Any]:
         """Get cached metadata for resampling decision tree to avoid multiple reader calls."""
-        if hasattr(self, "_resampling_metadata_cached"):
+        if self._resampling_metadata_cached is not None:
             return self._resampling_metadata_cached
 
         # If not cached yet, extract and cache it
@@ -228,7 +232,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
     def _get_reader_metadata_for_resampling(self) -> Dict[str, Any]:
         """Extract metadata from reader for resampling decision tree."""
-        metadata = {}
+        metadata: Dict[str, Any] = {}
 
         # Extract different types of metadata
         self._extract_essential_metadata(metadata)
@@ -243,7 +247,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         """Extract essential metadata for resampling decisions."""
         try:
             # Use cached essential metadata if available
-            if hasattr(self, "_essential_metadata_cached"):
+            if self._essential_metadata_cached is not None:
                 essential = self._essential_metadata_cached
             else:
                 essential = self.reader.get_essential_metadata()
@@ -268,7 +272,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         """Extract comprehensive metadata including Bruker GlobalMetadata."""
         try:
             # Use cached comprehensive metadata if available
-            if hasattr(self, "_comprehensive_metadata_cached"):
+            if self._comprehensive_metadata_cached is not None:
                 comp_meta = self._comprehensive_metadata_cached
             else:
                 comp_meta = self.reader.get_comprehensive_metadata()
@@ -314,7 +318,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         try:
             if hasattr(self.reader, "get_spectrum_metadata"):
                 # Use cached spectrum metadata if available
-                if hasattr(self, "_spectrum_metadata_cached"):
+                if self._spectrum_metadata_cached is not None:
                     spec_meta = self._spectrum_metadata_cached
                 else:
                     spec_meta = self.reader.get_spectrum_metadata()
@@ -492,7 +496,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         # Use cached essential metadata to avoid reader calls
         # This should be called after _initialize_conversion() has loaded metadata
-        if not hasattr(self, "_essential_metadata_cached"):
+        if self._essential_metadata_cached is None:
             # Cache essential metadata for reuse
             self._essential_metadata_cached = self.reader.get_essential_metadata()
 
@@ -552,7 +556,8 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             )
 
         # Override the parent's common mass axis
-        self._common_mass_axis = mass_axis.mz_values
+        self._common_mass_axis = mass_axis.mz_values.astype(np.float64)
+        assert self._common_mass_axis is not None
 
         # Cache the mass axis indices array to avoid repeated np.arange() calls
         self._cached_mass_axis_indices = np.arange(
@@ -618,6 +623,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                     "will NOT iterate through all spectra"
                 )
                 self._build_resampled_mass_axis()
+                assert self._common_mass_axis is not None
                 logging.info(
                     f"Built resampled mass axis with "
                     f"{len(self._common_mass_axis)} bins"
@@ -655,6 +661,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             logging.info(f"Coordinate bounds: {self._coordinate_bounds}")
             logging.info(f"Total spectra: {self._n_spectra}")
             logging.info(f"Estimated memory: {self._estimated_memory_gb:.2f} GB")
+            assert self._common_mass_axis is not None
             logging.info(f"Common mass axis length: {len(self._common_mass_axis)}")
         except Exception as e:
             logging.error(f"Error during initialization: {e}")
@@ -683,6 +690,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # For resampled data, we want to return ALL indices in the resampled
         # axis. The actual resampling/interpolation will be handled in the
         # processing
+        assert self._common_mass_axis is not None
         return np.arange(len(self._common_mass_axis), dtype=np.int_)
 
     def _process_single_spectrum(
@@ -717,6 +725,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 # Dense path for other methods (TIC-preserving, etc.)
                 resampled_intensities = self._resample_spectrum(mzs, intensities)
                 # Use cached indices instead of creating new array every time
+                assert self._cached_mass_axis_indices is not None
                 mz_indices = self._cached_mass_axis_indices
                 logging.debug(
                     f"Resampled: {len(resampled_intensities)} values, "
@@ -804,12 +813,13 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         nonzero_indices = np.where(nonzero_mask)[0].astype(np.int_)
         nonzero_values = accumulated[nonzero_mask]
 
-        return nonzero_indices, nonzero_values
+        return nonzero_indices, nonzero_values.astype(np.float64)
 
     def _tic_preserving_resample(
         self, mzs: NDArray[np.float64], intensities: NDArray[np.float64]
     ) -> NDArray[np.float64]:
         """Resample using TIC-preserving linear interpolation - optimized."""
+        assert self._common_mass_axis is not None
         if mzs.size == 0:
             return np.zeros(len(self._common_mass_axis))
 
@@ -825,6 +835,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             intensities_sorted = intensities[sort_indices]
 
         # Interpolate onto the common mass axis (np.interp is highly optimized)
+        assert self._common_mass_axis is not None
         resampled = np.interp(
             self._common_mass_axis,
             mzs_sorted,
@@ -846,7 +857,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # This method should be overridden by specific converters (2D/3D)
         pass
 
-    def _create_sparse_matrix(self) -> Dict[str, Any]:
+    def _create_sparse_matrix(self) -> Dict[str, Any]:  # type: ignore[override]
         """Create COO arrays for storing intensity values.
 
         Returns:
@@ -865,6 +876,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         n_masses = len(self._common_mass_axis)
 
         # Get exact number of peaks from cached metadata (no iteration needed!)
+        assert self._essential_metadata_cached is not None
         exact_nnz = self._essential_metadata_cached.total_peaks
 
         logging.info(
@@ -960,7 +972,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
     def _add_to_sparse_matrix(
         self,
-        coo_arrays: Dict[str, Any],
+        coo_arrays: Dict[str, Any],  # type: ignore[override]
         pixel_idx: int,
         mz_indices: NDArray[np.int_],
         intensities: NDArray[np.float64],
@@ -1379,6 +1391,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             )
 
         # Add conversion metadata
+        assert self._dimensions is not None
         pixel_size_attrs["msi_dataset_info"] = {
             "dataset_id": self.dataset_id,
             "total_grid_pixels": self._dimensions[0]
@@ -1418,9 +1431,9 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         metadata_dict = self._structured_metadata.copy()
 
         # Add SpatialData-specific enhancements
+        metadata_dict["non_empty_pixels"] = self._non_empty_pixel_count  # type: ignore[assignment]
         metadata_dict.update(
             {
-                "non_empty_pixels": self._non_empty_pixel_count,
                 "spatialdata_specific": {
                     "zarr_compression_level": self.compression_level,
                     "tables_count": len(getattr(metadata, "tables", {})),

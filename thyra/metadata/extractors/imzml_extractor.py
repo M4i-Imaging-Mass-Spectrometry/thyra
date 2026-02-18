@@ -410,7 +410,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
 
     def _extract_imzml_specific(self) -> Dict[str, Any]:
         """Extract ImzML format-specific metadata."""
-        format_specific = {
+        format_specific: Dict[str, Any] = {
             "imzml_version": "1.1.0",  # Default version
             "file_mode": (
                 "continuous"

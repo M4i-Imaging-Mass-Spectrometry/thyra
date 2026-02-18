@@ -44,23 +44,23 @@ class ImzMLOntologyValidator:
             name = cv_param.get("name", "")
             value = cv_param.get("value", "")
 
-            results["total_terms"] += 1
+            results["total_terms"] += 1  # type: ignore[operator]
 
             # --- NEW: Increment the count for this accession ---
             if accession:  # Ensure we don't count empty accessions
-                results["term_counts"][accession] = (
-                    results["term_counts"].get(accession, 0) + 1
+                results["term_counts"][accession] = (  # type: ignore[index]
+                    results["term_counts"].get(accession, 0) + 1  # type: ignore[attr-defined]
                 )
             # ---------------------------------------------------
 
             # Check if term is known
             term = ONTOLOGY.get_term(accession)
             if term:
-                results["known_terms"] += 1
+                results["known_terms"] += 1  # type: ignore[operator]
                 # self.found_terms redundant with results['term_counts']
             else:
-                results["unknown_terms"] += 1
-                results["unknown_list"].append(
+                results["unknown_terms"] += 1  # type: ignore[operator]
+                results["unknown_list"].append(  # type: ignore[attr-defined]
                     {
                         "accession": accession,
                         "name": name,
@@ -71,7 +71,7 @@ class ImzMLOntologyValidator:
 
                 # Context tracking (optional)
                 context = (
-                    cv_param.get("..", {}).tag
+                    cv_param.get("..", {}).tag  # type: ignore[union-attr]
                     if hasattr(cv_param, "get")
                     else "unknown"
                 )
@@ -155,9 +155,11 @@ class ImzMLOntologyValidator:
 
         for imzml_file in imzml_files:
             results = self.validate_file(imzml_file)
-            all_results["per_file_results"][str(imzml_file)] = results
+            all_results["per_file_results"][str(imzml_file)] = results  # type: ignore[index]
 
             for term in results["unknown_list"]:
-                all_results["all_unknown_terms"].add(term["accession"])
+                all_results["all_unknown_terms"].add(  # type: ignore[attr-defined]
+                    term["accession"]
+                )
 
         return all_results

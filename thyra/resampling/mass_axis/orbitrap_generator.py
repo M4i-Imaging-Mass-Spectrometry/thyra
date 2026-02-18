@@ -51,7 +51,8 @@ class OrbitrapAxisGenerator(BaseAxisGenerator):
         # k = reference_width / (reference_mz**1.5)  # Used for scaling
 
         # Generate axis by solving: integral of 1/mz^1.5 from min_mz to mz = target_position
-        # Integral: -2/sqrt(mz) + 2/sqrt(min_mz) = target_position * (-2/sqrt(max_mz) + 2/sqrt(min_mz)) / target_bins
+        # Integral: -2/sqrt(mz) + 2/sqrt(min_mz) =
+        #   target_position * (-2/sqrt(max_mz) + 2/sqrt(min_mz)) / target_bins
 
         inv_sqrt_min = 1.0 / np.sqrt(min_mz)
         inv_sqrt_max = 1.0 / np.sqrt(max_mz)
@@ -94,7 +95,7 @@ class OrbitrapAxisGenerator(BaseAxisGenerator):
         float
             Expected bin width at target m/z
         """
-        return reference_width * ((mz / reference_mz) ** 1.5)
+        return float(reference_width * ((mz / reference_mz) ** 1.5))
 
     def get_axis_type(self) -> AxisType:
         """Return the axis type for Orbitrap."""

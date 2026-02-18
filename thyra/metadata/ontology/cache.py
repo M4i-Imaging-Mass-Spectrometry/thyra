@@ -93,7 +93,7 @@ class OntologyCache:
             ),
         }
 
-        return urls.get(prefix)
+        return urls.get(prefix) if prefix is not None else None
 
 
 # Global instance

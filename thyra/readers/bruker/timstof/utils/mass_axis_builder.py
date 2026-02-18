@@ -5,7 +5,7 @@ from large datasets with memory efficiency and progress tracking.
 """
 
 import logging
-from typing import Any, Dict, Iterator, List, Optional, Set
+from typing import Any, Callable, Dict, Iterator, List, Optional, Set
 
 import numpy as np
 from tqdm import tqdm
@@ -24,7 +24,7 @@ class MassAxisBuilder:
         self,
         strategy: str = "auto",
         memory_limit_mb: float = 1024,
-        progress_callback: Optional[callable] = None,
+        progress_callback: Optional[Callable] = None,
     ):
         """Initialize the mass axis builder.
 

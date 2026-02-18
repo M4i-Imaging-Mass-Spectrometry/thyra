@@ -153,7 +153,7 @@ class SDKFunctions:
         logger.debug(
             f"Opened {self.file_type.upper()} file: {file_path} (handle: {handle})"
         )
-        return handle
+        return int(handle)
 
     def close_file(self, handle: int) -> None:
         """Close a Bruker data file.
@@ -318,8 +318,8 @@ class SDKFunctions:
             return np.array([]), np.array([])
 
         # Combine scan data
-        all_mz_indices = []
-        all_intensities = []
+        all_mz_indices: list[float] = []
+        all_intensities: list[float] = []
 
         for indices, intensities in scan_data:
             if len(indices) > 0:

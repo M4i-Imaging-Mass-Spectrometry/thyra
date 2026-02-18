@@ -103,7 +103,7 @@ class TICPreservingStrategy(ResamplingStrategy):
 
         return Spectrum(
             mz=target_axis.copy(),
-            intensity=interpolated_intensity,
+            intensity=interpolated_intensity,  # type: ignore[arg-type]
             coordinates=spectrum.coordinates,
             metadata=spectrum.metadata,
         )

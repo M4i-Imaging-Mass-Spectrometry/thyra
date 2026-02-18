@@ -4,6 +4,8 @@ This module provides specific exception types for better error handling
 and debugging throughout the reader implementation.
 """
 
+from typing import Optional
+
 
 class BrukerReaderError(Exception):
     """Base exception for all Bruker reader errors."""
@@ -14,7 +16,7 @@ class BrukerReaderError(Exception):
 class SDKError(BrukerReaderError):
     """Exception raised when there are issues with the Bruker SDK."""
 
-    def __init__(self, message: str, sdk_error_code: int = None):
+    def __init__(self, message: str, sdk_error_code: Optional[int] = None):
         """Initialize SDK error.
 
         Args:

@@ -1,5 +1,5 @@
 import logging
-from typing import Optional, Tuple
+from typing import Optional, Tuple, cast
 
 import dask.array as da
 import zarr
@@ -34,7 +34,7 @@ def optimize_zarr_chunks(
     try:
         # Open the Zarr store
         zarr_store = zarr.open_group(zarr_path, mode="r")
-        array = zarr_store[array_path]
+        array = cast(zarr.Array, zarr_store[array_path])
 
         if chunks is None:
             # For MSI data, chunk along m/z dimension and larger spatial tiles

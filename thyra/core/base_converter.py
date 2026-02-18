@@ -203,7 +203,7 @@ class BaseMSIConverter(ABC):
 
         # Fallback: try reader-specific methods
         if hasattr(self.reader, "n_spectra"):
-            return self.reader.n_spectra
+            return int(self.reader.n_spectra)
 
         # For ImzML readers, count coordinates
         if hasattr(self.reader, "parser") and self.reader.parser is not None:
@@ -212,7 +212,7 @@ class BaseMSIConverter(ABC):
 
         # For Bruker readers, try frame count methods
         if hasattr(self.reader, "_get_frame_count"):
-            return self.reader._get_frame_count()
+            return int(self.reader._get_frame_count())
 
         # Final fallback: calculate from dimensions
         if self._dimensions is not None:
@@ -263,8 +263,6 @@ class BaseMSIConverter(ABC):
             logging.info("Loading comprehensive metadata...")
             comprehensive = self.reader.get_comprehensive_metadata()
             self._metadata = comprehensive.raw_metadata
-            if self._metadata is None:
-                self._metadata = {}
         return self._metadata
 
     @abstractmethod
@@ -383,7 +381,7 @@ class BaseMSIConverter(ABC):
                 for x in range(n_x):
                     pixel_idx = z * (n_y * n_x) + y * n_x + x
                     coords.append(
-                        {  # type: ignore
+                        {
                             "z": z,
                             "y": y,
                             "x": x,
@@ -394,7 +392,7 @@ class BaseMSIConverter(ABC):
                     )
 
         coords_df: pd.DataFrame = pd.DataFrame(coords)
-        coords_df.set_index("pixel_id", inplace=True)  # type: ignore
+        coords_df.set_index("pixel_id", inplace=True)
 
         # Add spatial coordinates
         coords_df["spatial_x"] = coords_df["x"] * self.pixel_size_um
@@ -415,7 +413,7 @@ class BaseMSIConverter(ABC):
         var_df: DataFrame = pd.DataFrame({"mz": self._common_mass_axis})
         # Convert to string index for compatibility
         var_df["mz_str"] = var_df["mz"].astype(str)
-        var_df.set_index("mz_str", inplace=True)  # type: ignore
+        var_df.set_index("mz_str", inplace=True)
 
         return var_df
 

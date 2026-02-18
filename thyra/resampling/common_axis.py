@@ -98,9 +98,11 @@ class CommonAxisBuilder:
 
         if axis_type == AxisType.CONSTANT:
             # LinearAxisGenerator has different signature
-            return generator.generate_axis(min_mz, max_mz, num_bins)
+            return generator.generate_axis(  # type: ignore[attr-defined, no-any-return]
+                min_mz, max_mz, num_bins
+            )
         else:
             # Physics generators support reference parameters
-            return generator.generate_axis(
+            return generator.generate_axis(  # type: ignore[attr-defined, no-any-return]
                 min_mz, max_mz, num_bins, reference_mz, reference_width
             )

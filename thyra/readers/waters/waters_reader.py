@@ -173,6 +173,11 @@ class WatersReader(BaseMSIReader):
     def _create_metadata_extractor(self) -> MetadataExtractor:
         """Create Waters metadata extractor."""
         self._ensure_initialized()
+        assert self._ml is not None
+        assert self._handle is not None
+        assert self._imaging_grid is not None
+        assert self._function_types is not None
+        assert self._ms_functions is not None
         return WatersMetadataExtractor(
             ml=self._ml,
             handle=self._handle,
@@ -196,6 +201,10 @@ class WatersReader(BaseMSIReader):
             return self._common_mass_axis_cache
 
         self._ensure_initialized()
+        assert self._ml is not None
+        assert self._handle is not None
+        assert self._ms_functions is not None
+        assert self._imaging_grid is not None
 
         all_mzs: list = []
         total = sum(
@@ -252,6 +261,10 @@ class WatersReader(BaseMSIReader):
             0-based pixel indices.
         """
         self._ensure_initialized()
+        assert self._ml is not None
+        assert self._handle is not None
+        assert self._ms_functions is not None
+        assert self._imaging_grid is not None
 
         total = sum(
             self._ml.get_number_of_scans_in_function(self._handle, f)

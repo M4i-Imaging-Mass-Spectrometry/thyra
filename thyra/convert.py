@@ -59,10 +59,6 @@ def _validate_numeric_parameters(
         logging.error("Pixel size must be a positive number")
         return False
 
-    if not isinstance(handle_3d, bool):
-        logging.error("handle_3d must be a boolean value")
-        return False
-
     return True
 
 
@@ -259,7 +255,7 @@ def _perform_conversion_with_cleanup(converter: Any, reader: Any) -> bool:
         logging.info("Starting conversion...")
         result = converter.convert()
         logging.info(f"Conversion {'completed successfully' if result else 'failed'}")
-        return result
+        return bool(result)
     finally:
         if hasattr(reader, "close"):
             reader.close()

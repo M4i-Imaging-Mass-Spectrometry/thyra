@@ -50,7 +50,8 @@ class LinearTOFAxisGenerator(BaseAxisGenerator):
         # k = reference_width / np.sqrt(reference_mz)  # Used for scaling
 
         # Generate axis by solving: integral of 1/sqrt(mz) from min_mz to mz = target_position
-        # Integral: 2*sqrt(mz) - 2*sqrt(min_mz) = target_position * (2*sqrt(max_mz) - 2*sqrt(min_mz)) / target_bins
+        # Integral: 2*sqrt(mz) - 2*sqrt(min_mz) =
+        #   target_position * (2*sqrt(max_mz) - 2*sqrt(min_mz)) / target_bins
 
         sqrt_min = np.sqrt(min_mz)
         sqrt_max = np.sqrt(max_mz)
@@ -93,7 +94,7 @@ class LinearTOFAxisGenerator(BaseAxisGenerator):
         float
             Expected bin width at target m/z
         """
-        return reference_width * np.sqrt(mz / reference_mz)
+        return float(reference_width * np.sqrt(mz / reference_mz))
 
     def get_axis_type(self) -> AxisType:
         """Return the axis type for Linear TOF."""

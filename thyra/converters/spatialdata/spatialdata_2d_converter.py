@@ -253,7 +253,7 @@ class SpatialData2DConverter(BaseSpatialDataConverter):
                 if self._sparse_format == "csc":
                     sparse_matrix = coo.tocsc()
                 else:
-                    sparse_matrix = coo.tocsr()
+                    sparse_matrix = coo.tocsr()  # type: ignore[assignment]
 
                 logging.info(
                     f"Converted sparse matrix for {slice_id}: "

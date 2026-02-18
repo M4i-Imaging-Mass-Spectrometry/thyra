@@ -66,7 +66,7 @@ def build_raw_mass_axis(
     """
     from tqdm import tqdm
 
-    unique_mzs = set()
+    unique_mzs: set[float] = set()
     count = 0
     total_peaks = 0
 
@@ -169,7 +169,7 @@ def _get_frame_count(db_path: Path) -> int:
         with sqlite3.connect(str(db_path)) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM Frames")
-            return cursor.fetchone()[0]
+            return int(cursor.fetchone()[0])
     except Exception as e:
         logger.error(f"Error getting frame count: {e}")
         return 0
@@ -505,7 +505,7 @@ class BrukerReader(BrukerBaseMSIReader):
 
         # Build raw mass axis using simplified function (returns mass_axis and total_peaks)
         mass_axis, total_peaks = build_raw_mass_axis(
-            mz_iterator(), self.progress_callback
+            mz_iterator(), self.progress_callback  # type: ignore[arg-type]
         )
 
         # Cache total_peaks for later retrieval (if not already set from NumPeaks cache)
@@ -684,7 +684,7 @@ class BrukerReader(BrukerBaseMSIReader):
                 )
                 result = cursor.fetchone()
                 if result:
-                    return result[0]
+                    return int(result[0])
                 return None
 
         except Exception as e:
@@ -794,12 +794,12 @@ class BrukerReader(BrukerBaseMSIReader):
             # Close SDK handle
             if hasattr(self, "handle") and self.handle:
                 self.sdk.close_file(self.handle)
-                self.handle = None
+                self.handle = None  # type: ignore[assignment]
 
             # Close database connection
             if hasattr(self, "conn") and self.conn:
                 self.conn.close()
-                self.conn = None
+                self.conn = None  # type: ignore[assignment]
 
             # Mark as closed
             self._closed = True

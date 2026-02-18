@@ -188,7 +188,7 @@ class BrukerMetadataExtractor(MetadataExtractor):
         max_y: Optional[float],
     ) -> Tuple[int, int, int]:
         """Calculate dataset dimensions from coordinate bounds."""
-        if any(coord is None for coord in [min_x, max_x, min_y, max_y]):
+        if min_x is None or max_x is None or min_y is None or max_y is None:
             return (0, 0, 1)  # Default for problematic data
 
         # Bruker coordinates are typically in position units
@@ -215,7 +215,7 @@ class BrukerMetadataExtractor(MetadataExtractor):
 
     def _extract_bruker_specific(self) -> Dict[str, Any]:
         """Extract Bruker format-specific metadata."""
-        format_specific = {
+        format_specific: Dict[str, Any] = {
             "bruker_format": ("bruker_tdf" if self._is_tdf_format() else "bruker_tsf"),
             "data_format": ("bruker_tdf" if self._is_tdf_format() else "bruker_tsf"),
             "data_path": str(self.data_path),
@@ -237,7 +237,7 @@ class BrukerMetadataExtractor(MetadataExtractor):
 
     def _extract_acquisition_params(self) -> Dict[str, Any]:
         """Extract acquisition parameters from database."""
-        params = {}
+        params: Dict[str, Any] = {}
         cursor = self.conn.cursor()
 
         # Extract laser parameters if available
@@ -324,7 +324,7 @@ BeamScanSizeY, SpotSize
 
     def _extract_global_metadata(self) -> Dict[str, Any]:
         """Extract all global metadata from database."""
-        raw_metadata = {}
+        raw_metadata: Dict[str, Any] = {}
         cursor = self.conn.cursor()
 
         try:
@@ -367,6 +367,6 @@ BeamScanSizeY, SpotSize
         try:
             cursor.execute("SELECT COUNT(*) FROM MaldiFrameLaserInfo")
             result = cursor.fetchone()
-            return result and result[0] > 0
+            return bool(result and result[0] > 0)
         except sqlite3.OperationalError:
             return False

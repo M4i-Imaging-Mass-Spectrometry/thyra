@@ -5,7 +5,7 @@ from typing import Any, Dict, Generator, List, Optional, Tuple, Union, cast
 
 import numpy as np
 from numpy.typing import NDArray
-from pyimzml.ImzMLParser import ImzMLParser  # type: ignore
+from pyimzml.ImzMLParser import ImzMLParser
 from tqdm import tqdm
 
 from ...core.base_extractor import MetadataExtractor
@@ -108,13 +108,11 @@ class ImzMLReader(BaseMSIReader):
         # Determine file mode
         # Determine if file is continuous mode
         self.is_continuous = (
-            "continuous"
-            in self.parser.metadata.file_description.param_by_name  # type: ignore
+            "continuous" in self.parser.metadata.file_description.param_by_name
         )
         # Determine if file is processed mode
         self.is_processed = (
-            "processed"
-            in self.parser.metadata.file_description.param_by_name  # type: ignore
+            "processed" in self.parser.metadata.file_description.param_by_name
         )
 
         if self.is_continuous == self.is_processed:
@@ -136,14 +134,13 @@ class ImzMLReader(BaseMSIReader):
         # Parser should already be initialized when this is called from
         # _initialize_parser
 
-        n_coords = len(self.parser.coordinates)  # type: ignore
+        assert self.parser is not None
+        n_coords = len(self.parser.coordinates)
         logging.info(f"Caching {n_coords:,} coordinates...")
 
         # Vectorized conversion using numpy (much faster than Python loop)
         # np.array() on the coordinates list is the main cost here
-        self._coordinates_array = np.array(
-            self.parser.coordinates, dtype=np.int32
-        )  # type: ignore
+        self._coordinates_array = np.array(self.parser.coordinates, dtype=np.int32)
 
         # Convert to 0-based in place (subtract 1, but z minimum is 0)
         self._coordinates_array[:, :2] -= 1  # x and y
@@ -191,8 +188,8 @@ class ImzMLReader(BaseMSIReader):
 
             if self.is_continuous:
                 logging.info("Using m/z values from first spectrum (continuous mode)")
-                spectrum_data = parser.getspectrum(0)  # type: ignore
-                if spectrum_data is None or len(spectrum_data) < 1:  # type: ignore
+                spectrum_data = parser.getspectrum(0)
+                if spectrum_data is None or len(spectrum_data) < 1:
                     raise ValueError("Could not get first spectrum")
 
                 mzs = spectrum_data[0]
@@ -213,7 +210,7 @@ class ImzMLReader(BaseMSIReader):
             "Building common mass axis from all unique m/z values " "(processed mode)"
         )
 
-        total_spectra = len(parser.coordinates)  # type: ignore
+        total_spectra = len(parser.coordinates)
         all_mzs = self._collect_processed_mzs(parser, total_spectra)
 
         if not all_mzs:
@@ -234,8 +231,8 @@ class ImzMLReader(BaseMSIReader):
         ) as pbar:
             for idx in range(total_spectra):
                 try:
-                    spectrum_data = parser.getspectrum(idx)  # type: ignore
-                    if spectrum_data is None or len(spectrum_data) < 1:  # type: ignore
+                    spectrum_data = parser.getspectrum(idx)
+                    if spectrum_data is None or len(spectrum_data) < 1:
                         continue
 
                     mzs = spectrum_data[0]
@@ -276,7 +273,7 @@ class ImzMLReader(BaseMSIReader):
             return (int(row[0]), int(row[1]), int(row[2]))
 
         # Fallback: compute on the fly
-        x, y, z = parser.coordinates[idx]  # type: ignore
+        x, y, z = parser.coordinates[idx]
         return cast(
             Tuple[int, int, int],
             (x - 1, y - 1, z - 1 if z > 0 else 0),
@@ -290,7 +287,7 @@ class ImzMLReader(BaseMSIReader):
         """Process a single spectrum and return its data."""
         try:
             coords = self._get_spectrum_coordinates(parser, idx)
-            mzs, intensities = parser.getspectrum(idx)  # type: ignore
+            mzs, intensities = parser.getspectrum(idx)
 
             # Apply intensity threshold filtering if configured
             mzs, intensities = self._apply_intensity_filter(mzs, intensities)
@@ -367,7 +364,7 @@ class ImzMLReader(BaseMSIReader):
             batch_size = self.batch_size
 
         parser = cast(ImzMLParser, self.parser)
-        total_spectra = len(parser.coordinates)  # type: ignore
+        total_spectra = len(parser.coordinates)
         dimensions = self.get_essential_metadata().dimensions
         total_pixels = dimensions[0] * dimensions[1] * dimensions[2]
 
@@ -453,7 +450,7 @@ class ImzMLReader(BaseMSIReader):
 
         if hasattr(self, "parser") and self.parser is not None:
             if hasattr(self.parser, "m") and self.parser.m is not None:
-                self.parser.m.close()  # type: ignore
+                self.parser.m.close()
             self.parser = None
 
     @property
@@ -467,7 +464,7 @@ class ImzMLReader(BaseMSIReader):
 
         # Use parser coordinates which is efficient
         parser = cast(ImzMLParser, self.parser)
-        return len(parser.coordinates)  # type: ignore
+        return len(parser.coordinates)
 
     def get_total_peak_count(self) -> int:
         """Get total number of peaks across all spectra.
@@ -479,7 +476,7 @@ class ImzMLReader(BaseMSIReader):
         """
         self._ensure_parser_initialized()
         parser = cast(ImzMLParser, self.parser)
-        total_spectra = len(parser.coordinates)  # type: ignore
+        total_spectra = len(parser.coordinates)
 
         logging.info("Counting peaks across all spectra for exact allocation...")
         total_peaks = 0
@@ -491,7 +488,7 @@ class ImzMLReader(BaseMSIReader):
         ) as pbar:
             for idx in range(total_spectra):
                 try:
-                    mzs, _ = parser.getspectrum(idx)  # type: ignore
+                    mzs, _ = parser.getspectrum(idx)
                     total_peaks += len(mzs)
                 except Exception as e:
                     logging.warning(f"Error getting spectrum {idx}: {e}")

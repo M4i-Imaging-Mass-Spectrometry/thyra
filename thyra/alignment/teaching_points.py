@@ -411,7 +411,7 @@ class TeachingPointAlignment:
         flip_poslog_y: bool,
     ) -> Dict[str, Any]:
         """Compute MSI-to-image alignment from poslog positions."""
-        result = {
+        result: Dict[str, Any] = {
             "stage_offset": None,
             "msi_to_image": None,
             "image_to_msi": None,

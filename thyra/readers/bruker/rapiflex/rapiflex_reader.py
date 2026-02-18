@@ -390,8 +390,10 @@ class RapiflexReader(BrukerBaseMSIReader):
                 try:
                     # Parse point coordinates (format: "x,y")
                     # Use lists instead of tuples for Zarr serialization
-                    p1_parts = points[0].text.split(",")
-                    p2_parts = points[1].text.split(",")
+                    p1_text = points[0].text or ""
+                    p2_text = points[1].text or ""
+                    p1_parts = p1_text.split(",")
+                    p2_parts = p2_text.split(",")
                     p1 = [int(p1_parts[0]), int(p1_parts[1])]
                     p2 = [int(p2_parts[0]), int(p2_parts[1])]
 
@@ -587,10 +589,11 @@ class RapiflexReader(BrukerBaseMSIReader):
             # No data at this position
             return np.zeros(self.n_datapoints, dtype=np.float32)
 
+        assert self._dat_path is not None, "dat_path not set"
         with open(self._dat_path, "rb") as f:
             f.seek(int(offset))
             data = f.read(self.n_datapoints * 4)
-            return np.frombuffer(data, dtype=np.float32).copy()
+            return np.frombuffer(data, dtype=np.float32).copy()  # type: ignore[no-any-return]
 
     def iter_spectra(self, batch_size: Optional[int] = None) -> Generator[
         Tuple[Tuple[int, int, int], NDArray[np.float64], NDArray[np.float64]],

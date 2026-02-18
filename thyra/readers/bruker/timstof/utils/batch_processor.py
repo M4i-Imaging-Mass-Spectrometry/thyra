@@ -345,7 +345,7 @@ class BatchProcessor:
         self,
         items: List[Any],
         processor_func: Callable,
-        memory_limit_mb: float = None,
+        memory_limit_mb: Optional[float] = None,
     ) -> Iterator[Any]:
         """Process items with memory monitoring and adaptive batch sizing.
 

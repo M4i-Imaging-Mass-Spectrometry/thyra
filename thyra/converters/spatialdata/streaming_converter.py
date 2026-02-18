@@ -132,7 +132,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 n_mz_bins = int((max_mass - min_mass) / 0.01)
             else:
                 # Fallback estimate if mass range not available
-                n_mz_bins = 100000
+                n_mz_bins = 100000  # type: ignore[unreachable]
 
         # Dense matrix size in bytes (float32 = 4 bytes)
         dense_bytes = n_pixels * n_mz_bins * 4
@@ -396,6 +396,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         Returns:
             Tuple of (indices_arr, data_arr) Zarr arrays.
         """
+        assert self._zarr_store is not None, "Zarr store not initialized"
         X_group = self._zarr_store.create_group("X")
         X_group.attrs["encoding-type"] = "csr_matrix"
         X_group.attrs["encoding-version"] = "0.1.0"
@@ -541,6 +542,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
         # Fallback: general resampling with zero filtering
         resampled_ints = self._resample_spectrum(mzs, intensities)
+        assert self._common_mass_axis is not None, "Common mass axis not initialized"
         mz_indices = np.arange(len(self._common_mass_axis))
         mask = resampled_ints != 0
         return mz_indices[mask], resampled_ints[mask]
@@ -566,10 +568,12 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         n_cols = coo_result["n_cols"]
 
         # Read CSR components directly from Zarr
+        assert self._zarr_store is not None, "Zarr store not initialized"
         X_group = self._zarr_store["X"]
-        indptr = X_group["indptr"][:]
-        indices = X_group["indices"][:]
-        data = X_group["data"][:]
+        assert isinstance(X_group, zarr.Group), "Expected zarr.Group for X"
+        indptr = np.asarray(X_group["indptr"])
+        indices = np.asarray(X_group["indices"])
+        data = np.asarray(X_group["data"])
 
         logging.info(f"Loaded CSR components: {len(data):,} entries")
 
@@ -580,7 +584,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             indices = indices.astype(np.int64)
 
         # Create CSR matrix directly (no COO intermediate)
-        sparse_matrix = sparse.csr_matrix(
+        sparse_matrix: Union[sparse.csr_matrix, sparse.csc_matrix] = sparse.csr_matrix(
             (data, indices, indptr),
             shape=(n_rows, n_cols),
             dtype=np.float64,
@@ -1096,6 +1100,8 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
         slice_id = f"{self.dataset_id}_z0"
         region_key = f"{slice_id}_pixels"
+        if self._dimensions is None:
+            raise ValueError("Dimensions not initialized")
         n_x, n_y, n_z = self._dimensions
 
         # Clean output directory
@@ -1228,6 +1234,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         var_group.attrs["column-order"] = ["mz"]
 
         mz_values = self._common_mass_axis
+        assert mz_values is not None, "Common mass axis not initialized"
         mz_index = np.array([f"mz_{i}" for i in range(n_cols)], dtype=str_dtype)
         var_group.create_array("_index", data=mz_index)
         var_group.create_array("mz", data=mz_values)
