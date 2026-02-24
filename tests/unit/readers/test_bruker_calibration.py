@@ -349,6 +349,16 @@ class TestDefaultCalibrationBehavior:
         ), patch.object(
             BrukerReader, "_initialize_database"
         ), patch.object(
+            BrukerReader, "_detect_regions", return_value=[]
+        ), patch.object(
+            BrukerReader, "_select_region", return_value=(None, None)
+        ), patch.object(
+            BrukerReader, "_parse_mis_alignment", return_value={}
+        ), patch.object(
+            BrukerReader, "_build_positions_from_db", return_value=[]
+        ), patch.object(
+            BrukerReader, "_build_header_alignment", return_value={}
+        ), patch.object(
             BrukerReader, "_preload_frame_num_peaks", return_value={}
         ):
 

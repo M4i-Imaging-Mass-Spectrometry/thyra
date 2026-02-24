@@ -14,7 +14,7 @@ if SPATIALDATA_AVAILABLE:
     import xarray as xr
     from anndata import AnnData
     from spatialdata.models import Image2DModel, TableModel
-    from spatialdata.transformations import Identity
+    from spatialdata.transformations import Affine, Identity
 
 
 class SpatialData2DConverter(BaseSpatialDataConverter):
@@ -253,7 +253,7 @@ class SpatialData2DConverter(BaseSpatialDataConverter):
                 if self._sparse_format == "csc":
                     sparse_matrix = coo.tocsc()
                 else:
-                    sparse_matrix = coo.tocsr()  # type: ignore[assignment]
+                    sparse_matrix = coo.tocsr()
 
                 logging.info(
                     f"Converted sparse matrix for {slice_id}: "
@@ -303,22 +303,41 @@ class SpatialData2DConverter(BaseSpatialDataConverter):
                 # SpatialData
                 tic_values_with_channel = tic_values.reshape(1, y_size, x_size)
 
-                tic_image = xr.DataArray(
-                    tic_values_with_channel,
-                    dims=("c", "y", "x"),
-                    coords={
-                        "c": [0],  # Single channel
-                        "y": np.arange(y_size) * self.pixel_size_um,
-                        "x": np.arange(x_size) * self.pixel_size_um,
-                    },
-                )
+                # When alignment exists, use raster indices + Affine transform
+                # so TIC overlays correctly on the optical image.
+                # Otherwise, use physical micrometer coordinates + Identity.
+                if self._tic_to_image_matrix is not None:
+                    tic_image = xr.DataArray(
+                        tic_values_with_channel,
+                        dims=("c", "y", "x"),
+                        coords={
+                            "c": [0],
+                            "y": np.arange(y_size),
+                            "x": np.arange(x_size),
+                        },
+                    )
+                    transform = Affine(
+                        self._tic_to_image_matrix,
+                        input_axes=("x", "y"),
+                        output_axes=("x", "y"),
+                    )
+                else:
+                    tic_image = xr.DataArray(
+                        tic_values_with_channel,
+                        dims=("c", "y", "x"),
+                        coords={
+                            "c": [0],
+                            "y": np.arange(y_size) * self.pixel_size_um,
+                            "x": np.arange(x_size) * self.pixel_size_um,
+                        },
+                    )
+                    transform = Identity()
 
                 # Create Image2DModel for the TIC image
-                transform = Identity()
                 data_structures["images"][f"{slice_id}_tic"] = Image2DModel.parse(
                     tic_image,
                     transformations={
-                        slice_id: transform,
+                        self.dataset_id: transform,
                         "global": transform,
                     },
                 )

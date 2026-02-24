@@ -42,7 +42,7 @@ try:
     from .converters.spatialdata.converter import SpatialDataConverter
 except ImportError:
     # SpatialData dependencies not available
-    SpatialDataConverter = None  # type: ignore[assignment, misc]
+    SpatialDataConverter = None  # type: ignore[misc]
 
 # Expose main API
 __all__ = [

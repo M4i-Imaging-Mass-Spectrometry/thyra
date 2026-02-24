@@ -31,7 +31,7 @@ if SPATIALDATA_AVAILABLE:
     from anndata import AnnData
     from spatialdata import SpatialData
     from spatialdata.models import Image2DModel, ShapesModel, TableModel
-    from spatialdata.transformations import Identity
+    from spatialdata.transformations import Affine, Identity
 
 
 class StreamingSpatialDataConverter(BaseSpatialDataConverter):
@@ -132,7 +132,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 n_mz_bins = int((max_mass - min_mass) / 0.01)
             else:
                 # Fallback estimate if mass range not available
-                n_mz_bins = 100000  # type: ignore[unreachable]
+                n_mz_bins = 100000
 
         # Dense matrix size in bytes (float32 = 4 bytes)
         dense_bytes = n_pixels * n_mz_bins * 4
@@ -285,8 +285,10 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             n_rows, n_cols, pass1_result["total_nnz"], pass1_result["indptr"]
         )
 
-        # Pass 2: Write data to Zarr
-        self._coo_pass2_write_data(indices_arr, data_arr, total_spectra)
+        # Pass 2: Write data to Zarr (position-aware using indptr)
+        self._coo_pass2_write_data(
+            indices_arr, data_arr, pass1_result["indptr"], total_spectra
+        )
 
         logging.info(
             f"Pass 2 complete: {pass1_result['total_nnz']:,} non-zeros written to Zarr"
@@ -423,92 +425,139 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         return indices_arr, data_arr
 
     def _coo_pass2_write_data(
-        self, indices_arr: Any, data_arr: Any, total_spectra: int
+        self,
+        indices_arr: Any,
+        data_arr: Any,
+        indptr: NDArray[np.int64],
+        total_spectra: int,
     ) -> None:
-        """Pass 2: Write spectrum data directly to Zarr arrays.
+        """Pass 2: Write spectrum data to correct CSR positions.
+
+        Each spectrum's data must be written at the position indicated by
+        the indptr for its pixel_idx (row-major grid position), NOT in
+        iteration order. The reader may yield spectra in frame order which
+        differs from row-major pixel order.
 
         Args:
             indices_arr: Zarr array for column indices.
             data_arr: Zarr array for data values.
+            indptr: Row pointers from Pass 1 (indexed by pixel position).
             total_spectra: Total number of spectra to process.
         """
-        logging.info("Pass 2: Writing data directly to Zarr...")
+        if self._dimensions is None:
+            raise ValueError("Dimensions not initialized")
+
+        n_x, n_y, n_z = self._dimensions
+
+        logging.info("Pass 2: Writing data to Zarr (position-aware)...")
 
         if hasattr(self.reader, "reset"):
             self.reader.reset()
         self._suppress_reader_progress()
 
-        chunk_indices: list = []
-        chunk_data: list = []
-        chunk_start_pos = 0
-        spectra_in_chunk = 0
+        # Track write position per row, starting at each row's indptr offset
+        write_pos = indptr[:-1].copy()
+
+        # Buffer writes for efficiency: collect (zarr_position, col_idx, value)
+        buf_positions: list = []
+        buf_indices: list = []
+        buf_data: list = []
+        buf_size = 0
+        flush_threshold = 5_000_000  # flush every ~5M entries
 
         with tqdm(total=total_spectra, desc="Pass 2: Writing", unit="spectrum") as pbar:
             for coords, mzs, intensities in self.reader.iter_spectra(
                 batch_size=self._buffer_size
             ):
+                x, y, z = coords
+                pixel_idx = z * (n_x * n_y) + y * n_x + x
+
                 mz_indices, resampled_ints = self._process_spectrum(mzs, intensities)
+                nnz = len(mz_indices)
 
-                if len(mz_indices) > 0:
-                    chunk_indices.append(mz_indices.astype(np.int32))
-                    chunk_data.append(resampled_ints.astype(np.float64))
+                if nnz > 0:
+                    pos = write_pos[pixel_idx]
+                    positions = np.arange(pos, pos + nnz)
+                    buf_positions.append(positions)
+                    buf_indices.append(mz_indices.astype(np.int32))
+                    buf_data.append(resampled_ints.astype(np.float64))
+                    write_pos[pixel_idx] += nnz
+                    buf_size += nnz
 
-                spectra_in_chunk += 1
-
-                if spectra_in_chunk >= self._chunk_size:
-                    chunk_start_pos = self._flush_chunk_to_zarr(
-                        chunk_indices,
-                        chunk_data,
+                if buf_size >= flush_threshold:
+                    self._flush_positioned_to_zarr(
+                        buf_positions,
+                        buf_indices,
+                        buf_data,
                         indices_arr,
                         data_arr,
-                        chunk_start_pos,
                     )
-                    chunk_indices = []
-                    chunk_data = []
-                    spectra_in_chunk = 0
+                    buf_positions = []
+                    buf_indices = []
+                    buf_data = []
+                    buf_size = 0
 
                 pbar.update(1)
 
-        # Write final chunk
-        if chunk_indices:
-            self._flush_chunk_to_zarr(
-                chunk_indices, chunk_data, indices_arr, data_arr, chunk_start_pos
+        # Flush remaining
+        if buf_positions:
+            self._flush_positioned_to_zarr(
+                buf_positions,
+                buf_indices,
+                buf_data,
+                indices_arr,
+                data_arr,
             )
 
-    def _flush_chunk_to_zarr(
+    def _flush_positioned_to_zarr(
         self,
-        chunk_indices: list,
-        chunk_data: list,
+        buf_positions: list,
+        buf_indices: list,
+        buf_data: list,
         indices_arr: Any,
         data_arr: Any,
-        chunk_start_pos: int,
-    ) -> int:
-        """Flush accumulated chunk data to Zarr arrays.
+    ) -> None:
+        """Flush buffered data to correct positions in Zarr arrays.
+
+        Sorts entries by position so contiguous ranges can be written
+        efficiently in bulk.
 
         Args:
-            chunk_indices: List of index arrays to concatenate.
-            chunk_data: List of data arrays to concatenate.
-            indices_arr: Zarr array for indices.
-            data_arr: Zarr array for data.
-            chunk_start_pos: Current position in arrays.
-
-        Returns:
-            New position after writing.
+            buf_positions: List of position arrays (where to write).
+            buf_indices: List of column index arrays.
+            buf_data: List of data value arrays.
+            indices_arr: Zarr array for column indices.
+            data_arr: Zarr array for data values.
         """
-        if not chunk_indices:
-            return chunk_start_pos
+        if not buf_positions:
+            return
 
-        all_indices = np.concatenate(chunk_indices)
-        all_data = np.concatenate(chunk_data)
+        all_pos = np.concatenate(buf_positions)
+        all_idx = np.concatenate(buf_indices)
+        all_dat = np.concatenate(buf_data)
 
-        end_pos = chunk_start_pos + len(all_indices)
-        indices_arr[chunk_start_pos:end_pos] = all_indices
-        data_arr[chunk_start_pos:end_pos] = all_data
+        # Sort by position for efficient sequential writes
+        order = np.argsort(all_pos)
+        all_pos = all_pos[order]
+        all_idx = all_idx[order]
+        all_dat = all_dat[order]
 
-        del all_indices, all_data
+        # Write contiguous runs in bulk
+        n = len(all_pos)
+        i = 0
+        while i < n:
+            start_pos = all_pos[i]
+            # Find end of contiguous run
+            j = i + 1
+            while j < n and all_pos[j] == all_pos[j - 1] + 1:
+                j += 1
+            # Write the contiguous block
+            indices_arr[int(start_pos) : int(start_pos) + (j - i)] = all_idx[i:j]
+            data_arr[int(start_pos) : int(start_pos) + (j - i)] = all_dat[i:j]
+            i = j
+
+        del all_pos, all_idx, all_dat
         gc.collect()
-
-        return end_pos
 
     def _process_spectrum(
         self, mzs: np.ndarray, intensities: np.ndarray
@@ -737,22 +786,39 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 # Add channel dimension to make it (c, y, x) as required by SpatialData
                 tic_values_with_channel = tic_values.reshape(1, y_size, x_size)
 
-                tic_image = xr.DataArray(
-                    tic_values_with_channel,
-                    dims=("c", "y", "x"),
-                    coords={
-                        "c": [0],  # Single channel
-                        "y": np.arange(y_size) * self.pixel_size_um,
-                        "x": np.arange(x_size) * self.pixel_size_um,
-                    },
-                )
+                # When alignment exists, use raster indices + Affine transform
+                if self._tic_to_image_matrix is not None:
+                    tic_image = xr.DataArray(
+                        tic_values_with_channel,
+                        dims=("c", "y", "x"),
+                        coords={
+                            "c": [0],
+                            "y": np.arange(y_size),
+                            "x": np.arange(x_size),
+                        },
+                    )
+                    transform = Affine(
+                        self._tic_to_image_matrix,
+                        input_axes=("x", "y"),
+                        output_axes=("x", "y"),
+                    )
+                else:
+                    tic_image = xr.DataArray(
+                        tic_values_with_channel,
+                        dims=("c", "y", "x"),
+                        coords={
+                            "c": [0],
+                            "y": np.arange(y_size) * self.pixel_size_um,
+                            "x": np.arange(x_size) * self.pixel_size_um,
+                        },
+                    )
+                    transform = Identity()
 
                 # Create Image2DModel for the TIC image
-                transform = Identity()
                 data_structures["images"][f"{slice_id}_tic"] = Image2DModel.parse(
                     tic_image,
                     transformations={
-                        slice_id: transform,
+                        self.dataset_id: transform,
                         "global": transform,
                     },
                 )
@@ -1000,7 +1066,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                     # Vectorized scatter
                     destinations = write_pos[mz_indices]
                     mm_indices[destinations] = row_idx
-                    mm_data[destinations] = resampled_ints.astype(np.float32)
+                    mm_data[destinations] = resampled_ints
 
                     # Increment write positions
                     write_pos[mz_indices] += 1
@@ -1049,14 +1115,14 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # CSC data (values for each non-zero)
         mm_data = np.memmap(
             temp_dir / "csc_data.bin",
-            dtype=np.float32,
+            dtype=np.float64,
             mode="w+",
             shape=(size,),
         )
 
         logging.info(
             f"  Allocated memmap: {size * 4 / (1024**3):.2f} GB indices + "
-            f"{size * 4 / (1024**3):.2f} GB data"
+            f"{size * 8 / (1024**3):.2f} GB data"
         )
 
         return mm_indices, mm_data
@@ -1169,7 +1235,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         data_arr = X_group.create_array(
             "data",
             shape=(actual_nnz,),
-            dtype=np.float32,
+            dtype=np.float64,
             chunks=(min(actual_nnz, z_chunk),),
         )
 
@@ -1317,57 +1383,92 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # Add channel dimension (c, y, x) as required by SpatialData
         tic_values_3d = tic_values.reshape(1, y_size, x_size)
 
-        tic_xarray = xr.DataArray(
-            tic_values_3d,
-            dims=("c", "y", "x"),
-            coords={
-                "c": [0],
-                "y": np.arange(y_size) * self.pixel_size_um,
-                "x": np.arange(x_size) * self.pixel_size_um,
-            },
-        )
+        # When alignment exists, use raster indices + Affine transform
+        if self._tic_to_image_matrix is not None:
+            tic_xarray = xr.DataArray(
+                tic_values_3d,
+                dims=("c", "y", "x"),
+                coords={
+                    "c": [0],
+                    "y": np.arange(y_size),
+                    "x": np.arange(x_size),
+                },
+            )
+            tic_transform = Affine(
+                self._tic_to_image_matrix,
+                input_axes=("x", "y"),
+                output_axes=("x", "y"),
+            )
+        else:
+            tic_xarray = xr.DataArray(
+                tic_values_3d,
+                dims=("c", "y", "x"),
+                coords={
+                    "c": [0],
+                    "y": np.arange(y_size) * self.pixel_size_um,
+                    "x": np.arange(x_size) * self.pixel_size_um,
+                },
+            )
+            tic_transform = Identity()
 
-        transform = Identity()
         tic_image = Image2DModel.parse(
             tic_xarray,
             transformations={
-                slice_id: transform,
-                "global": transform,
+                self.dataset_id: tic_transform,
+                "global": tic_transform,
             },
         )
 
         # === Create Pixel Shapes ===
-        # Generate box geometries for each pixel in physical coordinates
-        # Vectorized approach for better performance with large datasets
-        half_pixel = self.pixel_size_um / 2
-
         # Create coordinate arrays (row-major order: y slowest, x fastest)
         y_indices = np.repeat(np.arange(n_y), n_x)
         x_indices = np.tile(np.arange(n_x), n_y)
 
-        # Convert to physical coordinates
-        spatial_x = x_indices * self.pixel_size_um
-        spatial_y = y_indices * self.pixel_size_um
-
-        # Create boxes using shapely's vectorized constructor
         from shapely import box as shapely_box_vectorized
 
-        geometries = shapely_box_vectorized(
-            spatial_x - half_pixel,
-            spatial_y - half_pixel,
-            spatial_x + half_pixel,
-            spatial_y + half_pixel,
-        )
+        if (
+            self._alignment_result is not None
+            and self._alignment_result.region_mappings
+        ):
+            # Use optical alignment - transform raster coords to image pixels
+            rm = self._alignment_result.region_mappings[0]
+            scale = rm._get_pixel_scale()
+            half = scale / 2.0
+            first_rx = self._alignment_result.first_raster_x
+            first_ry = self._alignment_result.first_raster_y
+
+            # Convert raster indices to original raster coords, then to image pixels
+            orig_x = x_indices + first_rx
+            orig_y = y_indices + first_ry
+            img_x = rm.image_min_x + half + (orig_x - rm.raster_min_x) * scale
+            img_y = rm.image_min_y + half + (orig_y - rm.raster_min_y) * scale
+
+            geometries = shapely_box_vectorized(
+                img_x - half, img_y - half, img_x + half, img_y + half
+            )
+        else:
+            # Physical micrometer coordinates
+            half_pixel = self.pixel_size_um / 2
+            spatial_x = x_indices * self.pixel_size_um
+            spatial_y = y_indices * self.pixel_size_um
+
+            geometries = shapely_box_vectorized(
+                spatial_x - half_pixel,
+                spatial_y - half_pixel,
+                spatial_x + half_pixel,
+                spatial_y + half_pixel,
+            )
 
         # Create GeoDataFrame with string indices matching obs
         instance_ids = [str(i) for i in range(n_rows)]
         gdf = gpd.GeoDataFrame(geometry=geometries, index=instance_ids)
 
+        shape_transform = Identity()
         shapes = ShapesModel.parse(
             gdf,
             transformations={
-                self.dataset_id: transform,
-                "global": transform,
+                self.dataset_id: shape_transform,
+                "global": shape_transform,
             },
         )
 
@@ -1471,7 +1572,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                     optical_image = Image2DModel.parse(
                         optical_xarray,
                         transformations={
-                            slice_id: transform,
+                            self.dataset_id: transform,
                             "global": transform,
                         },
                     )

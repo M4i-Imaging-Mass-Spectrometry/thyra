@@ -146,38 +146,39 @@ class RegionMapping:
     image_max_y: int
 
     def _get_pixel_scale(self) -> float:
-        """Get the consistent pixel scale for this region.
+        """Get the pixel scale for this region (image pixels per raster step).
 
-        Uses scale_x as the reference since it's typically more consistent
-        across regions. This ensures square pixels with no gaps.
+        The Area bounding box spans from image_min to image_max and must be
+        filled edge-to-edge by (raster_max - raster_min + 1) pixels.
+        Each pixel occupies image_width / n_pixels of the bounding box.
 
         Returns:
             Pixel scale in image pixels per raster step
         """
-        raster_width = max(1, self.raster_max_x - self.raster_min_x)
+        n_pixels = max(1, self.raster_max_x - self.raster_min_x + 1)
         image_width = self.image_max_x - self.image_min_x
-        return image_width / raster_width
+        return image_width / n_pixels
 
     def raster_to_image(self, raster_x: int, raster_y: int) -> Tuple[float, float]:
-        """Convert raster coordinates to image coordinates within this region.
+        """Convert raster coordinates to image pixel coordinates.
 
-        Uses consistent spacing (scale_x) for both X and Y to ensure square
-        pixels with no gaps. Pixels may not perfectly fill the bounding box
-        but will be correctly positioned relative to each other.
+        Maps raster positions to pixel centers within the Area bounding box.
+        The first pixel center is at image_min + half_pixel, the last at
+        image_max - half_pixel, so pixels fill the box edge-to-edge.
 
         Args:
             raster_x: Original raster X coordinate (not normalized)
             raster_y: Original raster Y coordinate (not normalized)
 
         Returns:
-            Tuple of (image_x, image_y) in pixels
+            Tuple of (image_x, image_y) pixel center coordinates
         """
-        # Use consistent scale for both dimensions (square pixels, no gaps)
         scale = self._get_pixel_scale()
+        half = scale / 2.0
 
-        # Position based on offset from first raster position
-        image_x = self.image_min_x + (raster_x - self.raster_min_x) * scale
-        image_y = self.image_min_y + (raster_y - self.raster_min_y) * scale
+        # Pixel center = box_min + half_pixel + offset * scale
+        image_x = self.image_min_x + half + (raster_x - self.raster_min_x) * scale
+        image_y = self.image_min_y + half + (raster_y - self.raster_min_y) * scale
 
         return image_x, image_y
 

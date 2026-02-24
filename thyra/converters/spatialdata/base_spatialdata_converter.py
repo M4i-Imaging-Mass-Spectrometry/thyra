@@ -27,7 +27,7 @@ try:
     from shapely.geometry import box
     from spatialdata import SpatialData
     from spatialdata.models import Image2DModel, ShapesModel, TableModel
-    from spatialdata.transformations import Identity
+    from spatialdata.transformations import Affine, Identity
 
     SPATIALDATA_AVAILABLE = True
 except (ImportError, NotImplementedError) as e:
@@ -41,6 +41,7 @@ except (ImportError, NotImplementedError) as e:
     TableModel = None
     ShapesModel = None
     Image2DModel = None
+    Affine = None
     Identity = None
     box = None
     gpd = None
@@ -141,6 +142,8 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         # Optical-MSI alignment (computed from FlexImaging Area definitions)
         self._alignment_result: Optional[AreaAlignmentResult] = None
+        # Affine matrix mapping TIC raster indices to optical image pixels
+        self._tic_to_image_matrix: Optional[NDArray[np.float64]] = None
 
         # Metadata caches (populated lazily during conversion)
         self._essential_metadata_cached: Optional[EssentialMetadata] = None
@@ -148,7 +151,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         self._spectrum_metadata_cached: Optional[Dict[str, Any]] = None
         self._resampling_metadata_cached: Optional[Dict[str, Any]] = None
 
-    def _setup_resampling(self) -> None:
+    def _setup_resampling(self) -> None:  # noqa: C901
         """Set up resampling configuration and strategy."""
         if not self._resampling_config:
             return
@@ -463,8 +466,8 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             # bins = (max_mz - min_mz) / width_at_mz
             bins = int((max_mz - min_mz) / width_at_mz)
 
-        # Ensure reasonable bounds
-        bins = max(100, min(bins, 100000))  # Between 100 and 100k bins
+        # Ensure minimum bin count
+        bins = max(100, bins)
 
         logging.info(f"Calculated {bins} bins for {axis_name} axis type")
         return bins
@@ -656,6 +659,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
             # Compute optical alignment for FlexImaging data
             self._compute_optical_alignment()
+            self._build_tic_to_image_affine()
 
             logging.info(f"Dataset dimensions: {self._dimensions}")
             logging.info(f"Coordinate bounds: {self._coordinate_bounds}")
@@ -857,7 +861,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # This method should be overridden by specific converters (2D/3D)
         pass
 
-    def _create_sparse_matrix(self) -> Dict[str, Any]:  # type: ignore[override]
+    def _create_sparse_matrix(self) -> Dict[str, Any]:
         """Create COO arrays for storing intensity values.
 
         Returns:
@@ -972,7 +976,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
     def _add_to_sparse_matrix(
         self,
-        coo_arrays: Dict[str, Any],  # type: ignore[override]
+        coo_arrays: Dict[str, Any],
         pixel_idx: int,
         mz_indices: NDArray[np.int_],
         intensities: NDArray[np.float64],
@@ -1168,6 +1172,39 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         except Exception as e:
             logging.warning(f"Failed to compute optical alignment: {e}")
             self._alignment_result = None
+
+    def _build_tic_to_image_affine(self) -> None:
+        """Build affine matrix mapping TIC raster-index coords to image pixels.
+
+        When optical alignment is available, this creates a 3x3 affine matrix
+        that transforms TIC image coordinates (integer raster indices) into
+        optical image pixel coordinates, so the TIC overlays correctly on the
+        optical image in SpatialData.
+
+        The matrix encodes: image_pixel = scale * raster_index + offset
+        where offset places the first pixel center at image_min + half_pixel.
+        """
+        if self._alignment_result is None:
+            return
+        if not self._alignment_result.region_mappings:
+            return
+
+        rm = self._alignment_result.region_mappings[0]
+        scale = rm._get_pixel_scale()
+        half = scale / 2.0
+
+        # Translation: raster index (0,0) maps to (image_min + half, image_min + half)
+        tx = rm.image_min_x + half
+        ty = rm.image_min_y + half
+
+        # 3x3 affine: [[scale, 0, tx], [0, scale, ty], [0, 0, 1]]
+        self._tic_to_image_matrix = np.array(
+            [[scale, 0, tx], [0, scale, ty], [0, 0, 1]], dtype=np.float64
+        )
+        logging.info(
+            f"Built TIC-to-image affine: scale={scale:.2f}, "
+            f"offset=({tx:.1f}, {ty:.1f})"
+        )
 
     def _add_optical_images(self, data_structures: Dict[str, Any]) -> None:
         """Load and add optical images from the reader to data structures.

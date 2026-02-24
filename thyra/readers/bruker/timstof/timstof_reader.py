@@ -9,7 +9,7 @@ import logging
 import os
 import sqlite3
 from pathlib import Path
-from typing import Callable, Dict, Generator, Optional, Tuple
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -34,6 +34,7 @@ from ....metadata.extractors.bruker_extractor import BrukerMetadataExtractor
 from ....utils.bruker_exceptions import DataError, FileFormatError, SDKError
 from ..base_bruker_reader import BrukerBaseMSIReader
 from ..folder_structure import BrukerFolderStructure, BrukerFormat
+from ..mis_parser import parse_mis_file
 from .sdk.dll_manager import DLLManager
 from .sdk.sdk_functions import SDKFunctions
 
@@ -195,6 +196,7 @@ class BrukerReader(BrukerBaseMSIReader):
         memory_limit_gb: Optional[float] = None,
         batch_size: Optional[int] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None,
+        region: Optional[int] = None,
         **kwargs,
     ):
         """Initialize the Bruker reader.
@@ -210,11 +212,15 @@ class BrukerReader(BrukerBaseMSIReader):
             memory_limit_gb: Ignored, maintained for compatibility
             batch_size: Ignored, maintained for compatibility
             progress_callback: Optional callback for progress updates
+            region: Region number to process for multi-region datasets.
+                None (default): auto-select the largest region if multiple
+                exist. int: explicitly select that region number.
             **kwargs: Additional arguments
         """
         super().__init__(data_path, **kwargs)
         self.use_recalibrated_state = use_recalibrated_state
         self.progress_callback = progress_callback
+        self._requested_region = region
 
         # Validate and setup paths
         self._validate_data_path()
@@ -229,6 +235,17 @@ class BrukerReader(BrukerBaseMSIReader):
         # Initialize SDK and connections
         self._initialize_sdk()
         self._initialize_database()
+
+        # Region detection and selection (must be after database init)
+        self._region_info: List[Tuple[int, int]] = self._detect_regions()
+        self._selected_region: Optional[int]
+        self._region_frame_ids: Optional[set]
+        self._selected_region, self._region_frame_ids = self._select_region()
+
+        # Optical alignment data (parsed from .mis file + database)
+        self._mis_metadata: Dict[str, Any] = self._parse_mis_alignment()
+        self._positions: List[Dict[str, Any]] = self._build_positions_from_db()
+        self._header: Dict[str, Any] = self._build_header_alignment()
 
         # Cached properties (lazy loaded)
         self._common_mass_axis: Optional[np.ndarray] = None
@@ -479,9 +496,83 @@ class BrukerReader(BrukerBaseMSIReader):
         """Create Bruker metadata extractor."""
         if not hasattr(self, "conn") or self.conn is None:
             raise ValueError("Database connection not available")
+        # Pass selected region so extractor computes per-region bounds
+        region_for_extractor = None
+        if self._region_frame_ids is not None:
+            region_for_extractor = self._selected_region
         return BrukerMetadataExtractor(
-            self.conn, self.data_path, self._calibration_metadata
+            self.conn,
+            self.data_path,
+            self._calibration_metadata,
+            region=region_for_extractor,
         )
+
+    def _detect_regions(self) -> List[Tuple[int, int]]:
+        """Detect available regions in the dataset.
+
+        Returns:
+            List of (region_number, frame_count) tuples sorted by frame
+            count descending. Empty list if no region info available.
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "SELECT RegionNumber, COUNT(*) as n_frames "
+                "FROM MaldiFrameInfo "
+                "GROUP BY RegionNumber "
+                "ORDER BY COUNT(*) DESC"
+            )
+            regions = [(int(r), int(n)) for r, n in cursor.fetchall()]
+            if len(regions) > 1:
+                region_desc = ", ".join(
+                    f"Region {r} ({n:,} frames)" for r, n in regions
+                )
+                logger.info(f"Detected {len(regions)} regions: {region_desc}")
+            return regions
+        except sqlite3.OperationalError:
+            return []
+
+    def _select_region(self) -> Tuple[Optional[int], Optional[set]]:
+        """Select region based on user request or auto-detection.
+
+        Returns:
+            Tuple of (selected_region_number, set_of_frame_ids).
+            Both are None when no filtering is needed (single region).
+        """
+        if not self._region_info or len(self._region_info) <= 1:
+            return (None, None)
+
+        # Multiple regions exist
+        valid_regions = [r for r, _ in self._region_info]
+
+        if self._requested_region is not None:
+            if self._requested_region not in valid_regions:
+                raise ValueError(
+                    f"Region {self._requested_region} not found. "
+                    f"Available regions: {valid_regions}"
+                )
+            selected = self._requested_region
+        else:
+            # Auto-select largest region
+            selected = self._region_info[0][0]  # Sorted by count DESC
+            logger.warning(
+                f"Multi-region dataset detected "
+                f"({len(self._region_info)} regions). "
+                f"Auto-selecting region {selected} "
+                f"({self._region_info[0][1]:,} spectra). "
+                f"Use region= parameter to select a different region."
+            )
+
+        # Get frame IDs for selected region
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT Frame FROM MaldiFrameInfo WHERE RegionNumber = ?",
+            (selected,),
+        )
+        frame_ids = {int(row[0]) for row in cursor.fetchall()}
+        logger.info(f"Region {selected}: {len(frame_ids):,} frames selected")
+
+        return (selected, frame_ids)
 
     def get_common_mass_axis(self) -> NDArray[np.float64]:
         """Return the common mass axis composed of all unique m/z values.
@@ -542,18 +633,29 @@ class BrukerReader(BrukerBaseMSIReader):
         None,
         None,
     ]:
-        """Raw spectrum iteration without batching."""
-        frame_count = self._get_frame_count()
+        """Raw spectrum iteration without batching.
+
+        When region filtering is active, only frames belonging to the
+        selected region are iterated.
+        """
+        # Determine which frames to iterate
+        if self._region_frame_ids is not None:
+            frame_ids: Any = sorted(self._region_frame_ids)
+            total = len(frame_ids)
+        else:
+            total = self._get_frame_count()
+            frame_ids = range(1, total + 1)
+
         coordinate_offsets = self._get_coordinate_offsets()
 
         # Setup progress tracking
         with tqdm(
-            total=frame_count,
+            total=total,
             desc="Reading spectra",
             unit="spectrum",
             disable=True,  # Disable to avoid double progress with converter
         ) as pbar:
-            for frame_id in range(1, frame_count + 1):
+            for frame_id in frame_ids:
                 try:
                     # Get normalized coordinates using persistent connection
                     coords = self._get_frame_coordinates_cached(
@@ -584,7 +686,7 @@ class BrukerReader(BrukerBaseMSIReader):
 
                     # Progress callback
                     if self.progress_callback:
-                        self.progress_callback(frame_id, frame_count)
+                        self.progress_callback(frame_id, total)
 
                 except Exception as e:
                     logger.warning(f"Error reading spectrum for frame {frame_id}: {e}")
@@ -592,9 +694,12 @@ class BrukerReader(BrukerBaseMSIReader):
                     continue
 
     def _get_frame_count(self) -> int:
-        """Get the total number of frames."""
+        """Get the total number of frames (respects region filtering)."""
         if self._frame_count is None:
-            self._frame_count = _get_frame_count(self.db_path)
+            if self._region_frame_ids is not None:
+                self._frame_count = len(self._region_frame_ids)
+            else:
+                self._frame_count = _get_frame_count(self.db_path)
 
         return self._frame_count
 
@@ -731,11 +836,14 @@ class BrukerReader(BrukerBaseMSIReader):
             return None
 
     def _preload_frame_num_peaks(self) -> Dict[int, int]:
-        """Preload NumPeaks values for all frames at initialization.
+        """Preload NumPeaks values for relevant frames at initialization.
 
         This optimization avoids the busy wait loop in SDK by providing
         exact buffer sizes for spectrum reading, reducing CPU usage from 100%
         to normal levels.
+
+        When region filtering is active, only caches peaks for frames in
+        the selected region.
 
         Returns:
             Dictionary mapping frame_id -> num_peaks (validated to be <= 65535)
@@ -751,6 +859,13 @@ class BrukerReader(BrukerBaseMSIReader):
                 invalid_count = 0
 
                 for frame_id, num_peaks in cursor.fetchall():
+                    # Skip frames not in selected region
+                    if (
+                        self._region_frame_ids is not None
+                        and frame_id not in self._region_frame_ids
+                    ):
+                        continue
+
                     if num_peaks is not None and 0 < num_peaks <= 65535:
                         num_peaks_cache[frame_id] = int(num_peaks)
                     else:
@@ -794,12 +909,12 @@ class BrukerReader(BrukerBaseMSIReader):
             # Close SDK handle
             if hasattr(self, "handle") and self.handle:
                 self.sdk.close_file(self.handle)
-                self.handle = None  # type: ignore[assignment]
+                self.handle = None
 
             # Close database connection
             if hasattr(self, "conn") and self.conn:
                 self.conn.close()
-                self.conn = None  # type: ignore[assignment]
+                self.conn = None
 
             # Mark as closed
             self._closed = True
@@ -850,6 +965,117 @@ class BrukerReader(BrukerBaseMSIReader):
         )
 
     @property
+    def mis_metadata(self) -> Dict[str, Any]:
+        """Get parsed .mis metadata for optical alignment."""
+        return self._mis_metadata
+
+    def _parse_mis_alignment(self) -> Dict[str, Any]:
+        """Parse .mis file for optical alignment if available.
+
+        Uses BrukerFolderStructure to find the .mis file in the parent
+        folder hierarchy, then parses it for area definitions and
+        teaching points.
+
+        Returns:
+            Dictionary of parsed .mis metadata, empty if no .mis found
+        """
+        try:
+            mis_path = self.get_teaching_points_file()
+        except (ValueError, OSError):
+            # Folder structure analysis can fail for non-standard paths
+            return {}
+
+        if mis_path is None:
+            return {}
+
+        logger.info(f"Found .mis file for optical alignment: {mis_path.name}")
+        metadata = parse_mis_file(mis_path)
+
+        if metadata.get("areas"):
+            logger.info(
+                f"Parsed {len(metadata['areas'])} area definitions " f"from .mis file"
+            )
+        return metadata
+
+    def _build_positions_from_db(self) -> List[Dict[str, Any]]:
+        """Build position list from MaldiFrameInfo for alignment.
+
+        Creates position dictionaries compatible with the alignment module
+        by querying raster coordinates and region numbers from the database.
+
+        Returns:
+            List of position dicts with region, raster_x, raster_y keys.
+            Empty list if no .mis areas are available.
+        """
+        if not self._mis_metadata.get("areas"):
+            return []
+
+        positions: List[Dict[str, Any]] = []
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "SELECT XIndexPos, YIndexPos, RegionNumber " "FROM MaldiFrameInfo"
+            )
+            for x, y, region in cursor.fetchall():
+                positions.append(
+                    {
+                        "region": int(region),
+                        "raster_x": int(x),
+                        "raster_y": int(y),
+                    }
+                )
+            logger.info(
+                f"Built {len(positions)} positions from MaldiFrameInfo "
+                f"for optical alignment"
+            )
+        except sqlite3.OperationalError as e:
+            logger.warning(f"Could not query positions for alignment: {e}")
+
+        return positions
+
+    def _build_header_alignment(self) -> Dict[str, Any]:
+        """Build header dict with first_raster offsets for alignment.
+
+        The first_raster_x/y values are the ImagingArea minimum coordinates,
+        which serve as the origin offset for normalizing raster positions.
+
+        Returns:
+            Dictionary with first_raster_x and first_raster_y keys.
+            Empty dict if no .mis areas are available.
+        """
+        if not self._mis_metadata.get("areas"):
+            return {}
+
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "SELECT Value FROM GlobalMetadata "
+                "WHERE Key = 'ImagingAreaMinXIndexPos'"
+            )
+            result_x = cursor.fetchone()
+            cursor.execute(
+                "SELECT Value FROM GlobalMetadata "
+                "WHERE Key = 'ImagingAreaMinYIndexPos'"
+            )
+            result_y = cursor.fetchone()
+
+            if result_x and result_y:
+                header = {
+                    "first_raster_x": int(float(result_x[0])),
+                    "first_raster_y": int(float(result_y[0])),
+                }
+                logger.info(
+                    f"Alignment offsets: first_raster=("
+                    f"{header['first_raster_x']}, "
+                    f"{header['first_raster_y']})"
+                )
+                return header
+        except (sqlite3.OperationalError, TypeError) as e:
+            logger.warning(f"Could not get alignment offsets: {e}")
+
+        return {}
+
+    @property
     def n_spectra(self) -> int:
         """Return the total number of spectra in the dataset.
 
@@ -880,7 +1106,8 @@ class BrukerReader(BrukerBaseMSIReader):
         """Get per-pixel peak counts for CSR indptr construction.
 
         Converts the frame-indexed NumPeaks cache to pixel-indexed array
-        using coordinate mapping.
+        using coordinate mapping. When region filtering is active, only
+        includes frames from the selected region.
 
         Returns:
             Array of size n_pixels where arr[pixel_idx] = peak_count.
@@ -903,7 +1130,17 @@ class BrukerReader(BrukerBaseMSIReader):
         # Map frame_id -> pixel_idx using coordinate lookup
         cursor = self.conn.cursor()
         try:
-            cursor.execute("SELECT Frame, XIndexPos, YIndexPos FROM MaldiFrameInfo")
+            if self._selected_region is not None:
+                cursor.execute(
+                    "SELECT Frame, XIndexPos, YIndexPos "
+                    "FROM MaldiFrameInfo "
+                    "WHERE RegionNumber = ?",
+                    (self._selected_region,),
+                )
+            else:
+                cursor.execute(
+                    "SELECT Frame, XIndexPos, YIndexPos " "FROM MaldiFrameInfo"
+                )
             for frame_id, x, y in cursor.fetchall():
                 if frame_id not in self._num_peaks_cache:
                     continue
