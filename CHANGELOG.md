@@ -2,6 +2,29 @@
 
 <!-- version list -->
 
+## v1.15.0 (2026-02-25)
+
+### Features
+
+- Multi-region support, optical alignment fixes, and image scaling
+  ([#76](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/76),
+  [`80c0d0b`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/80c0d0bf89d9cdf7420d6f0266c1448e8ecabece))
+
+- Optical alignment transforms, multi-region support, and streaming fixes
+  ([#76](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/76),
+  [`80c0d0b`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/80c0d0bf89d9cdf7420d6f0266c1448e8ecabece))
+
+- Optical alignment, multi-region support, and streaming fixes
+  ([#76](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/76),
+  [`80c0d0b`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/80c0d0bf89d9cdf7420d6f0266c1448e8ecabece))
+
+### Refactoring
+
+- Extract _resolve_imaging_bounds to reduce complexity
+  ([#76](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/76),
+  [`80c0d0b`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/80c0d0bf89d9cdf7420d6f0266c1448e8ecabece))
+
+
 ## v1.14.1 (2026-02-18)
 
 ### Bug Fixes
