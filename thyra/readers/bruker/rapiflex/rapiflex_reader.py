@@ -593,7 +593,7 @@ class RapiflexReader(BrukerBaseMSIReader):
         with open(self._dat_path, "rb") as f:
             f.seek(int(offset))
             data = f.read(self.n_datapoints * 4)
-            return np.frombuffer(data, dtype=np.float32).copy()  # type: ignore[no-any-return]
+            return np.frombuffer(data, dtype=np.float32).copy()
 
     def iter_spectra(self, batch_size: Optional[int] = None) -> Generator[
         Tuple[Tuple[int, int, int], NDArray[np.float64], NDArray[np.float64]],

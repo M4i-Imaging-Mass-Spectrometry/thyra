@@ -211,6 +211,38 @@ class BaseMSIReader(ABC):
         # Return only the valid indices and their corresponding intensities
         return indices[indices_valid], intensities[indices_valid]
 
+    def get_region_map(self) -> Optional[dict]:
+        """Get per-pixel region mapping for multi-region datasets.
+
+        Returns a dictionary mapping normalized (0-based) (x, y) coordinate
+        tuples to integer region numbers. This enables the converter to annotate
+        each pixel with its acquisition region in obs["region_number"].
+
+        Default implementation returns None (single-region or no region info).
+        Subclasses should override when region information is available.
+
+        Returns:
+            Dict mapping (x, y) tuples to region numbers, or None if
+            region information is not available.
+        """
+        return None
+
+    def get_region_info(self) -> Optional[list]:
+        """Get summary information about acquisition regions.
+
+        Returns a list of dictionaries, each describing one region with at
+        minimum: {"region_number": int, "n_spectra": int}. Additional keys
+        (e.g. "name") are format-specific and optional.
+
+        Default implementation returns None (single-region or no region info).
+        Subclasses should override when region information is available.
+
+        Returns:
+            List of region summary dicts, or None if region information
+            is not available.
+        """
+        return None
+
     def reset(self) -> None:
         """Reset the reader to allow iterating from the beginning again.
 

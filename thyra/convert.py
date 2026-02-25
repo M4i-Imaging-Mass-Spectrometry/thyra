@@ -273,33 +273,37 @@ def convert_msi(
     sparse_format: str = "csc",
     include_optical: bool = True,
     streaming: Union[bool, Literal["auto"]] = False,
+    region: Optional[int] = None,
     **kwargs: Any,
 ) -> bool:
-    """Convert MSI data to the specified format with enhanced error handling.
+    """Convert MSI data to the specified format.
 
-    Provides automatic pixel size detection from metadata or accepts user-specified values.
+    Provides automatic pixel size detection from metadata or
+    accepts user-specified values.
 
     Args:
         input_path: Path to input MSI data file or directory
         output_path: Path for output file
         format_type: Output format type (default: "spatialdata")
-        dataset_id: Identifier for the dataset (default: "msi_dataset")
-        pixel_size_um: Pixel size in micrometers (None for auto-detection)
+        dataset_id: Identifier for the dataset
+        pixel_size_um: Pixel size in micrometers (None for auto)
         handle_3d: Whether to process as 3D data (default: False)
         resampling_config: Optional resampling configuration
         reader_options: Optional format-specific reader options:
-            - intensity_threshold: float - Minimum intensity value to include.
-              Values below this threshold are filtered out during reading.
-              Useful for continuous mode data where most values are noise.
-              Default: None (no filtering).
-            - use_recalibrated_state: bool - For Bruker data, use active/recalibrated
-              calibration (default True).
-        sparse_format: Sparse matrix format for output ('csc' or 'csr', default: 'csc')
-        include_optical: Whether to include optical images in output (default: True)
-        streaming: Use memory-efficient streaming converter for large datasets.
+            - intensity_threshold: float - Minimum intensity
+              to include. Default: None (no filtering).
+            - use_recalibrated_state: bool - For Bruker data,
+              use active/recalibrated calibration (default True).
+        sparse_format: Sparse matrix format ('csc' or 'csr')
+        include_optical: Include optical images (default: True)
+        streaming: Use streaming converter for large datasets.
             - False: Use standard converter (default)
             - True: Force streaming converter
-            - "auto": Auto-detect based on estimated dataset size (>10GB)
+            - "auto": Auto-detect based on dataset size (>10GB)
+        region: For multi-region datasets (e.g. Bruker timsTOF),
+            select a specific region number. None (default)
+            converts all regions. Passed to the reader as
+            reader_options["region"].
         **kwargs: Additional keyword arguments
 
     Returns:
@@ -323,6 +327,11 @@ def convert_msi(
 
     if not _validate_paths(input_path, output_path):
         return False
+
+    # Merge region into reader_options if provided
+    if region is not None:
+        reader_options = dict(reader_options or {})
+        reader_options["region"] = region
 
     try:
         # Create reader with format-specific options

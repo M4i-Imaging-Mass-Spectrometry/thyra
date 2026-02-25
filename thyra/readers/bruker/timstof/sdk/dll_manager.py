@@ -14,7 +14,7 @@ from typing import Any, Optional
 if platform.system() == "Windows":
     from ctypes import windll
 else:
-    windll = None  # type: ignore[assignment]
+    windll = None
 
 from .....utils.bruker_exceptions import SDKError
 from .platform_detector import PlatformDetector, get_dll_paths, validate_library_path

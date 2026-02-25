@@ -27,7 +27,7 @@ try:
     from shapely.geometry import box
     from spatialdata import SpatialData
     from spatialdata.models import Image2DModel, ShapesModel, TableModel
-    from spatialdata.transformations import Identity
+    from spatialdata.transformations import Affine, Identity, Scale
 
     SPATIALDATA_AVAILABLE = True
 except (ImportError, NotImplementedError) as e:
@@ -41,7 +41,9 @@ except (ImportError, NotImplementedError) as e:
     TableModel = None
     ShapesModel = None
     Image2DModel = None
+    Affine = None
     Identity = None
+    Scale = None
     box = None
     gpd = None
 
@@ -141,6 +143,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         # Optical-MSI alignment (computed from FlexImaging Area definitions)
         self._alignment_result: Optional[AreaAlignmentResult] = None
+        # Affine matrix mapping TIC raster indices to optical image pixels
+        self._tic_to_image_matrix: Optional[NDArray[np.float64]] = None
+        # Primary optical image filename from .mis <ImageFile> and its dimensions
+        self._primary_optical_filename: Optional[str] = None
+        self._primary_optical_dims: Optional[Tuple[int, int]] = None  # (width, height)
 
         # Metadata caches (populated lazily during conversion)
         self._essential_metadata_cached: Optional[EssentialMetadata] = None
@@ -148,7 +155,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         self._spectrum_metadata_cached: Optional[Dict[str, Any]] = None
         self._resampling_metadata_cached: Optional[Dict[str, Any]] = None
 
-    def _setup_resampling(self) -> None:
+    def _setup_resampling(self) -> None:  # noqa: C901
         """Set up resampling configuration and strategy."""
         if not self._resampling_config:
             return
@@ -347,6 +354,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             self._store_instrument_info(adata, comp_meta)
             self._store_essential_metadata(adata, comp_meta)
             self._store_raw_metadata(adata, comp_meta)
+            self._store_region_info(adata)
 
             logging.debug("Added MSI metadata to AnnData .uns")
         except Exception as e:
@@ -386,6 +394,16 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         """Store raw metadata (complete original data for future use)."""
         if hasattr(comp_meta, "raw_metadata") and comp_meta.raw_metadata:
             adata.uns["raw_metadata"] = self._serialize_for_zarr(comp_meta.raw_metadata)
+
+    def _store_region_info(self, adata) -> None:
+        """Store acquisition region summary in uns.
+
+        Always written for a consistent schema. Single-region datasets
+        get a single-entry list with region_number=1.
+        """
+        region_info = getattr(self, "_region_info", None)
+        if region_info:
+            adata.uns["regions"] = self._serialize_for_zarr(region_info)
 
     def _serialize_for_zarr(self, obj):
         """Recursively convert tuples to lists for Zarr serialization."""
@@ -463,8 +481,8 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             # bins = (max_mz - min_mz) / width_at_mz
             bins = int((max_mz - min_mz) / width_at_mz)
 
-        # Ensure reasonable bounds
-        bins = max(100, min(bins, 100000))  # Between 100 and 100k bins
+        # Ensure minimum bin count
+        bins = max(100, bins)
 
         logging.info(f"Calculated {bins} bins for {axis_name} axis type")
         return bins
@@ -654,8 +672,23 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             # Only load comprehensive metadata if needed (lazy loading)
             self._metadata = None  # Will be loaded on demand
 
+            # Fetch region data from reader (available for multi-region datasets)
+            # Always populate region metadata for a consistent schema:
+            # - obs["region_number"] exists on every dataset
+            # - uns["regions"] always has at least one entry
+            # Single-region or unknown-region datasets default to region 1.
+            self._region_map = self.reader.get_region_map()
+            self._region_info = self.reader.get_region_info()
+            if self._region_info:
+                logging.info(
+                    f"Region metadata available: {len(self._region_info)} regions"
+                )
+            else:
+                self._region_info = [{"region_number": 1, "n_spectra": self._n_spectra}]
+
             # Compute optical alignment for FlexImaging data
             self._compute_optical_alignment()
+            self._build_tic_to_image_affine()
 
             logging.info(f"Dataset dimensions: {self._dimensions}")
             logging.info(f"Coordinate bounds: {self._coordinate_bounds}")
@@ -857,7 +890,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # This method should be overridden by specific converters (2D/3D)
         pass
 
-    def _create_sparse_matrix(self) -> Dict[str, Any]:  # type: ignore[override]
+    def _create_sparse_matrix(self) -> Dict[str, Any]:
         """Create COO arrays for storing intensity values.
 
         Returns:
@@ -972,7 +1005,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
     def _add_to_sparse_matrix(
         self,
-        coo_arrays: Dict[str, Any],  # type: ignore[override]
+        coo_arrays: Dict[str, Any],
         pixel_idx: int,
         mz_indices: NDArray[np.int_],
         intensities: NDArray[np.float64],
@@ -1054,7 +1087,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             raster_y: NDArray[np.int_] = adata.obs["y"].values
 
             # Default half-pixel size (fallback if region lookup fails)
-            default_half_pixel = 10.0
+            default_half_pixel = (10.0, 10.0)
             if self._alignment_result.region_mappings:
                 # Use first region as default
                 rm = self._alignment_result.region_mappings[0]
@@ -1067,16 +1100,17 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
                 if img_coords is not None:
                     ix, iy = img_coords
-                    # Get region-specific half-pixel size (square pixels)
+                    # Get region-specific half-pixel size (may be non-square)
                     half_pixel = self._alignment_result.get_half_pixel_size(rx, ry)
                     if half_pixel is None:
                         half_pixel = default_half_pixel
 
+                    half_x, half_y = half_pixel
                     pixel_box = box(
-                        ix - half_pixel,
-                        iy - half_pixel,
-                        ix + half_pixel,
-                        iy + half_pixel,
+                        ix - half_x,
+                        iy - half_y,
+                        ix + half_x,
+                        iy + half_y,
                     )
                     geometries.append(pixel_box)
                     valid_indices.append(i)
@@ -1097,12 +1131,15 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             # Standard physical coordinates (micrometers)
             x_coords: NDArray[np.float64] = adata.obs["spatial_x"].values
             y_coords: NDArray[np.float64] = adata.obs["spatial_y"].values
-            half_pixel = self.pixel_size_um / 2
+            half_pixel_um = self.pixel_size_um / 2
 
             for i in range(len(adata)):
                 x, y = x_coords[i], y_coords[i]
                 pixel_box = box(
-                    x - half_pixel, y - half_pixel, x + half_pixel, y + half_pixel
+                    x - half_pixel_um,
+                    y - half_pixel_um,
+                    x + half_pixel_um,
+                    y + half_pixel_um,
                 )
                 geometries.append(pixel_box)
 
@@ -1152,6 +1189,12 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         first_raster_x = header.get("first_raster_x", 0)
         first_raster_y = header.get("first_raster_y", 0)
 
+        # Store the primary optical image filename from <ImageFile>
+        image_file = mis_metadata.get("ImageFile", "")
+        if image_file:
+            self._primary_optical_filename = Path(image_file).stem.lower()
+            logging.info(f"Primary alignment image from .mis: {image_file}")
+
         # Compute area-based alignment
         try:
             aligner = TeachingPointAlignment()
@@ -1169,11 +1212,102 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             logging.warning(f"Failed to compute optical alignment: {e}")
             self._alignment_result = None
 
+    def _build_tic_to_image_affine(self) -> None:
+        """Build affine matrix mapping TIC raster-index coords to image pixels.
+
+        When optical alignment is available, this creates a 3x3 affine matrix
+        that transforms TIC image coordinates (integer raster indices) into
+        optical image pixel coordinates, so the TIC overlays correctly on the
+        optical image in SpatialData.
+
+        For single-region data, uses that region's mapping directly.
+        For multi-region data, computes a global affine from the overall
+        raster bounds and overall image bounds across all regions.
+
+        The matrix encodes: image_pixel = scale * raster_index + offset
+        where offset places the first pixel center at image_min + half_pixel.
+        """
+        if self._alignment_result is None:
+            return
+        if not self._alignment_result.region_mappings:
+            return
+
+        mappings = self._alignment_result.region_mappings
+
+        if len(mappings) == 1:
+            # Single region: use its mapping directly
+            rm = mappings[0]
+            n_raster_x = rm.raster_max_x - rm.raster_min_x + 1
+            image_width = rm.image_max_x - rm.image_min_x
+            scale_x = image_width / max(1, n_raster_x)
+            n_raster_y = rm.raster_max_y - rm.raster_min_y + 1
+            image_height = rm.image_max_y - rm.image_min_y
+            scale_y = image_height / max(1, n_raster_y)
+            half_x = scale_x / 2.0
+            half_y = scale_y / 2.0
+            tx = rm.image_min_x + half_x
+            ty = rm.image_min_y + half_y
+        else:
+            # Multi-region: compute global affine from overall bounds.
+            # The TIC grid covers the full normalized raster space
+            # (0..n_x-1, 0..n_y-1). We map this to the bounding box
+            # of all region image areas.
+            first_rx = self._alignment_result.first_raster_x
+            first_ry = self._alignment_result.first_raster_y
+
+            # Global raster bounds (original coords)
+            global_raster_min_x = min(rm.raster_min_x for rm in mappings)
+            global_raster_max_x = max(rm.raster_max_x for rm in mappings)
+            global_raster_min_y = min(rm.raster_min_y for rm in mappings)
+            global_raster_max_y = max(rm.raster_max_y for rm in mappings)
+
+            # Global image bounds
+            global_img_min_x = min(rm.image_min_x for rm in mappings)
+            global_img_max_x = max(rm.image_max_x for rm in mappings)
+            global_img_min_y = min(rm.image_min_y for rm in mappings)
+            global_img_max_y = max(rm.image_max_y for rm in mappings)
+
+            n_raster_x = global_raster_max_x - global_raster_min_x + 1
+            n_raster_y = global_raster_max_y - global_raster_min_y + 1
+            image_width = global_img_max_x - global_img_min_x
+            image_height = global_img_max_y - global_img_min_y
+
+            scale_x = image_width / max(1, n_raster_x)
+            scale_y = image_height / max(1, n_raster_y)
+            half_x = scale_x / 2.0
+            half_y = scale_y / 2.0
+
+            # The TIC grid index (0,0) corresponds to original raster
+            # position (first_rx, first_ry). We need to account for
+            # any gap between first_rx and global_raster_min_x.
+            offset_raster_x = first_rx - global_raster_min_x
+            offset_raster_y = first_ry - global_raster_min_y
+
+            tx = global_img_min_x + half_x + offset_raster_x * scale_x
+            ty = global_img_min_y + half_y + offset_raster_y * scale_y
+
+        # 3x3 affine: [[sx, 0, tx], [0, sy, ty], [0, 0, 1]]
+        self._tic_to_image_matrix = np.array(
+            [
+                [scale_x, 0, tx],
+                [0, scale_y, ty],
+                [0, 0, 1],
+            ],
+            dtype=np.float64,
+        )
+        logging.info(
+            f"Built TIC-to-image affine: "
+            f"scale=({scale_x:.2f}, {scale_y:.2f}), "
+            f"offset=({tx:.1f}, {ty:.1f})"
+        )
+
     def _add_optical_images(self, data_structures: Dict[str, Any]) -> None:
         """Load and add optical images from the reader to data structures.
 
         Finds optical TIFF files associated with the MSI data and adds them
-        as image layers in the SpatialData output.
+        as image layers in the SpatialData output. The primary alignment image
+        (from .mis <ImageFile>) is loaded first so its dimensions are known
+        when computing Scale transforms for the other images.
 
         Args:
             data_structures: Data structures dict to add images to
@@ -1188,16 +1322,53 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         logging.info(f"Found {len(optical_paths)} optical image(s)")
 
-        for tiff_path in optical_paths:
+        # Load primary image first so we know its dimensions for scaling others
+        primary_paths = [p for p in optical_paths if self._is_primary_optical(p)]
+        other_paths = [p for p in optical_paths if not self._is_primary_optical(p)]
+
+        for tiff_path in primary_paths + other_paths:
             try:
                 self._load_single_optical_image(tiff_path, data_structures)
             except Exception as e:
                 logging.warning(f"Failed to load optical image {tiff_path.name}: {e}")
 
+    def _is_primary_optical(self, tiff_path: Path) -> bool:
+        """Check if a TIFF file is the primary alignment image from .mis."""
+        if not self._primary_optical_filename:
+            return False
+        return tiff_path.stem.lower() == self._primary_optical_filename
+
+    def _compute_optical_scale_transform(self, x_size: int, y_size: int) -> Any:
+        """Compute a Scale transform for a non-primary optical image.
+
+        Maps the image's pixel coordinates to the primary alignment image's
+        coordinate space using the dimension ratio.
+
+        Args:
+            x_size: Width of the non-primary image
+            y_size: Height of the non-primary image
+
+        Returns:
+            Scale transform, or Identity if no primary dimensions available
+        """
+        if self._primary_optical_dims is None:
+            return Identity()
+
+        primary_w, primary_h = self._primary_optical_dims
+        scale_x = primary_w / x_size
+        scale_y = primary_h / y_size
+
+        logging.info(f"  Scale to primary: ({scale_x:.4f}, {scale_y:.4f})")
+        return Scale([scale_x, scale_y], axes=("x", "y"))
+
     def _load_single_optical_image(
         self, tiff_path: Path, data_structures: Dict[str, Any]
     ) -> None:
         """Load a single optical TIFF and add it to data structures.
+
+        The primary image (identified by .mis <ImageFile>) gets an Identity
+        transform. Other images get a Scale transform mapping their pixel
+        coordinates to the primary image's coordinate space.
 
         Args:
             tiff_path: Path to the TIFF file
@@ -1245,8 +1416,18 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 },
             )
 
-            # Create Image2DModel
-            transform = Identity()
+            # Determine transform: primary image gets Identity,
+            # others get Scale to align with primary image space
+            is_primary = self._is_primary_optical(tiff_path)
+            if is_primary:
+                transform = Identity()
+                self._primary_optical_dims = (x_size, y_size)
+                logging.info(f"  Primary alignment image: {x_size}x{y_size}")
+            elif self._primary_optical_dims is not None:
+                transform = self._compute_optical_scale_transform(x_size, y_size)
+            else:
+                transform = Identity()
+
             data_structures["images"][image_name] = Image2DModel.parse(
                 optical_image,
                 transformations={

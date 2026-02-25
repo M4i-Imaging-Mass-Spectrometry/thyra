@@ -399,6 +399,15 @@ def _handle_post_conversion(
     "'auto' enables streaming for datasets >10GB, 'true' forces streaming, "
     "'false' uses standard converter (default).",
 )
+# Region selection options
+@click.option(
+    "--region",
+    type=int,
+    default=None,
+    help="For multi-region datasets (e.g. Bruker timsTOF), "
+    "select a specific region number. By default all regions "
+    "are converted.",
+)
 def main(
     input: Path,
     output: Path,
@@ -423,6 +432,7 @@ def main(
     include_optical: bool,
     intensity_threshold: Optional[float],
     streaming: str,
+    region: Optional[int],
 ):
     """Convert MSI data to SpatialData format.
 
@@ -482,6 +492,7 @@ def main(
         sparse_format=sparse_format,
         include_optical=include_optical,
         streaming=_parse_streaming_option(streaming),
+        region=region,
     )
 
     _handle_post_conversion(success, optimize_chunks, format, output, dataset_id)
