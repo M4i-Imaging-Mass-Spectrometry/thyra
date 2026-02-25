@@ -137,6 +137,39 @@ class BrukerMetadataExtractor(MetadataExtractor):
 
         return min_mass, max_mass
 
+    def _resolve_imaging_bounds(
+        self,
+        frame_result: tuple,
+        bounds_data: Dict[str, Any],
+    ) -> Tuple[int, int, int, int]:
+        """Resolve imaging area bounds from frame data and global metadata.
+
+        Args:
+            frame_result: (min_x, max_x, min_y, max_y, count) from MaldiFrameInfo.
+            bounds_data: Global metadata dictionary with ImagingArea keys.
+
+        Returns:
+            Tuple of (min_x, max_x, min_y, max_y) imaging bounds.
+        """
+        min_x_raw, max_x_raw, min_y_raw, max_y_raw, _ = frame_result
+
+        if self._region is not None:
+            # Per-region: use actual coordinate bounds from the filtered query
+            return (
+                min_x_raw or 0,
+                max_x_raw or 0,
+                min_y_raw or 0,
+                max_y_raw or 0,
+            )
+
+        # Global: prefer ImagingArea from GlobalMetadata, fall back to frame bounds
+        return (
+            bounds_data.get("ImagingAreaMinXIndexPos", min_x_raw or 0),
+            bounds_data.get("ImagingAreaMaxXIndexPos", max_x_raw or 0),
+            bounds_data.get("ImagingAreaMinYIndexPos", min_y_raw or 0),
+            bounds_data.get("ImagingAreaMaxYIndexPos", max_y_raw or 0),
+        )
+
     def _extract_essential_impl(self) -> EssentialMetadata:
         """Extract essential metadata with proper coordinate normalization."""
         cursor = self.conn.cursor()
@@ -151,37 +184,15 @@ class BrukerMetadataExtractor(MetadataExtractor):
             if not frame_result:
                 raise ValueError("No data found in MaldiFrameInfo table")
 
-            min_x_raw, max_x_raw, min_y_raw, max_y_raw, frame_count = frame_result
-
-            if self._region is not None:
-                # Per-region: use actual coordinate bounds from
-                # the filtered query as both bounds and offsets
-                imaging_min_x = min_x_raw or 0
-                imaging_max_x = max_x_raw or 0
-                imaging_min_y = min_y_raw or 0
-                imaging_max_y = max_y_raw or 0
-            else:
-                # Global: use ImagingArea from GlobalMetadata
-                imaging_min_x = bounds_data.get(
-                    "ImagingAreaMinXIndexPos", min_x_raw or 0
-                )
-                imaging_max_x = bounds_data.get(
-                    "ImagingAreaMaxXIndexPos", max_x_raw or 0
-                )
-                imaging_min_y = bounds_data.get(
-                    "ImagingAreaMinYIndexPos", min_y_raw or 0
-                )
-                imaging_max_y = bounds_data.get(
-                    "ImagingAreaMaxYIndexPos", max_y_raw or 0
-                )
+            imaging_min_x, imaging_max_x, imaging_min_y, imaging_max_y = (
+                self._resolve_imaging_bounds(frame_result, bounds_data)
+            )
 
             # Store imaging area offsets for coordinate normalization
             imaging_area_offsets = (int(imaging_min_x), int(imaging_min_y), 0)
 
             # Normalize coordinates to start from 0
-            min_x = 0.0
             max_x = float(imaging_max_x - imaging_min_x)
-            min_y = 0.0
             max_y = float(imaging_max_y - imaging_min_y)
 
             # Extract beam sizes and validate mass range
@@ -191,12 +202,11 @@ class BrukerMetadataExtractor(MetadataExtractor):
             min_mass, max_mass = self._validate_mass_range(bounds_data)
 
             # Build final metadata objects
-            dimensions = self._calculate_dimensions_from_coords(
-                min_x, max_x, min_y, max_y
-            )
-            coordinate_bounds = (float(min_x), float(max_x), float(min_y), float(max_y))
+            dimensions = self._calculate_dimensions_from_coords(0.0, max_x, 0.0, max_y)
+            coordinate_bounds = (0.0, float(max_x), 0.0, float(max_y))
             pixel_size = (float(beam_x), float(beam_y)) if beam_x and beam_y else None
             mass_range = (float(min_mass), float(max_mass))
+            _, _, _, _, frame_count = frame_result
             n_spectra = int(frame_count) if frame_count else 0
             estimated_memory = self._estimate_memory_from_frames(n_spectra)
 
