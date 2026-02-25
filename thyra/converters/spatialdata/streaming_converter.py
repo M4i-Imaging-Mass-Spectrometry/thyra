@@ -14,7 +14,7 @@ import logging
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -760,7 +760,9 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 # Make sure region column exists and is correct
                 region_key = f"{slice_id}_pixels"
                 if "region" not in adata.obs.columns:
-                    adata.obs["region"] = region_key
+                    adata.obs["region"] = pd.Categorical([region_key] * len(adata))
+                elif not isinstance(adata.obs["region"].dtype, pd.CategoricalDtype):
+                    adata.obs["region"] = pd.Categorical(adata.obs["region"])
 
                 # Make sure instance_key is a string column
                 adata.obs["instance_key"] = adata.obs.index.astype(str)
@@ -1420,48 +1422,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         )
 
         # === Create Pixel Shapes ===
-        # Create coordinate arrays (row-major order: y slowest, x fastest)
-        y_indices = np.repeat(np.arange(n_y), n_x)
-        x_indices = np.tile(np.arange(n_x), n_y)
-
-        from shapely import box as shapely_box_vectorized
-
-        if (
-            self._alignment_result is not None
-            and self._alignment_result.region_mappings
-        ):
-            # Use optical alignment - transform raster coords to image pixels
-            rm = self._alignment_result.region_mappings[0]
-            scale = rm._get_pixel_scale()
-            half = scale / 2.0
-            first_rx = self._alignment_result.first_raster_x
-            first_ry = self._alignment_result.first_raster_y
-
-            # Convert raster indices to original raster coords, then to image pixels
-            orig_x = x_indices + first_rx
-            orig_y = y_indices + first_ry
-            img_x = rm.image_min_x + half + (orig_x - rm.raster_min_x) * scale
-            img_y = rm.image_min_y + half + (orig_y - rm.raster_min_y) * scale
-
-            geometries = shapely_box_vectorized(
-                img_x - half, img_y - half, img_x + half, img_y + half
-            )
-        else:
-            # Physical micrometer coordinates
-            half_pixel = self.pixel_size_um / 2
-            spatial_x = x_indices * self.pixel_size_um
-            spatial_y = y_indices * self.pixel_size_um
-
-            geometries = shapely_box_vectorized(
-                spatial_x - half_pixel,
-                spatial_y - half_pixel,
-                spatial_x + half_pixel,
-                spatial_y + half_pixel,
-            )
-
-        # Create GeoDataFrame with string indices matching obs
-        instance_ids = [str(i) for i in range(n_rows)]
-        gdf = gpd.GeoDataFrame(geometry=geometries, index=instance_ids)
+        gdf = self._create_streaming_pixel_shapes(n_rows, n_x, n_y)
 
         shape_transform = Identity()
         shapes = ShapesModel.parse(
@@ -1512,8 +1473,89 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
             logging.debug(f"Traceback:\n{traceback.format_exc()}")
 
+    def _create_streaming_pixel_shapes(
+        self, n_rows: int, n_x: int, n_y: int
+    ) -> "gpd.GeoDataFrame":
+        """Create pixel shape geometries for the streaming converter.
+
+        Args:
+            n_rows: Total number of pixels.
+            n_x: Number of pixels in x dimension.
+            n_y: Number of pixels in y dimension.
+
+        Returns:
+            GeoDataFrame with pixel box geometries.
+        """
+        y_indices = np.repeat(np.arange(n_y), n_x)
+        x_indices = np.tile(np.arange(n_x), n_y)
+
+        from shapely import box as shapely_box_vectorized
+        from shapely.geometry import box as shapely_box_single
+
+        valid_indices: Optional[List[int]] = None
+
+        if (
+            self._alignment_result is not None
+            and self._alignment_result.region_mappings
+        ):
+            # Use optical alignment - transform raster coords to image pixels.
+            default_half_pixel = self._alignment_result.region_mappings[
+                0
+            ].get_half_pixel_size()
+
+            valid_geometries: List[Any] = []
+            valid_indices = []
+            for i in range(n_rows):
+                rx, ry = int(x_indices[i]), int(y_indices[i])
+                img_coords = self._alignment_result.transform_point(rx, ry)
+
+                if img_coords is not None:
+                    ix, iy = img_coords
+                    half_pixel = self._alignment_result.get_half_pixel_size(rx, ry)
+                    if half_pixel is None:
+                        half_pixel = default_half_pixel
+                    half_x, half_y = half_pixel
+                    valid_geometries.append(
+                        shapely_box_single(
+                            ix - half_x, iy - half_y, ix + half_x, iy + half_y
+                        )
+                    )
+                    valid_indices.append(i)
+
+            n_skipped = n_rows - len(valid_indices)
+            if n_skipped > 0:
+                logging.info(
+                    f"Created {len(valid_geometries)} shapes using optical "
+                    f"alignment (skipped {n_skipped} empty grid positions)"
+                )
+
+            geometries = valid_geometries
+        else:
+            # Physical micrometer coordinates
+            half_pixel_um = self.pixel_size_um / 2
+            spatial_x = x_indices * self.pixel_size_um
+            spatial_y = y_indices * self.pixel_size_um
+
+            geometries = shapely_box_vectorized(
+                spatial_x - half_pixel_um,
+                spatial_y - half_pixel_um,
+                spatial_x + half_pixel_um,
+                spatial_y + half_pixel_um,
+            )
+
+        # Create GeoDataFrame with string indices matching obs
+        if valid_indices is not None:
+            instance_ids = [str(i) for i in valid_indices]
+        else:
+            instance_ids = [str(i) for i in range(n_rows)]
+        return gpd.GeoDataFrame(geometry=geometries, index=instance_ids)
+
     def _add_optical_images_to_sdata(self, sdata: "SpatialData", slice_id: str) -> None:
         """Add optical images directly to SpatialData store.
+
+        The primary alignment image (from .mis <ImageFile>) gets an Identity
+        transform and is loaded first. Other images get a Scale transform
+        mapping their pixel coordinates to the primary image's space.
 
         Args:
             sdata: SpatialData object to add images to
@@ -1531,11 +1573,14 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
         logging.info(f"  Adding {len(optical_paths)} optical image(s)...")
 
-        for tiff_path in optical_paths:
+        # Load primary image first so we know its dimensions for scaling others
+        primary_paths = [p for p in optical_paths if self._is_primary_optical(p)]
+        other_paths = [p for p in optical_paths if not self._is_primary_optical(p)]
+
+        for tiff_path in primary_paths + other_paths:
             try:
                 # Generate image name
-                stem = tiff_path.stem.replace(" ", "_").replace("-", "_")
-                image_name = f"{self.dataset_id}_optical_{stem}"
+                image_name = self._generate_optical_image_name(tiff_path)
 
                 logging.info(f"    Loading: {tiff_path.name} as '{image_name}'")
 
@@ -1567,8 +1612,20 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                         },
                     )
 
-                    # Create Image2DModel
-                    transform = Identity()
+                    # Determine transform: primary gets Identity,
+                    # others get Scale to align with primary
+                    is_primary = self._is_primary_optical(tiff_path)
+                    if is_primary:
+                        transform = Identity()
+                        self._primary_optical_dims = (x_size, y_size)
+                        logging.info(f"    Primary alignment image: {x_size}x{y_size}")
+                    elif self._primary_optical_dims is not None:
+                        transform = self._compute_optical_scale_transform(
+                            x_size, y_size
+                        )
+                    else:
+                        transform = Identity()
+
                     optical_image = Image2DModel.parse(
                         optical_xarray,
                         transformations={

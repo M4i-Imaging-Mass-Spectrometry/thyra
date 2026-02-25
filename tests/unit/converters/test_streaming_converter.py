@@ -117,6 +117,14 @@ class MockMSIReader:
         # All pixels have the same number of peaks
         return np.full(n_pixels, self.peaks_per_spectrum, dtype=np.int32)
 
+    def get_region_map(self):
+        """Return None (single-region mock)."""
+        return None
+
+    def get_region_info(self):
+        """Return None (single-region mock)."""
+        return None
+
     def close(self):
         """Mock close method."""
         pass

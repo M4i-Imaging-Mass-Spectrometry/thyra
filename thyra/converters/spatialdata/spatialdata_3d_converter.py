@@ -4,6 +4,7 @@ import logging
 from typing import Any, Dict, Tuple
 
 import numpy as np
+import pandas as pd
 from numpy.typing import NDArray
 
 from .base_spatialdata_converter import SPATIALDATA_AVAILABLE, BaseSpatialDataConverter
@@ -186,7 +187,9 @@ class SpatialData3DConverter(BaseSpatialDataConverter):
             # Make sure region column exists and is correct
             region_key = f"{self.dataset_id}_pixels"
             if "region" not in adata.obs.columns:
-                adata.obs["region"] = region_key
+                adata.obs["region"] = pd.Categorical([region_key] * len(adata))
+            elif not isinstance(adata.obs["region"].dtype, pd.CategoricalDtype):
+                adata.obs["region"] = pd.Categorical(adata.obs["region"])
 
             # Ensure instance_key is a string column
             adata.obs["instance_key"] = adata.obs.index.astype(str)

@@ -141,6 +141,20 @@ class SpatialData2DConverter(BaseSpatialDataConverter):
         coords_df["spatial_x"] = coords_df["x"] * self.pixel_size_um
         coords_df["spatial_y"] = coords_df["y"] * self.pixel_size_um
 
+        # Always add per-pixel region numbers for a consistent schema.
+        # Multi-region datasets use the reader's region map; single-region
+        # or unknown-region datasets default to region 1.
+        region_map = getattr(self, "_region_map", None)
+        if region_map is not None:
+            region_numbers = np.full(pixel_count, -1, dtype=np.int32)
+            for i in range(pixel_count):
+                key = (int(x_values[i]), int(y_values[i]))
+                if key in region_map:
+                    region_numbers[i] = region_map[key]
+            coords_df["region_number"] = region_numbers
+        else:
+            coords_df["region_number"] = np.ones(pixel_count, dtype=np.int32)
+
         return coords_df
 
     def _process_single_spectrum(
@@ -276,7 +290,9 @@ class SpatialData2DConverter(BaseSpatialDataConverter):
                 # Make sure region column exists and is correct
                 region_key = f"{slice_id}_pixels"
                 if "region" not in adata.obs.columns:
-                    adata.obs["region"] = region_key
+                    adata.obs["region"] = pd.Categorical([region_key] * len(adata))
+                elif not isinstance(adata.obs["region"].dtype, pd.CategoricalDtype):
+                    adata.obs["region"] = pd.Categorical(adata.obs["region"])
 
                 # Make sure instance_key is a string column
                 adata.obs["instance_key"] = adata.obs.index.astype(str)

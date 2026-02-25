@@ -213,8 +213,8 @@ class BrukerReader(BrukerBaseMSIReader):
             batch_size: Ignored, maintained for compatibility
             progress_callback: Optional callback for progress updates
             region: Region number to process for multi-region datasets.
-                None (default): auto-select the largest region if multiple
-                exist. int: explicitly select that region number.
+                None (default): convert all regions (no filtering).
+                int: explicitly select that region number only.
             **kwargs: Additional arguments
         """
         super().__init__(data_path, **kwargs)
@@ -533,46 +533,113 @@ class BrukerReader(BrukerBaseMSIReader):
             return []
 
     def _select_region(self) -> Tuple[Optional[int], Optional[set]]:
-        """Select region based on user request or auto-detection.
+        """Select region based on user request or convert all regions.
+
+        By default, all regions are converted (no filtering). The user can
+        explicitly select a single region via the region= parameter.
 
         Returns:
             Tuple of (selected_region_number, set_of_frame_ids).
-            Both are None when no filtering is needed (single region).
+            Both are None when no filtering is needed (default: all regions).
         """
         if not self._region_info or len(self._region_info) <= 1:
             return (None, None)
 
         # Multiple regions exist
         valid_regions = [r for r, _ in self._region_info]
+        total_spectra = sum(n for _, n in self._region_info)
 
         if self._requested_region is not None:
+            # User explicitly requested a specific region
             if self._requested_region not in valid_regions:
                 raise ValueError(
                     f"Region {self._requested_region} not found. "
                     f"Available regions: {valid_regions}"
                 )
             selected = self._requested_region
-        else:
-            # Auto-select largest region
-            selected = self._region_info[0][0]  # Sorted by count DESC
-            logger.warning(
-                f"Multi-region dataset detected "
-                f"({len(self._region_info)} regions). "
-                f"Auto-selecting region {selected} "
-                f"({self._region_info[0][1]:,} spectra). "
-                f"Use region= parameter to select a different region."
+
+            # Get frame IDs for selected region
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "SELECT Frame FROM MaldiFrameInfo WHERE RegionNumber = ?",
+                (selected,),
             )
+            frame_ids = {int(row[0]) for row in cursor.fetchall()}
+            logger.info(
+                f"Region {selected}: {len(frame_ids):,} frames selected "
+                f"(use region=None to convert all regions)"
+            )
+            return (selected, frame_ids)
 
-        # Get frame IDs for selected region
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "SELECT Frame FROM MaldiFrameInfo WHERE RegionNumber = ?",
-            (selected,),
+        # Default: convert all regions, no filtering
+        logger.info(
+            f"Multi-region dataset: converting all {len(self._region_info)} "
+            f"regions ({total_spectra:,} total spectra). "
+            f"Use region= parameter to select a specific region."
         )
-        frame_ids = {int(row[0]) for row in cursor.fetchall()}
-        logger.info(f"Region {selected}: {len(frame_ids):,} frames selected")
+        return (None, None)
 
-        return (selected, frame_ids)
+    def get_region_map(self) -> Optional[Dict[tuple, int]]:
+        """Get per-pixel region mapping from MaldiFrameInfo.
+
+        Maps each normalized (0-based) (x, y) coordinate to its acquisition
+        region number. Uses the same coordinate offsets as iter_spectra() so
+        the mapping is consistent with obs indices.
+
+        Returns:
+            Dict mapping (x, y) tuples to region numbers, or None if
+            region information is not available (single-region dataset).
+        """
+        if not self._region_info or len(self._region_info) <= 1:
+            return None
+
+        coordinate_offsets = self._get_coordinate_offsets()
+        region_map: Dict[tuple, int] = {}
+
+        try:
+            cursor = self.conn.cursor()
+            if self._selected_region is not None:
+                cursor.execute(
+                    "SELECT XIndexPos, YIndexPos, RegionNumber "
+                    "FROM MaldiFrameInfo WHERE RegionNumber = ?",
+                    (self._selected_region,),
+                )
+            else:
+                cursor.execute(
+                    "SELECT XIndexPos, YIndexPos, RegionNumber " "FROM MaldiFrameInfo"
+                )
+
+            for x, y, region_num in cursor.fetchall():
+                nx, ny = int(x), int(y)
+                if coordinate_offsets:
+                    nx -= coordinate_offsets[0]
+                    ny -= coordinate_offsets[1]
+                region_map[(nx, ny)] = int(region_num)
+
+            logger.info(
+                f"Built region map: {len(region_map)} pixels across "
+                f"{len(set(region_map.values()))} regions"
+            )
+            return region_map
+
+        except sqlite3.OperationalError as e:
+            logger.warning(f"Could not build region map: {e}")
+            return None
+
+    def get_region_info(self) -> Optional[list]:
+        """Get summary information about acquisition regions.
+
+        Returns:
+            List of region summary dicts with region_number and n_spectra,
+            or None if region information is not available.
+        """
+        if not self._region_info or len(self._region_info) <= 1:
+            return None
+
+        return [
+            {"region_number": region_num, "n_spectra": n_frames}
+            for region_num, n_frames in self._region_info
+        ]
 
     def get_common_mass_axis(self) -> NDArray[np.float64]:
         """Return the common mass axis composed of all unique m/z values.
@@ -1036,8 +1103,12 @@ class BrukerReader(BrukerBaseMSIReader):
     def _build_header_alignment(self) -> Dict[str, Any]:
         """Build header dict with first_raster offsets for alignment.
 
-        The first_raster_x/y values are the ImagingArea minimum coordinates,
-        which serve as the origin offset for normalizing raster positions.
+        The first_raster_x/y values must match the coordinate offsets used
+        by BrukerMetadataExtractor so that transform_point() correctly
+        de-normalizes 0-based raster coordinates back to originals.
+
+        When a specific region is selected, uses per-region minimums from
+        MaldiFrameInfo. Otherwise uses global ImagingArea from GlobalMetadata.
 
         Returns:
             Dictionary with first_raster_x and first_raster_y keys.
@@ -1048,28 +1119,50 @@ class BrukerReader(BrukerBaseMSIReader):
 
         try:
             cursor = self.conn.cursor()
-            cursor.execute(
-                "SELECT Value FROM GlobalMetadata "
-                "WHERE Key = 'ImagingAreaMinXIndexPos'"
-            )
-            result_x = cursor.fetchone()
-            cursor.execute(
-                "SELECT Value FROM GlobalMetadata "
-                "WHERE Key = 'ImagingAreaMinYIndexPos'"
-            )
-            result_y = cursor.fetchone()
 
-            if result_x and result_y:
-                header = {
-                    "first_raster_x": int(float(result_x[0])),
-                    "first_raster_y": int(float(result_y[0])),
-                }
-                logger.info(
-                    f"Alignment offsets: first_raster=("
-                    f"{header['first_raster_x']}, "
-                    f"{header['first_raster_y']})"
+            if self._selected_region is not None:
+                # Per-region: use actual min from the selected region's frames
+                # This matches BrukerMetadataExtractor's per-region offsets
+                cursor.execute(
+                    "SELECT MIN(XIndexPos), MIN(YIndexPos) "
+                    "FROM MaldiFrameInfo WHERE RegionNumber = ?",
+                    (self._selected_region,),
                 )
-                return header
+                result = cursor.fetchone()
+                if result and result[0] is not None and result[1] is not None:
+                    header = {
+                        "first_raster_x": int(result[0]),
+                        "first_raster_y": int(result[1]),
+                    }
+                else:
+                    return {}
+            else:
+                # Global: use ImagingArea from GlobalMetadata
+                cursor.execute(
+                    "SELECT Value FROM GlobalMetadata "
+                    "WHERE Key = 'ImagingAreaMinXIndexPos'"
+                )
+                result_x = cursor.fetchone()
+                cursor.execute(
+                    "SELECT Value FROM GlobalMetadata "
+                    "WHERE Key = 'ImagingAreaMinYIndexPos'"
+                )
+                result_y = cursor.fetchone()
+
+                if result_x and result_y:
+                    header = {
+                        "first_raster_x": int(float(result_x[0])),
+                        "first_raster_y": int(float(result_y[0])),
+                    }
+                else:
+                    return {}
+
+            logger.info(
+                f"Alignment offsets: first_raster=("
+                f"{header['first_raster_x']}, "
+                f"{header['first_raster_y']})"
+            )
+            return header
         except (sqlite3.OperationalError, TypeError) as e:
             logger.warning(f"Could not get alignment offsets: {e}")
 

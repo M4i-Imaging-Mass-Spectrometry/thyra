@@ -145,19 +145,25 @@ class RegionMapping:
     image_min_y: int
     image_max_y: int
 
-    def _get_pixel_scale(self) -> float:
-        """Get the pixel scale for this region (image pixels per raster step).
-
-        The Area bounding box spans from image_min to image_max and must be
-        filled edge-to-edge by (raster_max - raster_min + 1) pixels.
-        Each pixel occupies image_width / n_pixels of the bounding box.
+    def _get_pixel_scale_x(self) -> float:
+        """Get the X pixel scale (image pixels per raster step in X).
 
         Returns:
-            Pixel scale in image pixels per raster step
+            Pixel scale along X axis
         """
         n_pixels = max(1, self.raster_max_x - self.raster_min_x + 1)
         image_width = self.image_max_x - self.image_min_x
         return image_width / n_pixels
+
+    def _get_pixel_scale_y(self) -> float:
+        """Get the Y pixel scale (image pixels per raster step in Y).
+
+        Returns:
+            Pixel scale along Y axis
+        """
+        n_pixels = max(1, self.raster_max_y - self.raster_min_y + 1)
+        image_height = self.image_max_y - self.image_min_y
+        return image_height / n_pixels
 
     def raster_to_image(self, raster_x: int, raster_y: int) -> Tuple[float, float]:
         """Convert raster coordinates to image pixel coordinates.
@@ -166,6 +172,9 @@ class RegionMapping:
         The first pixel center is at image_min + half_pixel, the last at
         image_max - half_pixel, so pixels fill the box edge-to-edge.
 
+        X and Y scales are computed independently so non-square aspect
+        ratios are handled correctly.
+
         Args:
             raster_x: Original raster X coordinate (not normalized)
             raster_y: Original raster Y coordinate (not normalized)
@@ -173,25 +182,29 @@ class RegionMapping:
         Returns:
             Tuple of (image_x, image_y) pixel center coordinates
         """
-        scale = self._get_pixel_scale()
-        half = scale / 2.0
+        scale_x = self._get_pixel_scale_x()
+        scale_y = self._get_pixel_scale_y()
 
         # Pixel center = box_min + half_pixel + offset * scale
-        image_x = self.image_min_x + half + (raster_x - self.raster_min_x) * scale
-        image_y = self.image_min_y + half + (raster_y - self.raster_min_y) * scale
+        image_x = (
+            self.image_min_x + scale_x / 2.0 + (raster_x - self.raster_min_x) * scale_x
+        )
+        image_y = (
+            self.image_min_y + scale_y / 2.0 + (raster_y - self.raster_min_y) * scale_y
+        )
 
         return image_x, image_y
 
-    def get_half_pixel_size(self) -> float:
+    def get_half_pixel_size(self) -> Tuple[float, float]:
         """Get the half-pixel size for this region in image coordinates.
 
-        Returns a single value for square pixels. Uses the same scale as
-        raster_to_image() to ensure pixel size matches spacing (no gaps).
+        Returns independent X and Y half-sizes to handle non-square
+        aspect ratios correctly.
 
         Returns:
-            Half-pixel size in image pixels
+            Tuple of (half_x, half_y) in image pixels
         """
-        return self._get_pixel_scale() / 2
+        return self._get_pixel_scale_x() / 2, self._get_pixel_scale_y() / 2
 
 
 @dataclass
@@ -241,18 +254,22 @@ class AreaAlignmentResult:
 
         return None
 
-    def get_half_pixel_size(self, norm_x: int, norm_y: int) -> Optional[float]:
+    def get_half_pixel_size(
+        self, norm_x: int, norm_y: int
+    ) -> Optional[Tuple[float, float]]:
         """Get the half-pixel size for a given position.
 
-        Returns a single value for square pixels. The scale may vary
-        between regions due to Area definitions.
+        Returns independent X and Y half-sizes to handle non-square
+        aspect ratios. The scale may vary between regions due to
+        Area definitions.
 
         Args:
             norm_x: Normalized (0-based) raster X coordinate
             norm_y: Normalized (0-based) raster Y coordinate
 
         Returns:
-            Half-pixel size in image pixels, or None if no mapping exists
+            Tuple of (half_x, half_y) in image pixels, or None if
+            no mapping exists
         """
         # Convert normalized to original raster coords
         orig_x = norm_x + self.first_raster_x
