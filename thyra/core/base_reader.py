@@ -12,6 +12,8 @@ from ..metadata.types import ComprehensiveMetadata, EssentialMetadata
 if TYPE_CHECKING:
     from .base_extractor import MetadataExtractor
 
+logger = logging.getLogger(__name__)
+
 
 class BaseMSIReader(ABC):
     """Abstract base class for reading MSI data formats."""
@@ -37,7 +39,7 @@ class BaseMSIReader(ABC):
         self._metadata_extractor: Optional["MetadataExtractor"] = None
 
         if intensity_threshold is not None:
-            logging.info(
+            logger.info(
                 f"Intensity threshold active: values < {intensity_threshold} "
                 "will be filtered out"
             )

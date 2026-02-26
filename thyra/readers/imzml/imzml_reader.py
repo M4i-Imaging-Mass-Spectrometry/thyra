@@ -13,6 +13,8 @@ from ...core.base_reader import BaseMSIReader
 from ...core.registry import register_reader
 from ...metadata.extractors.imzml_extractor import ImzMLMetadataExtractor
 
+logger = logging.getLogger(__name__)
+
 
 @register_reader("imzml")
 class ImzMLReader(BaseMSIReader):
@@ -89,7 +91,7 @@ class ImzMLReader(BaseMSIReader):
         self.ibd_file = open(self.ibd_path, mode="rb")
 
         # Initialize the parser
-        logging.info(f"Initializing ImzML parser for {imzml_path}")
+        logger.info(f"Initializing ImzML parser for {imzml_path}")
         try:
             self.parser = ImzMLParser(
                 filename=str(imzml_path),
@@ -99,7 +101,7 @@ class ImzMLReader(BaseMSIReader):
         except Exception as e:
             if self.ibd_file:
                 self.ibd_file.close()
-            logging.error(f"Failed to initialize ImzML parser: {e}")
+            logger.error(f"Failed to initialize ImzML parser: {e}")
             raise
 
         if self.parser.metadata is None:
@@ -134,9 +136,10 @@ class ImzMLReader(BaseMSIReader):
         # Parser should already be initialized when this is called from
         # _initialize_parser
 
-        assert self.parser is not None
+        if self.parser is None:
+            raise RuntimeError("Parser is not initialized")
         n_coords = len(self.parser.coordinates)
-        logging.info(f"Caching {n_coords:,} coordinates...")
+        logger.info(f"Caching {n_coords:,} coordinates...")
 
         # Vectorized conversion using numpy (much faster than Python loop)
         # np.array() on the coordinates list is the main cost here
@@ -148,7 +151,7 @@ class ImzMLReader(BaseMSIReader):
             self._coordinates_array[:, 2] - 1, 0
         )  # z
 
-        logging.info(f"Cached {n_coords:,} coordinates as numpy array")
+        logger.info(f"Cached {n_coords:,} coordinates as numpy array")
 
     def _create_metadata_extractor(self) -> MetadataExtractor:
         """Create ImzML metadata extractor."""
@@ -187,7 +190,7 @@ class ImzMLReader(BaseMSIReader):
             parser = cast(ImzMLParser, self.parser)
 
             if self.is_continuous:
-                logging.info("Using m/z values from first spectrum (continuous mode)")
+                logger.info("Using m/z values from first spectrum (continuous mode)")
                 spectrum_data = parser.getspectrum(0)
                 if spectrum_data is None or len(spectrum_data) < 1:
                     raise ValueError("Could not get first spectrum")
@@ -206,7 +209,7 @@ class ImzMLReader(BaseMSIReader):
     def _extract_continuous_mass_axis(self, parser: ImzMLParser) -> NDArray[np.float64]:
         """Extract continuous mass axis from processed data."""
         # For processed data, collect unique m/z values across spectra
-        logging.info(
+        logger.info(
             "Building common mass axis from all unique m/z values " "(processed mode)"
         )
 
@@ -239,7 +242,7 @@ class ImzMLReader(BaseMSIReader):
                     if mzs.size > 0:
                         all_mzs.append(mzs)
                 except Exception as e:
-                    logging.warning(f"Error getting spectrum {idx}: {e}")
+                    logger.warning(f"Error getting spectrum {idx}: {e}")
                 pbar.update(1)
 
         return all_mzs
@@ -255,7 +258,7 @@ class ImzMLReader(BaseMSIReader):
             if unique_mzs.size == 0:
                 raise ValueError("Failed to extract any m/z values")
 
-            logging.info(
+            logger.info(
                 f"Created common mass axis with {len(unique_mzs)} unique " f"m/z values"
             )
             return unique_mzs
@@ -299,7 +302,7 @@ class ImzMLReader(BaseMSIReader):
             pbar.update(1)
             return None
         except Exception as e:
-            logging.warning(f"Error processing spectrum {idx}: {e}")
+            logger.warning(f"Error processing spectrum {idx}: {e}")
             pbar.update(1)
             return None
 
@@ -368,7 +371,7 @@ class ImzMLReader(BaseMSIReader):
         dimensions = self.get_essential_metadata().dimensions
         total_pixels = dimensions[0] * dimensions[1] * dimensions[2]
 
-        logging.info(
+        logger.info(
             f"Processing {total_spectra} spectra in a grid of " f"{total_pixels} pixels"
         )
 
@@ -478,7 +481,7 @@ class ImzMLReader(BaseMSIReader):
         parser = cast(ImzMLParser, self.parser)
         total_spectra = len(parser.coordinates)
 
-        logging.info("Counting peaks across all spectra for exact allocation...")
+        logger.info("Counting peaks across all spectra for exact allocation...")
         total_peaks = 0
 
         with tqdm(
@@ -491,10 +494,10 @@ class ImzMLReader(BaseMSIReader):
                     mzs, _ = parser.getspectrum(idx)
                     total_peaks += len(mzs)
                 except Exception as e:
-                    logging.warning(f"Error getting spectrum {idx}: {e}")
+                    logger.warning(f"Error getting spectrum {idx}: {e}")
                 pbar.update(1)
 
-        logging.info(f"Total peak count: {total_peaks:,}")
+        logger.info(f"Total peak count: {total_peaks:,}")
         return total_peaks
 
     @property

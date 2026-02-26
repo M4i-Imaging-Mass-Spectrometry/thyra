@@ -589,7 +589,8 @@ class RapiflexReader(BrukerBaseMSIReader):
             # No data at this position
             return np.zeros(self.n_datapoints, dtype=np.float32)
 
-        assert self._dat_path is not None, "dat_path not set"
+        if self._dat_path is None:
+            raise RuntimeError("dat_path not set")
         with open(self._dat_path, "rb") as f:
             f.seek(int(offset))
             data = f.read(self.n_datapoints * 4)

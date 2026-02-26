@@ -10,6 +10,8 @@ from .base_spatialdata_converter import SPATIALDATA_AVAILABLE, _import_error_msg
 from .spatialdata_2d_converter import SpatialData2DConverter
 from .spatialdata_3d_converter import SpatialData3DConverter
 
+logger = logging.getLogger(__name__)
+
 
 class SpatialDataConverter:
     """Factory converter for MSI data to SpatialData format.
@@ -94,9 +96,9 @@ class SpatialDataConverter:
 # Only register the converter if SpatialData dependencies are available
 if SPATIALDATA_AVAILABLE:
     register_converter("spatialdata")(SpatialDataConverter)
-    logging.debug("SpatialDataConverter registered successfully")
+    logger.debug("SpatialDataConverter registered successfully")
 else:
-    logging.warning(
+    logger.warning(
         f"SpatialDataConverter not registered due to dependency issues: "
         f"{_import_error_msg}"
     )

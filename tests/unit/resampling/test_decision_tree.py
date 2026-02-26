@@ -102,6 +102,7 @@ class TestResamplingDecisionTree:
         axis_type = self.tree.select_axis_type(None)
         assert axis_type == AxisType.CONSTANT
 
+
 class TestInstrumentDetectorChain:
     """Test InstrumentDetectorChain behavior."""
 
@@ -342,5 +343,3 @@ class TestDataCharacteristics:
             n_spectra=1000,
         )
         assert chars.is_maldi_tof
-
-

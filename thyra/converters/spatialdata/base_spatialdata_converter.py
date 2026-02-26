@@ -16,6 +16,8 @@ from ...metadata.types import ComprehensiveMetadata, EssentialMetadata
 from ...resampling import ResamplingDecisionTree, ResamplingMethod
 from ...resampling.types import ResamplingConfig
 
+logger = logging.getLogger(__name__)
+
 # Check SpatialData availability (defer imports to avoid issues)
 SPATIALDATA_AVAILABLE = False
 _import_error_msg = None
@@ -23,6 +25,7 @@ try:
     import geopandas as gpd
     import tifffile
     import xarray as xr
+    import zarr
     from anndata import AnnData
     from shapely.geometry import box
     from spatialdata import SpatialData
@@ -32,7 +35,7 @@ try:
     SPATIALDATA_AVAILABLE = True
 except (ImportError, NotImplementedError) as e:
     _import_error_msg = str(e)
-    logging.warning(f"SpatialData dependencies not available: {e}")
+    logger.warning(f"SpatialData dependencies not available: {e}")
     SPATIALDATA_AVAILABLE = False
 
     # Create dummy classes for registration
@@ -199,17 +202,17 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 metadata = self._get_reader_metadata_for_resampling()
                 tree = ResamplingDecisionTree()
                 detected_method = tree.select_strategy(metadata)
-                logging.info(f"Auto-detected resampling method: {detected_method}")
+                logger.info(f"Auto-detected resampling method: {detected_method}")
                 self._resampling_method = detected_method
             except NotImplementedError as e:
-                logging.error(f"Auto-detection failed: {e}")
-                logging.info("Falling back to nearest_neighbor for resampling")
+                logger.error(f"Auto-detection failed: {e}")
+                logger.info("Falling back to nearest_neighbor for resampling")
                 self._resampling_method = ResamplingMethod.NEAREST_NEIGHBOR
         else:
             # Use provided method directly (already an enum)
             self._resampling_method = method
 
-        logging.info(f"Using resampling method: {self._resampling_method}")
+        logger.info(f"Using resampling method: {self._resampling_method}")
 
         # Store axis_type override if provided (will be used in _build_resampled_mass_axis)
         self._manual_axis_type = axis_type
@@ -273,7 +276,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 "n_spectra": getattr(essential, "n_spectra", None),
             }
         except Exception as e:
-            logging.debug(f"Could not extract essential metadata: {e}")
+            logger.debug(f"Could not extract essential metadata: {e}")
 
     def _extract_comprehensive_metadata(self, metadata: Dict[str, Any]) -> None:
         """Extract comprehensive metadata including Bruker GlobalMetadata."""
@@ -288,7 +291,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             self._extract_bruker_metadata(metadata, comp_meta)
             self._extract_instrument_info(metadata, comp_meta)
         except Exception as e:
-            logging.debug(f"Could not extract comprehensive metadata: {e}")
+            logger.debug(f"Could not extract comprehensive metadata: {e}")
 
     def _extract_bruker_metadata(self, metadata: Dict[str, Any], comp_meta) -> None:
         """Extract Bruker GlobalMetadata from comprehensive metadata."""
@@ -297,7 +300,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             and "global_metadata" in comp_meta.raw_metadata
         ):
             metadata["GlobalMetadata"] = comp_meta.raw_metadata["global_metadata"]
-            logging.debug(
+            logger.debug(
                 f"Extracted Bruker GlobalMetadata with keys: "
                 f"{list(metadata['GlobalMetadata'].keys())}"
             )
@@ -306,17 +309,17 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         """Extract instrument_info for fallback detection."""
         if hasattr(comp_meta, "instrument_info"):
             metadata["instrument_info"] = comp_meta.instrument_info
-            logging.debug(f"Extracted instrument_info: {comp_meta.instrument_info}")
+            logger.debug(f"Extracted instrument_info: {comp_meta.instrument_info}")
 
         # Extract format_specific for FlexImaging detection
         if hasattr(comp_meta, "format_specific"):
             metadata["format_specific"] = comp_meta.format_specific
-            logging.debug(f"Extracted format_specific: {comp_meta.format_specific}")
+            logger.debug(f"Extracted format_specific: {comp_meta.format_specific}")
 
         # Extract acquisition_params for additional detection
         if hasattr(comp_meta, "acquisition_params"):
             metadata["acquisition_params"] = comp_meta.acquisition_params
-            logging.debug(
+            logger.debug(
                 f"Extracted acquisition_params: {comp_meta.acquisition_params}"
             )
 
@@ -334,7 +337,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 if spec_meta:
                     metadata.update(spec_meta)
         except Exception as e:
-            logging.debug(f"Could not extract spectrum metadata: {e}")
+            logger.debug(f"Could not extract spectrum metadata: {e}")
 
     def _add_metadata_to_uns(self, adata) -> None:
         """Add MSI metadata to AnnData .uns for preservation in SpatialData.
@@ -356,9 +359,9 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             self._store_raw_metadata(adata, comp_meta)
             self._store_region_info(adata)
 
-            logging.debug("Added MSI metadata to AnnData .uns")
+            logger.debug("Added MSI metadata to AnnData .uns")
         except Exception as e:
-            logging.debug(f"Could not add metadata to .uns: {e}")
+            logger.debug(f"Could not add metadata to .uns: {e}")
 
     def _store_format_specific(self, adata, comp_meta) -> None:
         """Store format-specific metadata (FlexImaging areas, teaching points)."""
@@ -451,7 +454,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             width_at_mz = self._width_at_mz
             reference_mz = self._reference_mz
 
-        logging.info(
+        logger.info(
             f"Calculating bins for {width_at_mz*1000:.1f} mDa width at m/z {reference_mz:.1f}"
         )
 
@@ -484,7 +487,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # Ensure minimum bin count
         bins = max(100, bins)
 
-        logging.info(f"Calculated {bins} bins for {axis_name} axis type")
+        logger.info(f"Calculated {bins} bins for {axis_name} axis type")
         return bins
 
     def _get_reference_params(self, axis_type) -> Tuple[float, float]:
@@ -525,13 +528,13 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # Check if manual axis type override was provided
         if hasattr(self, "_manual_axis_type") and self._manual_axis_type is not None:
             axis_type = self._manual_axis_type
-            logging.info(f"Using manually specified axis type: {axis_type}")
+            logger.info(f"Using manually specified axis type: {axis_type}")
         else:
             # Get metadata for axis type selection (minimize reader calls)
             metadata = self._get_cached_metadata_for_resampling()
             tree = ResamplingDecisionTree()
             axis_type = tree.select_axis_type(metadata)
-            logging.info(f"Auto-detected axis type: {axis_type}")
+            logger.info(f"Auto-detected axis type: {axis_type}")
 
         # Calculate bins based on width if specified OR if no bins were specified (default)
         if self._width_at_mz is not None or self._target_bins is None:
@@ -541,7 +544,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             # User explicitly specified bin count
             target_bins = self._target_bins
 
-        logging.info(
+        logger.info(
             f"Building resampled mass axis: {min_mz:.2f} - {max_mz:.2f} m/z, "
             f"{target_bins} bins"
         )
@@ -562,20 +565,21 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 reference_mz=reference_mz,
                 reference_width=reference_width,
             )
-            logging.info(
+            logger.info(
                 f"Built physics-based {axis_type} mass axis with "
                 f"{len(mass_axis.mz_values)} points"
             )
         else:
             # Fall back to uniform axis
             mass_axis = builder.build_uniform_axis(min_mz, max_mz, target_bins)
-            logging.info(
+            logger.info(
                 f"Built uniform mass axis with " f"{len(mass_axis.mz_values)} points"
             )
 
         # Override the parent's common mass axis
         self._common_mass_axis = mass_axis.mz_values.astype(np.float64)
-        assert self._common_mass_axis is not None
+        if self._common_mass_axis is None:
+            raise RuntimeError("Common mass axis is None after assignment")
 
         # Cache the mass axis indices array to avoid repeated np.arange() calls
         self._cached_mass_axis_indices = np.arange(
@@ -587,7 +591,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         min_bin_size = np.min(bin_widths) * 1000  # Convert to mDa
         max_bin_size = np.max(bin_widths) * 1000  # Convert to mDa
 
-        logging.info(
+        logger.info(
             f"Resampled mass axis created: {len(self._common_mass_axis)} bins, "
             f"range {self._common_mass_axis[0]:.2f}-{self._common_mass_axis[-1]:.2f} m/z, "
             f"bin sizes {min_bin_size:.2f}-{max_bin_size:.2f} mDa ({axis_type})"
@@ -595,7 +599,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
     def _initialize_conversion(self) -> None:
         """Override parent initialization to preserve resampled mass axis."""
-        logging.info("Loading essential dataset information...")
+        logger.info("Loading essential dataset information...")
         try:
             # Load essential metadata first (fast, single query for Bruker)
             essential = self.reader.get_essential_metadata()
@@ -622,52 +626,15 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 old_size = self.pixel_size_um
                 self.pixel_size_um = essential.pixel_size[0]
                 self.pixel_size_source = PixelSizeSource.AUTO_DETECTED
-                logging.info(
+                logger.info(
                     f"Auto-detected pixel size: {self.pixel_size_um} um "
                     f"(was default: {old_size} um)"
                 )
             elif self.pixel_size_source == PixelSizeSource.USER_PROVIDED:
-                logging.info(
-                    f"Using user-specified pixel size: {self.pixel_size_um} um"
-                )
+                logger.info(f"Using user-specified pixel size: {self.pixel_size_um} um")
 
             # Handle mass axis setup
-            config_status = "SET" if self._resampling_config else "NOT SET"
-            logging.info(f"Mass axis mode: resampling_config={config_status}")
-            if self._resampling_config:
-                # Build resampled mass axis now that reader metadata is loaded
-                logging.info(
-                    "Building RESAMPLED mass axis (resampling enabled) - "
-                    "will NOT iterate through all spectra"
-                )
-                self._build_resampled_mass_axis()
-                assert self._common_mass_axis is not None
-                logging.info(
-                    f"Built resampled mass axis with "
-                    f"{len(self._common_mass_axis)} bins"
-                )
-            else:
-                # No resampling - load raw mass axis as usual
-                if self.reader.has_shared_mass_axis:
-                    logging.info(
-                        "Loading RAW mass axis (no resampling) - "
-                        "continuous mode, reading m/z from first spectrum only"
-                    )
-                else:
-                    logging.warning(
-                        "Building RAW mass axis (no resampling) - "
-                        "processed mode, iterating ALL spectra to collect unique m/z values. "
-                        "This is slow for large datasets!"
-                    )
-                self._common_mass_axis = self.reader.get_common_mass_axis()
-                if len(self._common_mass_axis) == 0:
-                    raise ValueError(
-                        "Common mass axis is empty. Cannot proceed with " "conversion."
-                    )
-                logging.info(
-                    f"Using raw mass axis with "
-                    f"{len(self._common_mass_axis)} unique m/z values"
-                )
+            self._setup_mass_axis()
 
             # Only load comprehensive metadata if needed (lazy loading)
             self._metadata = None  # Will be loaded on demand
@@ -680,7 +647,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             self._region_map = self.reader.get_region_map()
             self._region_info = self.reader.get_region_info()
             if self._region_info:
-                logging.info(
+                logger.info(
                     f"Region metadata available: {len(self._region_info)} regions"
                 )
             else:
@@ -690,15 +657,57 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             self._compute_optical_alignment()
             self._build_tic_to_image_affine()
 
-            logging.info(f"Dataset dimensions: {self._dimensions}")
-            logging.info(f"Coordinate bounds: {self._coordinate_bounds}")
-            logging.info(f"Total spectra: {self._n_spectra}")
-            logging.info(f"Estimated memory: {self._estimated_memory_gb:.2f} GB")
-            assert self._common_mass_axis is not None
-            logging.info(f"Common mass axis length: {len(self._common_mass_axis)}")
+            logger.info(f"Dataset dimensions: {self._dimensions}")
+            logger.info(f"Coordinate bounds: {self._coordinate_bounds}")
+            logger.info(f"Total spectra: {self._n_spectra}")
+            logger.info(f"Estimated memory: {self._estimated_memory_gb:.2f} GB")
+            if self._common_mass_axis is None:
+                raise RuntimeError("Common mass axis is None after initialization")
+            logger.info(f"Common mass axis length: {len(self._common_mass_axis)}")
         except Exception as e:
-            logging.error(f"Error during initialization: {e}")
+            logger.error(f"Error during initialization: {e}")
             raise
+
+    def _setup_mass_axis(self) -> None:
+        """Set up the common mass axis (resampled or raw)."""
+        config_status = "SET" if self._resampling_config else "NOT SET"
+        logger.info(f"Mass axis mode: resampling_config={config_status}")
+        if self._resampling_config:
+            # Build resampled mass axis now that reader metadata is loaded
+            logger.info(
+                "Building RESAMPLED mass axis (resampling enabled) - "
+                "will NOT iterate through all spectra"
+            )
+            self._build_resampled_mass_axis()
+            if self._common_mass_axis is None:
+                raise RuntimeError(
+                    "Common mass axis is None after resampled axis build"
+                )
+            logger.info(
+                f"Built resampled mass axis with " f"{len(self._common_mass_axis)} bins"
+            )
+        else:
+            # No resampling - load raw mass axis as usual
+            if self.reader.has_shared_mass_axis:
+                logger.info(
+                    "Loading RAW mass axis (no resampling) - "
+                    "continuous mode, reading m/z from first spectrum only"
+                )
+            else:
+                logger.warning(
+                    "Building RAW mass axis (no resampling) - "
+                    "processed mode, iterating ALL spectra to collect unique m/z values. "
+                    "This is slow for large datasets!"
+                )
+            self._common_mass_axis = self.reader.get_common_mass_axis()
+            if len(self._common_mass_axis) == 0:
+                raise ValueError(
+                    "Common mass axis is empty. Cannot proceed with conversion."
+                )
+            logger.info(
+                f"Using raw mass axis with "
+                f"{len(self._common_mass_axis)} unique m/z values"
+            )
 
     def _map_mass_to_indices(self, mzs: NDArray[np.float64]) -> NDArray[np.int_]:
         """Override mass mapping to handle resampling with interpolation."""
@@ -723,7 +732,8 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # For resampled data, we want to return ALL indices in the resampled
         # axis. The actual resampling/interpolation will be handled in the
         # processing
-        assert self._common_mass_axis is not None
+        if self._common_mass_axis is None:
+            raise RuntimeError("Common mass axis is not initialized")
         return np.arange(len(self._common_mass_axis), dtype=np.int_)
 
     def _process_single_spectrum(
@@ -735,7 +745,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
     ) -> None:
         """Override spectrum processing to handle resampling with sparse optimization."""
         # Only log detailed per-spectrum info at DEBUG level
-        logging.debug(
+        logger.debug(
             f"Processing spectrum at {coords}: {len(mzs)} peaks, "
             f"intensity sum: {np.sum(intensities):.2e}"
         )
@@ -750,7 +760,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 mz_indices, resampled_intensities = self._nearest_neighbor_resample(
                     mzs, intensities
                 )
-                logging.debug(
+                logger.debug(
                     f"Resampled (sparse): {len(resampled_intensities)} non-zero bins, "
                     f"sum: {np.sum(resampled_intensities):.2e}"
                 )
@@ -758,9 +768,10 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 # Dense path for other methods (TIC-preserving, etc.)
                 resampled_intensities = self._resample_spectrum(mzs, intensities)
                 # Use cached indices instead of creating new array every time
-                assert self._cached_mass_axis_indices is not None
+                if self._cached_mass_axis_indices is None:
+                    raise RuntimeError("Cached mass axis indices are not initialized")
                 mz_indices = self._cached_mass_axis_indices
-                logging.debug(
+                logger.debug(
                     f"Resampled: {len(resampled_intensities)} values, "
                     f"sum: {np.sum(resampled_intensities):.2e}"
                 )
@@ -772,7 +783,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         else:
             # Use standard processing for non-resampled data
             mz_indices = self._map_mass_to_indices(mzs)
-            logging.debug(
+            logger.debug(
                 f"Mapped to {len(mz_indices)} indices, "
                 f"intensity sum: {np.sum(intensities):.2e}"
             )
@@ -852,7 +863,8 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         self, mzs: NDArray[np.float64], intensities: NDArray[np.float64]
     ) -> NDArray[np.float64]:
         """Resample using TIC-preserving linear interpolation - optimized."""
-        assert self._common_mass_axis is not None
+        if self._common_mass_axis is None:
+            raise RuntimeError("Common mass axis is not initialized")
         if mzs.size == 0:
             return np.zeros(len(self._common_mass_axis))
 
@@ -868,7 +880,8 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             intensities_sorted = intensities[sort_indices]
 
         # Interpolate onto the common mass axis (np.interp is highly optimized)
-        assert self._common_mass_axis is not None
+        if self._common_mass_axis is None:
+            raise RuntimeError("Common mass axis is not initialized")
         resampled = np.interp(
             self._common_mass_axis,
             mzs_sorted,
@@ -909,13 +922,14 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         n_masses = len(self._common_mass_axis)
 
         # Get exact number of peaks from cached metadata (no iteration needed!)
-        assert self._essential_metadata_cached is not None
+        if self._essential_metadata_cached is None:
+            raise RuntimeError("Essential metadata cache is not initialized")
         exact_nnz = self._essential_metadata_cached.total_peaks
 
-        logging.info(
+        logger.info(
             f"Pre-allocating COO arrays: {n_pixels:,} pixels x {n_masses:,} m/z bins"
         )
-        logging.info(f"Exact non-zero values from metadata: {exact_nnz:,}")
+        logger.info(f"Exact non-zero values from metadata: {exact_nnz:,}")
 
         # Pre-allocate arrays with exact size (uint32 for indices, all values are positive)
         return {
@@ -1038,7 +1052,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             if new_size < end_idx:
                 new_size = end_idx + int(current_size * 0.1)  # Ensure it fits
 
-            logging.info(
+            logger.info(
                 f"Resizing COO arrays from {current_size:,} to {new_size:,} elements"
             )
 
@@ -1118,12 +1132,12 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
             n_skipped = len(adata) - len(valid_indices)
             if n_skipped > 0:
-                logging.info(
+                logger.info(
                     f"Created {len(geometries)} shapes using optical alignment "
                     f"(skipped {n_skipped} empty grid positions)"
                 )
             else:
-                logging.info(
+                logger.info(
                     f"Created {len(geometries)} shapes using optical alignment "
                     f"(image pixel coordinates)"
                 )
@@ -1168,14 +1182,14 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         """
         # Check if reader has FlexImaging-specific metadata
         if not hasattr(self.reader, "mis_metadata"):
-            logging.debug("Reader does not have mis_metadata, skipping alignment")
+            logger.debug("Reader does not have mis_metadata, skipping alignment")
             return
 
         mis_metadata = getattr(self.reader, "mis_metadata", {})
         areas = mis_metadata.get("areas", [])
 
         if not areas:
-            logging.debug("No Area definitions found, skipping alignment")
+            logger.debug("No Area definitions found, skipping alignment")
             return
 
         # Get required data for alignment
@@ -1183,7 +1197,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         header = getattr(self.reader, "_header", {})
 
         if not positions:
-            logging.warning("No position data available for alignment")
+            logger.warning("No position data available for alignment")
             return
 
         first_raster_x = header.get("first_raster_x", 0)
@@ -1193,7 +1207,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         image_file = mis_metadata.get("ImageFile", "")
         if image_file:
             self._primary_optical_filename = Path(image_file).stem.lower()
-            logging.info(f"Primary alignment image from .mis: {image_file}")
+            logger.info(f"Primary alignment image from .mis: {image_file}")
 
         # Compute area-based alignment
         try:
@@ -1204,12 +1218,12 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 first_raster_x=first_raster_x,
                 first_raster_y=first_raster_y,
             )
-            logging.info(
+            logger.info(
                 f"Computed optical alignment with "
                 f"{len(self._alignment_result.region_mappings)} region mappings"
             )
         except Exception as e:
-            logging.warning(f"Failed to compute optical alignment: {e}")
+            logger.warning(f"Failed to compute optical alignment: {e}")
             self._alignment_result = None
 
     def _build_tic_to_image_affine(self) -> None:
@@ -1295,7 +1309,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             ],
             dtype=np.float64,
         )
-        logging.info(
+        logger.info(
             f"Built TIC-to-image affine: "
             f"scale=({scale_x:.2f}, {scale_y:.2f}), "
             f"offset=({tx:.1f}, {ty:.1f})"
@@ -1317,10 +1331,10 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         optical_paths = self.reader.get_optical_image_paths()
         if not optical_paths:
-            logging.debug("No optical images found")
+            logger.debug("No optical images found")
             return
 
-        logging.info(f"Found {len(optical_paths)} optical image(s)")
+        logger.info(f"Found {len(optical_paths)} optical image(s)")
 
         # Load primary image first so we know its dimensions for scaling others
         primary_paths = [p for p in optical_paths if self._is_primary_optical(p)]
@@ -1330,7 +1344,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             try:
                 self._load_single_optical_image(tiff_path, data_structures)
             except Exception as e:
-                logging.warning(f"Failed to load optical image {tiff_path.name}: {e}")
+                logger.warning(f"Failed to load optical image {tiff_path.name}: {e}")
 
     def _is_primary_optical(self, tiff_path: Path) -> bool:
         """Check if a TIFF file is the primary alignment image from .mis."""
@@ -1358,7 +1372,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         scale_x = primary_w / x_size
         scale_y = primary_h / y_size
 
-        logging.info(f"  Scale to primary: ({scale_x:.4f}, {scale_y:.4f})")
+        logger.info(f"  Scale to primary: ({scale_x:.4f}, {scale_y:.4f})")
         return Scale([scale_x, scale_y], axes=("x", "y"))
 
     def _load_single_optical_image(
@@ -1377,7 +1391,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # Generate a clean name for the image layer
         image_name = self._generate_optical_image_name(tiff_path)
 
-        logging.info(f"Loading optical image: {tiff_path.name} as '{image_name}'")
+        logger.info(f"Loading optical image: {tiff_path.name} as '{image_name}'")
 
         # Read TIFF using tifffile (handles large files efficiently)
         with tifffile.TiffFile(tiff_path) as tif:
@@ -1394,7 +1408,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 img_data = np.moveaxis(img_data, -1, 0)
                 n_channels = img_data.shape[0]
             else:
-                logging.warning(
+                logger.warning(
                     f"Unexpected image dimensions {img_data.ndim} for {tiff_path.name}"
                 )
                 return
@@ -1422,7 +1436,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             if is_primary:
                 transform = Identity()
                 self._primary_optical_dims = (x_size, y_size)
-                logging.info(f"  Primary alignment image: {x_size}x{y_size}")
+                logger.info(f"  Primary alignment image: {x_size}x{y_size}")
             elif self._primary_optical_dims is not None:
                 transform = self._compute_optical_scale_transform(x_size, y_size)
             else:
@@ -1436,7 +1450,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 },
             )
 
-            logging.info(
+            logger.info(
                 f"Added optical image '{image_name}': {x_size}x{y_size} "
                 f"({n_channels} channel{'s' if n_channels > 1 else ''})"
             )
@@ -1493,13 +1507,14 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
             # Write to disk
             sdata.write(str(self.output_path))
-            logging.info(f"Successfully saved SpatialData to {self.output_path}")
+            zarr.consolidate_metadata(str(self.output_path))
+            logger.info(f"Successfully saved SpatialData to {self.output_path}")
             return True
         except Exception as e:
-            logging.error(f"Error saving SpatialData: {e}")
+            logger.error(f"Error saving SpatialData: {e}")
             import traceback
 
-            logging.debug(f"Detailed traceback:\n{traceback.format_exc()}")
+            logger.debug(f"Detailed traceback:\n{traceback.format_exc()}")
             return False
 
     def add_metadata(self, metadata: "SpatialData") -> None:
@@ -1530,7 +1545,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         if not hasattr(metadata, "attrs") or metadata.attrs is None:
             metadata.attrs = {}
 
-        logging.info("Adding comprehensive metadata to SpatialData.attrs")
+        logger.info("Adding comprehensive metadata to SpatialData.attrs")
 
         # Create pixel size attributes
         pixel_size_attrs = self._create_pixel_size_attrs()
@@ -1566,13 +1581,14 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             pixel_size_attrs["pixel_size_detection_info"] = dict(
                 self._pixel_size_detection_info
             )
-            logging.info(
+            logger.info(
                 f"Added pixel size detection info: "
                 f"{self._pixel_size_detection_info}"
             )
 
         # Add conversion metadata
-        assert self._dimensions is not None
+        if self._dimensions is None:
+            raise RuntimeError("Dimensions are not initialized")
         pixel_size_attrs["msi_dataset_info"] = {
             "dataset_id": self.dataset_id,
             "total_grid_pixels": self._dimensions[0]
@@ -1638,7 +1654,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         metadata.metadata = metadata_dict
 
-        logging.info(
+        logger.info(
             f"Comprehensive metadata persisted to SpatialData with "
             f"{len(metadata_dict)} top-level sections"
         )

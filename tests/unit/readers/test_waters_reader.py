@@ -1,7 +1,6 @@
 """Tests for the Waters .raw MSI reader."""
 
-from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -139,9 +138,7 @@ class TestWatersReaderInit:
 
     @patch("thyra.readers.waters.waters_reader.MassLynxLib")
     @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
-    def test_second_init_is_noop(
-        self, mock_build_grid, mock_ml_cls, mock_waters_data
-    ):
+    def test_second_init_is_noop(self, mock_build_grid, mock_ml_cls, mock_waters_data):
         """Test that calling _ensure_initialized twice doesn't re-open."""
         mock_ml = MagicMock()
         mock_ml_cls.get_instance.return_value = mock_ml
@@ -189,9 +186,7 @@ class TestWatersReaderClose:
 
     @patch("thyra.readers.waters.waters_reader.MassLynxLib")
     @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
-    def test_double_close_is_safe(
-        self, mock_build_grid, mock_ml_cls, mock_waters_data
-    ):
+    def test_double_close_is_safe(self, mock_build_grid, mock_ml_cls, mock_waters_data):
         """Test that closing twice doesn't call close_file twice."""
         mock_ml = MagicMock()
         mock_ml_cls.get_instance.return_value = mock_ml
@@ -374,9 +369,7 @@ class TestWatersReaderMassAxis:
 
     @patch("thyra.readers.waters.waters_reader.MassLynxLib")
     @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
-    def test_get_common_mass_axis(
-        self, mock_build_grid, mock_ml_cls, mock_waters_data
-    ):
+    def test_get_common_mass_axis(self, mock_build_grid, mock_ml_cls, mock_waters_data):
         """Test building common mass axis from multiple spectra."""
         mock_ml = MagicMock()
         mock_ml_cls.get_instance.return_value = mock_ml
@@ -408,9 +401,7 @@ class TestWatersReaderMassAxis:
 
     @patch("thyra.readers.waters.waters_reader.MassLynxLib")
     @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
-    def test_mass_axis_is_cached(
-        self, mock_build_grid, mock_ml_cls, mock_waters_data
-    ):
+    def test_mass_axis_is_cached(self, mock_build_grid, mock_ml_cls, mock_waters_data):
         """Test that the mass axis is cached after first call."""
         mock_ml = MagicMock()
         mock_ml_cls.get_instance.return_value = mock_ml
@@ -452,9 +443,7 @@ class TestWatersReaderProperties:
 
     @patch("thyra.readers.waters.waters_reader.MassLynxLib")
     @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
-    def test_repr_after_init(
-        self, mock_build_grid, mock_ml_cls, mock_waters_data
-    ):
+    def test_repr_after_init(self, mock_build_grid, mock_ml_cls, mock_waters_data):
         """Test repr includes grid info after initialization."""
         mock_ml = MagicMock()
         mock_ml_cls.get_instance.return_value = mock_ml

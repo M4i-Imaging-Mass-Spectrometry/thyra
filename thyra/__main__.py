@@ -14,6 +14,8 @@ from thyra.convert import convert_msi  # noqa: E402
 from thyra.utils.data_processors import optimize_zarr_chunks  # noqa: E402
 from thyra.utils.logging_config import setup_logging  # noqa: E402
 
+logger = logging.getLogger(__name__)
+
 # Configure Dask to use new query planning (silences legacy DataFrame warning)
 os.environ["DASK_DATAFRAME__QUERY_PLANNING"] = "True"
 
@@ -245,9 +247,9 @@ def _handle_post_conversion(
         optimize_zarr_chunks(str(output), f"tables/{dataset_id}/X")
 
     if success:
-        logging.info(f"Conversion completed successfully. Output stored at {output}")
+        logger.info(f"Conversion completed successfully. Output stored at {output}")
     else:
-        logging.error("Conversion failed.")
+        logger.error("Conversion failed.")
 
 
 @click.command()

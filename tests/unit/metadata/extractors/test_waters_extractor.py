@@ -135,9 +135,7 @@ class TestWatersMetadataExtractorEssential:
     def test_total_peaks(self):
         """Test total peak count."""
         n_peaks = 20
-        mock_ml, handle, grid, ft, ms = _make_grid_and_ml(
-            n_x=2, n_y=2, n_peaks=n_peaks
-        )
+        mock_ml, handle, grid, ft, ms = _make_grid_and_ml(n_x=2, n_y=2, n_peaks=n_peaks)
         extractor = WatersMetadataExtractor(
             mock_ml, handle, Path("/test/data.raw"), grid, ft, ms
         )
@@ -203,9 +201,7 @@ class TestWatersMetadataExtractorEssential:
     def test_peak_counts_per_pixel(self):
         """Test per-pixel peak count array."""
         n_peaks = 15
-        mock_ml, handle, grid, ft, ms = _make_grid_and_ml(
-            n_x=2, n_y=2, n_peaks=n_peaks
-        )
+        mock_ml, handle, grid, ft, ms = _make_grid_and_ml(n_x=2, n_y=2, n_peaks=n_peaks)
         extractor = WatersMetadataExtractor(
             mock_ml, handle, Path("/test/data.raw"), grid, ft, ms
         )
