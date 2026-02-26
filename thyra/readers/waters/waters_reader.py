@@ -165,6 +165,33 @@ class WatersReader(BaseMSIReader):
             f"grid {self._imaging_grid.pixel_count_x}x{self._imaging_grid.pixel_count_y}"
         )
 
+    def _require_initialized(
+        self,
+    ) -> Tuple[
+        "MassLynxLib",
+        ctypes.c_void_p,
+        "ImagingGrid",
+        Dict[int, "FunctionType"],
+        List[int],
+    ]:
+        """Ensure the reader is initialized and return required fields."""
+        self._ensure_initialized()
+        if (
+            self._ml is None
+            or self._handle is None
+            or self._imaging_grid is None
+            or self._function_types is None
+            or self._ms_functions is None
+        ):
+            raise RuntimeError("Reader not fully initialized")
+        return (
+            self._ml,
+            self._handle,
+            self._imaging_grid,
+            self._function_types,
+            self._ms_functions,
+        )
+
     @property
     def has_shared_mass_axis(self) -> bool:
         """Waters MSI data is typically processed/centroided with varying m/z per pixel."""
@@ -172,19 +199,16 @@ class WatersReader(BaseMSIReader):
 
     def _create_metadata_extractor(self) -> MetadataExtractor:
         """Create Waters metadata extractor."""
-        self._ensure_initialized()
-        assert self._ml is not None
-        assert self._handle is not None
-        assert self._imaging_grid is not None
-        assert self._function_types is not None
-        assert self._ms_functions is not None
+        ml, handle, imaging_grid, function_types, ms_functions = (
+            self._require_initialized()
+        )
         return WatersMetadataExtractor(
-            ml=self._ml,
-            handle=self._handle,
+            ml=ml,
+            handle=handle,
             data_path=self.data_path,
-            imaging_grid=self._imaging_grid,
-            function_types=self._function_types,
-            ms_functions=self._ms_functions,
+            imaging_grid=imaging_grid,
+            function_types=function_types,
+            ms_functions=ms_functions,
         )
 
     def get_common_mass_axis(self) -> NDArray[np.float64]:
@@ -200,30 +224,25 @@ class WatersReader(BaseMSIReader):
         if self._common_mass_axis_cache is not None:
             return self._common_mass_axis_cache
 
-        self._ensure_initialized()
-        assert self._ml is not None
-        assert self._handle is not None
-        assert self._ms_functions is not None
-        assert self._imaging_grid is not None
-
-        all_mzs: list = []
-        total = sum(
-            self._ml.get_number_of_scans_in_function(self._handle, f)
-            for f in self._ms_functions
+        ml, handle, imaging_grid, function_types, ms_functions = (
+            self._require_initialized()
         )
 
+        all_mzs: list = []
+        total = sum(ml.get_number_of_scans_in_function(handle, f) for f in ms_functions)
+
         with tqdm(total=total, desc="Building mass axis", unit="scan") as pbar:
-            for func in self._ms_functions:
-                n_scans = self._ml.get_number_of_scans_in_function(self._handle, func)
+            for func in ms_functions:
+                n_scans = ml.get_number_of_scans_in_function(handle, func)
                 for scan in range(n_scans):
                     pbar.update(1)
 
-                    scan_info = self._imaging_grid.scan_map.get((func, scan))
+                    scan_info = imaging_grid.scan_map.get((func, scan))
                     if scan_info is None or not scan_info.has_position:
                         continue
 
                     try:
-                        mzs, _ = self._ml.read_spectrum(self._handle, func, scan)
+                        mzs, _ = ml.read_spectrum(handle, func, scan)
                         if mzs.size > 0:
                             all_mzs.append(mzs)
                     except Exception as e:
@@ -260,37 +279,30 @@ class WatersReader(BaseMSIReader):
             Tuple of ((x, y, z), mzs, intensities) where coordinates are
             0-based pixel indices.
         """
-        self._ensure_initialized()
-        assert self._ml is not None
-        assert self._handle is not None
-        assert self._ms_functions is not None
-        assert self._imaging_grid is not None
-
-        total = sum(
-            self._ml.get_number_of_scans_in_function(self._handle, f)
-            for f in self._ms_functions
+        ml, handle, imaging_grid, function_types, ms_functions = (
+            self._require_initialized()
         )
 
+        total = sum(ml.get_number_of_scans_in_function(handle, f) for f in ms_functions)
+
         with tqdm(total=total, desc="Reading spectra", unit="spectrum") as pbar:
-            for func in self._ms_functions:
-                n_scans = self._ml.get_number_of_scans_in_function(self._handle, func)
+            for func in ms_functions:
+                n_scans = ml.get_number_of_scans_in_function(handle, func)
                 for scan in range(n_scans):
                     pbar.update(1)
 
                     # Look up cached scan info from the grid build pass
-                    scan_info = self._imaging_grid.scan_map.get((func, scan))
+                    scan_info = imaging_grid.scan_map.get((func, scan))
                     if scan_info is None or not scan_info.has_position:
                         continue
 
                     # Map laser position to pixel coordinates
-                    coords = self._imaging_grid.get_coordinates(scan_info)
+                    coords = imaging_grid.get_coordinates(scan_info)
                     if coords is None:
                         continue
 
                     try:
-                        mzs, intensities = self._ml.read_spectrum(
-                            self._handle, func, scan
-                        )
+                        mzs, intensities = ml.read_spectrum(handle, func, scan)
 
                         # Apply intensity threshold filtering (from BaseMSIReader)
                         mzs, intensities = self._apply_intensity_filter(

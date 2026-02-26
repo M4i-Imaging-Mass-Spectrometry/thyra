@@ -33,6 +33,8 @@ if SPATIALDATA_AVAILABLE:
     from spatialdata.models import Image2DModel, ShapesModel, TableModel
     from spatialdata.transformations import Affine, Identity
 
+logger = logging.getLogger(__name__)
+
 
 class StreamingSpatialDataConverter(BaseSpatialDataConverter):
     """Memory-efficient streaming converter for MSI data to SpatialData format.
@@ -128,11 +130,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         else:
             # Estimate from mass range with ~0.01 Da resolution
             min_mass, max_mass = metadata.mass_range
-            if min_mass is not None and max_mass is not None:
-                n_mz_bins = int((max_mass - min_mass) / 0.01)
-            else:
-                # Fallback estimate if mass range not available
-                n_mz_bins = 100000
+            n_mz_bins = int((max_mass - min_mass) / 0.01)
 
         # Dense matrix size in bytes (float32 = 4 bytes)
         dense_bytes = n_pixels * n_mz_bins * 4
@@ -140,7 +138,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # Convert to GB
         size_gb = dense_bytes / (1024**3)
 
-        logging.info(
+        logger.info(
             f"Estimated output size: {size_gb:.1f} GB "
             f"({n_pixels:,} pixels x {n_mz_bins:,} m/z bins)"
         )
@@ -161,12 +159,12 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             estimated_size = self._estimate_output_size_gb()
             use_pcs = estimated_size > self.PCS_SIZE_THRESHOLD_GB
             if use_pcs:
-                logging.info(
+                logger.info(
                     f"Dataset size ({estimated_size:.1f} GB) exceeds threshold "
                     f"({self.PCS_SIZE_THRESHOLD_GB} GB) - using PCS method"
                 )
             else:
-                logging.info(
+                logger.info(
                     f"Dataset size ({estimated_size:.1f} GB) below threshold "
                     f"({self.PCS_SIZE_THRESHOLD_GB} GB) - using standard method"
                 )
@@ -198,7 +196,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 # Use no-cache approach for memory-efficient CSC conversion
                 # This processes spectra twice but eliminates the ~200GB cache file
                 result = self._convert_to_csc_no_cache()
-                logging.info(
+                logger.info(
                     f"Zero-copy CSC conversion complete: {result['total_nnz']:,} non-zeros"
                 )
             else:
@@ -209,15 +207,15 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 self._finalize_data(data_structures)
                 self._save_output(data_structures)
                 self._cleanup_temp_storage()
-                logging.info("Zero-copy COO conversion complete")
+                logger.info("Zero-copy COO conversion complete")
 
             return True
 
         except Exception as e:
-            logging.error(f"Error during zero-copy conversion: {e}")
+            logger.error(f"Error during zero-copy conversion: {e}")
             import traceback
 
-            logging.error(f"Detailed traceback:\n{traceback.format_exc()}")
+            logger.error(f"Detailed traceback:\n{traceback.format_exc()}")
             return False
 
         finally:
@@ -232,7 +230,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             self._temp_path = self._temp_dir
             self._cleanup_temp = False
 
-        logging.info(f"Temp storage: {self._temp_path}")
+        logger.info(f"Temp storage: {self._temp_path}")
 
         # Create Zarr store for COO chunks
         zarr_path = self._temp_path / "coo_chunks.zarr"
@@ -243,9 +241,9 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         if self._cleanup_temp and self._temp_path is not None:
             try:
                 shutil.rmtree(self._temp_path, ignore_errors=True)
-                logging.debug(f"Cleaned up temp storage: {self._temp_path}")
+                logger.debug(f"Cleaned up temp storage: {self._temp_path}")
             except Exception as e:
-                logging.warning(f"Failed to cleanup temp storage: {e}")
+                logger.warning(f"Failed to cleanup temp storage: {e}")
 
     def _stream_build_coo(self) -> Dict[str, Any]:
         """Stream-build CSR matrix using two-pass direct Zarr write.
@@ -268,7 +266,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         n_rows = n_x * n_y * n_z
         n_cols = len(self._common_mass_axis)
 
-        logging.info(
+        logger.info(
             f"Streaming CSR build (two-pass): {n_rows:,} pixels x {n_cols:,} cols"
         )
 
@@ -290,7 +288,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             indices_arr, data_arr, pass1_result["indptr"], total_spectra
         )
 
-        logging.info(
+        logger.info(
             f"Pass 2 complete: {pass1_result['total_nnz']:,} non-zeros written to Zarr"
         )
 
@@ -330,7 +328,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             Dictionary with nnz_per_row, total_nnz, tic_values, total_intensity,
             pixel_count, and indptr.
         """
-        logging.info(
+        logger.info(
             f"Pass 1: Counting non-zeros per row ({total_spectra:,} spectra)..."
         )
 
@@ -364,7 +362,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 pixel_count += 1
                 pbar.update(1)
 
-        logging.info(f"Pass 1 complete: {total_nnz:,} total non-zeros")
+        logger.info(f"Pass 1 complete: {total_nnz:,} total non-zeros")
 
         # Build indptr from nnz counts
         indptr = np.zeros(n_rows + 1, dtype=np.int64)
@@ -398,7 +396,8 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         Returns:
             Tuple of (indices_arr, data_arr) Zarr arrays.
         """
-        assert self._zarr_store is not None, "Zarr store not initialized"
+        if self._zarr_store is None:
+            raise RuntimeError("Zarr store not initialized")
         X_group = self._zarr_store.create_group("X")
         X_group.attrs["encoding-type"] = "csr_matrix"
         X_group.attrs["encoding-version"] = "0.1.0"
@@ -406,7 +405,9 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
         # Use int64 for indptr if total_nnz exceeds int32 max
         indptr_dtype = np.int64 if total_nnz > np.iinfo(np.int32).max else np.int32
-        X_group.create_array("indptr", data=indptr.astype(indptr_dtype))
+        indptr_arr = X_group.create_array("indptr", data=indptr.astype(indptr_dtype))
+        indptr_arr.attrs["encoding-type"] = "array"
+        indptr_arr.attrs["encoding-version"] = "0.2.0"
 
         chunk_size_zarr = min(total_nnz, 1000000)
         indices_arr = X_group.create_array(
@@ -415,12 +416,16 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             dtype=np.int32,
             chunks=(chunk_size_zarr,),
         )
+        indices_arr.attrs["encoding-type"] = "array"
+        indices_arr.attrs["encoding-version"] = "0.2.0"
         data_arr = X_group.create_array(
             "data",
             shape=(total_nnz,),
             dtype=np.float64,
             chunks=(chunk_size_zarr,),
         )
+        data_arr.attrs["encoding-type"] = "array"
+        data_arr.attrs["encoding-version"] = "0.2.0"
 
         return indices_arr, data_arr
 
@@ -449,7 +454,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
         n_x, n_y, n_z = self._dimensions
 
-        logging.info("Pass 2: Writing data to Zarr (position-aware)...")
+        logger.info("Pass 2: Writing data to Zarr (position-aware)...")
 
         if hasattr(self.reader, "reset"):
             self.reader.reset()
@@ -591,7 +596,8 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
         # Fallback: general resampling with zero filtering
         resampled_ints = self._resample_spectrum(mzs, intensities)
-        assert self._common_mass_axis is not None, "Common mass axis not initialized"
+        if self._common_mass_axis is None:
+            raise RuntimeError("Common mass axis not initialized")
         mz_indices = np.arange(len(self._common_mass_axis))
         mask = resampled_ints != 0
         return mz_indices[mask], resampled_ints[mask]
@@ -611,24 +617,26 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         Returns:
             Data structures dictionary for SpatialData creation
         """
-        logging.info("Reading CSR components from Zarr...")
+        logger.info("Reading CSR components from Zarr...")
 
         n_rows = coo_result["n_rows"]
         n_cols = coo_result["n_cols"]
 
         # Read CSR components directly from Zarr
-        assert self._zarr_store is not None, "Zarr store not initialized"
+        if self._zarr_store is None:
+            raise RuntimeError("Zarr store not initialized")
         X_group = self._zarr_store["X"]
-        assert isinstance(X_group, zarr.Group), "Expected zarr.Group for X"
+        if not isinstance(X_group, zarr.Group):
+            raise TypeError("Expected zarr.Group for X")
         indptr = np.asarray(X_group["indptr"])
         indices = np.asarray(X_group["indices"])
         data = np.asarray(X_group["data"])
 
-        logging.info(f"Loaded CSR components: {len(data):,} entries")
+        logger.info(f"Loaded CSR components: {len(data):,} entries")
 
         # For large datasets (>2.1B entries), ensure 64-bit indices for scipy
         if len(data) > np.iinfo(np.int32).max:
-            logging.info("Large dataset detected, using 64-bit sparse matrix indices")
+            logger.info("Large dataset detected, using 64-bit sparse matrix indices")
             indptr = indptr.astype(np.int64)
             indices = indices.astype(np.int64)
 
@@ -644,11 +652,11 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
         # Convert to CSC if needed
         if self._sparse_format == "csc":
-            logging.info("Converting CSR to CSC format...")
+            logger.info("Converting CSR to CSC format...")
             sparse_matrix = sparse_matrix.tocsc()
             gc.collect()
 
-        logging.info(
+        logger.info(
             f"Created sparse matrix: {sparse_matrix.shape}, {sparse_matrix.nnz:,} nnz"
         )
 
@@ -826,10 +834,10 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 )
 
             except Exception as e:
-                logging.error(f"Error processing slice {slice_id}: {e}")
+                logger.error(f"Error processing slice {slice_id}: {e}")
                 import traceback
 
-                logging.debug(f"Detailed traceback:\n{traceback.format_exc()}")
+                logger.debug(f"Detailed traceback:\n{traceback.format_exc()}")
                 raise
 
         # Add optical images if available
@@ -871,7 +879,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         n_rows = n_x * n_y * n_z
         n_cols = len(self._common_mass_axis)
 
-        logging.info(
+        logger.info(
             f"Streaming CSC (no-cache): {n_rows:,} pixels x {n_cols:,} m/z bins"
         )
 
@@ -881,7 +889,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
         try:
             # Step 1: Pre-scan - count entries per column (no caching)
-            logging.info("Step 1/3: Pre-scan (counting entries per column)...")
+            logger.info("Step 1/3: Pre-scan (counting entries per column)...")
             prescan_result = self._prescan_count_columns(n_rows, n_cols, n_x, n_y)
 
             col_counts = prescan_result["col_counts"]
@@ -891,22 +899,22 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             pixel_count = prescan_result["pixel_count"]
 
             if total_nnz == 0:
-                logging.warning("No non-zero entries found!")
+                logger.warning("No non-zero entries found!")
 
             # Build indptr from col_counts
             indptr = np.zeros(n_cols + 1, dtype=np.int64)
             indptr[1:] = np.cumsum(col_counts)
 
             # Step 2: Allocate memory-mapped files for CSC arrays
-            logging.info(f"Step 2/3: Allocating memmap ({total_nnz:,} entries)...")
+            logger.info(f"Step 2/3: Allocating memmap ({total_nnz:,} entries)...")
             mm_indices, mm_data = self._allocate_csc_memmap_arrays(total_nnz, temp_dir)
 
             # Step 3: Main pass - process and scatter directly to CSC
-            logging.info("Step 3/3: Processing spectra and scattering to CSC...")
+            logger.info("Step 3/3: Processing spectra and scattering to CSC...")
             self._scatter_spectra_direct(mm_indices, mm_data, indptr, n_x, pixel_count)
 
             # Write CSC arrays to Zarr
-            logging.info("Writing CSC arrays to Zarr...")
+            logger.info("Writing CSC arrays to Zarr...")
             self._write_csc_arrays_to_zarr(
                 mm_indices,
                 mm_data,
@@ -923,7 +931,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             del mm_indices, mm_data
             gc.collect()
 
-            logging.info(f"Streaming CSC (no-cache) complete: {total_nnz:,} non-zeros")
+            logger.info(f"Streaming CSC (no-cache) complete: {total_nnz:,} non-zeros")
 
             return {
                 "total_nnz": total_nnz,
@@ -1000,7 +1008,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # Compute average spectrum
         avg_spectrum = total_intensity / max(pixel_count, 1)
 
-        logging.info(
+        logger.info(
             f"  Pre-scan complete: {total_nnz:,} entries across {n_cols:,} columns"
         )
 
@@ -1086,7 +1094,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         mm_indices.flush()
         mm_data.flush()
 
-        logging.info("  Scatter complete, memmap flushed")
+        logger.info("  Scatter complete, memmap flushed")
 
     def _allocate_csc_memmap_arrays(
         self, total_nnz: int, temp_dir: Path
@@ -1122,7 +1130,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             shape=(size,),
         )
 
-        logging.info(
+        logger.info(
             f"  Allocated memmap: {size * 4 / (1024**3):.2f} GB indices + "
             f"{size * 8 / (1024**3):.2f} GB data"
         )
@@ -1209,7 +1217,9 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             g.attrs["encoding-type"] = "dict"
             g.attrs["encoding-version"] = "0.1.0"
 
-        table_group.create_array("raw", data=np.array(False))
+        raw_arr = table_group.create_array("raw", data=np.array(False))
+        raw_arr.attrs["encoding-type"] = "array"
+        raw_arr.attrs["encoding-version"] = "0.2.0"
 
         # X group (CSC matrix)
         X_group = table_group.create_group("X")
@@ -1218,11 +1228,13 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         X_group.attrs["shape"] = [n_rows, n_cols]
 
         # Write indptr (small, do it directly) - use int64
-        X_group.create_array(
+        indptr_arr = X_group.create_array(
             "indptr",
             data=indptr.astype(np.int64),
             chunks=(min(len(indptr), 100_000),),
         )
+        indptr_arr.attrs["encoding-type"] = "array"
+        indptr_arr.attrs["encoding-version"] = "0.2.0"
 
         # Zarr chunk settings
         z_chunk = 1_000_000
@@ -1234,12 +1246,16 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             dtype=np.int32,
             chunks=(min(actual_nnz, z_chunk),),
         )
+        indices_arr.attrs["encoding-type"] = "array"
+        indices_arr.attrs["encoding-version"] = "0.2.0"
         data_arr = X_group.create_array(
             "data",
             shape=(actual_nnz,),
             dtype=np.float64,
             chunks=(min(actual_nnz, z_chunk),),
         )
+        data_arr.attrs["encoding-type"] = "array"
+        data_arr.attrs["encoding-version"] = "0.2.0"
 
         # Sequential transfer from memmap to Zarr (aligned to chunks)
         read_buffer_size = z_chunk * 50  # ~200 MB buffer
@@ -1277,22 +1293,38 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         spatial_x = x_values.astype(np.float64) * self.pixel_size_um
         spatial_y = y_values.astype(np.float64) * self.pixel_size_um
 
-        obs_group.create_array("y", data=y_values)
-        obs_group.create_array("x", data=x_values)
-        obs_group.create_array("spatial_x", data=spatial_x)
-        obs_group.create_array("spatial_y", data=spatial_y)
-        obs_group.create_array("instance_id", data=instance_ids)
-        obs_group.create_array("instance_key", data=instance_ids)
+        a = obs_group.create_array("y", data=y_values)
+        a.attrs["encoding-type"] = "array"
+        a.attrs["encoding-version"] = "0.2.0"
+        a = obs_group.create_array("x", data=x_values)
+        a.attrs["encoding-type"] = "array"
+        a.attrs["encoding-version"] = "0.2.0"
+        a = obs_group.create_array("spatial_x", data=spatial_x)
+        a.attrs["encoding-type"] = "array"
+        a.attrs["encoding-version"] = "0.2.0"
+        a = obs_group.create_array("spatial_y", data=spatial_y)
+        a.attrs["encoding-type"] = "array"
+        a.attrs["encoding-version"] = "0.2.0"
+        a = obs_group.create_array("instance_id", data=instance_ids)
+        a.attrs["encoding-type"] = "string-array"
+        a.attrs["encoding-version"] = "0.2.0"
+        a = obs_group.create_array("instance_key", data=instance_ids)
+        a.attrs["encoding-type"] = "string-array"
+        a.attrs["encoding-version"] = "0.2.0"
 
         # Region as categorical
         region_group = obs_group.create_group("region")
         region_group.attrs["encoding-type"] = "categorical"
         region_group.attrs["encoding-version"] = "0.2.0"
         region_group.attrs["ordered"] = False
-        region_group.create_array(
+        a = region_group.create_array(
             "categories", data=np.array([region_key], dtype=str_dtype)
         )
-        region_group.create_array("codes", data=np.zeros(n_rows, dtype=np.int8))
+        a.attrs["encoding-type"] = "string-array"
+        a.attrs["encoding-version"] = "0.2.0"
+        a = region_group.create_array("codes", data=np.zeros(n_rows, dtype=np.int8))
+        a.attrs["encoding-type"] = "array"
+        a.attrs["encoding-version"] = "0.2.0"
 
         # var (mass axis)
         var_group = table_group.create_group("var")
@@ -1302,10 +1334,15 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         var_group.attrs["column-order"] = ["mz"]
 
         mz_values = self._common_mass_axis
-        assert mz_values is not None, "Common mass axis not initialized"
+        if mz_values is None:
+            raise RuntimeError("Common mass axis not initialized")
         mz_index = np.array([f"mz_{i}" for i in range(n_cols)], dtype=str_dtype)
-        var_group.create_array("_index", data=mz_index)
-        var_group.create_array("mz", data=mz_values)
+        a = var_group.create_array("_index", data=mz_index)
+        a.attrs["encoding-type"] = "string-array"
+        a.attrs["encoding-version"] = "0.2.0"
+        a = var_group.create_array("mz", data=mz_values)
+        a.attrs["encoding-type"] = "array"
+        a.attrs["encoding-version"] = "0.2.0"
 
         # uns (metadata)
         uns_group = table_group.create_group("uns")
@@ -1315,42 +1352,65 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         sd_attrs = uns_group.create_group("spatialdata_attrs")
         sd_attrs.attrs["encoding-type"] = "dict"
         sd_attrs.attrs["encoding-version"] = "0.1.0"
-        sd_attrs.create_array("region", data=np.array(region_key, dtype=str_dtype))
-        sd_attrs.create_array("region_key", data=np.array("region", dtype=str_dtype))
-        sd_attrs.create_array(
-            "instance_key", data=np.array("instance_key", dtype=str_dtype)
+        a = sd_attrs.create_array("region", data=np.array(region_key, dtype=str_dtype))
+        a.attrs["encoding-type"] = "string"
+        a.attrs["encoding-version"] = "0.2.0"
+        a = sd_attrs.create_array(
+            "region_key", data=np.array("region", dtype=str_dtype)
         )
+        a.attrs["encoding-type"] = "string"
+        a.attrs["encoding-version"] = "0.2.0"
+        a = sd_attrs.create_array(
+            "instance_key",
+            data=np.array("instance_key", dtype=str_dtype),
+        )
+        a.attrs["encoding-type"] = "string"
+        a.attrs["encoding-version"] = "0.2.0"
 
         em_group = uns_group.create_group("essential_metadata")
         em_group.attrs["encoding-type"] = "dict"
         em_group.attrs["encoding-version"] = "0.1.0"
-        em_group.create_array("dimensions", data=np.array(self._dimensions))
-        em_group.create_array(
-            "mass_range", data=np.array([mz_values.min(), mz_values.max()])
+        a = em_group.create_array(
+            "dimensions", data=np.asarray(np.array(self._dimensions))
         )
-        em_group.create_array(
+        a.attrs["encoding-type"] = "array"
+        a.attrs["encoding-version"] = "0.2.0"
+        a = em_group.create_array(
+            "mass_range",
+            data=np.array([mz_values.min(), mz_values.max()]),
+        )
+        a.attrs["encoding-type"] = "array"
+        a.attrs["encoding-version"] = "0.2.0"
+        a = em_group.create_array(
             "source_path",
             data=np.array(str(self.reader.data_path), dtype=str_dtype),
         )
-        em_group.create_array(
-            "spectrum_type", data=np.array("processed", dtype=str_dtype)
+        a.attrs["encoding-type"] = "string"
+        a.attrs["encoding-version"] = "0.2.0"
+        a = em_group.create_array(
+            "spectrum_type",
+            data=np.array("processed", dtype=str_dtype),
         )
+        a.attrs["encoding-type"] = "string"
+        a.attrs["encoding-version"] = "0.2.0"
 
-        uns_group.create_array("average_spectrum", data=avg_spectrum)
+        a = uns_group.create_array("average_spectrum", data=avg_spectrum)
+        a.attrs["encoding-type"] = "array"
+        a.attrs["encoding-version"] = "0.2.0"
 
         # Create empty images and shapes groups (will be populated below)
         store.create_group("images")
         store.create_group("shapes")
 
-        # Consolidate metadata before adding images/shapes
-        logging.info("  Consolidating metadata...")
-        zarr.consolidate_metadata(str(self.output_path))
-
         # Add TIC image and pixel shapes using SpatialData
-        logging.info("  Adding TIC image and pixel shapes...")
+        logger.info("  Adding TIC image and pixel shapes...")
         self._add_tic_image_and_shapes_to_store(
             tic_values, n_rows, n_x, n_y, slice_id, region_key
         )
+
+        # Consolidate metadata after all elements are written
+        logger.info("  Consolidating metadata...")
+        zarr.consolidate_metadata(str(self.output_path))
 
     def _add_tic_image_and_shapes_to_store(
         self,
@@ -1376,7 +1436,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             region_key: Region key for shapes (e.g., "msi_dataset_z0_pixels").
         """
         if not SPATIALDATA_AVAILABLE:
-            logging.warning("SpatialData not available, skipping TIC image and shapes")
+            logger.warning("SpatialData not available, skipping TIC image and shapes")
             return
 
         # === Create TIC Image ===
@@ -1459,7 +1519,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             sdata.write_element(tic_name, overwrite=True)
             sdata.write_element(region_key, overwrite=True)
 
-            logging.info(
+            logger.info(
                 f"  Added TIC image '{tic_name}' ({x_size}x{y_size}) and "
                 f"{n_rows:,} pixel shapes"
             )
@@ -1468,10 +1528,10 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             self._add_optical_images_to_sdata(sdata, slice_id)
 
         except Exception as e:
-            logging.warning(f"Failed to add TIC image and shapes: {e}")
+            logger.warning(f"Failed to add TIC image and shapes: {e}")
             import traceback
 
-            logging.debug(f"Traceback:\n{traceback.format_exc()}")
+            logger.debug(f"Traceback:\n{traceback.format_exc()}")
 
     def _create_streaming_pixel_shapes(
         self, n_rows: int, n_x: int, n_y: int
@@ -1524,7 +1584,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
             n_skipped = n_rows - len(valid_indices)
             if n_skipped > 0:
-                logging.info(
+                logger.info(
                     f"Created {len(valid_geometries)} shapes using optical "
                     f"alignment (skipped {n_skipped} empty grid positions)"
                 )
@@ -1566,12 +1626,12 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
         optical_paths = self.reader.get_optical_image_paths()
         if not optical_paths:
-            logging.debug("No optical images found")
+            logger.debug("No optical images found")
             return
 
         import tifffile
 
-        logging.info(f"  Adding {len(optical_paths)} optical image(s)...")
+        logger.info(f"  Adding {len(optical_paths)} optical image(s)...")
 
         # Load primary image first so we know its dimensions for scaling others
         primary_paths = [p for p in optical_paths if self._is_primary_optical(p)]
@@ -1582,7 +1642,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 # Generate image name
                 image_name = self._generate_optical_image_name(tiff_path)
 
-                logging.info(f"    Loading: {tiff_path.name} as '{image_name}'")
+                logger.info(f"    Loading: {tiff_path.name} as '{image_name}'")
 
                 # Read TIFF
                 with tifffile.TiffFile(tiff_path) as tif:
@@ -1594,7 +1654,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                     elif img_data.ndim == 3:
                         img_data = np.moveaxis(img_data, -1, 0)
                     else:
-                        logging.warning(
+                        logger.warning(
                             f"Unexpected dimensions {img_data.ndim} for {tiff_path.name}"
                         )
                         continue
@@ -1618,7 +1678,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                     if is_primary:
                         transform = Identity()
                         self._primary_optical_dims = (x_size, y_size)
-                        logging.info(f"    Primary alignment image: {x_size}x{y_size}")
+                        logger.info(f"    Primary alignment image: {x_size}x{y_size}")
                     elif self._primary_optical_dims is not None:
                         transform = self._compute_optical_scale_transform(
                             x_size, y_size
@@ -1638,9 +1698,9 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                     sdata.images[image_name] = optical_image
                     sdata.write_element(image_name, overwrite=True)
 
-                    logging.info(
+                    logger.info(
                         f"    Added optical image ({x_size}x{y_size}, {n_channels}ch)"
                     )
 
             except Exception as e:
-                logging.warning(f"Failed to load optical image {tiff_path.name}: {e}")
+                logger.warning(f"Failed to load optical image {tiff_path.name}: {e}")

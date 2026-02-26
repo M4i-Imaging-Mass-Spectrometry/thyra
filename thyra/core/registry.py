@@ -8,6 +8,8 @@ from typing import Dict, NoReturn, Type
 from .base_converter import BaseMSIConverter
 from .base_reader import BaseMSIReader
 
+logger = logging.getLogger(__name__)
+
 # Import BrukerFolderStructure for unified Bruker format detection
 # This avoids circular imports by importing lazily in the method
 _bruker_folder_structure_module = None
@@ -47,7 +49,7 @@ class MSIRegistry:
         """Register reader class."""
         with self._lock:
             self._readers[format_name] = reader_class
-            logging.info(
+            logger.info(
                 f"Registered reader {reader_class.__name__} for format "
                 f"'{format_name}'"
             )
@@ -58,7 +60,7 @@ class MSIRegistry:
         """Register converter class."""
         with self._lock:
             self._converters[format_name] = converter_class
-            logging.info(
+            logger.info(
                 f"Registered converter {converter_class.__name__} for format "
                 f"'{format_name}'"
             )

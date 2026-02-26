@@ -4,6 +4,8 @@ from typing import Optional, Tuple, cast
 import dask.array as da
 import zarr
 
+logger = logging.getLogger(__name__)
+
 
 def optimize_zarr_chunks(
     zarr_path: str,
@@ -91,5 +93,5 @@ def optimize_zarr_chunks(
 
         return True
     except Exception as e:
-        logging.error(f"Error optimizing chunks: {e}")
+        logger.error(f"Error optimizing chunks: {e}")
         return False

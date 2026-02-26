@@ -194,7 +194,8 @@ class AffineTransform:
         homogeneous = np.hstack([points, np.ones((n, 1))])
         # Transform
         transformed = (self.matrix @ homogeneous.T).T
-        return transformed[:, :2]
+        result: NDArray[np.float64] = transformed[:, :2]
+        return result
 
     def inverse(self) -> "AffineTransform":
         """Compute inverse transformation.
@@ -231,7 +232,8 @@ class AffineTransform:
         Returns:
             3x3 numpy array
         """
-        return self.matrix.copy()
+        result: NDArray[np.float64] = self.matrix.copy()
+        return result
 
     def compute_residuals(
         self,

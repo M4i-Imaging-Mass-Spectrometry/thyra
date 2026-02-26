@@ -5,6 +5,8 @@ from typing import Any, Optional
 
 from ..metadata.types import ComprehensiveMetadata, EssentialMetadata
 
+logger = logging.getLogger(__name__)
+
 
 class MetadataExtractor(ABC):
     """Abstract base class for format-specific metadata extractors."""
@@ -51,9 +53,9 @@ class MetadataExtractor(ABC):
             EssentialMetadata: Critical metadata for processing
         """
         if self._essential_cache is None:
-            logging.info("Extracting essential metadata...")
+            logger.info("Extracting essential metadata...")
             self._essential_cache = self._extract_essential_impl()
-            logging.debug(
+            logger.debug(
                 f"Essential metadata extracted: "
                 f"{self._essential_cache.dimensions} dimensions, "
                 f"{self._essential_cache.n_spectra} spectra"
@@ -68,11 +70,11 @@ class MetadataExtractor(ABC):
             format-specific details
         """
         if self._comprehensive_cache is None:
-            logging.info("Extracting comprehensive metadata...")
+            logger.info("Extracting comprehensive metadata...")
             # Ensure essential metadata is loaded first
             self.get_essential()
             self._comprehensive_cache = self._extract_comprehensive_impl()
-            logging.debug(
+            logger.debug(
                 f"Comprehensive metadata extracted with "
                 f"{len(self._comprehensive_cache.raw_metadata)} raw entries"
             )
@@ -82,4 +84,4 @@ class MetadataExtractor(ABC):
         """Clear cached metadata to force re-extraction."""
         self._essential_cache = None
         self._comprehensive_cache = None
-        logging.debug("Metadata cache cleared")
+        logger.debug("Metadata cache cleared")

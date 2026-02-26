@@ -477,8 +477,13 @@ class TestSpatialDataConverter:
             assert shapes == mock_shapes
             mock_create_shapes.assert_called_once_with(mock_adata, is_3d=False)
 
+    @patch(
+        "thyra.converters.spatialdata.base_spatialdata_converter.zarr.consolidate_metadata"
+    )
     @patch("thyra.converters.spatialdata.base_spatialdata_converter." "SpatialData")
-    def test_save_output(self, mock_spatial_data_class, mock_reader, temp_dir):
+    def test_save_output(
+        self, mock_spatial_data_class, mock_consolidate, mock_reader, temp_dir
+    ):
         """Test saving output."""
         output_path = temp_dir / "test_output.zarr"
 
@@ -564,8 +569,13 @@ class TestSpatialDataConverter:
         assert mock_sdata.metadata["conversion_info"]["pixel_size_um"] == 2.0
         assert "conversion_info" in mock_sdata.metadata
 
+    @patch(
+        "thyra.converters.spatialdata.base_spatialdata_converter.zarr.consolidate_metadata"
+    )
     @patch("thyra.converters.spatialdata.base_spatialdata_converter." "SpatialData")
-    def test_convert_end_to_end(self, mock_spatial_data, mock_reader, temp_dir):
+    def test_convert_end_to_end(
+        self, mock_spatial_data, mock_consolidate, mock_reader, temp_dir
+    ):
         """Test the full conversion process."""
         output_path = temp_dir / "test_output.zarr"
 

@@ -10,6 +10,8 @@ from scipy import sparse
 
 from .base_spatialdata_converter import SPATIALDATA_AVAILABLE, BaseSpatialDataConverter
 
+logger = logging.getLogger(__name__)
+
 if SPATIALDATA_AVAILABLE:
     import xarray as xr
     from anndata import AnnData
@@ -88,7 +90,7 @@ class SpatialData2DConverter(BaseSpatialDataConverter):
         avg_peaks_per_pixel = 2000
         estimated_nnz = int(n_pixels * avg_peaks_per_pixel * 1.1)  # 10% buffer
 
-        logging.info(
+        logger.info(
             f"Pre-allocating COO arrays for slice z={z_value}: {n_pixels:,} pixels x "
             f"{n_masses:,} m/z bins"
         )
@@ -245,9 +247,7 @@ class SpatialData2DConverter(BaseSpatialDataConverter):
             try:
                 # Convert COO arrays to sparse matrix (CSC or CSR based on config)
                 format_name = "CSC" if self._sparse_format == "csc" else "CSR"
-                logging.info(
-                    f"Converting COO arrays to {format_name} for {slice_id}..."
-                )
+                logger.info(f"Converting COO arrays to {format_name} for {slice_id}...")
                 coo_arrays = slice_data["sparse_data"]
                 current_idx = coo_arrays["current_idx"]
 
@@ -264,12 +264,13 @@ class SpatialData2DConverter(BaseSpatialDataConverter):
                     dtype=np.float64,
                 )
                 # Convert to configured sparse format
+                sparse_matrix: Any
                 if self._sparse_format == "csc":
                     sparse_matrix = coo.tocsc()
                 else:
                     sparse_matrix = coo.tocsr()
 
-                logging.info(
+                logger.info(
                     f"Converted sparse matrix for {slice_id}: "
                     f"{sparse_matrix.nnz:,} non-zero entries ({format_name})"
                 )
@@ -359,10 +360,10 @@ class SpatialData2DConverter(BaseSpatialDataConverter):
                 )
 
             except Exception as e:
-                logging.error(f"Error processing slice {slice_id}: {e}")
+                logger.error(f"Error processing slice {slice_id}: {e}")
                 import traceback
 
-                logging.debug(f"Detailed traceback:\n{traceback.format_exc()}")
+                logger.debug(f"Detailed traceback:\n{traceback.format_exc()}")
                 raise
 
         # Add optical images if available

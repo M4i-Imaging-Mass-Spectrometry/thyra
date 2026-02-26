@@ -9,6 +9,8 @@ from numpy.typing import NDArray
 
 from .base_spatialdata_converter import SPATIALDATA_AVAILABLE, BaseSpatialDataConverter
 
+logger = logging.getLogger(__name__)
+
 if SPATIALDATA_AVAILABLE:
     import xarray as xr
     from anndata import AnnData
@@ -145,7 +147,7 @@ class SpatialData3DConverter(BaseSpatialDataConverter):
 
             # Convert COO arrays to sparse matrix (CSC or CSR based on config)
             format_name = "CSC" if self._sparse_format == "csc" else "CSR"
-            logging.info(f"Converting COO arrays to {format_name} format...")
+            logger.info(f"Converting COO arrays to {format_name} format...")
             coo_arrays = data_structures["sparse_matrix"]
             current_idx = coo_arrays["current_idx"]
 
@@ -164,12 +166,13 @@ class SpatialData3DConverter(BaseSpatialDataConverter):
                 dtype=np.float64,
             )
             # Convert to configured sparse format
+            sparse_matrix: Any
             if self._sparse_format == "csc":
                 sparse_matrix = coo.tocsc()
             else:
                 sparse_matrix = coo.tocsr()
 
-            logging.info(
+            logger.info(
                 f"Converted sparse matrix: {sparse_matrix.nnz:,} non-zero entries ({format_name})"
             )
 
@@ -212,10 +215,10 @@ class SpatialData3DConverter(BaseSpatialDataConverter):
             self._create_tic_image(data_structures)
 
         except Exception as e:
-            logging.error(f"Error processing 3D volume: {e}")
+            logger.error(f"Error processing 3D volume: {e}")
             import traceback
 
-            logging.debug(f"Detailed traceback:\n{traceback.format_exc()}")
+            logger.debug(f"Detailed traceback:\n{traceback.format_exc()}")
             raise
 
     def _create_tic_image(self, data_structures: Dict[str, Any]) -> None:
@@ -264,7 +267,7 @@ class SpatialData3DConverter(BaseSpatialDataConverter):
                 )
             except (ImportError, AttributeError):
                 # Fallback if Image3DModel is not available
-                logging.warning("Image3DModel not available, using generic image model")
+                logger.warning("Image3DModel not available, using generic image model")
                 from spatialdata.models import ImageModel
 
                 data_structures["images"][f"{self.dataset_id}_tic"] = ImageModel.parse(

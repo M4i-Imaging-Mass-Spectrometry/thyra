@@ -8,6 +8,8 @@ from typing import Any, Dict, Literal, Optional, Tuple, Union
 from .core.base_converter import PixelSizeSource
 from .core.registry import detect_format, get_converter_class, get_reader_class
 
+logger = logging.getLogger(__name__)
+
 warnings.filterwarnings(
     "ignore",
     message=r"Accession IMS:1000046.*",  # ignore UserWarning
@@ -26,11 +28,11 @@ def _validate_paths_parameters(
 ) -> bool:
     """Validate path parameters."""
     if not input_path or not isinstance(input_path, (str, Path)):
-        logging.error("Input path must be a valid string or Path object")
+        logger.error("Input path must be a valid string or Path object")
         return False
 
     if not output_path or not isinstance(output_path, (str, Path)):
-        logging.error("Output path must be a valid string or Path object")
+        logger.error("Output path must be a valid string or Path object")
         return False
 
     return True
@@ -39,11 +41,11 @@ def _validate_paths_parameters(
 def _validate_string_parameters(format_type: str, dataset_id: str) -> bool:
     """Validate string parameters."""
     if not isinstance(format_type, str) or not format_type.strip():
-        logging.error("Format type must be a non-empty string")
+        logger.error("Format type must be a non-empty string")
         return False
 
     if not isinstance(dataset_id, str) or not dataset_id.strip():
-        logging.error("Dataset ID must be a non-empty string")
+        logger.error("Dataset ID must be a non-empty string")
         return False
 
     return True
@@ -56,7 +58,7 @@ def _validate_numeric_parameters(
     if pixel_size_um is not None and (
         not isinstance(pixel_size_um, (int, float)) or pixel_size_um <= 0
     ):
-        logging.error("Pixel size must be a positive number")
+        logger.error("Pixel size must be a positive number")
         return False
 
     return True
@@ -81,11 +83,11 @@ def _validate_input_parameters(
 def _validate_paths(input_path: Path, output_path: Path) -> bool:
     """Validate that input exists and output doesn't exist."""
     if not input_path.exists():
-        logging.error(f"Input path does not exist: {input_path}")
+        logger.error(f"Input path does not exist: {input_path}")
         return False
 
     if output_path.exists():
-        logging.error(f"Destination {output_path} already exists.")
+        logger.error(f"Destination {output_path} already exists.")
         return False
 
     return True
@@ -104,9 +106,9 @@ def _create_reader(
         Tuple of (reader instance, detected format string)
     """
     input_format = detect_format(input_path)
-    logging.info(f"Detected format: {input_format}")
+    logger.info(f"Detected format: {input_format}")
     reader_class = get_reader_class(input_format)
-    logging.info(f"Using reader: {reader_class.__name__}")
+    logger.info(f"Using reader: {reader_class.__name__}")
 
     # Pass reader options to the reader if provided
     options = reader_options or {}
@@ -128,16 +130,16 @@ def _determine_pixel_size(
         return pixel_size_um, PixelSizeSource.USER_PROVIDED, pixel_size_detection_info
 
     # Attempt automatic detection
-    logging.info("Attempting automatic pixel size detection...")
+    logger.info("Attempting automatic pixel size detection...")
     essential_metadata = reader.get_essential_metadata()
 
     if essential_metadata.pixel_size is None:
-        logging.error("✗ Pixel size not found in metadata")
-        logging.error("Use --pixel-size parameter (e.g., --pixel-size 25)")
+        logger.error("Pixel size not found in metadata")
+        logger.error("Use --pixel-size parameter (e.g., --pixel-size 25)")
         raise ValueError("Pixel size not found in metadata")
 
     final_pixel_size = essential_metadata.pixel_size[0]  # Use X size
-    logging.info(f"✓ Detected pixel size: {final_pixel_size:.1f} µm")
+    logger.info(f"Detected pixel size: {final_pixel_size:.1f} um")
 
     pixel_size_detection_info = {
         "method": "automatic",
@@ -166,13 +168,13 @@ def _should_use_streaming(streaming: Union[bool, Literal["auto"]], reader: Any) 
         # Rough estimate: assume average 10k peaks per spectrum, 8 bytes each
         estimated_gb = (n_pixels * 10000 * 8) / (1024**3)
         if estimated_gb > 10:
-            logging.info(
+            logger.info(
                 f"Auto-detected large dataset (~{estimated_gb:.1f} GB), "
                 "using streaming converter"
             )
             return True
     except Exception as e:
-        logging.debug(f"Could not estimate dataset size for auto-streaming: {e}")
+        logger.debug(f"Could not estimate dataset size for auto-streaming: {e}")
     return False
 
 
@@ -211,26 +213,26 @@ def _create_converter(
         try:
             from .converters.spatialdata import StreamingSpatialDataConverter
 
-            logging.info("Using streaming converter for memory-efficient processing")
+            logger.info("Using streaming converter for memory-efficient processing")
             return StreamingSpatialDataConverter(
                 reader, output_path, **converter_kwargs
             )
         except ImportError as e:
-            logging.warning(f"Streaming converter not available: {e}")
-            logging.warning("Falling back to standard converter")
+            logger.warning(f"Streaming converter not available: {e}")
+            logger.warning("Falling back to standard converter")
 
     try:
         converter_class = get_converter_class(format_type.lower())
-        logging.info(f"Using converter: {converter_class.__name__}")
+        logger.info(f"Using converter: {converter_class.__name__}")
     except ValueError as e:
         if "spatialdata" in format_type.lower():
-            logging.error(
+            logger.error(
                 "SpatialData converter is not available due to " "dependency issues."
             )
-            logging.error("This is commonly caused by zarr version incompatibility.")
-            logging.error("Try upgrading your dependencies:")
-            logging.error("  pip install --upgrade anndata spatialdata zarr")
-            logging.error("Or create a fresh environment with compatible versions.")
+            logger.error("This is commonly caused by zarr version incompatibility.")
+            logger.error("Try upgrading your dependencies:")
+            logger.error("  pip install --upgrade anndata spatialdata zarr")
+            logger.error("Or create a fresh environment with compatible versions.")
             raise ValueError("SpatialData converter unavailable") from e
         else:
             raise e
@@ -252,9 +254,9 @@ def _create_converter(
 def _perform_conversion_with_cleanup(converter: Any, reader: Any) -> bool:
     """Perform the conversion and handle reader cleanup."""
     try:
-        logging.info("Starting conversion...")
+        logger.info("Starting conversion...")
         result = converter.convert()
-        logging.info(f"Conversion {'completed successfully' if result else 'failed'}")
+        logger.info(f"Conversion {'completed successfully' if result else 'failed'}")
         return bool(result)
     finally:
         if hasattr(reader, "close"):
@@ -323,7 +325,7 @@ def convert_msi(
     # Convert to Path objects and validate
     input_path = Path(input_path).resolve()
     output_path = Path(output_path).resolve()
-    logging.info(f"Processing input file: {input_path}")
+    logger.info(f"Processing input file: {input_path}")
 
     if not _validate_paths(input_path, output_path):
         return False
@@ -363,6 +365,6 @@ def convert_msi(
         return _perform_conversion_with_cleanup(converter, reader)
 
     except Exception as e:
-        logging.error(f"Error during conversion: {e}")
-        logging.error(f"Detailed traceback:\n{traceback.format_exc()}")
+        logger.error(f"Error during conversion: {e}")
+        logger.error(f"Detailed traceback:\n{traceback.format_exc()}")
         return False

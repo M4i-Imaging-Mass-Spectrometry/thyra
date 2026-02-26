@@ -194,12 +194,14 @@ class MassLynxLib:
         This is a type-narrowing helper that converts Optional[ctypes.CDLL]
         to ctypes.CDLL for mypy.
         """
-        assert self._api_lib is not None, "API library not loaded"
+        if self._api_lib is None:
+            raise RuntimeError("API library not loaded")
         return self._api_lib
 
     def _setup_function_signatures(self) -> None:
         """Define argtypes/restype for all DLL functions."""
-        assert self._api_lib is not None, "API library not loaded"
+        if self._api_lib is None:
+            raise RuntimeError("API library not loaded")
         dll = self._api_lib
 
         # -- File open/close --

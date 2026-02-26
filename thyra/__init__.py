@@ -7,6 +7,7 @@ pixel size detection.
 
 # Suppress known warnings from dependencies
 import warnings
+from typing import Any
 
 # Configure Dask to use new query planning (silences legacy DataFrame warning)
 try:
@@ -42,7 +43,7 @@ try:
     from .converters.spatialdata.converter import SpatialDataConverter
 except ImportError:
     # SpatialData dependencies not available
-    SpatialDataConverter = None  # type: ignore[misc]
+    SpatialDataConverter: Any = None  # type: ignore[no-redef]
 
 # Expose main API
 __all__ = [
