@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.15.1 (2026-02-26)
+
+### Bug Fixes
+
+- Code quality sweep - mypy, logging, asserts, zarr consolidation
+  ([#77](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/77),
+  [`fd51e6f`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/fd51e6f8989617a664e9f911502e1d101dfa28f9))
+
+
 ## v1.15.0 (2026-02-25)
 
 ### Features
