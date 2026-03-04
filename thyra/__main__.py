@@ -194,6 +194,46 @@ def _display_calibration_info(input: Path, use_recalibrated: bool) -> None:
     click.echo("=" * 60 + "\n")
 
 
+def _select_bruker_dataset(input_path: Path) -> Path:
+    """Prompt user to select a dataset when multiple .d folders exist.
+
+    If the input directory contains multiple Bruker .d folders, displays
+    them as a numbered list and lets the user pick one interactively.
+
+    Args:
+        input_path: The user-provided input path
+
+    Returns:
+        The selected .d folder path, or the original path if no
+        selection is needed
+    """
+    if input_path.suffix.lower() == ".d":
+        return input_path
+
+    if not input_path.is_dir():
+        return input_path
+
+    d_folders = sorted(
+        f for f in input_path.iterdir() if f.is_dir() and f.suffix.lower() == ".d"
+    )
+
+    if len(d_folders) <= 1:
+        return input_path
+
+    click.echo(f"\nFound {len(d_folders)} datasets in {input_path.name}:")
+    for i, d_folder in enumerate(d_folders, 1):
+        click.echo(f"  [{i}] {d_folder.name}")
+
+    choice: int = click.prompt(
+        "\nSelect dataset to convert",
+        type=click.IntRange(1, len(d_folders)),
+    )
+
+    selected: Path = d_folders[choice - 1]
+    click.echo(f"  -> {selected.name}\n")
+    return selected
+
+
 def _build_resampling_config(
     resample_method: str,
     mass_axis_type: str,
@@ -252,52 +292,200 @@ def _handle_post_conversion(
         logger.error("Conversion failed.")
 
 
-@click.command()
+class GroupedCommand(click.Command):
+    """Command that groups options into sections in --help output."""
+
+    GROUPS = {
+        "Conversion": [
+            "--format",
+            "--pixel-size",
+            "--region",
+            "--no-resample",
+            "--resample",
+            "--include-optical",
+            "--no-optical",
+        ],
+        "Logging": ["--log-level", "-v", "--log-file"],
+        "Resampling (advanced)": [
+            "--resample-method",
+            "--mass-axis-type",
+            "--resample-bins",
+            "--resample-min-mz",
+            "--resample-max-mz",
+            "--resample-width-at-mz",
+            "--resample-reference-mz",
+        ],
+        "Performance": ["--streaming", "--optimize-chunks", "--sparse-format"],
+        "Bruker-specific": [
+            "--use-recalibrated",
+            "--no-recalibrated",
+            "--interactive-calibration",
+            "--intensity-threshold",
+        ],
+        "Other": ["--dataset-id", "--handle-3d"],
+    }
+
+    def format_help(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
+        """Custom help that groups options into sections."""
+        self.format_usage(ctx, formatter)
+        self.format_help_text(ctx, formatter)
+
+        opts, opt_map = self._collect_options(ctx)
+        if not opts:
+            return
+
+        used: set = set()
+        for group_name, group_opts in self.GROUPS.items():
+            records = self._records_for_group(group_opts, opt_map, used)
+            if records:
+                with formatter.section(group_name):
+                    formatter.write_dl(records)
+
+        remaining = [rv for param, rv in opts if id(param) not in used]
+        if remaining:
+            with formatter.section("Options"):
+                formatter.write_dl(remaining)
+
+    @staticmethod
+    def _collect_options(ctx: click.Context) -> tuple:
+        """Collect options and build name-to-record mapping."""
+        opts = []
+        for param in ctx.command.get_params(ctx):
+            rv = param.get_help_record(ctx)
+            if rv is not None:
+                opts.append((param, rv))
+
+        opt_map: dict = {}
+        for param, rv in opts:
+            for name in getattr(param, "opts", []) + getattr(
+                param, "secondary_opts", []
+            ):
+                opt_map[name] = (param, rv)
+
+        return opts, opt_map
+
+    @staticmethod
+    def _records_for_group(group_opts: list, opt_map: dict, used: set) -> list:
+        """Extract help records for a group, tracking used params."""
+        records = []
+        for opt_name in group_opts:
+            if opt_name in opt_map and id(opt_map[opt_name][0]) not in used:
+                param, rv = opt_map[opt_name]
+                records.append(rv)
+                used.add(id(param))
+        return records
+
+
+@click.command(cls=GroupedCommand)
 @click.argument("input", type=click.Path(exists=True, path_type=Path))
 @click.argument("output", type=click.Path(path_type=Path))
-# Basic conversion options
+# -- Conversion --
 @click.option(
     "--format",
     type=click.Choice(["spatialdata"]),
     default="spatialdata",
-    help="Output format type: spatialdata (full SpatialData format)",
-)
-@click.option(
-    "--dataset-id",
-    default="msi_dataset",
-    help="Identifier for the dataset",
+    help="Output format (default: spatialdata)",
 )
 @click.option(
     "--pixel-size",
     type=float,
     default=None,
-    help="Pixel size in micrometers. If not specified, automatic detection "
-    "from metadata will be attempted.",
+    help="Pixel size in um (default: auto-detect from metadata)",
 )
 @click.option(
-    "--handle-3d",
-    is_flag=True,
-    help="Process as 3D data (default: treat as 2D slices)",
+    "--region",
+    type=int,
+    default=None,
+    help="Convert specific region number (default: all regions)",
+)
+@click.option(
+    "--resample/--no-resample",
+    default=True,
+    help="Mass axis resampling (default: enabled)",
+)
+@click.option(
+    "--include-optical/--no-optical",
+    default=True,
+    help="Include optical images in output (default: True)",
+)
+# -- Logging --
+@click.option(
+    "-v",
+    "--log-level",
+    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]),
+    default="INFO",
+    help="Logging level (default: INFO)",
+)
+@click.option(
+    "--log-file",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Write logs to file",
+)
+# -- Performance --
+@click.option(
+    "--streaming",
+    type=click.Choice(["auto", "true", "false"]),
+    default="false",
+    help="Streaming mode for large datasets (default: false)",
 )
 @click.option(
     "--optimize-chunks",
     is_flag=True,
     help="Optimize Zarr chunks after conversion",
 )
-# Logging options
 @click.option(
-    "--log-level",
-    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]),
-    default="INFO",
-    help="Set the logging level",
+    "--sparse-format",
+    type=click.Choice(["csc", "csr"]),
+    default="csc",
+    help="Sparse matrix format: csc or csr (default: csc)",
+)
+# -- Resampling (advanced) --
+@click.option(
+    "--resample-method",
+    type=click.Choice(["auto", "nearest_neighbor", "tic_preserving"]),
+    default="auto",
+    help="Resampling method (default: auto-detect)",
 )
 @click.option(
-    "--log-file",
-    type=click.Path(path_type=Path),
+    "--mass-axis-type",
+    type=click.Choice(
+        ["auto", "constant", "linear_tof", "reflector_tof", "orbitrap", "fticr"]
+    ),
+    default="auto",
+    help="Mass axis spacing type (default: auto-detect)",
+)
+@click.option(
+    "--resample-bins",
+    type=int,
     default=None,
-    help="Path to the log file",
+    help="Number of bins (mutually exclusive with --resample-width-at-mz)",
 )
-# Bruker calibration options
+@click.option(
+    "--resample-min-mz",
+    type=float,
+    default=None,
+    help="Minimum m/z (default: auto-detect)",
+)
+@click.option(
+    "--resample-max-mz",
+    type=float,
+    default=None,
+    help="Maximum m/z (default: auto-detect)",
+)
+@click.option(
+    "--resample-width-at-mz",
+    type=float,
+    default=None,
+    help="Mass width in Da at reference m/z for physics-based binning",
+)
+@click.option(
+    "--resample-reference-mz",
+    type=float,
+    default=1000.0,
+    help="Reference m/z for width specification (default: 1000.0)",
+)
+# -- Bruker-specific --
 @click.option(
     "--use-recalibrated/--no-recalibrated",
     default=True,
@@ -306,109 +494,24 @@ def _handle_post_conversion(
 @click.option(
     "--interactive-calibration",
     is_flag=True,
-    help="Display Bruker calibration states (informational only, see issue #54)",
+    help="Display Bruker calibration states",
 )
-# Resampling options
-@click.option(
-    "--resample",
-    is_flag=True,
-    help="Enable mass axis resampling/harmonization",
-)
-@click.option(
-    "--resample-method",
-    type=click.Choice(["auto", "nearest_neighbor", "tic_preserving"]),
-    default="auto",
-    help="Resampling method: auto (detect from metadata), "
-    "nearest_neighbor (centroid data), tic_preserving (profile data)",
-)
-@click.option(
-    "--resample-bins",
-    type=int,
-    default=None,
-    help="Number of bins for resampled mass axis. "
-    "If not specified, uses axis-type-specific defaults: "
-    "LINEAR_TOF uses 17 mDa @ m/z 300, others use 5 mDa @ m/z 1000. "
-    "Mutually exclusive with --resample-width-at-mz.",
-)
-@click.option(
-    "--resample-min-mz",
-    type=float,
-    default=None,
-    help="Minimum m/z for resampled axis (default: auto-detect from data)",
-)
-@click.option(
-    "--resample-max-mz",
-    type=float,
-    default=None,
-    help="Maximum m/z for resampled axis (default: auto-detect from data)",
-)
-@click.option(
-    "--resample-width-at-mz",
-    type=float,
-    default=None,
-    help="Mass width (in Da) at reference m/z for physics-based binning. "
-    "Default: axis-type-specific (LINEAR_TOF: 17 mDa @ m/z 300, others: 5 mDa @ m/z 1000). "
-    "Mutually exclusive with --resample-bins.",
-)
-@click.option(
-    "--resample-reference-mz",
-    type=float,
-    default=1000.0,
-    help="Reference m/z for width specification (default: 1000.0). "
-    "Used with --resample-width-at-mz.",
-)
-@click.option(
-    "--mass-axis-type",
-    type=click.Choice(
-        ["auto", "constant", "linear_tof", "reflector_tof", "orbitrap", "fticr"]
-    ),
-    default="auto",
-    help="Mass axis spacing type: auto (detect from metadata), "
-    "constant (uniform spacing), linear_tof (sqrt spacing), "
-    "reflector_tof (logarithmic spacing), orbitrap (1/sqrt spacing), "
-    "fticr (quadratic spacing). Only used with --resample.",
-)
-@click.option(
-    "--sparse-format",
-    type=click.Choice(["csc", "csr"]),
-    default="csc",
-    help="Sparse matrix format for output: csc (Compressed Sparse Column, "
-    "default, better for column-wise operations like feature selection) or "
-    "csr (Compressed Sparse Row, better for row-wise operations).",
-)
-# Optical image options
-@click.option(
-    "--include-optical/--no-optical",
-    default=True,
-    help="Include optical images (TIFF) in output (default: True)",
-)
-# Noise filtering options
 @click.option(
     "--intensity-threshold",
     type=float,
     default=None,
-    help="Minimum intensity value to include. Values below this threshold "
-    "are filtered out during reading. Useful for continuous mode data "
-    "(e.g., Rapiflex) where most values are detector noise. "
-    "Default: None (no filtering).",
+    help="Minimum intensity filter (useful for continuous mode data)",
 )
-# Memory/performance options
+# -- Other --
 @click.option(
-    "--streaming",
-    type=click.Choice(["auto", "true", "false"]),
-    default="false",
-    help="Use memory-efficient streaming converter for large datasets. "
-    "'auto' enables streaming for datasets >10GB, 'true' forces streaming, "
-    "'false' uses standard converter (default).",
+    "--dataset-id",
+    default="msi_dataset",
+    help="Dataset identifier (default: msi_dataset)",
 )
-# Region selection options
 @click.option(
-    "--region",
-    type=int,
-    default=None,
-    help="For multi-region datasets (e.g. Bruker timsTOF), "
-    "select a specific region number. By default all regions "
-    "are converted.",
+    "--handle-3d",
+    is_flag=True,
+    help="Process as 3D data instead of 2D slices",
 )
 def main(
     input: Path,
@@ -458,6 +561,9 @@ def main(
 
     # Configure logging
     setup_logging(log_level=getattr(logging, log_level), log_file=log_file)
+
+    # If input folder has multiple .d datasets, let the user choose
+    input = _select_bruker_dataset(input)
 
     # Display calibration info if requested (Bruker datasets only)
     if interactive_calibration and input.is_dir() and input.suffix.lower() == ".d":

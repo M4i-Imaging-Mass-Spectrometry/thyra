@@ -218,13 +218,20 @@ class BrukerFolderStructure:
         For Rapiflex, this is the .mis file.
         For timsTOF, teaching points may be in other locations (TBD).
 
+        When multiple .mis files exist (e.g., multi-dataset slides where
+        each .d has its own .mis), the file whose stem matches the .d
+        folder stem is preferred. This ensures each dataset uses its own
+        Area definitions for correct optical alignment.
+
         Args:
             data_path: Path to the data folder
 
         Returns:
             Path to teaching points file, or None if not found
         """
-        # Search for .mis file (Rapiflex)
+        # The .d folder stem is the matching key (e.g., "sample_E2506")
+        d_stem = data_path.stem
+
         search_paths = [data_path, self.path, data_path.parent]
 
         for search_path in search_paths:
@@ -233,8 +240,16 @@ class BrukerFolderStructure:
 
             mis_files = list(search_path.glob("*.mis"))
             if mis_files:
-                # Return the first .mis file found
-                logger.debug(f"Found teaching points file: {mis_files[0]}")
+                # Prefer .mis file whose stem matches the .d folder stem
+                for mis_file in mis_files:
+                    if mis_file.stem == d_stem:
+                        logger.debug(
+                            f"Found matching teaching points file: " f"{mis_file.name}"
+                        )
+                        return mis_file
+
+                # Fallback to first .mis file found
+                logger.debug(f"No .mis matching '{d_stem}', using {mis_files[0].name}")
                 return mis_files[0]
 
         return None
