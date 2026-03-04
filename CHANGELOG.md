@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v1.16.0 (2026-03-04)
+
+### Bug Fixes
+
+- Correct multi-brain optical alignment for shared TIFF slides
+  ([#78](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/78),
+  [`77fed1d`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/77fed1de8edc6129a9fb6908cfc3b928810529ec))
+
+### Features
+
+- Interactive dataset selection, grouped CLI help, resample default
+  ([#78](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/78),
+  [`77fed1d`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/77fed1de8edc6129a9fb6908cfc3b928810529ec))
+
+- Multi-brain alignment fix and CLI improvements
+  ([#78](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/78),
+  [`77fed1d`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/77fed1de8edc6129a9fb6908cfc3b928810529ec))
+
+
 ## v1.15.1 (2026-02-26)
 
 ### Bug Fixes
