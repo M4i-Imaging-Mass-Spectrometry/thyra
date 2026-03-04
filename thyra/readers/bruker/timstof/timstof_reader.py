@@ -7,6 +7,7 @@ comprehensive error handling.
 
 import logging
 import os
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
@@ -1070,6 +1071,11 @@ class BrukerReader(BrukerBaseMSIReader):
         Creates position dictionaries compatible with the alignment module
         by querying raster coordinates and region numbers from the database.
 
+        For single-region .d files on multi-region slides, the RegionNumber
+        column is often 0 regardless of which area on the slide was acquired.
+        In this case, we parse the SpotName column (format R{nn}X{nnn}Y{nnn})
+        to recover the true region number from the original acquisition.
+
         Returns:
             List of position dicts with region, raster_x, raster_y keys.
             Empty list if no .mis areas are available.
@@ -1077,28 +1083,67 @@ class BrukerReader(BrukerBaseMSIReader):
         if not self._mis_metadata.get("areas"):
             return []
 
+        n_areas = len(self._mis_metadata["areas"])
+        positions = self._query_maldi_frame_positions()
+
+        if positions:
+            self._log_position_summary(positions, n_areas)
+
+        return positions
+
+    def _query_maldi_frame_positions(self) -> List[Dict[str, Any]]:
+        """Query MaldiFrameInfo for raster positions with SpotName fallback."""
         positions: List[Dict[str, Any]] = []
+        spot_region_re = re.compile(r"^R(\d+)")
+
         try:
             cursor = self.conn.cursor()
-            cursor.execute(
-                "SELECT XIndexPos, YIndexPos, RegionNumber " "FROM MaldiFrameInfo"
-            )
-            for x, y, region in cursor.fetchall():
-                positions.append(
-                    {
-                        "region": int(region),
-                        "raster_x": int(x),
-                        "raster_y": int(y),
-                    }
+            use_spotname = False
+            try:
+                cursor.execute(
+                    "SELECT XIndexPos, YIndexPos, RegionNumber, SpotName "
+                    "FROM MaldiFrameInfo"
                 )
-            logger.info(
-                f"Built {len(positions)} positions from MaldiFrameInfo "
-                f"for optical alignment"
-            )
+                use_spotname = True
+            except sqlite3.OperationalError:
+                cursor.execute(
+                    "SELECT XIndexPos, YIndexPos, RegionNumber " "FROM MaldiFrameInfo"
+                )
+
+            for row in cursor.fetchall():
+                x, y, region = row[0], row[1], row[2]
+                if use_spotname and row[3]:
+                    m = spot_region_re.match(str(row[3]))
+                    if m and int(m.group(1)) != int(region):
+                        region = int(m.group(1))
+                positions.append(
+                    {"region": int(region), "raster_x": int(x), "raster_y": int(y)}
+                )
         except sqlite3.OperationalError as e:
             logger.warning(f"Could not query positions for alignment: {e}")
 
         return positions
+
+    def _log_position_summary(
+        self, positions: List[Dict[str, Any]], n_areas: int
+    ) -> None:
+        """Log summary of queried positions and region-to-area mapping."""
+        unique_regions = sorted(set(p["region"] for p in positions))
+        logger.info(
+            f"Built {len(positions)} positions from MaldiFrameInfo "
+            f"for optical alignment "
+            f"(regions: {unique_regions}, areas in .mis: {n_areas})"
+        )
+        if len(unique_regions) == 1 and n_areas > 1:
+            rid = unique_regions[0]
+            if rid < n_areas:
+                area_name = self._mis_metadata["areas"][rid].get("name", f"Area {rid}")
+                logger.info(f"Single region {rid} will align to Area '{area_name}'")
+            else:
+                logger.warning(
+                    f"Region {rid} exceeds number of areas "
+                    f"({n_areas}). Alignment may be incorrect."
+                )
 
     def _build_header_alignment(self) -> Dict[str, Any]:
         """Build header dict with first_raster offsets for alignment.

@@ -731,11 +731,18 @@ class TeachingPointAlignment:
             for pos in data["positions"]:
                 pos_to_region[(pos["raster_x"], pos["raster_y"])] = r
 
-        # Match areas to regions by index (Area 01 = Region 0, etc.)
+        # Match areas to regions by region number.
+        # Region number N maps to the Nth Area (0-indexed) from the .mis file.
+        # For single-region .d files, the SpotName-derived region number
+        # determines which Area the data aligns to.
         region_mappings: List[RegionMapping] = []
         for i, area in enumerate(areas):
             if i not in regions:
-                logger.warning(f"Area '{area['name']}' has no matching region {i}")
+                logger.debug(
+                    f"Area '{area['name']}' (index {i}) has no matching "
+                    f"region in data (available regions: "
+                    f"{sorted(regions.keys())})"
+                )
                 continue
 
             # Area bounds in image pixels - use min/max of p1 and p2
