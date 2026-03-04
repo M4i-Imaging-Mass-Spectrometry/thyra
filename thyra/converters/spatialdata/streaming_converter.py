@@ -13,6 +13,8 @@ import gc
 import logging
 import shutil
 import tempfile
+import warnings
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
@@ -34,6 +36,29 @@ if SPATIALDATA_AVAILABLE:
     from spatialdata.transformations import Affine, Identity
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _suppress_upstream_warnings():
+    """Suppress known upstream warnings from ome_zarr, zarr v3, and spatialdata."""
+    with warnings.catch_warnings():
+        # ome_zarr passes deprecated kwargs to da.to_zarr()
+        warnings.filterwarnings(
+            "ignore",
+            message="Passing storage-related arguments",
+            category=FutureWarning,
+        )
+        # zarr v3 does not recognize parquet files inside the store
+        warnings.filterwarnings(
+            "ignore", message="Object at.*is not recognized", category=UserWarning
+        )
+        # zarr v3 consolidated metadata not in spec yet
+        warnings.filterwarnings(
+            "ignore",
+            message="Consolidated metadata is currently not",
+            category=UserWarning,
+        )
+        yield
 
 
 class StreamingSpatialDataConverter(BaseSpatialDataConverter):
@@ -1410,7 +1435,8 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
         # Consolidate metadata after all elements are written
         logger.info("  Consolidating metadata...")
-        zarr.consolidate_metadata(str(self.output_path))
+        with _suppress_upstream_warnings():
+            zarr.consolidate_metadata(str(self.output_path))
 
     def _add_tic_image_and_shapes_to_store(
         self,
@@ -1496,11 +1522,9 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # === Write to existing store using SpatialData ===
         # Open the store and add elements
         try:
-            # Suppress expected warning about table annotating shapes that don't exist yet.
-            # The shapes are created and written immediately after this read.
-            import warnings
-
-            with warnings.catch_warnings():
+            with _suppress_upstream_warnings():
+                # Also suppress table-annotating-missing-shapes warning (shapes
+                # are created and written immediately after this read).
                 warnings.filterwarnings(
                     "ignore",
                     message="The table is annotating.*which is not present",
@@ -1508,24 +1532,24 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 )
                 sdata = SpatialData.read(str(self.output_path))
 
-            # Add TIC image
-            tic_name = f"{slice_id}_tic"
-            sdata.images[tic_name] = tic_image
+                # Add TIC image
+                tic_name = f"{slice_id}_tic"
+                sdata.images[tic_name] = tic_image
 
-            # Add shapes
-            sdata.shapes[region_key] = shapes
+                # Add shapes
+                sdata.shapes[region_key] = shapes
 
-            # Write elements to disk
-            sdata.write_element(tic_name, overwrite=True)
-            sdata.write_element(region_key, overwrite=True)
+                # Write elements to disk
+                sdata.write_element(tic_name, overwrite=True)
+                sdata.write_element(region_key, overwrite=True)
 
-            logger.info(
-                f"  Added TIC image '{tic_name}' ({x_size}x{y_size}) and "
-                f"{n_rows:,} pixel shapes"
-            )
+                logger.info(
+                    f"  Added TIC image '{tic_name}' ({x_size}x{y_size}) and "
+                    f"{n_rows:,} pixel shapes"
+                )
 
-            # Add optical images if available
-            self._add_optical_images_to_sdata(sdata, slice_id)
+                # Add optical images if available
+                self._add_optical_images_to_sdata(sdata, slice_id)
 
         except Exception as e:
             logger.warning(f"Failed to add TIC image and shapes: {e}")

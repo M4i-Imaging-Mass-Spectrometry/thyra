@@ -1,7 +1,9 @@
 # thyra/converters/spatialdata/base_spatialdata_converter.py
 
 import logging
+import warnings
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -17,6 +19,27 @@ from ...resampling import ResamplingDecisionTree, ResamplingMethod
 from ...resampling.types import ResamplingConfig
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _suppress_upstream_warnings():
+    """Suppress known upstream warnings from ome_zarr, zarr v3, and spatialdata."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Passing storage-related arguments",
+            category=FutureWarning,
+        )
+        warnings.filterwarnings(
+            "ignore", message="Object at.*is not recognized", category=UserWarning
+        )
+        warnings.filterwarnings(
+            "ignore",
+            message="Consolidated metadata is currently not",
+            category=UserWarning,
+        )
+        yield
+
 
 # Check SpatialData availability (defer imports to avoid issues)
 SPATIALDATA_AVAILABLE = False
@@ -1506,8 +1529,9 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             self.add_metadata(sdata)
 
             # Write to disk
-            sdata.write(str(self.output_path))
-            zarr.consolidate_metadata(str(self.output_path))
+            with _suppress_upstream_warnings():
+                sdata.write(str(self.output_path))
+                zarr.consolidate_metadata(str(self.output_path))
             logger.info(f"Successfully saved SpatialData to {self.output_path}")
             return True
         except Exception as e:
