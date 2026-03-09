@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.17.0 (2026-03-09)
+
+### Features
+
+- Include area names from .mis file in region info output
+  ([`2c34961`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/2c34961a51ecc9f12ab2e783136fc864022611d9))
+
+
 ## v1.16.0 (2026-03-04)
 
 ### Bug Fixes
