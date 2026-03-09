@@ -1,5 +1,6 @@
 # thyra/converters/spatialdata/base_spatialdata_converter.py
 
+import json
 import logging
 import warnings
 from abc import ABC, abstractmethod
@@ -422,14 +423,18 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             adata.uns["raw_metadata"] = self._serialize_for_zarr(comp_meta.raw_metadata)
 
     def _store_region_info(self, adata) -> None:
-        """Store acquisition region summary in uns.
+        """Store acquisition region summary in uns as JSON.
+
+        Stored as a JSON string because AnnData/zarr cannot round-trip
+        a list of dicts (they get stringified individually). JSON
+        preserves the structure and can be parsed with json.loads().
 
         Always written for a consistent schema. Single-region datasets
         get a single-entry list with region_number=1.
         """
         region_info = getattr(self, "_region_info", None)
         if region_info:
-            adata.uns["regions"] = self._serialize_for_zarr(region_info)
+            adata.uns["regions"] = json.dumps(self._serialize_for_zarr(region_info))
 
     def _serialize_for_zarr(self, obj):
         """Recursively convert tuples to lists for Zarr serialization."""
