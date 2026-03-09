@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.17.1 (2026-03-09)
+
+### Bug Fixes
+
+- Store region info as JSON to preserve dict structure in zarr
+  ([`49d674e`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/49d674e5e72a23c4700a6efdcb5721dd9ee87cb4))
+
+
 ## v1.17.0 (2026-03-09)
 
 ### Features
