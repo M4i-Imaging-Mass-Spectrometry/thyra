@@ -631,16 +631,24 @@ class BrukerReader(BrukerBaseMSIReader):
         """Get summary information about acquisition regions.
 
         Returns:
-            List of region summary dicts with region_number and n_spectra,
+            List of region summary dicts with region_number, n_spectra,
+            and name (from .mis Area definitions when available),
             or None if region information is not available.
         """
         if not self._region_info or len(self._region_info) <= 1:
             return None
 
-        return [
-            {"region_number": region_num, "n_spectra": n_frames}
-            for region_num, n_frames in self._region_info
-        ]
+        areas = self._mis_metadata.get("areas", [])
+        result = []
+        for region_num, n_frames in self._region_info:
+            info: Dict[str, Any] = {
+                "region_number": region_num,
+                "n_spectra": n_frames,
+            }
+            if region_num < len(areas) and areas[region_num].get("name"):
+                info["name"] = areas[region_num]["name"]
+            result.append(info)
+        return result
 
     def get_common_mass_axis(self) -> NDArray[np.float64]:
         """Return the common mass axis composed of all unique m/z values.
