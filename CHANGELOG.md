@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v1.18.2 (2026-03-10)
+
+### Bug Fixes
+
+- Update Bruker SDK binaries to support TSF/MALDI on Linux
+  ([#80](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/80),
+  [`b629c0a`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/b629c0a81806c3e1865d31d7339ba833d7feb037))
+
+### Documentation
+
+- Add Bruker SDK license and attribution for bundled binaries
+  ([#80](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/80),
+  [`b629c0a`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/b629c0a81806c3e1865d31d7339ba833d7feb037))
+
+
 ## v1.18.1 (2026-03-10)
 
 ### Bug Fixes
