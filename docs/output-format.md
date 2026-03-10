@@ -127,6 +127,28 @@ plt.title("Average Mass Spectrum")
 plt.show()
 ```
 
+### Per-Region Average Spectrum
+
+For multi-region datasets, Thyra also stores a mean spectrum per acquisition
+region in `uns["average_spectrum_per_region"]`. Each key is the region number
+(as a string), and the value is a 1-D array matching the m/z axis.
+
+```python
+if "average_spectrum_per_region" in msi_table.uns:
+    per_region = msi_table.uns["average_spectrum_per_region"]
+    for region_id, spectrum in per_region.items():
+        plt.plot(mz_values, spectrum, label=f"Region {region_id}", linewidth=0.5)
+    plt.xlabel("m/z")
+    plt.ylabel("Average Intensity")
+    plt.legend()
+    plt.title("Average Spectrum per Region")
+    plt.show()
+```
+
+!!! note
+    This key is only present when the dataset contains multiple acquisition
+    regions. Single-region datasets only have the global `average_spectrum`.
+
 ### Intensity Matrix
 
 The intensity matrix is stored as a sparse matrix. Each row is one pixel, each

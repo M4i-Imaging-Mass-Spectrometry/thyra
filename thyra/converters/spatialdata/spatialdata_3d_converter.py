@@ -45,7 +45,9 @@ class SpatialData3DConverter(BaseSpatialDataConverter):
 
         n_x, n_y, n_z = self._dimensions
 
-        return {
+        n_cols = len(self._common_mass_axis)
+
+        data_structures: Dict[str, Any] = {
             "mode": "3d_volume",
             "sparse_matrix": self._create_sparse_matrix(),
             "coords_df": self._create_coordinates_dataframe(),
@@ -54,9 +56,19 @@ class SpatialData3DConverter(BaseSpatialDataConverter):
             "shapes": shapes,
             "images": images,
             "tic_values": np.zeros((n_y, n_x, n_z), dtype=np.float64),
-            "total_intensity": np.zeros(len(self._common_mass_axis), dtype=np.float64),
+            "total_intensity": np.zeros(n_cols, dtype=np.float64),
             "pixel_count": 0,
         }
+
+        # Per-region accumulators for multi-region datasets
+        if self._region_map is not None:
+            unique_regions = sorted(set(self._region_map.values()))
+            data_structures["region_total_intensity"] = {
+                r: np.zeros(n_cols, dtype=np.float64) for r in unique_regions
+            }
+            data_structures["region_pixel_count"] = {r: 0 for r in unique_regions}
+
+        return data_structures
 
     def _process_single_spectrum(
         self,
@@ -115,6 +127,17 @@ class SpatialData3DConverter(BaseSpatialDataConverter):
                 ):
                     data_structures["total_intensity"][mz_indices[i]] += intensity
         data_structures["pixel_count"] += 1
+
+        # Per-region accumulation for multi-region datasets
+        if "region_total_intensity" in data_structures:
+            region_num = self._region_map.get((x, y), -1)
+            if region_num in data_structures["region_total_intensity"]:
+                np.add.at(
+                    data_structures["region_total_intensity"][region_num],
+                    mz_indices,
+                    intensities,
+                )
+                data_structures["region_pixel_count"][region_num] += 1
 
         # Get pixel index for 3D volume
         pixel_idx = self._get_pixel_index(x, y, z)
@@ -186,6 +209,14 @@ class SpatialData3DConverter(BaseSpatialDataConverter):
             # Add average spectrum to .uns (use total_intensity to match
             # original behavior)
             adata.uns["average_spectrum"] = data_structures["total_intensity"]
+
+            # Add per-region mean spectra for multi-region datasets
+            if "region_total_intensity" in data_structures:
+                per_region: Dict[str, Any] = {}
+                for r, total in data_structures["region_total_intensity"].items():
+                    count = data_structures["region_pixel_count"].get(r, 0)
+                    per_region[str(r)] = total / max(count, 1)
+                adata.uns["average_spectrum_per_region"] = per_region
 
             # Make sure region column exists and is correct
             region_key = f"{self.dataset_id}_pixels"

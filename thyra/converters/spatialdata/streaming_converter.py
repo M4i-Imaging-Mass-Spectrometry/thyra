@@ -328,6 +328,55 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             "tic_values": pass1_result["tic_values"],
             "avg_spectrum": avg_spectrum,
             "pixel_count": pass1_result["pixel_count"],
+            "avg_spectrum_per_region": pass1_result.get("avg_spectrum_per_region"),
+        }
+
+    def _init_region_accumulators(self, n_cols: int) -> Tuple[
+        Optional[Dict[tuple, int]],
+        Optional[Dict[int, NDArray[np.float64]]],
+        Optional[Dict[int, int]],
+    ]:
+        """Initialise per-region accumulation structures.
+
+        Returns:
+            (region_map, region_total, region_count) -- all None when no
+            region map is available.
+        """
+        region_map = self._region_map if hasattr(self, "_region_map") else None
+        if region_map is None:
+            return None, None, None
+        unique_regions = sorted(set(region_map.values()))
+        region_total = {r: np.zeros(n_cols, dtype=np.float64) for r in unique_regions}
+        region_count: Dict[int, int] = {r: 0 for r in unique_regions}
+        return region_map, region_total, region_count
+
+    @staticmethod
+    def _accumulate_region(
+        region_map: Dict[tuple, int],
+        region_total: Dict[int, NDArray[np.float64]],
+        region_count: Dict[int, int],
+        x: int,
+        y: int,
+        mz_indices: NDArray[np.int_],
+        resampled_ints: NDArray[np.float64],
+    ) -> None:
+        """Accumulate spectrum into the appropriate region bucket."""
+        rn = region_map.get((x, y), -1)
+        if rn in region_total:
+            np.add.at(region_total[rn], mz_indices, resampled_ints)
+            region_count[rn] += 1
+
+    @staticmethod
+    def _compute_region_averages(
+        region_total: Optional[Dict[int, NDArray[np.float64]]],
+        region_count: Optional[Dict[int, int]],
+    ) -> Optional[Dict[str, NDArray[np.float64]]]:
+        """Compute per-region mean spectra from accumulators."""
+        if region_total is None or region_count is None:
+            return None
+        return {
+            str(r): total / max(region_count.get(r, 0), 1)
+            for r, total in region_total.items()
         }
 
     def _coo_pass1_count_nonzeros(
@@ -363,6 +412,8 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         total_nnz = 0
         pixel_count = 0
 
+        region_map, region_total, region_count = self._init_region_accumulators(n_cols)
+
         with tqdm(
             total=total_spectra, desc="Pass 1: Counting", unit="spectrum"
         ) as pbar:
@@ -384,6 +435,17 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 if nnz > 0:
                     np.add.at(total_intensity, mz_indices, resampled_ints)
 
+                    if region_map is not None:
+                        self._accumulate_region(
+                            region_map,
+                            region_total,
+                            region_count,
+                            x,
+                            y,
+                            mz_indices,
+                            resampled_ints,
+                        )
+
                 pixel_count += 1
                 pbar.update(1)
 
@@ -401,6 +463,9 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             "total_intensity": total_intensity,
             "pixel_count": pixel_count,
             "indptr": indptr,
+            "avg_spectrum_per_region": self._compute_region_averages(
+                region_total, region_count
+            ),
         }
 
     def _coo_setup_zarr_arrays(
@@ -799,6 +864,11 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 # Add average spectrum to .uns
                 adata.uns["average_spectrum"] = avg_spectrum
 
+                # Add per-region mean spectra for multi-region datasets
+                avg_per_region = data_structures.get("avg_spectrum_per_region")
+                if avg_per_region is not None:
+                    adata.uns["average_spectrum_per_region"] = avg_per_region
+
                 # Add MSI metadata to .uns
                 self._add_metadata_to_uns(adata)
 
@@ -934,6 +1004,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             tic_values = prescan_result["tic_values"]
             avg_spectrum = prescan_result["avg_spectrum"]
             pixel_count = prescan_result["pixel_count"]
+            avg_per_region = prescan_result.get("avg_spectrum_per_region")
 
             if total_nnz == 0:
                 logger.warning("No non-zero entries found!")
@@ -962,6 +1033,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 tic_values,
                 avg_spectrum,
                 pixel_count,
+                avg_per_region,
             )
 
             # Cleanup memmap references before deleting files
@@ -1010,6 +1082,8 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         total_nnz = 0
         pixel_count = 0
 
+        region_map, region_total, region_count = self._init_region_accumulators(n_cols)
+
         self._suppress_reader_progress()
         total_spectra = self._get_total_spectra_count()
 
@@ -1039,6 +1113,17 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                     if 0 <= y < n_y and 0 <= x < n_x:
                         tic_values[y, x] = resampled_ints.sum()
 
+                    if region_map is not None:
+                        self._accumulate_region(
+                            region_map,
+                            region_total,
+                            region_count,
+                            x,
+                            y,
+                            mz_indices,
+                            resampled_ints,
+                        )
+
                 pixel_count += 1
                 pbar.update(1)
 
@@ -1055,6 +1140,9 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             "tic_values": tic_values,
             "avg_spectrum": avg_spectrum,
             "pixel_count": pixel_count,
+            "avg_spectrum_per_region": self._compute_region_averages(
+                region_total, region_count
+            ),
         }
 
     def _scatter_spectra_direct(
@@ -1185,6 +1273,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         tic_values: NDArray[np.float64],
         avg_spectrum: NDArray[np.float64],
         pixel_count: int,
+        avg_spectrum_per_region: dict[str, NDArray[np.float64]] | None = None,
     ) -> None:
         """Write CSC arrays to Zarr store with SpatialData-compatible structure.
 
@@ -1206,6 +1295,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             tic_values: TIC image array.
             avg_spectrum: Average spectrum.
             pixel_count: Number of non-empty pixels.
+            avg_spectrum_per_region: Per-region mean spectra, or None.
         """
         from datetime import datetime
 
@@ -1434,6 +1524,16 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         a = uns_group.create_array("average_spectrum", data=avg_spectrum)
         a.attrs["encoding-type"] = "array"
         a.attrs["encoding-version"] = "0.2.0"
+
+        # Per-region mean spectra for multi-region datasets
+        if avg_spectrum_per_region is not None:
+            pr_group = uns_group.create_group("average_spectrum_per_region")
+            pr_group.attrs["encoding-type"] = "dict"
+            pr_group.attrs["encoding-version"] = "0.1.0"
+            for region_key_str, region_avg in avg_spectrum_per_region.items():
+                ra = pr_group.create_array(region_key_str, data=region_avg)
+                ra.attrs["encoding-type"] = "array"
+                ra.attrs["encoding-version"] = "0.2.0"
 
         # Create empty images and shapes groups (will be populated below)
         store.create_group("images")
