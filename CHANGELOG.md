@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.17.2 (2026-03-10)
+
+### Bug Fixes
+
+- Add region_number to obs in streaming and 3D converters
+  ([`3dea7ca`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/3dea7caf6c07713694ae8daa95dff3d4b414133b))
+
+
 ## v1.17.1 (2026-03-09)
 
 ### Bug Fixes
