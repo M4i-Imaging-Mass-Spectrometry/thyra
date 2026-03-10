@@ -2,6 +2,65 @@
 
 <!-- version list -->
 
+## v1.18.0 (2026-03-10)
+
+### Bug Fixes
+
+- Correct changelog dates, dark mode, nav tabs, mypy version
+  ([#79](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/79),
+  [`a2d662c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a2d662c59d9dfe67cd713ca095ca1997c3307687))
+
+- Dark mode admonitions, navigation polish, mypy version
+  ([#79](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/79),
+  [`a2d662c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a2d662c59d9dfe67cd713ca095ca1997c3307687))
+
+- Docs review sweep - accuracy, mobile, and packaging fixes
+  ([#79](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/79),
+  [`a2d662c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a2d662c59d9dfe67cd713ca095ca1997c3307687))
+
+- Final docs sweep - version gap note, obs columns, kwargs type
+  ([#79](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/79),
+  [`a2d662c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a2d662c59d9dfe67cd713ca095ca1997c3307687))
+
+- Pin mkdocs <2 and change streaming default to auto
+  ([#79](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/79),
+  [`a2d662c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a2d662c59d9dfe67cd713ca095ca1997c3307687))
+
+- Resolve tab visibility and layout issues in docs theme
+  ([#79](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/79),
+  [`a2d662c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a2d662c59d9dfe67cd713ca095ca1997c3307687))
+
+### Code Style
+
+- Brand admonition colours for note, tip, info, and warning
+  ([#79](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/79),
+  [`a2d662c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a2d662c59d9dfe67cd713ca095ca1997c3307687))
+
+- Clean tab bar beneath gradient header
+  ([#79](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/79),
+  [`a2d662c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a2d662c59d9dfe67cd713ca095ca1997c3307687))
+
+### Documentation
+
+- Add MkDocs Material documentation site
+  ([#79](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/79),
+  [`a2d662c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a2d662c59d9dfe67cd713ca095ca1997c3307687))
+
+- Complete API reference with metadata, resampling, and registry
+  ([#79](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/79),
+  [`a2d662c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a2d662c59d9dfe67cd713ca095ca1997c3307687))
+
+- Comprehensive documentation overhaul
+  ([#79](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/79),
+  [`a2d662c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a2d662c59d9dfe67cd713ca095ca1997c3307687))
+
+### Features
+
+- Apply brand colour scheme and typography to docs
+  ([#79](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/79),
+  [`a2d662c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a2d662c59d9dfe67cd713ca095ca1997c3307687))
+
+
 ## v1.17.2 (2026-03-10)
 
 ### Bug Fixes
