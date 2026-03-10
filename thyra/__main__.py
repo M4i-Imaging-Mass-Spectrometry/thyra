@@ -426,8 +426,8 @@ class GroupedCommand(click.Command):
 @click.option(
     "--streaming",
     type=click.Choice(["auto", "true", "false"]),
-    default="false",
-    help="Streaming mode for large datasets (default: false)",
+    default="auto",
+    help="Streaming mode for large datasets (default: auto)",
 )
 @click.option(
     "--optimize-chunks",

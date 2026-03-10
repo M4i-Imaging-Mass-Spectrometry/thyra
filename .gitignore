@@ -1,3 +1,6 @@
+# MkDocs build output
+site/
+
 # Python cache and build files
 *.pyc
 *.pyo

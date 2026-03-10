@@ -10,9 +10,9 @@ authors = ["Theodoros Visvikis <t.visvikis@maastrichtuniversity.nl>"]
 maintainers = ["Theodoros Visvikis <t.visvikis@maastrichtuniversity.nl>"]
 license = "MIT"
 readme = "README.md"
-homepage = "https://github.com/Tomatokeftes/thyra"
-repository = "https://github.com/Tomatokeftes/thyra"
-documentation = "https://github.com/Tomatokeftes/thyra#readme"
+homepage = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra"
+repository = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra"
+documentation = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra#readme"
 keywords = [
     "mass-spectrometry",
     "imaging",
@@ -34,7 +34,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
@@ -48,10 +47,10 @@ classifiers = [
 packages = [{include = "thyra"}]
 
 [tool.poetry.urls]
-"Bug Tracker" = "https://github.com/Tomatokeftes/thyra/issues"
-"Discussions" = "https://github.com/Tomatokeftes/thyra/discussions"
-"Changelog" = "https://github.com/Tomatokeftes/thyra/blob/main/CHANGELOG.md"
-"Contributing" = "https://github.com/Tomatokeftes/thyra/blob/main/CONTRIBUTING.md"
+"Bug Tracker" = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues"
+"Discussions" = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/discussions"
+"Changelog" = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/blob/main/CHANGELOG.md"
+"Contributing" = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/blob/main/CONTRIBUTING.md"
 
 [tool.poetry.dependencies]
 python = ">=3.11, <3.13"
@@ -97,6 +96,11 @@ ipykernel = "^6.30.1"
 jupyter = "^1.1.1"
 docformatter = "^1.7.7"
 ptitprince = "^0.3.1"
+
+[tool.poetry.group.docs.dependencies]
+mkdocs = ">=1.6, <2"
+mkdocs-material = ">=9.5"
+mkdocstrings = {extras = ["python"], version = ">=0.27"}
 
 [tool.poetry.scripts]
 thyra = "thyra.__main__:main"
@@ -159,7 +163,7 @@ exclude_dirs = ["tests", "docs"]
 skips = ["B101", "B601", "B603", "B607"]  # Allow assert statements, shell usage, and subprocess calls with controlled input
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false  # Set to true once types are added
