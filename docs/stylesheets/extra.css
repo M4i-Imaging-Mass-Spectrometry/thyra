@@ -91,19 +91,65 @@ body {
 }
 
 /* ---- Admonition accents ---- */
+
+/* Note + Info -> Vibrant Purple */
 .md-typeset .admonition.note,
-.md-typeset details.note {
+.md-typeset details.note,
+.md-typeset .admonition.info,
+.md-typeset details.info {
   border-color: #792074;
 }
 
 .md-typeset .note > .admonition-title,
-.md-typeset .note > summary {
+.md-typeset .note > summary,
+.md-typeset .info > .admonition-title,
+.md-typeset .info > summary {
   background-color: rgba(121, 32, 116, 0.1);
 }
 
 .md-typeset .note > .admonition-title::before,
-.md-typeset .note > summary::before {
+.md-typeset .note > summary::before,
+.md-typeset .info > .admonition-title::before,
+.md-typeset .info > summary::before {
   background-color: #792074;
+}
+
+/* Tip -> Brick */
+.md-typeset .admonition.tip,
+.md-typeset details.tip,
+.md-typeset .admonition.hint,
+.md-typeset details.hint {
+  border-color: #9A4B3D;
+}
+
+.md-typeset .tip > .admonition-title,
+.md-typeset .tip > summary,
+.md-typeset .hint > .admonition-title,
+.md-typeset .hint > summary {
+  background-color: rgba(154, 75, 61, 0.1);
+}
+
+.md-typeset .tip > .admonition-title::before,
+.md-typeset .tip > summary::before,
+.md-typeset .hint > .admonition-title::before,
+.md-typeset .hint > summary::before {
+  background-color: #9A4B3D;
+}
+
+/* Warning -> Warm amber */
+.md-typeset .admonition.warning,
+.md-typeset details.warning {
+  border-color: #c67a30;
+}
+
+.md-typeset .warning > .admonition-title,
+.md-typeset .warning > summary {
+  background-color: rgba(198, 122, 48, 0.1);
+}
+
+.md-typeset .warning > .admonition-title::before,
+.md-typeset .warning > summary::before {
+  background-color: #c67a30;
 }
 
 /* ---- Buttons / CTA ---- */
