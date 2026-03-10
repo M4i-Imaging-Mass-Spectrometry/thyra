@@ -67,6 +67,46 @@ body {
   background: linear-gradient(135deg, #792074, #9A4B3D);
 }
 
+/* ---- Navigation tabs bar ---- */
+/* Clean white bar beneath the gradient header */
+.md-tabs {
+  background: #ffffff;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.07);
+}
+
+.md-tabs__link {
+  color: #555;
+  font-weight: 500;
+  opacity: 1;
+}
+
+.md-tabs__link:hover {
+  color: #9A4B3D;
+}
+
+.md-tabs__link--active {
+  color: #792074;
+  font-weight: 600;
+}
+
+/* Dark mode tabs */
+[data-md-color-scheme="slate"] .md-tabs {
+  background: #1e1e1e;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+[data-md-color-scheme="slate"] .md-tabs__link {
+  color: #aaa;
+}
+
+[data-md-color-scheme="slate"] .md-tabs__link:hover {
+  color: #c47a6e;
+}
+
+[data-md-color-scheme="slate"] .md-tabs__link--active {
+  color: #c8a0c5;
+}
+
 /* ---- Navigation active indicator ---- */
 .md-nav__link--active,
 .md-nav__link:is([aria-current]) {
