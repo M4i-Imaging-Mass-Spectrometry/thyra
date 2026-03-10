@@ -6,14 +6,14 @@ All notable changes to Thyra are documented here. This project uses
 
 <!-- version list -->
 
-## v1.17.2 (2025-03-10)
+## v1.17.2 (2026-03-10)
 
 ### Bug Fixes
 
 - Add `region_number` to `.obs` in streaming and 3D converters for consistent
   region tracking across all converter paths
 
-## v1.17.1 (2025-03-10)
+## v1.17.1 (2026-03-09)
 
 ### Bug Fixes
 
@@ -21,14 +21,14 @@ All notable changes to Thyra are documented here. This project uses
   structure through AnnData/Zarr round-trip (previously stored as stringified
   numpy array)
 
-## v1.17.0 (2025-03-10)
+## v1.17.0 (2026-03-09)
 
 ### Features
 
 - Include area names from `.mis` file in region info output, so
   `uns["regions"]` now contains human-readable region names alongside numbers
 
-## v1.16.0 (2025-03-09)
+## v1.16.0 (2026-03-04)
 
 ### Features
 
@@ -41,14 +41,14 @@ All notable changes to Thyra are documented here. This project uses
 - Correct multi-brain optical alignment for shared TIFF slides -- each
   `.d` dataset now matches its own `.mis` file
 
-## v1.15.1 (2025-03-08)
+## v1.15.1 (2026-02-26)
 
 ### Bug Fixes
 
 - Code quality sweep: mypy fixes, logging improvements, assert cleanup, zarr
   consolidation guards
 
-## v1.15.0 (2025-03-07)
+## v1.15.0 (2026-02-25)
 
 ### Features
 
@@ -57,13 +57,13 @@ All notable changes to Thyra are documented here. This project uses
 - Region metadata (names, spectra counts) stored in `uns["regions"]`
 - Streaming converter fixes for large datasets
 
-## v1.14.1 (2025-03-06)
+## v1.14.1 (2026-02-18)
 
 ### Bug Fixes
 
 - Resolve all 287 mypy type errors across codebase
 
-## v1.14.0 (2025-03-05)
+## v1.14.0 (2026-02-13)
 
 ### Features
 
@@ -78,13 +78,13 @@ All notable changes to Thyra are documented here. This project uses
 - Lower PCS threshold from 50 GB to 30 GB for memory efficiency
 - Fix release workflow to properly detect and publish new versions
 
-## v1.11.0 (2025-02-20)
+## v1.11.0 (2026-01-23)
 
 ### Features
 
 - Add `streaming` parameter to `convert_msi()` Python API
 
-## v1.10.0 (2025-02-18)
+## v1.10.0 (2026-01-23)
 
 ### Features
 
@@ -96,7 +96,7 @@ All notable changes to Thyra are documented here. This project uses
 - Remove dead code (zero_copy parameter, `_convert_with_scipy`)
 - Reduce `_stream_build_coo` complexity
 
-## v1.9.0 (2025-02-10)
+## v1.9.0 (2025-12-15)
 
 ### Features
 
