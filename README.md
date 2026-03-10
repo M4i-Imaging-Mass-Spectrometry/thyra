@@ -9,6 +9,8 @@
 
 **Thyra** (from Greek thyra, meaning "door" or "portal") -- a modern Python library for converting Mass Spectrometry Imaging (MSI) data into the standardized **SpatialData/Zarr format**, serving as your portal to spatial omics analysis workflows.
 
+**[Read the documentation](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra)** | [Getting Started](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/getting-started/) | [CLI Reference](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/cli/) | [API Reference](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/api/)
+
 ## Features
 
 - **Multiple Input Formats**: ImzML, Bruker (.d directories), Waters (.raw directories)
