@@ -75,17 +75,17 @@ body {
 }
 
 .md-tabs__link {
-  color: #555;
+  color: #555 !important;
   font-weight: 500;
-  opacity: 1;
+  opacity: 1 !important;
 }
 
 .md-tabs__link:hover {
-  color: #9A4B3D;
+  color: #9A4B3D !important;
 }
 
 .md-tabs__link--active {
-  color: #792074;
+  color: #792074 !important;
   font-weight: 600;
 }
 
@@ -96,15 +96,27 @@ body {
 }
 
 [data-md-color-scheme="slate"] .md-tabs__link {
-  color: #aaa;
+  color: #aaa !important;
 }
 
 [data-md-color-scheme="slate"] .md-tabs__link:hover {
-  color: #c47a6e;
+  color: #c47a6e !important;
 }
 
 [data-md-color-scheme="slate"] .md-tabs__link--active {
-  color: #c8a0c5;
+  color: #c8a0c5 !important;
+}
+
+/* ---- Hide left sidebar (tabs handle page navigation) ---- */
+/* Content expands into the freed space; right TOC stays for
+   within-page navigation */
+.md-sidebar--primary {
+  display: none;
+}
+
+/* Let content area use the extra width */
+.md-content {
+  margin-left: 0;
 }
 
 /* ---- Navigation active indicator ---- */
