@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.18.1 (2026-03-10)
+
+### Bug Fixes
+
+- Prevent duplicate PyPI publish on concurrent release runs
+  ([`40884a6`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/40884a68f6106f43e8640004b8fc44840e0f257a))
+
+### Documentation
+
+- Add prominent documentation links to top of README
+  ([`b58f27b`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/b58f27b7bc2f80f1c0b95ae581540acf23e1225e))
+
+
 ## v1.18.0 (2026-03-10)
 
 ### Bug Fixes
