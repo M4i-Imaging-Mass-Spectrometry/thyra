@@ -117,10 +117,14 @@ thyra volume.imzML output.zarr --handle-3d
 
 ## Streaming Mode
 
-For datasets that exceed available memory (100+ GB), use streaming mode:
+Thyra automatically detects large datasets (>10 GB estimated) and switches to streaming mode. You can also force it explicitly:
 
 ```bash
+# Force streaming on
 thyra large_dataset.d output.zarr --streaming true
+
+# Force streaming off
+thyra large_dataset.d output.zarr --streaming false
 ```
 
 Streaming mode processes data in chunks and writes incrementally to disk, keeping memory usage constant regardless of dataset size.

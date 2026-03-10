@@ -84,7 +84,7 @@ thyra input.imzML output.zarr --resample-min-mz 100 --resample-max-mz 1000
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--streaming [auto\|true\|false]` | `false` | Streaming mode for large datasets |
+| `--streaming [auto\|true\|false]` | `auto` | Streaming mode for large datasets |
 | `--optimize-chunks` | off | Optimize Zarr chunks after conversion |
 | `--sparse-format [csc\|csr]` | `csc` | Sparse matrix storage format |
 

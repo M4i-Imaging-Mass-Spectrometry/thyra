@@ -190,7 +190,7 @@ def _create_converter(
     resampling_config: Optional[Dict[str, Any]] = None,
     sparse_format: str = "csc",
     include_optical: bool = True,
-    streaming: Union[bool, Literal["auto"]] = False,
+    streaming: Union[bool, Literal["auto"]] = "auto",
     **kwargs: Any,
 ) -> Any:
     """Create and return a converter for the specified format."""
@@ -274,7 +274,7 @@ def convert_msi(
     reader_options: Optional[Dict[str, Any]] = None,
     sparse_format: str = "csc",
     include_optical: bool = True,
-    streaming: Union[bool, Literal["auto"]] = False,
+    streaming: Union[bool, Literal["auto"]] = "auto",
     region: Optional[int] = None,
     **kwargs: Any,
 ) -> bool:
@@ -299,9 +299,9 @@ def convert_msi(
         sparse_format: Sparse matrix format ('csc' or 'csr')
         include_optical: Include optical images (default: True)
         streaming: Use streaming converter for large datasets.
-            - False: Use standard converter (default)
+            - "auto": Auto-detect based on dataset size >10GB (default)
             - True: Force streaming converter
-            - "auto": Auto-detect based on dataset size (>10GB)
+            - False: Force standard converter
         region: For multi-region datasets (e.g. Bruker timsTOF),
             select a specific region number. None (default)
             converts all regions. Passed to the reader as
