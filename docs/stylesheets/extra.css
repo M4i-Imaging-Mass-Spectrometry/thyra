@@ -108,15 +108,17 @@ body {
 }
 
 /* ---- Hide left sidebar (tabs handle page navigation) ---- */
-/* Content expands into the freed space; right TOC stays for
-   within-page navigation */
-.md-sidebar--primary {
-  display: none;
-}
+/* Only hide on wide screens where tabs are visible; on mobile the
+   sidebar hamburger menu is the only navigation so we keep it. */
+@media screen and (min-width: 76.25em) {
+  .md-sidebar--primary {
+    display: none;
+  }
 
-/* Let content area use the extra width */
-.md-content {
-  margin-left: 0;
+  /* Let content area use the extra width */
+  .md-content {
+    margin-left: 0;
+  }
 }
 
 /* ---- Navigation active indicator ---- */

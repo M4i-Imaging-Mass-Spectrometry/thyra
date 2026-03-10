@@ -99,7 +99,7 @@ chooses an appropriate method and bin count.
 
     - **`constant`** -- Uniform bin width (Da). Suitable for MALDI-TOF in linear mode.
     - **`linear_tof`** -- Width scales as sqrt(m/z). Matches TOF resolution.
-    - **`reflector_tof`** -- Width scales as m/z^(2/3). Matches reflector TOF.
+    - **`reflector_tof`** -- Width scales linearly with m/z (constant relative resolution). Matches reflector TOF.
     - **`orbitrap`** -- Width scales as m/z^(3/2). Matches Orbitrap resolution.
     - **`fticr`** -- Width scales as m/z^2. Matches FTICR resolution.
     - **`auto`** -- Detected from instrument metadata.

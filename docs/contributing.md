@@ -23,7 +23,7 @@ Thank you for your interest in contributing to Thyra! This document provides gui
 
 1. **Fork and Clone the Repository**
    ```bash
-   git clone https://github.com/M4i-Imaging-Mass-Spectrometry/thyra.git
+   git clone https://github.com/<your-username>/thyra.git
    cd thyra
    ```
 
@@ -79,7 +79,7 @@ poetry run bandit -r thyra/
 
 1. **Unit Tests** - Fast tests for individual functions
    ```bash
-   poetry run pytest -m "unit"
+   poetry run pytest -m "not integration"
    ```
 
 2. **Integration Tests** - End-to-end workflow tests
