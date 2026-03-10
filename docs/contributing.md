@@ -220,7 +220,7 @@ Use the appropriate issue template:
 
 ## Code of Conduct
 
-Please note that this project is governed by our [Code of Conduct](CODE_OF_CONDUCT.md). By participating, you agree to abide by its terms.
+Please note that this project is governed by our [Code of Conduct](code-of-conduct.md). By participating, you agree to abide by its terms.
 
 ## Versioning Policy
 

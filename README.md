@@ -1,57 +1,44 @@
 # Thyra
 
-[![Tests](https://img.shields.io/github/actions/workflow/status/Tomatokeftes/thyra/tests.yml?branch=main&logo=github)](https://github.com/Tomatokeftes/thyra/actions/workflows/tests.yml)
+[![Tests](https://img.shields.io/github/actions/workflow/status/M4i-Imaging-Mass-Spectrometry/thyra/tests.yml?branch=main&logo=github)](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/actions/workflows/tests.yml)
 [![PyPI](https://img.shields.io/pypi/v/thyra?logo=pypi&logoColor=white)](https://pypi.org/project/thyra/)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Docs](https://img.shields.io/badge/docs-mkdocs-blue)](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra)
 
-**Thyra** (from Greek θύρα, meaning "door" or "portal") - A modern Python library for converting Mass Spectrometry Imaging (MSI) data into the standardized **SpatialData/Zarr format**, serving as your portal to spatial omics analysis workflows.
+**Thyra** (from Greek thyra, meaning "door" or "portal") -- a modern Python library for converting Mass Spectrometry Imaging (MSI) data into the standardized **SpatialData/Zarr format**, serving as your portal to spatial omics analysis workflows.
 
 ## Features
 
 - **Multiple Input Formats**: ImzML, Bruker (.d directories), Waters (.raw directories)
 - **SpatialData Output**: Modern, cloud-ready format with Zarr backend
 - **Memory Efficient**: Handles large datasets (100+ GB) through streaming processing
-- **Metadata Preservation**: Extracts and maintains all acquisition parameters
+- **Optical Alignment**: Automatic MSI-to-optical image registration for Bruker data
+- **Multi-Region Support**: Handles slides with multiple tissue sections
+- **Resampling**: Physics-aware mass axis resampling (enabled by default)
 - **3D Support**: Process volume data or treat as 2D slices
-- **Cross-Platform**: Windows, macOS, and Linux support
+- **Cross-Platform**: Windows, macOS, and Linux
 
 ## Installation
 
-### Via pip (Recommended)
 ```bash
 pip install thyra
 ```
 
-### Via conda
-```bash
-conda install -c conda-forge thyra
-```
-
-### From source
-```bash
-git clone https://github.com/Tomatokeftes/thyra.git
-cd thyra
-poetry install
-```
-
 ## Quick Start
 
-### Command Line Interface
+### Command Line
 
 ```bash
-# Basic conversion
+# Basic conversion (resampling enabled by default)
 thyra input.imzML output.zarr
 
-# Bruker data with custom parameters
-thyra data.d output.zarr --pixel-size 50 --dataset-id "experiment_001"
+# Bruker data with verbose logging
+thyra data.d output.zarr -v DEBUG
 
-# Waters data
-thyra data.raw output.zarr
-
-# 3D volume processing
-thyra volume.imzML output.zarr --handle-3d
+# Disable resampling
+thyra input.imzML output.zarr --no-resample
 ```
 
 ### Python API
@@ -59,162 +46,66 @@ thyra volume.imzML output.zarr --handle-3d
 ```python
 from thyra import convert_msi
 
-# Simple conversion
-success = convert_msi(
-    input_path="data/sample.imzML",
-    output_path="output/sample.zarr",
-    pixel_size_um=25.0
-)
-
-# Advanced usage with custom parameters
-success = convert_msi(
-    input_path="data/experiment.d",
-    output_path="output/experiment.zarr",
-    dataset_id="exp_001",
-    pixel_size_um=10.0,
-    handle_3d=True
-)
+success = convert_msi("data/sample.imzML", "output/sample.zarr")
 ```
 
-## Supported Formats
-
-### Input Formats
-| Format | Extension | Description | Status |
-|--------|-----------|-------------|--------|
-| ImzML | `.imzML` | Open standard for MS imaging | Full support |
-| Bruker | `.d` | Bruker proprietary format | Full support |
-| Waters | `.raw` | Waters MassLynx imaging format | Full support |
-
-### Output Formats
-| Format | Description | Benefits |
-|--------|-------------|----------|
-| SpatialData/Zarr | Modern spatial omics standard | Cloud-ready, efficient, standardized |
-
-## Advanced Usage
-
-### Configuration Options
-
-```bash
-# All available options
-thyra input.imzML output.zarr \
-    --pixel-size 25 \
-    --dataset-id "my_experiment" \
-    --handle-3d \
-    --optimize-chunks \
-    --log-level DEBUG \
-    --log-file conversion.log
-```
-
-### Batch Processing
-
-```python
-import glob
-from thyra import convert_msi
-
-# Process multiple files
-for input_file in glob.glob("data/*.imzML"):
-    output_file = input_file.replace(".imzML", ".zarr")
-    convert_msi(input_file, output_file)
-```
-
-### Working with SpatialData
+### Working with the Output
 
 ```python
 import spatialdata as sd
 
-# Load converted data
 sdata = sd.read_zarr("output/sample.zarr")
+msi_table = sdata.tables["msi_dataset_z0"]
 
-# Access the MSI data
-msi_data = sdata.tables["msi_dataset"]
-print(f"Shape: {msi_data.shape}")
-print(f"Mass channels: {msi_data.var.index}")
-```
-
-## Development
-
-### Setup Development Environment
-
-```bash
-# Clone repository
-git clone https://github.com/Tomatokeftes/thyra.git
-cd thyra
-
-# Install with development dependencies
-poetry install
-
-# Install pre-commit hooks
-poetry run pre-commit install
-```
-
-### Running Tests
-
-```bash
-# Unit tests only
-poetry run pytest -m "not integration"
-
-# All tests
-poetry run pytest
-
-# With coverage
-poetry run pytest --cov=thyra
-```
-
-### Code Quality
-
-```bash
-# Format code
-poetry run black .
-poetry run isort .
-
-# Run linting
-poetry run flake8
-
-# Run all checks
-poetry run pre-commit run --all-files
+print(f"Shape: {msi_table.shape}")  # (pixels, m/z bins)
+print(f"m/z range: {msi_table.var['mz'].min():.1f} -- {msi_table.var['mz'].max():.1f}")
 ```
 
 ## Documentation
 
-- **API Documentation**: [Auto-generated docs](https://github.com/Tomatokeftes/thyra#readme)
-- **Contributing Guide**: [CONTRIBUTING.md](CONTRIBUTING.md)
-- **Architecture Overview**: [docs/architecture.md](docs/architecture.md)
-- **Changelog**: [CHANGELOG.md](CHANGELOG.md)
+Full documentation: **[M4i-Imaging-Mass-Spectrometry.github.io/thyra](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra)**
+
+- [Getting Started](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/getting-started/) -- installation, first conversion, common workflows
+- [CLI Reference](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/cli/) -- all command-line options
+- [Output Format](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/output-format/) -- understanding the zarr structure
+- [API Reference](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/api/) -- Python API documentation
+
+## Supported Formats
+
+| Input | Extension | Status |
+|-------|-----------|--------|
+| ImzML | `.imzML` | Full support |
+| Bruker | `.d` | Full support (timsTOF + Rapiflex) |
+| Waters | `.raw` | Full support |
+
+Output: **SpatialData/Zarr** -- cloud-ready, efficient, standardized
+
+## Development
+
+```bash
+git clone https://github.com/M4i-Imaging-Mass-Spectrometry/thyra.git
+cd thyra
+poetry install
+poetry run pre-commit install
+poetry run pytest
+```
 
 ## Contributing
 
-We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
-
-### Quick Contribution Steps
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes and add tests
-4. Run the test suite (`poetry run pytest`)
-5. Commit your changes (`git commit -m 'Add amazing feature'`)
-6. Push to your branch (`git push origin feature/amazing-feature`)
-7. Open a Pull Request
+See [CONTRIBUTING.md](docs/contributing.md) for guidelines.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Support
-
-- **Issues**: [GitHub Issues](https://github.com/Tomatokeftes/thyra/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/Tomatokeftes/thyra/discussions)
-- **Email**: t.visvikis@maastrichtuniversity.nl
+MIT -- see [LICENSE](LICENSE).
 
 ## Citation
 
-If you use Thyra in your research, please cite:
-
 ```bibtex
 @software{thyra2024,
-  title = {Thyra: Modern Mass Spectrometry Imaging Data Conversion - Portal to Spatial Omics},
+  title = {Thyra: Modern Mass Spectrometry Imaging Data Conversion},
   author = {Visvikis, Theodoros},
   year = {2024},
-  url = {https://github.com/Tomatokeftes/thyra}
+  url = {https://github.com/M4i-Imaging-Mass-Spectrometry/thyra}
 }
 ```
 
@@ -223,7 +114,3 @@ If you use Thyra in your research, please cite:
 - Built with [SpatialData](https://spatialdata.scverse.org/) ecosystem
 - Powered by [Zarr](https://zarr.readthedocs.io/) for efficient storage
 - Uses [pyimzML](https://github.com/alexandrovteam/pyimzML) for ImzML parsing
-
----
-
-**Thyra** - Your portal from traditional MSI formats to modern spatial omics workflows
