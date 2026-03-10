@@ -757,6 +757,18 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         coords_df["spatial_x"] = coords_df["x"] * self.pixel_size_um
         coords_df["spatial_y"] = coords_df["y"] * self.pixel_size_um
 
+        # Always add per-pixel region numbers for a consistent schema.
+        region_map = getattr(self, "_region_map", None)
+        if region_map is not None:
+            region_numbers = np.full(pixel_count, -1, dtype=np.int32)
+            for i in range(pixel_count):
+                key = (int(x_values[i]), int(y_values[i]))
+                if key in region_map:
+                    region_numbers[i] = region_map[key]
+            coords_df["region_number"] = region_numbers
+        else:
+            coords_df["region_number"] = np.ones(pixel_count, dtype=np.int32)
+
         return coords_df
 
     def _finalize_data(self, data_structures: Dict[str, Any]) -> None:

@@ -1006,6 +1006,21 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         coords_df = pd.DataFrame(coords_data)
         coords_df.set_index("instance_id", inplace=True)
+
+        # Always add per-pixel region numbers for a consistent schema.
+        region_map = getattr(self, "_region_map", None)
+        if region_map is not None:
+            region_numbers = np.full(len(coords_df), -1, dtype=np.int32)
+            for i, (x, y) in enumerate(
+                zip(coords_df["x"].values, coords_df["y"].values)
+            ):
+                key = (int(x), int(y))
+                if key in region_map:
+                    region_numbers[i] = region_map[key]
+            coords_df["region_number"] = region_numbers
+        else:
+            coords_df["region_number"] = np.ones(len(coords_df), dtype=np.int32)
+
         return coords_df
 
     def _create_mass_dataframe(self) -> pd.DataFrame:
