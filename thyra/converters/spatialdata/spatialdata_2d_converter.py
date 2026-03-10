@@ -57,16 +57,28 @@ class SpatialData2DConverter(BaseSpatialDataConverter):
         if self._common_mass_axis is None:
             raise ValueError("Common mass axis is not initialized")
 
-        return {
+        n_cols = len(self._common_mass_axis)
+
+        data_structures: Dict[str, Any] = {
             "mode": "2d_slices",
             "slices_data": slices_data,
             "tables": tables,
             "shapes": shapes,
             "images": images,
             "var_df": self._create_mass_dataframe(),
-            "total_intensity": np.zeros(len(self._common_mass_axis), dtype=np.float64),
+            "total_intensity": np.zeros(n_cols, dtype=np.float64),
             "pixel_count": 0,
         }
+
+        # Per-region accumulators for multi-region datasets
+        if self._region_map is not None:
+            unique_regions = sorted(set(self._region_map.values()))
+            data_structures["region_total_intensity"] = {
+                r: np.zeros(n_cols, dtype=np.float64) for r in unique_regions
+            }
+            data_structures["region_pixel_count"] = {r: 0 for r in unique_regions}
+
+        return data_structures
 
     def _create_sparse_matrix_for_slice(self, z_value: int) -> Dict[str, Any]:
         """Create COO arrays for a single slice.
@@ -208,6 +220,17 @@ class SpatialData2DConverter(BaseSpatialDataConverter):
         np.add.at(data_structures["total_intensity"], mz_indices, intensities)
         data_structures["pixel_count"] += 1
 
+        # Per-region accumulation for multi-region datasets
+        if "region_total_intensity" in data_structures:
+            region_num = self._region_map.get((x, y), -1)
+            if region_num in data_structures["region_total_intensity"]:
+                np.add.at(
+                    data_structures["region_total_intensity"][region_num],
+                    mz_indices,
+                    intensities,
+                )
+                data_structures["region_pixel_count"][region_num] += 1
+
         # Add data to the appropriate slice
         slice_id = f"{self.dataset_id}_z{z}"
         if slice_id in data_structures["slices_data"]:
@@ -284,6 +307,9 @@ class SpatialData2DConverter(BaseSpatialDataConverter):
 
                 # Add average spectrum to .uns
                 adata.uns["average_spectrum"] = avg_spectrum
+
+                # Add per-region mean spectra for multi-region datasets
+                self._store_per_region_avg(adata, data_structures)
 
                 # Add MSI metadata to .uns
                 self._add_metadata_to_uns(adata)
@@ -368,3 +394,16 @@ class SpatialData2DConverter(BaseSpatialDataConverter):
 
         # Add optical images if available
         self._add_optical_images(data_structures)
+
+    @staticmethod
+    def _store_per_region_avg(
+        adata: "AnnData", data_structures: Dict[str, Any]
+    ) -> None:
+        """Compute and store per-region mean spectra in uns."""
+        if "region_total_intensity" not in data_structures:
+            return
+        per_region: Dict[str, Any] = {}
+        for r, total in data_structures["region_total_intensity"].items():
+            count = data_structures["region_pixel_count"].get(r, 0)
+            per_region[str(r)] = total / max(count, 1)
+        adata.uns["average_spectrum_per_region"] = per_region
