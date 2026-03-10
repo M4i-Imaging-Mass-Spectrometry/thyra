@@ -22,7 +22,7 @@ class BaseMSIReader(ABC):
         self,
         data_path: Path,
         intensity_threshold: Optional[float] = None,
-        **kwargs,
+        **kwargs: object,
     ):
         """Initialize the reader with the path to the data.
 

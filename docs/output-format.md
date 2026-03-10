@@ -196,7 +196,8 @@ print("Columns:", list(msi_table.obs.columns))
 | `spatial_x`, `spatial_y` | float | Physical coordinates in micrometers |
 | `region` | categorical | SpatialData region key |
 | `region_number` | int | Acquisition region number |
-| `instance_key` | str | Unique pixel identifier |
+
+The DataFrame index is `instance_id` (a string pixel identifier).
 
 ---
 

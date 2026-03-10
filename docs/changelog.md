@@ -65,6 +65,11 @@ All notable changes to Thyra are documented here. This project uses
 
 ## v1.14.0 (2026-02-13)
 
+!!! note "Versions 1.12 and 1.13 were skipped"
+    The automated release pipeline (`python-semantic-release`) incremented
+    the version number during internal CI iterations that were not published
+    to PyPI.  Published releases jump directly from 1.11.0 to 1.14.0.
+
 ### Features
 
 - Waters `.raw` MSI reader with MassLynx native library support
