@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v1.19.0 (2026-03-10)
+
+### Bug Fixes
+
+- Extract region accumulation helpers to reduce complexity
+  ([#81](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/81),
+  [`159494e`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/159494eb9cbdf518bfa69638142ab24ff130fbd6))
+
+### Features
+
+- Compute and store per-region mean spectrum for multi-region datasets
+  ([#81](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/81),
+  [`159494e`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/159494eb9cbdf518bfa69638142ab24ff130fbd6))
+
+- Per-region mean spectrum for multi-region datasets
+  ([#81](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/81),
+  [`159494e`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/159494eb9cbdf518bfa69638142ab24ff130fbd6))
+
+
 ## v1.18.2 (2026-03-10)
 
 ### Bug Fixes

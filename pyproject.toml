@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "thyra"
-version = "1.18.2"
+version = "1.19.0"
 description = "A modern Python library for converting Mass Spectrometry Imaging (MSI) data into SpatialData/Zarr format - your portal to spatial omics"
 authors = ["Theodoros Visvikis <t.visvikis@maastrichtuniversity.nl>"]
 maintainers = ["Theodoros Visvikis <t.visvikis@maastrichtuniversity.nl>"]
