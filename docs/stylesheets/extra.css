@@ -1,0 +1,144 @@
+/* ==========================================================
+   Thyra -- Brand Theme Override for MkDocs Material
+   Palette: Paper White #FFF | Rich Black #000
+            Vibrant Purple #792074 | Brick #9A4B3D
+   Gradient (minimal use): #792074 -> #9A4B3D
+   Typography: Effra CC -> Verdana fallback
+   ========================================================== */
+
+/* ---- Light mode ---- */
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: #792074;
+  --md-primary-fg-color--light: #8e3a89;
+  --md-primary-fg-color--dark: #5e1a5a;
+  --md-primary-bg-color: #ffffff;
+  --md-primary-bg-color--light: #ffffff;
+  --md-accent-fg-color: #9A4B3D;
+  --md-accent-fg-color--transparent: rgba(154, 75, 61, 0.1);
+  --md-typeset-a-color: #792074;
+  --md-default-bg-color: #ffffff;
+}
+
+/* ---- Dark mode ---- */
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #792074;
+  --md-primary-fg-color--light: #9e4899;
+  --md-primary-fg-color--dark: #5e1a5a;
+  --md-primary-bg-color: #ffffff;
+  --md-primary-bg-color--light: #ffffffcc;
+  --md-accent-fg-color: #c47a6e;
+  --md-accent-fg-color--transparent: rgba(196, 122, 110, 0.12);
+  --md-typeset-a-color: #c47a6e;
+}
+
+/* ---- Typography ---- */
+:root {
+  --md-text-font: "Effra CC", "Verdana", sans-serif;
+  --md-code-font: "Fira Code", "Consolas", monospace;
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Type hierarchy */
+.md-typeset h1 {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #792074;
+}
+
+[data-md-color-scheme="slate"] .md-typeset h1 {
+  color: #c8a0c5;
+}
+
+.md-typeset h2 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.md-typeset h3 {
+  font-weight: 600;
+}
+
+/* ---- Header gradient (minimal brand use) ---- */
+.md-header {
+  background: linear-gradient(135deg, #792074, #9A4B3D);
+}
+
+/* ---- Navigation active indicator ---- */
+.md-nav__link--active,
+.md-nav__link:is([aria-current]) {
+  color: #792074;
+  font-weight: 600;
+}
+
+[data-md-color-scheme="slate"] .md-nav__link--active,
+[data-md-color-scheme="slate"] .md-nav__link:is([aria-current]) {
+  color: #c47a6e;
+}
+
+/* ---- Tabs / tabbed content ---- */
+.md-typeset .tabbed-labels > label:hover {
+  color: #9A4B3D;
+}
+
+.md-typeset .tabbed-labels > label--active,
+.md-typeset .tabbed-labels > .tabbed-input:checked + label {
+  color: #792074;
+  border-color: #792074;
+}
+
+/* ---- Admonition accents ---- */
+.md-typeset .admonition.note,
+.md-typeset details.note {
+  border-color: #792074;
+}
+
+.md-typeset .note > .admonition-title,
+.md-typeset .note > summary {
+  background-color: rgba(121, 32, 116, 0.1);
+}
+
+.md-typeset .note > .admonition-title::before,
+.md-typeset .note > summary::before {
+  background-color: #792074;
+}
+
+/* ---- Buttons / CTA ---- */
+.md-typeset .md-button--primary {
+  background-color: #792074;
+  border-color: #792074;
+  color: #ffffff;
+}
+
+.md-typeset .md-button--primary:hover {
+  background-color: #9A4B3D;
+  border-color: #9A4B3D;
+}
+
+/* ---- Search highlight ---- */
+.md-search-result mark {
+  background-color: rgba(154, 75, 61, 0.25);
+}
+
+/* ---- Code blocks ---- */
+.md-typeset code {
+  border-radius: 3px;
+}
+
+/* ---- Footer ---- */
+.md-footer {
+  background: linear-gradient(135deg, #792074, #9A4B3D);
+}
+
+/* ---- Scrollbar accent (webkit) ---- */
+::-webkit-scrollbar-thumb {
+  background: #792074;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #9A4B3D;
+}

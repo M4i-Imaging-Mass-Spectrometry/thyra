@@ -6,18 +6,15 @@ repo_name: M4i-Imaging-Mass-Spectrometry/thyra
 
 theme:
   name: material
+  font: false  # Use brand fonts from extra.css instead of Google Fonts
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: teal
-      accent: teal
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: teal
-      accent: teal
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
@@ -28,6 +25,9 @@ theme:
     - navigation.top
     - search.highlight
     - toc.follow
+
+extra_css:
+  - stylesheets/extra.css
 
 plugins:
   - search
