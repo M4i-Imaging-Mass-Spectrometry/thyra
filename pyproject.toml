@@ -164,7 +164,7 @@ exclude_dirs = ["tests", "docs"]
 skips = ["B101", "B601", "B603", "B607"]  # Allow assert statements, shell usage, and subprocess calls with controlled input
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false  # Set to true once types are added

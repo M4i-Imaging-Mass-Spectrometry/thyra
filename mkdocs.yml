@@ -7,6 +7,8 @@ repo_name: M4i-Imaging-Mass-Spectrometry/thyra
 theme:
   name: material
   font: false  # Use brand fonts from extra.css instead of Google Fonts
+  icon:
+    logo: material/door-open
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
@@ -21,8 +23,11 @@ theme:
   features:
     - content.code.copy
     - content.code.annotate
+    - navigation.tabs
     - navigation.sections
     - navigation.top
+    - navigation.instant
+    - navigation.instant.progress
     - search.highlight
     - toc.follow
 

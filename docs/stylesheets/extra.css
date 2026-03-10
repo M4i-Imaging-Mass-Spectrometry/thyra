@@ -84,7 +84,6 @@ body {
   color: #9A4B3D;
 }
 
-.md-typeset .tabbed-labels > label--active,
 .md-typeset .tabbed-labels > .tabbed-input:checked + label {
   color: #792074;
   border-color: #792074;
@@ -150,6 +149,68 @@ body {
 .md-typeset .warning > .admonition-title::before,
 .md-typeset .warning > summary::before {
   background-color: #c67a30;
+}
+
+/* ---- Dark mode admonition overrides ---- */
+
+/* Note + Info (dark) -> lighter purple tint */
+[data-md-color-scheme="slate"] .md-typeset .admonition.note,
+[data-md-color-scheme="slate"] .md-typeset details.note,
+[data-md-color-scheme="slate"] .md-typeset .admonition.info,
+[data-md-color-scheme="slate"] .md-typeset details.info {
+  border-color: #9e4899;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .note > .admonition-title,
+[data-md-color-scheme="slate"] .md-typeset .note > summary,
+[data-md-color-scheme="slate"] .md-typeset .info > .admonition-title,
+[data-md-color-scheme="slate"] .md-typeset .info > summary {
+  background-color: rgba(158, 72, 153, 0.15);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .note > .admonition-title::before,
+[data-md-color-scheme="slate"] .md-typeset .note > summary::before,
+[data-md-color-scheme="slate"] .md-typeset .info > .admonition-title::before,
+[data-md-color-scheme="slate"] .md-typeset .info > summary::before {
+  background-color: #b86ab3;
+}
+
+/* Tip (dark) -> lighter brick tint */
+[data-md-color-scheme="slate"] .md-typeset .admonition.tip,
+[data-md-color-scheme="slate"] .md-typeset details.tip,
+[data-md-color-scheme="slate"] .md-typeset .admonition.hint,
+[data-md-color-scheme="slate"] .md-typeset details.hint {
+  border-color: #c47a6e;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .tip > .admonition-title,
+[data-md-color-scheme="slate"] .md-typeset .tip > summary,
+[data-md-color-scheme="slate"] .md-typeset .hint > .admonition-title,
+[data-md-color-scheme="slate"] .md-typeset .hint > summary {
+  background-color: rgba(196, 122, 110, 0.15);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .tip > .admonition-title::before,
+[data-md-color-scheme="slate"] .md-typeset .tip > summary::before,
+[data-md-color-scheme="slate"] .md-typeset .hint > .admonition-title::before,
+[data-md-color-scheme="slate"] .md-typeset .hint > summary::before {
+  background-color: #c47a6e;
+}
+
+/* Warning (dark) -> lighter amber tint */
+[data-md-color-scheme="slate"] .md-typeset .admonition.warning,
+[data-md-color-scheme="slate"] .md-typeset details.warning {
+  border-color: #d4944d;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .warning > .admonition-title,
+[data-md-color-scheme="slate"] .md-typeset .warning > summary {
+  background-color: rgba(212, 148, 77, 0.15);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .warning > .admonition-title::before,
+[data-md-color-scheme="slate"] .md-typeset .warning > summary::before {
+  background-color: #d4944d;
 }
 
 /* ---- Buttons / CTA ---- */
