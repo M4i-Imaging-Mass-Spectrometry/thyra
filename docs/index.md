@@ -1,41 +1,52 @@
 # Thyra
 
-**Thyra** (from Greek thyra, meaning "door" or "portal") -- a modern Python library for converting Mass Spectrometry Imaging (MSI) data into the standardized SpatialData/Zarr format, serving as your portal to spatial omics analysis workflows.
+[![PyPI](https://img.shields.io/pypi/v/thyra?logo=pypi&logoColor=white)](https://pypi.org/project/thyra/)
+[![Tests](https://img.shields.io/github/actions/workflow/status/M4i-Imaging-Mass-Spectrometry/thyra/tests.yml?branch=main&logo=github)](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/actions/workflows/tests.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+**Thyra** (from Greek *thyra*, meaning "door" or "portal") converts Mass Spectrometry Imaging (MSI) data into the standardized [SpatialData](https://spatialdata.scverse.org/)/Zarr format -- your portal to spatial omics analysis workflows.
+
+---
+
+## Why Thyra?
+
+Mass spectrometry imaging produces rich spatial-molecular data, but every vendor stores it differently. Downstream tools -- napari, squidpy, scanpy -- expect a common format. Thyra bridges that gap:
+
+```
+ .imzML  ──┐                        ┌── napari visualisation
+ .d      ──┼──  thyra  ──> .zarr  ──┼── squidpy / scanpy analysis
+ .raw    ──┘   (SpatialData)        └── custom Python workflows
+```
+
+The output is a single SpatialData/Zarr directory containing intensity matrices, TIC images, optical images, pixel geometries, and full metadata -- ready for any tool in the scverse ecosystem.
+
+---
 
 ## Features
 
-- **Multiple Input Formats** -- ImzML, Bruker (.d directories), Waters (.raw directories)
-- **SpatialData Output** -- Modern, cloud-ready format with Zarr backend
-- **Memory Efficient** -- Handles large datasets (100+ GB) through streaming processing
-- **Optical Alignment** -- Automatic MSI-to-optical image registration for Bruker data
-- **Multi-Region Support** -- Handles slides with multiple tissue sections
-- **Resampling** -- Physics-aware mass axis resampling (enabled by default)
-- **3D Support** -- Process volume data or treat as 2D slices
-- **Cross-Platform** -- Windows, macOS, and Linux
+| | Feature | Description |
+|---|---------|-------------|
+| **Formats** | Multiple inputs | ImzML, Bruker (.d timsTOF + Rapiflex), Waters (.raw) |
+| **Output** | SpatialData/Zarr | Cloud-ready, chunked, standardised |
+| **Scale** | Memory efficient | Streaming mode for 100+ GB datasets |
+| **Optics** | Optical alignment | Automatic MSI-to-microscopy registration (Bruker) |
+| **Regions** | Multi-region | Handles slides with multiple tissue sections |
+| **Resampling** | Physics-aware | Instrument-specific mass axis resampling (on by default) |
+| **3D** | Volume support | Process as 3D volume or separate 2D slices |
+| **Platform** | Cross-platform | Windows, macOS, Linux |
 
-## Quick Install
+---
+
+## Quick Start
+
+### Install
 
 ```bash
 pip install thyra
 ```
 
-## Supported Formats
-
-### Input
-
-| Format | Extension | Description |
-|--------|-----------|-------------|
-| ImzML  | `.imzML`  | Open standard for MS imaging |
-| Bruker | `.d`      | Bruker timsTOF and Rapiflex |
-| Waters | `.raw`    | Waters MassLynx imaging |
-
-### Output
-
-| Format | Description |
-|--------|-------------|
-| SpatialData/Zarr | Modern spatial omics standard -- cloud-ready, efficient, standardized |
-
-## Quick Example
+### Convert
 
 === "CLI"
 
@@ -48,7 +59,52 @@ pip install thyra
     ```python
     from thyra import convert_msi
 
-    convert_msi("input.imzML", "output.zarr")
+    success = convert_msi("input.imzML", "output.zarr")
     ```
 
-See the [Getting Started](getting-started.md) guide for more details.
+### Explore the output
+
+```python
+import spatialdata as sd
+
+sdata = sd.read_zarr("output.zarr")
+
+# Intensity matrix (pixels x m/z bins)
+table = sdata.tables["msi_dataset_z0"]
+print(f"Shape: {table.shape}")
+print(f"m/z range: {table.var['mz'].min():.1f} -- {table.var['mz'].max():.1f}")
+
+# TIC image
+import numpy as np
+tic = np.asarray(sdata.images["msi_dataset_z0_tic"])[0]
+```
+
+!!! tip "What is in the output?"
+    See [Output Format](output-format.md) for the full structure: tables, TIC images, optical images, pixel shapes, regions, and metadata.
+
+---
+
+## Supported Formats
+
+### Input
+
+| Format | Extension | Instruments |
+|--------|-----------|-------------|
+| ImzML  | `.imzML`  | Any vendor exporting to open standard |
+| Bruker | `.d`      | timsTOF fleX, Rapiflex MALDI-TOF |
+| Waters | `.raw`    | MassLynx imaging (DESI, MALDI) |
+
+### Output
+
+| Format | Description |
+|--------|-------------|
+| **SpatialData/Zarr** | The [scverse](https://scverse.org/) standard for spatial omics -- cloud-ready, chunked, with coordinate transforms |
+
+---
+
+## Next Steps
+
+- **[Getting Started](getting-started.md)** -- installation, first conversion, common workflows
+- **[CLI Reference](cli.md)** -- every command-line option explained
+- **[Output Format](output-format.md)** -- what the .zarr contains and how to use it
+- **[API Reference](api.md)** -- Python API documentation

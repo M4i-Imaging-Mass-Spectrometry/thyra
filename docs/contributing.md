@@ -15,7 +15,7 @@ Thank you for your interest in contributing to Thyra! This document provides gui
 
 ### Prerequisites
 
-- Python 3.12 or higher
+- Python 3.11 or 3.12
 - Poetry for dependency management
 - Git
 
@@ -23,8 +23,8 @@ Thank you for your interest in contributing to Thyra! This document provides gui
 
 1. **Fork and Clone the Repository**
    ```bash
-   git clone https://github.com/yourusername/Thyra.git
-   cd Thyra
+   git clone https://github.com/M4i-Imaging-Mass-Spectrometry/thyra.git
+   cd thyra
    ```
 
 2. **Install Dependencies**
@@ -254,8 +254,8 @@ Thyra follows [Semantic Versioning](https://semver.org/) (SemVer):
 
 If you have questions about contributing that aren't covered here, please:
 
-1. Check the existing [GitHub Discussions](https://github.com/Tomatokeftes/Thyra/discussions)
+1. Check the existing [GitHub Discussions](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/discussions)
 2. Open a new discussion if your question hasn't been asked
 3. Tag maintainers if you need urgent clarification
 
-Thank you for contributing to Thyra! 🚀
+Thank you for contributing to Thyra!
