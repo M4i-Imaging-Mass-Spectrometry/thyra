@@ -8,31 +8,39 @@ from numpy.typing import NDArray
 
 @dataclass(frozen=True)
 class EssentialMetadata:
-    """Critical metadata for processing decisions and interpolation setup."""
+    """Critical metadata for processing decisions and interpolation setup.
 
-    # (x, y, z) grid dimensions
+    Attributes:
+        dimensions: Grid dimensions as ``(x, y, z)``.
+        coordinate_bounds: Spatial extent as ``(min_x, max_x, min_y, max_y)``.
+        mass_range: Mass-to-charge range as ``(min_mz, max_mz)``.
+        pixel_size: Pixel dimensions as ``(x_um, y_um)`` in micrometres,
+            or ``None`` when not detected.
+        n_spectra: Total number of spectra in the dataset.
+        total_peaks: Total number of peaks across all spectra (used for
+            sparse matrix pre-allocation).
+        estimated_memory_gb: Estimated dense memory footprint in GB.
+        source_path: Absolute path to the source data.
+        coordinate_offsets: Raw coordinate offsets ``(x, y, z)`` used to
+            normalise coordinates to 0-based indexing.
+        spectrum_type: Spectrum type string (e.g. ``"centroid spectrum"``),
+            used to guide resampling decisions.
+        peak_counts_per_pixel: Per-pixel peak counts for CSR ``indptr``
+            construction in the streaming converter.  Array of size
+            ``n_pixels`` where ``arr[pixel_idx] = peak_count`` and
+            ``pixel_idx = z * (n_x * n_y) + y * n_x + x``.
+    """
+
     dimensions: Tuple[int, int, int]
-    # min_x, max_x, min_y, max_y
     coordinate_bounds: Tuple[float, float, float, float]
-    # (min_mass, max_mass)
     mass_range: Tuple[float, float]
-    # (x_size, y_size) in micrometers
     pixel_size: Optional[Tuple[float, float]]
-    # Total number of spectra
     n_spectra: int
-    # Total number of peaks across all spectra (for COO allocation)
     total_peaks: int
-    # Memory usage estimate
     estimated_memory_gb: float
-    # Path to source data
     source_path: str
-    # (x_offset, y_offset, z_offset) for raw coordinate normalization
     coordinate_offsets: Optional[Tuple[int, int, int]] = None
-    # Spectrum type for resampling decisions (e.g., "centroid spectrum")
     spectrum_type: Optional[str] = None
-    # Per-pixel peak counts for CSR indptr construction (streaming converter)
-    # Array of size n_pixels where arr[pixel_idx] = peak_count
-    # pixel_idx = z * (n_x * n_y) + y * n_x + x
     peak_counts_per_pixel: Optional[NDArray[np.int32]] = None
 
     @property
@@ -48,13 +56,28 @@ class EssentialMetadata:
 
 @dataclass
 class ComprehensiveMetadata:
-    """Complete metadata including format-specific details."""
+    """Complete metadata including format-specific details.
+
+    Wraps :class:`EssentialMetadata` and adds vendor-specific information
+    that is not needed for conversion but useful for provenance and QC.
+
+    Attributes:
+        essential: Core metadata required for conversion.
+        format_specific: Vendor-specific metadata (e.g. ImzML CV params,
+            Bruker property tables).
+        acquisition_params: Acquisition parameters such as polarity,
+            scan range, and laser settings.
+        instrument_info: Instrument model, serial number, and software
+            version.
+        raw_metadata: Unprocessed metadata exactly as read from the
+            source file, preserved for round-trip fidelity.
+    """
 
     essential: EssentialMetadata
-    format_specific: Dict[str, Any]  # Format-specific metadata (ImzML/Bruker)
-    acquisition_params: Dict[str, Any]  # Acquisition parameters
-    instrument_info: Dict[str, Any]  # Instrument information
-    raw_metadata: Dict[str, Any]  # Original format metadata (unprocessed)
+    format_specific: Dict[str, Any]
+    acquisition_params: Dict[str, Any]
+    instrument_info: Dict[str, Any]
+    raw_metadata: Dict[str, Any]
 
     @property
     def dimensions(self) -> Tuple[int, int, int]:

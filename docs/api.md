@@ -1,8 +1,9 @@
 # API Reference
 
 Thyra's Python API centres on a single function: `convert_msi`. For most use
-cases, that is all you need. The reader and converter base classes are
-documented below for advanced users who want to extend Thyra with new formats.
+cases, that is all you need. The remaining sections document configuration
+types, metadata objects, and base classes for advanced users who want to inspect
+results or extend Thyra with new formats.
 
 ---
 
@@ -37,7 +38,7 @@ success = convert_msi(
     resampling_config={
         "method": "tic_preserving",
         "axis_type": "orbitrap",
-        "n_bins": 50000,
+        "target_bins": 50000,
     },
 )
 ```
@@ -68,6 +69,73 @@ success = convert_msi(
 
 ---
 
+## Resampling Configuration
+
+When you pass `resampling_config` to `convert_msi`, the dictionary keys map
+to the fields of `ResamplingConfig`. You can pass a plain dict (as shown in
+the examples above) or construct the dataclass directly:
+
+```python
+from thyra.resampling.types import ResamplingConfig, ResamplingMethod, AxisType
+
+config = ResamplingConfig(
+    method=ResamplingMethod.TIC_PRESERVING,
+    axis_type=AxisType.ORBITRAP,
+    target_bins=50000,
+)
+
+success = convert_msi("input.imzML", "output.zarr", resampling_config=config)
+```
+
+::: thyra.resampling.types.ResamplingConfig
+    options:
+      show_root_heading: true
+      heading_level: 3
+
+::: thyra.resampling.types.ResamplingMethod
+    options:
+      show_root_heading: true
+      heading_level: 3
+      members: true
+
+::: thyra.resampling.types.AxisType
+    options:
+      show_root_heading: true
+      heading_level: 3
+      members: true
+
+---
+
+## Metadata Types
+
+Readers expose metadata through two dataclasses. `EssentialMetadata` contains
+everything needed for conversion decisions (grid size, mass range, memory
+estimate). `ComprehensiveMetadata` wraps essential metadata and adds
+vendor-specific details for provenance and QC.
+
+```python
+from thyra.readers.imzml import ImzMLReader
+
+with ImzMLReader("sample.imzML") as reader:
+    meta = reader.get_essential_metadata()
+    print(f"Grid: {meta.dimensions}")
+    print(f"m/z range: {meta.mass_range}")
+    print(f"Spectra: {meta.n_spectra}")
+    print(f"Est. memory: {meta.estimated_memory_gb:.1f} GB")
+```
+
+::: thyra.metadata.types.EssentialMetadata
+    options:
+      show_root_heading: true
+      heading_level: 3
+
+::: thyra.metadata.types.ComprehensiveMetadata
+    options:
+      show_root_heading: true
+      heading_level: 3
+
+---
+
 ## Reader Base Class
 
 All format readers (ImzML, Bruker, Waters) inherit from this base class. If
@@ -85,6 +153,7 @@ and implement the abstract methods below.
         - get_region_map
         - get_region_info
         - has_shared_mass_axis
+        - close
 
 ---
 
@@ -102,3 +171,48 @@ formats by subclassing `BaseMSIConverter`.
         - pixel_size_source
         - dataset_id
         - handle_3d
+
+---
+
+## Format Detection and Plugin Registry
+
+Thyra uses a registry to map file extensions and directory structures to the
+correct reader and converter classes. The public functions below let you detect
+formats programmatically or register your own reader/converter.
+
+### Detecting a format
+
+```python
+from pathlib import Path
+from thyra.core.registry import detect_format
+
+fmt = detect_format(Path("experiment.imzML"))  # "imzml"
+fmt = detect_format(Path("data.d"))            # "bruker" or "rapiflex"
+fmt = detect_format(Path("data.raw"))          # "waters"
+```
+
+### Registering a custom reader
+
+```python
+from thyra.core.registry import register_reader
+from thyra.core.base_reader import BaseMSIReader
+
+@register_reader("my_format")
+class MyFormatReader(BaseMSIReader):
+    ...
+```
+
+::: thyra.core.registry.detect_format
+    options:
+      show_root_heading: true
+      heading_level: 3
+
+::: thyra.core.registry.register_reader
+    options:
+      show_root_heading: true
+      heading_level: 3
+
+::: thyra.core.registry.register_converter
+    options:
+      show_root_heading: true
+      heading_level: 3
