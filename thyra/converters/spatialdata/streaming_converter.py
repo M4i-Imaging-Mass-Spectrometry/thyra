@@ -1520,6 +1520,14 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         )
         a.attrs["encoding-type"] = "string"
         a.attrs["encoding-version"] = "0.2.0"
+        from thyra import __version__
+
+        a = em_group.create_array(
+            "thyra_version",
+            data=np.array(__version__, dtype=str_dtype),
+        )
+        a.attrs["encoding-type"] = "string"
+        a.attrs["encoding-version"] = "0.2.0"
 
         a = uns_group.create_array("average_spectrum", data=avg_spectrum)
         a.attrs["encoding-type"] = "array"
