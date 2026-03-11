@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.20.0 (2026-03-11)
+
+### Features
+
+- Store thyra_version in essential_metadata
+  ([#82](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/82),
+  [`7c309e2`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/7c309e215701d5b26bb85bc1282010077cc749c3))
+
+
 ## v1.19.0 (2026-03-10)
 
 ### Bug Fixes
