@@ -410,11 +410,14 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         essential = comp_meta.essential
         dims = essential.dimensions
         mrange = essential.mass_range
+        from thyra import __version__
+
         adata.uns["essential_metadata"] = {
             "source_path": str(essential.source_path),
             "dimensions": list(dims) if dims else None,
             "mass_range": list(mrange) if mrange else None,
             "spectrum_type": getattr(essential, "spectrum_type", None),
+            "thyra_version": __version__,
         }
 
     def _store_raw_metadata(self, adata, comp_meta) -> None:
