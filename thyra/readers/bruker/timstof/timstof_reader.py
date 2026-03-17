@@ -719,8 +719,15 @@ class BrukerReader(BrukerBaseMSIReader):
             frame_ids: Any = sorted(self._region_frame_ids)
             total = len(frame_ids)
         else:
-            total = self._get_frame_count()
-            frame_ids = range(1, total + 1)
+            # Use actual frame IDs from MaldiFrameInfo when available,
+            # rather than assuming sequential 1..N. This handles .d files
+            # where frame IDs are non-contiguous (e.g., region-split files).
+            frame_ids = self._get_maldi_frame_ids()
+            if frame_ids is not None:
+                total = len(frame_ids)
+            else:
+                total = self._get_frame_count()
+                frame_ids = range(1, total + 1)
 
         coordinate_offsets = self._get_coordinate_offsets()
 
@@ -768,6 +775,26 @@ class BrukerReader(BrukerBaseMSIReader):
                     logger.warning(f"Error reading spectrum for frame {frame_id}: {e}")
                     pbar.update(1)
                     continue
+
+    def _get_maldi_frame_ids(self) -> Optional[List[int]]:
+        """Get sorted frame IDs from MaldiFrameInfo table.
+
+        Returns actual frame IDs rather than assuming sequential 1..N,
+        which is necessary for .d files with non-contiguous frame IDs
+        (e.g., files split by region from a multi-region acquisition).
+
+        Returns:
+            Sorted list of frame IDs, or None if MaldiFrameInfo is unavailable.
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT Frame FROM MaldiFrameInfo ORDER BY Frame")
+            rows = cursor.fetchall()
+            if rows:
+                return [int(row[0]) for row in rows]
+            return None
+        except sqlite3.OperationalError:
+            return None
 
     def _get_frame_count(self) -> int:
         """Get the total number of frames (respects region filtering)."""

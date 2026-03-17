@@ -778,6 +778,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             "var_df": self._create_mass_dataframe(),
             "avg_spectrum": coo_result["avg_spectrum"],
             "pixel_count": coo_result["pixel_count"],
+            "avg_spectrum_per_region": coo_result.get("avg_spectrum_per_region"),
         }
 
     def _create_data_structures(self) -> Dict[str, Any]:
