@@ -2,6 +2,23 @@
 
 <!-- version list -->
 
+## v1.20.1 (2026-03-17)
+
+### Bug Fixes
+
+- Iterate actual frame IDs from MaldiFrameInfo instead of assuming sequential 1..N
+  ([#83](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/83),
+  [`91642cb`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/91642cbdca502933b3c76f04210f8c53dcc87e36))
+
+- Pass per-region avg spectrum through COO path
+  ([#83](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/83),
+  [`91642cb`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/91642cbdca502933b3c76f04210f8c53dcc87e36))
+
+- Pass per-region avg spectrum through COO path data structures
+  ([#83](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/83),
+  [`91642cb`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/91642cbdca502933b3c76f04210f8c53dcc87e36))
+
+
 ## v1.20.0 (2026-03-11)
 
 ### Features
