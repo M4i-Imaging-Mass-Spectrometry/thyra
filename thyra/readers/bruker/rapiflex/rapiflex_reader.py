@@ -376,7 +376,8 @@ class RapiflexReader(BrukerBaseMSIReader):
         """Extract Area definitions from .mis XML.
 
         Areas define the image pixel coordinates for each acquisition region.
-        Each Area has a Name and two Point elements defining the bounding box.
+        Areas may be rectangular (Type=0, 2 points) or polygon (Type=3, N
+        points). In both cases the bounding box of all points is stored.
 
         Args:
             root: XML root element
@@ -388,20 +389,21 @@ class RapiflexReader(BrukerBaseMSIReader):
             points = area_elem.findall("Point")
             if len(points) >= 2:
                 try:
-                    # Parse point coordinates (format: "x,y")
-                    # Use lists instead of tuples for Zarr serialization
-                    p1_text = points[0].text or ""
-                    p2_text = points[1].text or ""
-                    p1_parts = p1_text.split(",")
-                    p2_parts = p2_text.split(",")
-                    p1 = [int(p1_parts[0]), int(p1_parts[1])]
-                    p2 = [int(p2_parts[0]), int(p2_parts[1])]
+                    # Parse ALL point coordinates to get bounding box
+                    # Works for both rectangular (2 points) and polygon (N points)
+                    all_x = []
+                    all_y = []
+                    for pt in points:
+                        pt_text = pt.text or ""
+                        parts = pt_text.split(",")
+                        all_x.append(int(parts[0]))
+                        all_y.append(int(parts[1]))
 
                     areas.append(
                         {
                             "name": area_name,
-                            "p1": p1,  # [x1, y1] in image pixels
-                            "p2": p2,  # [x2, y2] in image pixels
+                            "p1": [min(all_x), min(all_y)],
+                            "p2": [max(all_x), max(all_y)],
                         }
                     )
                 except (ValueError, IndexError) as e:
