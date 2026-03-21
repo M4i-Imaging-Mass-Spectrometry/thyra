@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.20.2 (2026-03-21)
+
+### Bug Fixes
+
+- Compute bounding box from all points in polygon Area definitions
+  ([#85](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/85),
+  [`76741a5`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/76741a5bf12c12b24ab7d62e450767078ff3d9db))
+
+
 ## v1.20.1 (2026-03-17)
 
 ### Bug Fixes
