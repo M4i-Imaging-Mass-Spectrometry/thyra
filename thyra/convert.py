@@ -17,11 +17,6 @@ warnings.filterwarnings(
     module=r"pyimzml.ontology.ontology",
 )
 
-# warnings.filterwarnings(
-#     "ignore",
-#     category=CryptographyDeprecationWarning
-# )
-
 
 def _validate_paths_parameters(
     input_path: Union[str, Path], output_path: Union[str, Path]
@@ -51,10 +46,8 @@ def _validate_string_parameters(format_type: str, dataset_id: str) -> bool:
     return True
 
 
-def _validate_numeric_parameters(
-    pixel_size_um: Optional[float], handle_3d: bool
-) -> bool:
-    """Validate numeric and boolean parameters."""
+def _validate_numeric_parameters(pixel_size_um: Optional[float]) -> bool:
+    """Validate numeric parameters."""
     if pixel_size_um is not None and (
         not isinstance(pixel_size_um, (int, float)) or pixel_size_um <= 0
     ):
@@ -70,13 +63,12 @@ def _validate_input_parameters(
     format_type: str,
     dataset_id: str,
     pixel_size_um: Optional[float],
-    handle_3d: bool,
 ) -> bool:
     """Validate all input parameters for convert_msi function."""
     return (
         _validate_paths_parameters(input_path, output_path)
         and _validate_string_parameters(format_type, dataset_id)
-        and _validate_numeric_parameters(pixel_size_um, handle_3d)
+        and _validate_numeric_parameters(pixel_size_um)
     )
 
 
@@ -201,6 +193,7 @@ def _create_converter(
         "handle_3d": handle_3d,
         "pixel_size_detection_info": pixel_size_detection_info,
         "resampling_config": resampling_config,
+        "sparse_format": sparse_format,
         "include_optical": include_optical,
         **kwargs,
     }
@@ -227,7 +220,7 @@ def _create_converter(
     except ValueError as e:
         if "spatialdata" in format_type.lower():
             logger.error(
-                "SpatialData converter is not available due to " "dependency issues."
+                "SpatialData converter is not available due to dependency issues."
             )
             logger.error("This is commonly caused by zarr version incompatibility.")
             logger.error("Try upgrading your dependencies:")
@@ -236,19 +229,7 @@ def _create_converter(
             raise ValueError("SpatialData converter unavailable") from e
         else:
             raise e
-    return converter_class(
-        reader,
-        output_path,
-        dataset_id=dataset_id,
-        pixel_size_um=pixel_size_um,
-        pixel_size_source=pixel_size_source,
-        handle_3d=handle_3d,
-        pixel_size_detection_info=pixel_size_detection_info,
-        resampling_config=resampling_config,
-        sparse_format=sparse_format,
-        include_optical=include_optical,
-        **kwargs,
-    )
+    return converter_class(reader, output_path, **converter_kwargs)
 
 
 def _perform_conversion_with_cleanup(converter: Any, reader: Any) -> bool:
@@ -318,7 +299,6 @@ def convert_msi(
         format_type,
         dataset_id,
         pixel_size_um,
-        handle_3d,
     ):
         return False
 
