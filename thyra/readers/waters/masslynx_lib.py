@@ -290,10 +290,6 @@ class MassLynxLib:
         ]
         dll.getDataPoints.restype = c_uint32
 
-    # ----------------------------------------------------------------
-    # High-level Python methods
-    # ----------------------------------------------------------------
-
     def open_file(self, raw_path: str) -> c_void_p:
         """Open a Waters .raw directory. Returns opaque handle.
 

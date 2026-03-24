@@ -139,28 +139,34 @@ class MockMSIReader:
     not SPATIALDATA_AVAILABLE,
     reason="SpatialData dependencies not available",
 )
+def test_converter_initialization():
+    """Test that the converter initializes correctly."""
+    reader = MockMSIReader()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_path = Path(tmpdir) / "test_output.zarr"
+
+        converter = StreamingSpatialDataConverter(
+            reader=reader,
+            output_path=output_path,
+            dataset_id="test_dataset",
+            pixel_size_um=20.0,
+            chunk_size=50,
+            use_csc=True,
+        )
+
+        assert converter._chunk_size == 50
+        assert converter._use_csc is True
+        assert converter.dataset_id == "test_dataset"
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not SPATIALDATA_AVAILABLE,
+    reason="SpatialData dependencies not available",
+)
 class TestStreamingSpatialDataConverter:
     """Tests for StreamingSpatialDataConverter."""
-
-    def test_converter_initialization(self):
-        """Test that the converter initializes correctly."""
-        reader = MockMSIReader()
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_path = Path(tmpdir) / "test_output.zarr"
-
-            converter = StreamingSpatialDataConverter(
-                reader=reader,
-                output_path=output_path,
-                dataset_id="test_dataset",
-                pixel_size_um=20.0,
-                chunk_size=50,
-                use_csc=True,
-            )
-
-            assert converter._chunk_size == 50
-            assert converter._use_csc is True
-            assert converter.dataset_id == "test_dataset"
 
     def test_basic_conversion(self):
         """Test basic conversion with small synthetic dataset."""
@@ -374,6 +380,7 @@ class TestStreamingSpatialDataConverter:
                 ), "Shape area should match pixel size"
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not SPATIALDATA_AVAILABLE,
     reason="SpatialData dependencies not available",
@@ -412,6 +419,7 @@ def test_streaming_converter_memory_efficiency():
         assert success
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not SPATIALDATA_AVAILABLE,
     reason="SpatialData dependencies not available",
@@ -448,6 +456,7 @@ def test_single_pixel_dataset():
         assert len(list(sdata.shapes.values())[0]) == 1, "Should have 1 shape"
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not SPATIALDATA_AVAILABLE,
     reason="SpatialData dependencies not available",
@@ -478,6 +487,7 @@ def test_coo_path_small_dataset():
         assert len(sdata.tables) > 0, "Should have tables"
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not SPATIALDATA_AVAILABLE,
     reason="SpatialData dependencies not available",
@@ -520,6 +530,7 @@ def test_rectangular_grid():
             assert tic_image.shape[2] == 10, "TIC width should be 10"
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not SPATIALDATA_AVAILABLE,
     reason="SpatialData dependencies not available",
@@ -551,6 +562,7 @@ def test_auto_use_csc_mode_large_dataset():
         assert isinstance(should_use, bool)
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not SPATIALDATA_AVAILABLE,
     reason="SpatialData dependencies not available",
@@ -584,6 +596,7 @@ def test_auto_use_csc_mode_with_resampling():
         assert size_gb < 1.0, "Should be less than 1 GB"
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not SPATIALDATA_AVAILABLE,
     reason="SpatialData dependencies not available",
@@ -624,6 +637,7 @@ class MockMSIReaderWithOptical(MockMSIReader):
         return self._optical_images
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not SPATIALDATA_AVAILABLE,
     reason="SpatialData dependencies not available",
@@ -666,6 +680,7 @@ def test_optical_image_loading():
         assert len(optical_keys) > 0, "Should have optical image"
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not SPATIALDATA_AVAILABLE,
     reason="SpatialData dependencies not available",
@@ -710,6 +725,7 @@ def test_optical_image_rgb():
         assert optical_img.shape[0] == 3, "RGB image should have 3 channels"
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not SPATIALDATA_AVAILABLE,
     reason="SpatialData dependencies not available",
@@ -755,6 +771,7 @@ def test_no_optical_images_when_disabled():
         assert len(tic_keys) > 0, "Should still have TIC image"
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not SPATIALDATA_AVAILABLE,
     reason="SpatialData dependencies not available",
@@ -832,6 +849,7 @@ class MockMSIReaderWithControlledIntensities(MockMSIReader):
                     yield (x, y, z), mzs, intensities
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not SPATIALDATA_AVAILABLE,
     reason="SpatialData dependencies not available",

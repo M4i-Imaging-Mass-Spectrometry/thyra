@@ -42,6 +42,57 @@ def _suppress_upstream_warnings():
         yield
 
 
+def _normalize_resampling_config(
+    config: Union[Dict[str, Any], "ResamplingConfig"],
+) -> "ResamplingConfig":
+    """Normalise a resampling config dict or dataclass to a ResamplingConfig.
+
+    Accepts either a plain dict (as produced by _build_resampling_config in
+    __main__.py) or an already-constructed ResamplingConfig dataclass and
+    returns a ResamplingConfig in both cases.
+    """
+    if isinstance(config, ResamplingConfig):
+        return config
+
+    from ...resampling.types import AxisType
+
+    method_raw = config.get("method")
+    axis_type_raw = config.get("axis_type")
+
+    method = None
+    if isinstance(method_raw, str) and method_raw not in ("auto", ""):
+        method_map = {
+            "nearest_neighbor": ResamplingMethod.NEAREST_NEIGHBOR,
+            "tic_preserving": ResamplingMethod.TIC_PRESERVING,
+        }
+        method = method_map.get(method_raw)
+    elif isinstance(method_raw, ResamplingMethod):
+        method = method_raw
+
+    axis_type = None
+    if isinstance(axis_type_raw, str) and axis_type_raw not in ("auto", ""):
+        axis_type_map = {
+            "constant": AxisType.CONSTANT,
+            "linear_tof": AxisType.LINEAR_TOF,
+            "reflector_tof": AxisType.REFLECTOR_TOF,
+            "orbitrap": AxisType.ORBITRAP,
+            "fticr": AxisType.FTICR,
+        }
+        axis_type = axis_type_map.get(axis_type_raw)
+    elif isinstance(axis_type_raw, AxisType):
+        axis_type = axis_type_raw
+
+    return ResamplingConfig(
+        method=method,
+        axis_type=axis_type,
+        target_bins=config.get("target_bins"),
+        mass_width_da=config.get("width_at_mz"),
+        reference_mz=config.get("reference_mz", 1000.0),
+        min_mz=config.get("min_mz"),
+        max_mz=config.get("max_mz"),
+    )
+
+
 # Check SpatialData availability (defer imports to avoid issues)
 SPATIALDATA_AVAILABLE = False
 _import_error_msg = None
@@ -151,7 +202,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         self._non_empty_pixel_count: int = 0
         self._pixel_size_detection_info = pixel_size_detection_info
-        self._resampling_config = resampling_config
+        self._resampling_config = (
+            _normalize_resampling_config(resampling_config)
+            if resampling_config is not None
+            else None
+        )
         self._sparse_format = sparse_format.lower()
         self._include_optical = include_optical
         if self._sparse_format not in ("csc", "csr"):
@@ -182,42 +237,14 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         self._spectrum_metadata_cached: Optional[Dict[str, Any]] = None
         self._resampling_metadata_cached: Optional[Dict[str, Any]] = None
 
-    def _setup_resampling(self) -> None:  # noqa: C901
+    def _setup_resampling(self) -> None:
         """Set up resampling configuration and strategy."""
         if not self._resampling_config:
             return
 
-        # Access method - handle both dict and dataclass
-        # Check for ResamplingConfig dataclass first (more specific)
-        if isinstance(self._resampling_config, ResamplingConfig):
-            method = self._resampling_config.method
-            axis_type = self._resampling_config.axis_type
-        elif isinstance(self._resampling_config, dict):
-            method_raw = self._resampling_config.get("method", "auto")
-            axis_type_raw = self._resampling_config.get("axis_type", "auto")
-            # Convert string to enum if needed
-            if isinstance(method_raw, str):
-                method_map = {
-                    "nearest_neighbor": ResamplingMethod.NEAREST_NEIGHBOR,
-                    "tic_preserving": ResamplingMethod.TIC_PRESERVING,
-                }
-                method = method_map.get(method_raw, None)
-            else:
-                method = method_raw
-            # Convert axis_type string to enum if needed
-            if isinstance(axis_type_raw, str):
-                from ...resampling.types import AxisType
-
-                axis_type_map = {
-                    "constant": AxisType.CONSTANT,
-                    "linear_tof": AxisType.LINEAR_TOF,
-                    "reflector_tof": AxisType.REFLECTOR_TOF,
-                    "orbitrap": AxisType.ORBITRAP,
-                    "fticr": AxisType.FTICR,
-                }
-                axis_type = axis_type_map.get(axis_type_raw, None)
-            else:
-                axis_type = axis_type_raw
+        config = self._resampling_config
+        method = config.method
+        axis_type = config.axis_type
 
         # If method is None or "auto", use DecisionTree to determine strategy
         if method is None:
@@ -241,20 +268,12 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # Store axis_type override if provided (will be used in _build_resampled_mass_axis)
         self._manual_axis_type = axis_type
 
-        # Store resampling parameters - handle both dict and dataclass
-        if isinstance(self._resampling_config, ResamplingConfig):
-            # ResamplingConfig dataclass
-            self._target_bins = self._resampling_config.target_bins
-            self._min_mz = self._resampling_config.min_mz
-            self._max_mz = self._resampling_config.max_mz
-            self._width_at_mz = self._resampling_config.mass_width_da
-            self._reference_mz = self._resampling_config.reference_mz
-        elif isinstance(self._resampling_config, dict):
-            self._target_bins = self._resampling_config.get("target_bins", None)
-            self._min_mz = self._resampling_config.get("min_mz")
-            self._max_mz = self._resampling_config.get("max_mz")
-            self._width_at_mz = self._resampling_config.get("width_at_mz")
-            self._reference_mz = self._resampling_config.get("reference_mz", 1000.0)
+        # Store resampling parameters from the ResamplingConfig dataclass
+        self._target_bins = config.target_bins
+        self._min_mz = config.min_mz
+        self._max_mz = config.max_mz
+        self._width_at_mz = config.mass_width_da
+        self._reference_mz = config.reference_mz
 
     def _get_cached_metadata_for_resampling(self) -> Dict[str, Any]:
         """Get cached metadata for resampling decision tree to avoid multiple reader calls."""
@@ -973,56 +992,46 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         }
 
     def _create_coordinates_dataframe(self) -> pd.DataFrame:
-        """Create coordinates dataframe with pixel positions.
-
-        Returns:
-            DataFrame with pixel coordinates
-
-        Raises:
-            ValueError: If dimensions are not initialized
-        """
+        """Create coordinates dataframe with pixel positions."""
         if self._dimensions is None:
             raise ValueError("Dimensions are not initialized")
 
         n_x, n_y, n_z = self._dimensions
+        n_pixels = n_x * n_y * n_z
 
-        # Pre-allocate arrays for better performance
-        coords_data = []
+        pixel_idx = np.arange(n_pixels, dtype=np.int64)
+        z_idx = pixel_idx // (n_x * n_y)
+        remainder = pixel_idx % (n_x * n_y)
+        y_idx = remainder // n_x
+        x_idx = remainder % n_x
 
-        pixel_idx = 0
-        for z in range(n_z):
-            for y in range(n_y):
-                for x in range(n_x):
-                    coords_data.append(
-                        {
-                            "x": x,
-                            "y": y,
-                            "z": z if n_z > 1 else 0,
-                            "instance_id": str(pixel_idx),
-                            "region": f"{self.dataset_id}_pixels",
-                            "spatial_x": x * self.pixel_size_um,
-                            "spatial_y": y * self.pixel_size_um,
-                            "spatial_z": (z * self.pixel_size_um if n_z > 1 else 0.0),
-                        }
-                    )
-                    pixel_idx += 1
-
-        coords_df = pd.DataFrame(coords_data)
+        coords_df = pd.DataFrame(
+            {
+                "x": x_idx,
+                "y": y_idx,
+                "z": z_idx if n_z > 1 else np.zeros(n_pixels, dtype=np.int64),
+                "instance_id": pixel_idx.astype(str),
+                "region": np.full(n_pixels, f"{self.dataset_id}_pixels"),
+                "spatial_x": x_idx * self.pixel_size_um,
+                "spatial_y": y_idx * self.pixel_size_um,
+                "spatial_z": (
+                    z_idx * self.pixel_size_um
+                    if n_z > 1
+                    else np.zeros(n_pixels, dtype=np.float64)
+                ),
+            }
+        )
         coords_df.set_index("instance_id", inplace=True)
 
-        # Always add per-pixel region numbers for a consistent schema.
         region_map = getattr(self, "_region_map", None)
         if region_map is not None:
-            region_numbers = np.full(len(coords_df), -1, dtype=np.int32)
-            for i, (x, y) in enumerate(
-                zip(coords_df["x"].values, coords_df["y"].values)
-            ):
-                key = (int(x), int(y))
-                if key in region_map:
-                    region_numbers[i] = region_map[key]
+            keys = list(zip(x_idx.tolist(), y_idx.tolist()))
+            region_numbers = np.array(
+                [region_map.get(k, -1) for k in keys], dtype=np.int32
+            )
             coords_df["region_number"] = region_numbers
         else:
-            coords_df["region_number"] = np.ones(len(coords_df), dtype=np.int32)
+            coords_df["region_number"] = np.ones(n_pixels, dtype=np.int32)
 
         return coords_df
 

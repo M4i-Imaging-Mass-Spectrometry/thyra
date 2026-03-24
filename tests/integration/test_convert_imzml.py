@@ -10,6 +10,7 @@ from thyra.convert import convert_msi
 class TestImzMLConversion:
     """Test the end-to-end conversion of imzML files."""
 
+    @pytest.mark.integration
     @pytest.mark.skipif(
         not pytest.importorskip("spatialdata", reason="SpatialData not installed"),
         reason="SpatialData not installed",
