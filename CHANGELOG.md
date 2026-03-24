@@ -2,6 +2,46 @@
 
 <!-- version list -->
 
+## v1.20.3 (2026-03-24)
+
+### Performance Improvements
+
+- Vectorise _create_coordinates_dataframe with numpy instead of Python loop
+  ([#86](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/86),
+  [`7eeaf40`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/7eeaf40a18d8463df678b49106420ff4d47f44eb))
+
+### Refactoring
+
+- Clean up convert.py and align flake8 line length with black
+  ([#86](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/86),
+  [`7eeaf40`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/7eeaf40a18d8463df678b49106420ff4d47f44eb))
+
+- Code quality improvements ([#86](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/86),
+  [`7eeaf40`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/7eeaf40a18d8463df678b49106420ff4d47f44eb))
+
+- Normalise resampling config to ResamplingConfig at init, remove isinstance branching
+  ([#86](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/86),
+  [`7eeaf40`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/7eeaf40a18d8463df678b49106420ff4d47f44eb))
+
+- Remove duplicate _suppress_upstream_warnings from streaming_converter
+  ([#86](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/86),
+  [`7eeaf40`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/7eeaf40a18d8463df678b49106420ff4d47f44eb))
+
+- Remove hardcoded path, clean up type ignores, delete dead integration test
+  ([#86](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/86),
+  [`7eeaf40`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/7eeaf40a18d8463df678b49106420ff4d47f44eb))
+
+### Testing
+
+- Add unit tests for MSIRegistry format detection and registration
+  ([#86](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/86),
+  [`7eeaf40`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/7eeaf40a18d8463df678b49106420ff4d47f44eb))
+
+- Clean up test suite - remove dead tests, mark integration, add unit tests
+  ([#86](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/86),
+  [`7eeaf40`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/7eeaf40a18d8463df678b49106420ff4d47f44eb))
+
+
 ## v1.20.2 (2026-03-21)
 
 ### Bug Fixes
