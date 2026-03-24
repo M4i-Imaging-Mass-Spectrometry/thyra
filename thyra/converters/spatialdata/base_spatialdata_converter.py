@@ -42,6 +42,57 @@ def _suppress_upstream_warnings():
         yield
 
 
+def _normalize_resampling_config(
+    config: Union[Dict[str, Any], "ResamplingConfig"],
+) -> "ResamplingConfig":
+    """Normalise a resampling config dict or dataclass to a ResamplingConfig.
+
+    Accepts either a plain dict (as produced by _build_resampling_config in
+    __main__.py) or an already-constructed ResamplingConfig dataclass and
+    returns a ResamplingConfig in both cases.
+    """
+    if isinstance(config, ResamplingConfig):
+        return config
+
+    from ...resampling.types import AxisType
+
+    method_raw = config.get("method")
+    axis_type_raw = config.get("axis_type")
+
+    method = None
+    if isinstance(method_raw, str) and method_raw not in ("auto", ""):
+        method_map = {
+            "nearest_neighbor": ResamplingMethod.NEAREST_NEIGHBOR,
+            "tic_preserving": ResamplingMethod.TIC_PRESERVING,
+        }
+        method = method_map.get(method_raw)
+    elif isinstance(method_raw, ResamplingMethod):
+        method = method_raw
+
+    axis_type = None
+    if isinstance(axis_type_raw, str) and axis_type_raw not in ("auto", ""):
+        axis_type_map = {
+            "constant": AxisType.CONSTANT,
+            "linear_tof": AxisType.LINEAR_TOF,
+            "reflector_tof": AxisType.REFLECTOR_TOF,
+            "orbitrap": AxisType.ORBITRAP,
+            "fticr": AxisType.FTICR,
+        }
+        axis_type = axis_type_map.get(axis_type_raw)
+    elif isinstance(axis_type_raw, AxisType):
+        axis_type = axis_type_raw
+
+    return ResamplingConfig(
+        method=method,
+        axis_type=axis_type,
+        target_bins=config.get("target_bins"),
+        mass_width_da=config.get("width_at_mz"),
+        reference_mz=config.get("reference_mz", 1000.0),
+        min_mz=config.get("min_mz"),
+        max_mz=config.get("max_mz"),
+    )
+
+
 # Check SpatialData availability (defer imports to avoid issues)
 SPATIALDATA_AVAILABLE = False
 _import_error_msg = None
@@ -151,7 +202,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         self._non_empty_pixel_count: int = 0
         self._pixel_size_detection_info = pixel_size_detection_info
-        self._resampling_config = resampling_config
+        self._resampling_config = (
+            _normalize_resampling_config(resampling_config)
+            if resampling_config is not None
+            else None
+        )
         self._sparse_format = sparse_format.lower()
         self._include_optical = include_optical
         if self._sparse_format not in ("csc", "csr"):
@@ -182,42 +237,14 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         self._spectrum_metadata_cached: Optional[Dict[str, Any]] = None
         self._resampling_metadata_cached: Optional[Dict[str, Any]] = None
 
-    def _setup_resampling(self) -> None:  # noqa: C901
+    def _setup_resampling(self) -> None:
         """Set up resampling configuration and strategy."""
         if not self._resampling_config:
             return
 
-        # Access method - handle both dict and dataclass
-        # Check for ResamplingConfig dataclass first (more specific)
-        if isinstance(self._resampling_config, ResamplingConfig):
-            method = self._resampling_config.method
-            axis_type = self._resampling_config.axis_type
-        elif isinstance(self._resampling_config, dict):
-            method_raw = self._resampling_config.get("method", "auto")
-            axis_type_raw = self._resampling_config.get("axis_type", "auto")
-            # Convert string to enum if needed
-            if isinstance(method_raw, str):
-                method_map = {
-                    "nearest_neighbor": ResamplingMethod.NEAREST_NEIGHBOR,
-                    "tic_preserving": ResamplingMethod.TIC_PRESERVING,
-                }
-                method = method_map.get(method_raw, None)
-            else:
-                method = method_raw
-            # Convert axis_type string to enum if needed
-            if isinstance(axis_type_raw, str):
-                from ...resampling.types import AxisType
-
-                axis_type_map = {
-                    "constant": AxisType.CONSTANT,
-                    "linear_tof": AxisType.LINEAR_TOF,
-                    "reflector_tof": AxisType.REFLECTOR_TOF,
-                    "orbitrap": AxisType.ORBITRAP,
-                    "fticr": AxisType.FTICR,
-                }
-                axis_type = axis_type_map.get(axis_type_raw, None)
-            else:
-                axis_type = axis_type_raw
+        config = self._resampling_config
+        method = config.method
+        axis_type = config.axis_type
 
         # If method is None or "auto", use DecisionTree to determine strategy
         if method is None:
@@ -241,20 +268,12 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # Store axis_type override if provided (will be used in _build_resampled_mass_axis)
         self._manual_axis_type = axis_type
 
-        # Store resampling parameters - handle both dict and dataclass
-        if isinstance(self._resampling_config, ResamplingConfig):
-            # ResamplingConfig dataclass
-            self._target_bins = self._resampling_config.target_bins
-            self._min_mz = self._resampling_config.min_mz
-            self._max_mz = self._resampling_config.max_mz
-            self._width_at_mz = self._resampling_config.mass_width_da
-            self._reference_mz = self._resampling_config.reference_mz
-        elif isinstance(self._resampling_config, dict):
-            self._target_bins = self._resampling_config.get("target_bins", None)
-            self._min_mz = self._resampling_config.get("min_mz")
-            self._max_mz = self._resampling_config.get("max_mz")
-            self._width_at_mz = self._resampling_config.get("width_at_mz")
-            self._reference_mz = self._resampling_config.get("reference_mz", 1000.0)
+        # Store resampling parameters from the ResamplingConfig dataclass
+        self._target_bins = config.target_bins
+        self._min_mz = config.min_mz
+        self._max_mz = config.max_mz
+        self._width_at_mz = config.mass_width_da
+        self._reference_mz = config.reference_mz
 
     def _get_cached_metadata_for_resampling(self) -> Dict[str, Any]:
         """Get cached metadata for resampling decision tree to avoid multiple reader calls."""

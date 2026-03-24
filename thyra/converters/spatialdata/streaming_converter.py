@@ -125,13 +125,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
         # Estimate number of m/z bins after resampling
         if self._resampling_config:
-            if isinstance(self._resampling_config, dict):
-                n_mz_bins = self._resampling_config.get("target_bins") or 10000
-            else:
-                # ResamplingConfig dataclass
-                n_mz_bins = (
-                    getattr(self._resampling_config, "target_bins", None) or 10000
-                )
+            n_mz_bins = self._resampling_config.target_bins or 10000
         else:
             # Estimate from mass range with ~0.01 Da resolution
             min_mass, max_mass = metadata.mass_range
