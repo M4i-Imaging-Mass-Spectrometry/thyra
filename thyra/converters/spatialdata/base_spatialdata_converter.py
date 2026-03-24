@@ -992,56 +992,46 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         }
 
     def _create_coordinates_dataframe(self) -> pd.DataFrame:
-        """Create coordinates dataframe with pixel positions.
-
-        Returns:
-            DataFrame with pixel coordinates
-
-        Raises:
-            ValueError: If dimensions are not initialized
-        """
+        """Create coordinates dataframe with pixel positions."""
         if self._dimensions is None:
             raise ValueError("Dimensions are not initialized")
 
         n_x, n_y, n_z = self._dimensions
+        n_pixels = n_x * n_y * n_z
 
-        # Pre-allocate arrays for better performance
-        coords_data = []
+        pixel_idx = np.arange(n_pixels, dtype=np.int64)
+        z_idx = pixel_idx // (n_x * n_y)
+        remainder = pixel_idx % (n_x * n_y)
+        y_idx = remainder // n_x
+        x_idx = remainder % n_x
 
-        pixel_idx = 0
-        for z in range(n_z):
-            for y in range(n_y):
-                for x in range(n_x):
-                    coords_data.append(
-                        {
-                            "x": x,
-                            "y": y,
-                            "z": z if n_z > 1 else 0,
-                            "instance_id": str(pixel_idx),
-                            "region": f"{self.dataset_id}_pixels",
-                            "spatial_x": x * self.pixel_size_um,
-                            "spatial_y": y * self.pixel_size_um,
-                            "spatial_z": (z * self.pixel_size_um if n_z > 1 else 0.0),
-                        }
-                    )
-                    pixel_idx += 1
-
-        coords_df = pd.DataFrame(coords_data)
+        coords_df = pd.DataFrame(
+            {
+                "x": x_idx,
+                "y": y_idx,
+                "z": z_idx if n_z > 1 else np.zeros(n_pixels, dtype=np.int64),
+                "instance_id": pixel_idx.astype(str),
+                "region": np.full(n_pixels, f"{self.dataset_id}_pixels"),
+                "spatial_x": x_idx * self.pixel_size_um,
+                "spatial_y": y_idx * self.pixel_size_um,
+                "spatial_z": (
+                    z_idx * self.pixel_size_um
+                    if n_z > 1
+                    else np.zeros(n_pixels, dtype=np.float64)
+                ),
+            }
+        )
         coords_df.set_index("instance_id", inplace=True)
 
-        # Always add per-pixel region numbers for a consistent schema.
         region_map = getattr(self, "_region_map", None)
         if region_map is not None:
-            region_numbers = np.full(len(coords_df), -1, dtype=np.int32)
-            for i, (x, y) in enumerate(
-                zip(coords_df["x"].values, coords_df["y"].values)
-            ):
-                key = (int(x), int(y))
-                if key in region_map:
-                    region_numbers[i] = region_map[key]
+            keys = list(zip(x_idx.tolist(), y_idx.tolist()))
+            region_numbers = np.array(
+                [region_map.get(k, -1) for k in keys], dtype=np.int32
+            )
             coords_df["region_number"] = region_numbers
         else:
-            coords_df["region_number"] = np.ones(len(coords_df), dtype=np.int32)
+            coords_df["region_number"] = np.ones(n_pixels, dtype=np.int32)
 
         return coords_df
 
