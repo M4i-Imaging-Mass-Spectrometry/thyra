@@ -100,28 +100,21 @@ class ImzMLOntologyValidator:
             ),
         ]
 
-        # --- NEW: Section to display most common terms ---
         if results["term_counts"]:
             lines.extend(["", "Most Common Terms:", "------------------"])
-            # Sort terms by count, descending
             sorted_terms = sorted(
                 results["term_counts"].items(),
                 key=lambda item: item[1],
                 reverse=True,
             )
-            for accession, count in sorted_terms[:15]:  # Display top 15
+            for accession, count in sorted_terms[:15]:
                 term_details = ONTOLOGY.get_term(accession)
-
-                # --- THIS IS THE CORRECTED LINE ---
                 term_name = (
                     term_details[1]
                     if term_details and len(term_details) > 1
                     else "Unknown Term"
                 )
-                # ------------------------------------
-
                 lines.append(f"- {accession} ({term_name}): {count} times")
-        # -----------------------------------------------
 
         if results["unknown_list"]:
             lines.extend(["", "Unknown Terms:", "--------------"])
