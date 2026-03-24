@@ -77,7 +77,6 @@ def _get_windows_paths(lib_name: str, data_directory: Optional[Path]) -> List[Pa
     # User-specific paths
     paths.extend(
         [
-            Path(r"C:\Users\P70078823\Desktop\MSIConverter") / lib_name,
             Path.home() / "Desktop" / "MSIConverter" / lib_name,
             Path.home() / "Downloads" / lib_name,
             Path.home() / "Documents" / "Bruker" / lib_name,

@@ -31,36 +31,28 @@ class ImzMLOntologyValidator:
         ns = {"mzml": "http://psi.hupo.org/ms/mzml"}
         cv_params = root.findall(".//mzml:cvParam", ns) or root.findall(".//cvParam")
 
-        results = {
-            "total_terms": 0,
-            "known_terms": 0,
-            "unknown_terms": 0,
-            "unknown_list": [],
-            "term_counts": {},
-        }
+        total_terms = 0
+        known_terms = 0
+        unknown_terms = 0
+        unknown_list: List[Dict[str, Any]] = []
+        term_counts: Dict[str, int] = {}
 
         for cv_param in cv_params:
             accession = cv_param.get("accession", "")
             name = cv_param.get("name", "")
             value = cv_param.get("value", "")
 
-            results["total_terms"] += 1  # type: ignore[operator]
+            total_terms += 1
 
-            # --- NEW: Increment the count for this accession ---
-            if accession:  # Ensure we don't count empty accessions
-                results["term_counts"][accession] = (  # type: ignore[index]
-                    results["term_counts"].get(accession, 0) + 1  # type: ignore[attr-defined]
-                )
-            # ---------------------------------------------------
+            if accession:
+                term_counts[accession] = term_counts.get(accession, 0) + 1
 
-            # Check if term is known
             term = ONTOLOGY.get_term(accession)
             if term:
-                results["known_terms"] += 1  # type: ignore[operator]
-                # self.found_terms redundant with results['term_counts']
+                known_terms += 1
             else:
-                results["unknown_terms"] += 1  # type: ignore[operator]
-                results["unknown_list"].append(  # type: ignore[attr-defined]
+                unknown_terms += 1
+                unknown_list.append(
                     {
                         "accession": accession,
                         "name": name,
@@ -69,15 +61,15 @@ class ImzMLOntologyValidator:
                     }
                 )
 
-                # Context tracking (optional)
-                context = (
-                    cv_param.get("..", {}).tag  # type: ignore[union-attr]
-                    if hasattr(cv_param, "get")
-                    else "unknown"
-                )
-                self.unknown_terms.setdefault(accession, []).append(context)
+                self.unknown_terms.setdefault(accession, []).append("unknown")
 
-        # Generate summary
+        results: Dict[str, Any] = {
+            "total_terms": total_terms,
+            "known_terms": known_terms,
+            "unknown_terms": unknown_terms,
+            "unknown_list": unknown_list,
+            "term_counts": term_counts,
+        }
         results["summary"] = self._generate_summary(results)
 
         return results
@@ -147,19 +139,17 @@ class ImzMLOntologyValidator:
         """Validate all imzML files in a directory."""
         imzml_files = list(directory.glob("**/*.imzML"))
 
-        all_results = {
-            "files_checked": len(imzml_files),
-            "all_unknown_terms": set(),
-            "per_file_results": {},
-        }
+        per_file_results: Dict[str, Any] = {}
+        all_unknown_terms: set = set()
 
         for imzml_file in imzml_files:
             results = self.validate_file(imzml_file)
-            all_results["per_file_results"][str(imzml_file)] = results  # type: ignore[index]
-
+            per_file_results[str(imzml_file)] = results
             for term in results["unknown_list"]:
-                all_results["all_unknown_terms"].add(  # type: ignore[attr-defined]
-                    term["accession"]
-                )
+                all_unknown_terms.add(term["accession"])
 
-        return all_results
+        return {
+            "files_checked": len(imzml_files),
+            "all_unknown_terms": all_unknown_terms,
+            "per_file_results": per_file_results,
+        }
