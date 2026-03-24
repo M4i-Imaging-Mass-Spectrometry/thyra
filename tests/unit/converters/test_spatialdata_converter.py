@@ -799,3 +799,177 @@ class TestSparseFormat:
         )
 
         assert converter._sparse_format == "csr"
+
+
+class TestNormalizeResamplingConfig:
+    """Tests for _normalize_resampling_config."""
+
+    def test_passthrough_dataclass(self):
+        """Passing a ResamplingConfig returns it unchanged."""
+        from thyra.converters.spatialdata.base_spatialdata_converter import (
+            _normalize_resampling_config,
+        )
+        from thyra.resampling.types import ResamplingConfig
+
+        cfg = ResamplingConfig(target_bins=500)
+        result = _normalize_resampling_config(cfg)
+        assert result is cfg
+
+    def test_dict_target_bins(self):
+        """Dict with target_bins converts correctly."""
+        from thyra.converters.spatialdata.base_spatialdata_converter import (
+            _normalize_resampling_config,
+        )
+        from thyra.resampling.types import ResamplingConfig
+
+        result = _normalize_resampling_config({"target_bins": 2000})
+        assert isinstance(result, ResamplingConfig)
+        assert result.target_bins == 2000
+
+    def test_dict_method_nearest_neighbor(self):
+        """Dict method string maps to ResamplingMethod enum."""
+        from thyra.converters.spatialdata.base_spatialdata_converter import (
+            _normalize_resampling_config,
+        )
+        from thyra.resampling.types import ResamplingMethod
+
+        result = _normalize_resampling_config({"method": "nearest_neighbor"})
+        assert result.method == ResamplingMethod.NEAREST_NEIGHBOR
+
+    def test_dict_auto_method_becomes_none(self):
+        """method='auto' maps to None (use default)."""
+        from thyra.converters.spatialdata.base_spatialdata_converter import (
+            _normalize_resampling_config,
+        )
+
+        result = _normalize_resampling_config({"method": "auto"})
+        assert result.method is None
+
+    def test_dict_width_at_mz_maps_to_mass_width_da(self):
+        """Dict key width_at_mz maps to ResamplingConfig.mass_width_da."""
+        from thyra.converters.spatialdata.base_spatialdata_converter import (
+            _normalize_resampling_config,
+        )
+
+        result = _normalize_resampling_config({"width_at_mz": 0.01})
+        assert result.mass_width_da == 0.01
+
+    def test_dict_reference_mz_default(self):
+        """reference_mz defaults to 1000.0 when not supplied."""
+        from thyra.converters.spatialdata.base_spatialdata_converter import (
+            _normalize_resampling_config,
+        )
+
+        result = _normalize_resampling_config({})
+        assert result.reference_mz == 1000.0
+
+    def test_dict_reference_mz_custom(self):
+        """Explicit reference_mz is preserved."""
+        from thyra.converters.spatialdata.base_spatialdata_converter import (
+            _normalize_resampling_config,
+        )
+
+        result = _normalize_resampling_config({"reference_mz": 500.0})
+        assert result.reference_mz == 500.0
+
+    def test_dict_axis_type_string(self):
+        """axis_type string maps to AxisType enum."""
+        from thyra.converters.spatialdata.base_spatialdata_converter import (
+            _normalize_resampling_config,
+        )
+        from thyra.resampling.types import AxisType
+
+        result = _normalize_resampling_config({"axis_type": "orbitrap"})
+        assert result.axis_type == AxisType.ORBITRAP
+
+
+class TestCreateCoordinatesDataframe:
+    """Tests for the vectorized _create_coordinates_dataframe."""
+
+    def _make_converter(self, temp_dir, dimensions, pixel_size_um=10.0):
+        """Return an initialised SpatialDataConverter for the given dims."""
+        mock_reader = create_mock_reader_with_dimensions(dimensions)
+        output_path = temp_dir / "test_output.zarr"
+        converter = SpatialDataConverter(
+            mock_reader,
+            output_path,
+            dataset_id="ds",
+            pixel_size_um=pixel_size_um,
+        )
+        converter._dimensions = dimensions
+        return converter
+
+    def test_2d_pixel_count(self, temp_dir):
+        """2D grid produces n_x * n_y rows."""
+        converter = self._make_converter(temp_dir, (4, 3, 1))
+        df = converter._create_coordinates_dataframe()
+        assert len(df) == 12
+
+    def test_3d_pixel_count(self, temp_dir):
+        """3D volume produces n_x * n_y * n_z rows."""
+        converter = self._make_converter(temp_dir, (2, 3, 4))
+        df = converter._create_coordinates_dataframe()
+        assert len(df) == 24
+
+    def test_2d_x_range(self, temp_dir):
+        """x coordinates span [0, n_x-1]."""
+        converter = self._make_converter(temp_dir, (5, 4, 1))
+        df = converter._create_coordinates_dataframe()
+        assert df["x"].min() == 0
+        assert df["x"].max() == 4
+
+    def test_2d_y_range(self, temp_dir):
+        """y coordinates span [0, n_y-1]."""
+        converter = self._make_converter(temp_dir, (5, 4, 1))
+        df = converter._create_coordinates_dataframe()
+        assert df["y"].min() == 0
+        assert df["y"].max() == 3
+
+    def test_2d_z_all_zero(self, temp_dir):
+        """For a 2D grid (n_z=1) all z values are 0."""
+        converter = self._make_converter(temp_dir, (3, 3, 1))
+        df = converter._create_coordinates_dataframe()
+        assert (df["z"] == 0).all()
+
+    def test_3d_z_range(self, temp_dir):
+        """z coordinates span [0, n_z-1] for a 3D volume."""
+        converter = self._make_converter(temp_dir, (2, 2, 3))
+        df = converter._create_coordinates_dataframe()
+        assert df["z"].min() == 0
+        assert df["z"].max() == 2
+
+    def test_unique_coordinates(self, temp_dir):
+        """Every (x, y, z) combination is unique."""
+        converter = self._make_converter(temp_dir, (3, 4, 2))
+        df = converter._create_coordinates_dataframe()
+        tuples = list(zip(df["x"], df["y"], df["z"]))
+        assert len(tuples) == len(set(tuples))
+
+    def test_spatial_coords_scale_with_pixel_size(self, temp_dir):
+        """spatial_x / spatial_y are x / y multiplied by pixel_size_um."""
+        converter = self._make_converter(temp_dir, (3, 3, 1), pixel_size_um=25.0)
+        df = converter._create_coordinates_dataframe()
+        np.testing.assert_array_equal(df["spatial_x"], df["x"] * 25.0)
+        np.testing.assert_array_equal(df["spatial_y"], df["y"] * 25.0)
+
+    def test_instance_id_index(self, temp_dir):
+        """The dataframe index is named instance_id."""
+        converter = self._make_converter(temp_dir, (2, 2, 1))
+        df = converter._create_coordinates_dataframe()
+        assert df.index.name == "instance_id"
+
+    def test_region_number_without_region_map(self, temp_dir):
+        """Without a region_map, region_number is 1 for all pixels."""
+        converter = self._make_converter(temp_dir, (2, 2, 1))
+        df = converter._create_coordinates_dataframe()
+        assert (df["region_number"] == 1).all()
+
+    def test_region_number_with_region_map(self, temp_dir):
+        """With a region_map, pixels get the correct region number."""
+        converter = self._make_converter(temp_dir, (2, 2, 1))
+        converter._region_map = {(0, 0): 0, (1, 0): 0, (0, 1): 1, (1, 1): 1}
+        df = converter._create_coordinates_dataframe()
+        row_x0_y0 = df[(df["x"] == 0) & (df["y"] == 0)]
+        row_x0_y1 = df[(df["x"] == 0) & (df["y"] == 1)]
+        assert row_x0_y0["region_number"].iloc[0] == 0
+        assert row_x0_y1["region_number"].iloc[0] == 1
