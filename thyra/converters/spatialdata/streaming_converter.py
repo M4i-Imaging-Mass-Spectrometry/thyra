@@ -14,7 +14,6 @@ import logging
 import shutil
 import tempfile
 import warnings
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
@@ -25,7 +24,11 @@ from numpy.typing import NDArray
 from scipy import sparse
 from tqdm import tqdm
 
-from .base_spatialdata_converter import SPATIALDATA_AVAILABLE, BaseSpatialDataConverter
+from .base_spatialdata_converter import (
+    SPATIALDATA_AVAILABLE,
+    BaseSpatialDataConverter,
+    _suppress_upstream_warnings,
+)
 
 if SPATIALDATA_AVAILABLE:
     import geopandas as gpd
@@ -36,29 +39,6 @@ if SPATIALDATA_AVAILABLE:
     from spatialdata.transformations import Affine, Identity
 
 logger = logging.getLogger(__name__)
-
-
-@contextmanager
-def _suppress_upstream_warnings():
-    """Suppress known upstream warnings from ome_zarr, zarr v3, and spatialdata."""
-    with warnings.catch_warnings():
-        # ome_zarr passes deprecated kwargs to da.to_zarr()
-        warnings.filterwarnings(
-            "ignore",
-            message="Passing storage-related arguments",
-            category=FutureWarning,
-        )
-        # zarr v3 does not recognize parquet files inside the store
-        warnings.filterwarnings(
-            "ignore", message="Object at.*is not recognized", category=UserWarning
-        )
-        # zarr v3 consolidated metadata not in spec yet
-        warnings.filterwarnings(
-            "ignore",
-            message="Consolidated metadata is currently not",
-            category=UserWarning,
-        )
-        yield
 
 
 class StreamingSpatialDataConverter(BaseSpatialDataConverter):
