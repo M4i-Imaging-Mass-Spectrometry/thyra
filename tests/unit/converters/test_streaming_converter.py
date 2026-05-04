@@ -139,6 +139,47 @@ class MockMSIReader:
     not SPATIALDATA_AVAILABLE,
     reason="SpatialData dependencies not available",
 )
+def test_estimate_output_size_uses_real_bins_for_width_based_config():
+    """Regression for #87: when ``target_bins`` is None, the size estimator
+    must resolve the bin count via ``width_at_mz`` rather than fall back to a
+    hardcoded 10,000 placeholder. A 10k fallback would also pick the wrong
+    streaming method against ``PCS_SIZE_THRESHOLD_GB``.
+    """
+    reader = MockMSIReader(
+        dimensions=(50, 50, 1),
+        peaks_per_spectrum=200,
+        mass_range=(100.0, 1000.0),
+    )
+    # Width-based config: bins NOT specified, only width_at_mz.
+    # With CONSTANT axis (mock falls through to DefaultDetector) and
+    # 5 mDa bin width over 100-1000 m/z, the resolved axis is 180,000 bins.
+    config = {
+        "method": "tic_preserving",
+        "target_bins": None,
+        "width_at_mz": 0.005,
+        "reference_mz": 1000.0,
+    }
+    with tempfile.TemporaryDirectory() as tmpdir:
+        converter = StreamingSpatialDataConverter(
+            reader=reader,
+            output_path=Path(tmpdir) / "out.zarr",
+            use_csc="auto",
+            resampling_config=config,
+        )
+        size_gb = converter._estimate_output_size_gb()
+
+    # 2500 pixels x 180k bins x 4 bytes = ~1.68 GB. With the buggy 10k
+    # fallback it would have been ~0.09 GB.
+    assert size_gb > 1.0, (
+        f"Expected size estimate > 1 GB (resolved bins), got {size_gb:.3f} GB. "
+        "Likely regression of #87 (10k hardcoded fallback)."
+    )
+
+
+@pytest.mark.skipif(
+    not SPATIALDATA_AVAILABLE,
+    reason="SpatialData dependencies not available",
+)
 def test_converter_initialization():
     """Test that the converter initializes correctly."""
     reader = MockMSIReader()

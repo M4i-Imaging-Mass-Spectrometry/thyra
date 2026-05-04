@@ -561,38 +561,48 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # Default for other axis types: 5.0 mDa at m/z 1000
         return 0.005, 1000.0
 
-    def _build_resampled_mass_axis(self) -> None:
-        """Build resampled mass axis using physics-based generators."""
-        from ...resampling.common_axis import CommonAxisBuilder
+    def _resolve_resampling_plan(
+        self,
+    ) -> Tuple[float, float, Any, int]:
+        """Resolve mass range, axis type, and target bin count for resampling.
 
-        # Use cached essential metadata to avoid reader calls
-        # This should be called after _initialize_conversion() has loaded metadata
+        Single source of truth used by both ``_build_resampled_mass_axis`` and
+        the size estimator. Caches essential metadata lazily.
+
+        Returns:
+            (min_mz, max_mz, axis_type, target_bins)
+        """
         if self._essential_metadata_cached is None:
-            # Cache essential metadata for reuse
             self._essential_metadata_cached = self.reader.get_essential_metadata()
 
         mass_range = self._essential_metadata_cached.mass_range
         min_mz = mass_range[0] if self._min_mz is None else self._min_mz
         max_mz = mass_range[1] if self._max_mz is None else self._max_mz
 
-        # Check if manual axis type override was provided
         if hasattr(self, "_manual_axis_type") and self._manual_axis_type is not None:
             axis_type = self._manual_axis_type
-            logger.info(f"Using manually specified axis type: {axis_type}")
         else:
-            # Get metadata for axis type selection (minimize reader calls)
             metadata = self._get_cached_metadata_for_resampling()
             tree = ResamplingDecisionTree()
             axis_type = tree.select_axis_type(metadata)
-            logger.info(f"Auto-detected axis type: {axis_type}")
 
-        # Calculate bins based on width if specified OR if no bins were specified (default)
         if self._width_at_mz is not None or self._target_bins is None:
-            # Either user specified width OR using default (calculate from 5mDa@1000)
             target_bins = self._calculate_bins_from_width(min_mz, max_mz, axis_type)
         else:
-            # User explicitly specified bin count
             target_bins = self._target_bins
+
+        return min_mz, max_mz, axis_type, target_bins
+
+    def _build_resampled_mass_axis(self) -> None:
+        """Build resampled mass axis using physics-based generators."""
+        from ...resampling.common_axis import CommonAxisBuilder
+
+        min_mz, max_mz, axis_type, target_bins = self._resolve_resampling_plan()
+
+        if hasattr(self, "_manual_axis_type") and self._manual_axis_type is not None:
+            logger.info(f"Using manually specified axis type: {axis_type}")
+        else:
+            logger.info(f"Auto-detected axis type: {axis_type}")
 
         logger.info(
             f"Building resampled mass axis: {min_mz:.2f} - {max_mz:.2f} m/z, "
