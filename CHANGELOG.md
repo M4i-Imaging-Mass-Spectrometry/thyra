@@ -2,6 +2,47 @@
 
 <!-- version list -->
 
+## v1.21.0 (2026-05-04)
+
+### Bug Fixes
+
+- Bruker region selection, pixel size, and size estimator bugs
+  ([#92](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/92),
+  [`f4177d5`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f4177d5f13d9d01cc585f95f91d80ce73285d655))
+
+- Cast function_types dict keys to string for zarr serialization
+  ([#92](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/92),
+  [`f4177d5`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f4177d5f13d9d01cc585f95f91d80ce73285d655))
+
+- Compute size estimator bins from real resampling axis
+  ([#92](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/92),
+  [`f4177d5`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f4177d5f13d9d01cc585f95f91d80ce73285d655))
+
+- Drop empty pixel rows from obs when polygon != bbox
+  ([#92](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/92),
+  [`f4177d5`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f4177d5f13d9d01cc585f95f91d80ce73285d655))
+
+- Prefer .mis Raster over BeamScanSize for pixel size
+  ([#92](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/92),
+  [`f4177d5`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f4177d5f13d9d01cc585f95f91d80ce73285d655))
+
+### Features
+
+- Accept .mis Area Names on --region; surface mapping
+  ([#92](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/92),
+  [`f4177d5`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f4177d5f13d9d01cc585f95f91d80ce73285d655))
+
+### Testing
+
+- Attach handler directly to module logger for log capture
+  ([#92](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/92),
+  [`f4177d5`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f4177d5f13d9d01cc585f95f91d80ce73285d655))
+
+- Capture log via root logger to fix CI flake
+  ([#92](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/92),
+  [`f4177d5`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f4177d5f13d9d01cc585f95f91d80ce73285d655))
+
+
 ## v1.20.3 (2026-03-24)
 
 ### Performance Improvements
