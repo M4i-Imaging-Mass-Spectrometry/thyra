@@ -84,10 +84,11 @@ def test_log_region_mapping_emits_pairs(caplog: pytest.LogCaptureFixture) -> Non
         [(0, 10), (1, 20), (2, 30)],
         None,
     )
-    with caplog.at_level(
-        logging.INFO, logger="thyra.readers.bruker.timstof.timstof_reader"
-    ):
-        h._log_region_mapping()
+    caplog.set_level(logging.INFO)
+    # Ensure the module logger propagates so caplog's root handler can see it.
+    module_logger = logging.getLogger("thyra.readers.bruker.timstof.timstof_reader")
+    module_logger.propagate = True
+    h._log_region_mapping()
     text = caplog.text
     assert "Region mapping" in text
     assert "RegionNumber 0 -> Area '01'" in text
@@ -99,10 +100,11 @@ def test_log_region_mapping_skips_single_region(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     h = _harness(["only"], [(0, 100)], None)
-    with caplog.at_level(
-        logging.INFO, logger="thyra.readers.bruker.timstof.timstof_reader"
-    ):
-        h._log_region_mapping()
+    caplog.set_level(logging.INFO)
+    # Ensure the module logger propagates so caplog's root handler can see it.
+    module_logger = logging.getLogger("thyra.readers.bruker.timstof.timstof_reader")
+    module_logger.propagate = True
+    h._log_region_mapping()
     assert "Region mapping" not in caplog.text
 
 
@@ -110,8 +112,9 @@ def test_log_region_mapping_skips_when_no_areas(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     h = _harness([], [(0, 10), (1, 20)], None)
-    with caplog.at_level(
-        logging.INFO, logger="thyra.readers.bruker.timstof.timstof_reader"
-    ):
-        h._log_region_mapping()
+    caplog.set_level(logging.INFO)
+    # Ensure the module logger propagates so caplog's root handler can see it.
+    module_logger = logging.getLogger("thyra.readers.bruker.timstof.timstof_reader")
+    module_logger.propagate = True
+    h._log_region_mapping()
     assert "Region mapping" not in caplog.text
