@@ -1,11 +1,41 @@
 """Tests for Bruker region selection by name vs DB number (#89)."""
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from contextlib import contextmanager
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import pytest
 
 from thyra.readers.bruker.timstof.timstof_reader import BrukerReader
+
+_MODULE_LOGGER_NAME = "thyra.readers.bruker.timstof.timstof_reader"
+
+
+@contextmanager
+def _capture_module_logs() -> Iterator[List[str]]:
+    """Attach a handler directly to the reader's module logger.
+
+    pytest's ``caplog`` relies on log propagation to the root handler, which
+    can be silently disabled by other tests in the session. Attaching a
+    handler to the named logger directly captures records regardless of
+    propagation state, making this assertion robust to test order.
+    """
+    records: List[str] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record.getMessage())
+
+    module_logger = logging.getLogger(_MODULE_LOGGER_NAME)
+    handler = _Capture(level=logging.INFO)
+    previous_level = module_logger.level
+    module_logger.addHandler(handler)
+    module_logger.setLevel(logging.INFO)
+    try:
+        yield records
+    finally:
+        module_logger.removeHandler(handler)
+        module_logger.setLevel(previous_level)
 
 
 class _NameResolutionHarness:
@@ -78,43 +108,30 @@ def test_resolve_none_returns_none() -> None:
     assert h._resolve_requested_region() is None
 
 
-def test_log_region_mapping_emits_pairs(caplog: pytest.LogCaptureFixture) -> None:
+def test_log_region_mapping_emits_pairs() -> None:
     h = _harness(
         ["01", "02", "03"],
         [(0, 10), (1, 20), (2, 30)],
         None,
     )
-    caplog.set_level(logging.INFO)
-    # Ensure the module logger propagates so caplog's root handler can see it.
-    module_logger = logging.getLogger("thyra.readers.bruker.timstof.timstof_reader")
-    module_logger.propagate = True
-    h._log_region_mapping()
-    text = caplog.text
+    with _capture_module_logs() as records:
+        h._log_region_mapping()
+    text = "\n".join(records)
     assert "Region mapping" in text
     assert "RegionNumber 0 -> Area '01'" in text
     assert "RegionNumber 1 -> Area '02'" in text
     assert "RegionNumber 2 -> Area '03'" in text
 
 
-def test_log_region_mapping_skips_single_region(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+def test_log_region_mapping_skips_single_region() -> None:
     h = _harness(["only"], [(0, 100)], None)
-    caplog.set_level(logging.INFO)
-    # Ensure the module logger propagates so caplog's root handler can see it.
-    module_logger = logging.getLogger("thyra.readers.bruker.timstof.timstof_reader")
-    module_logger.propagate = True
-    h._log_region_mapping()
-    assert "Region mapping" not in caplog.text
+    with _capture_module_logs() as records:
+        h._log_region_mapping()
+    assert all("Region mapping" not in line for line in records)
 
 
-def test_log_region_mapping_skips_when_no_areas(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+def test_log_region_mapping_skips_when_no_areas() -> None:
     h = _harness([], [(0, 10), (1, 20)], None)
-    caplog.set_level(logging.INFO)
-    # Ensure the module logger propagates so caplog's root handler can see it.
-    module_logger = logging.getLogger("thyra.readers.bruker.timstof.timstof_reader")
-    module_logger.propagate = True
-    h._log_region_mapping()
-    assert "Region mapping" not in caplog.text
+    with _capture_module_logs() as records:
+        h._log_region_mapping()
+    assert all("Region mapping" not in line for line in records)
