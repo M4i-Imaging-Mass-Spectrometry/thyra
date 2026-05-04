@@ -8,9 +8,35 @@ for aligning MSI data with optical images.
 import logging
 import xml.etree.ElementTree as ET  # nosec B405 - parsing trusted local instrument files
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def find_mis_file_for_d_folder(data_path: Path) -> Optional[Path]:
+    """Locate the .mis file that corresponds to a Bruker .d folder.
+
+    A FlexImaging acquisition typically writes the .mis next to the .d folder,
+    using the same stem. Falls back to any .mis in the parent directory.
+
+    Args:
+        data_path: Path to the Bruker .d directory
+
+    Returns:
+        Path to the matching .mis file, or None if none found.
+    """
+    parent = data_path.parent
+    if not parent.exists():
+        return None
+
+    matching = parent / f"{data_path.stem}.mis"
+    if matching.exists():
+        return matching
+
+    candidates = list(parent.glob("*.mis"))
+    if candidates:
+        return candidates[0]
+    return None
 
 
 def parse_mis_file(path: Path) -> Dict[str, Any]:

@@ -160,6 +160,56 @@ class TestBrukerMetadataExtractor:
 
         assert essential.pixel_size is None
 
+    def test_pixel_size_prefers_mis_raster_over_beamscan(self, tmp_path):
+        """Regression for #90: when a .mis file is present alongside the .d
+        folder with a Raster value smaller than BeamScanSize (oversampled
+        acquisition), the extractor must report the Raster step as pixel size.
+        """
+        # BeamScanSize is 10 um but the actual raster step is 5 um (2x oversampling).
+        sample_data = {
+            "essential": (10.0, 10.0, 5.0, 0, 2, 0, 4, 400, 100.0, 1000.0),
+            "comprehensive": [],
+            "laser_info": (10.0, 10.0, 5.0),
+        }
+        mock_conn = self.create_mock_connection(sample_data)
+
+        d_folder = tmp_path / "sample_oversampled.d"
+        d_folder.mkdir()
+        mis = tmp_path / "sample_oversampled.mis"
+        mis.write_text(
+            "<?xml version='1.0'?><ImagingSequence>"
+            "<Raster>5,5</Raster></ImagingSequence>"
+        )
+
+        extractor = BrukerMetadataExtractor(mock_conn, d_folder)
+        essential = extractor.get_essential()
+
+        assert essential.pixel_size == (5.0, 5.0), (
+            f"Expected Raster (5.0, 5.0), got BeamScanSize {essential.pixel_size}. "
+            "Likely regression of #90."
+        )
+
+    def test_pixel_size_falls_back_to_beamscan_when_no_mis(self, tmp_path):
+        """When no .mis file is present, the extractor must fall back to
+        BeamScanSizeX/Y so behaviour stays unchanged for datasets that lack
+        FlexImaging metadata.
+        """
+        sample_data = {
+            "essential": (15.0, 15.0, 5.0, 0, 2, 0, 4, 400, 100.0, 1000.0),
+            "comprehensive": [],
+            "laser_info": (15.0, 15.0, 5.0),
+        }
+        mock_conn = self.create_mock_connection(sample_data)
+
+        d_folder = tmp_path / "sample_no_mis.d"
+        d_folder.mkdir()
+        # Intentionally no .mis file in tmp_path
+
+        extractor = BrukerMetadataExtractor(mock_conn, d_folder)
+        essential = extractor.get_essential()
+
+        assert essential.pixel_size == (15.0, 15.0)
+
     def test_extract_essential_3d_data(self):
         """Test essential metadata extraction with 3D data (SpotSize > 1)."""
         # Mock data with 3D coordinates
