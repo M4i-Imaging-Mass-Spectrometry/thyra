@@ -470,6 +470,40 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         else:
             return obj
 
+    def _drop_empty_pixels(self, adata: "AnnData") -> "AnnData":
+        """Drop obs rows whose intensity matrix row has no non-zero values.
+
+        Acquisitions are typically polygon-shaped, but the obs table is
+        indexed over the rectangular bounding box of the acquired
+        coordinates. That leaves "corner" pixels inside the bbox but
+        outside the actual polygon, which carry no spectra and inflate
+        the obs / shapes layouts (#88). For multi-region datasets these
+        empties also include inter-region gaps when the bbox is the
+        union of regions.
+
+        Filtering here makes obs reflect only positions where data was
+        actually acquired. The TIC image is unaffected (it is a dense
+        2D spatial image, not a per-pixel table). Visualisation code
+        that scatters obs values back onto a grid via obs[``x``]/[``y``]
+        works identically before and after.
+        """
+        if adata.n_obs == 0:
+            return adata
+        row_nnz = adata.X.getnnz(axis=1)
+        non_empty = np.asarray(row_nnz).flatten() > 0
+        if bool(non_empty.all()):
+            return adata
+        n_total = adata.n_obs
+        n_kept = int(non_empty.sum())
+        logger.info(
+            "Dropping %d empty pixel rows from obs (%d non-empty pixels "
+            "remain). These positions are inside the bounding box but "
+            "outside the acquisition polygon.",
+            n_total - n_kept,
+            n_kept,
+        )
+        return adata[non_empty, :].copy()
+
     def _calculate_bins_from_width(
         self, min_mz: float, max_mz: float, axis_type
     ) -> int:

@@ -305,6 +305,9 @@ class SpatialData2DConverter(BaseSpatialDataConverter):
                     var=data_structures["var_df"],
                 )
 
+                # Drop bbox positions that have no spectrum (#88)
+                adata = self._drop_empty_pixels(adata)
+
                 # Add average spectrum to .uns
                 adata.uns["average_spectrum"] = avg_spectrum
 
