@@ -123,11 +123,12 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         n_x, n_y, n_z = metadata.dimensions
         n_pixels = n_x * n_y * n_z
 
-        # Estimate number of m/z bins after resampling
+        # Estimate number of m/z bins after resampling using the same
+        # resolution path the axis builder will use, so the gate against
+        # PCS_SIZE_THRESHOLD_GB sees the real bin count.
         if self._resampling_config:
-            n_mz_bins = self._resampling_config.target_bins or 10000
+            _, _, _, n_mz_bins = self._resolve_resampling_plan()
         else:
-            # Estimate from mass range with ~0.01 Da resolution
             min_mass, max_mass = metadata.mass_range
             n_mz_bins = int((max_mass - min_mass) / 0.01)
 
@@ -835,6 +836,9 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                     obs=coords_df,
                     var=data_structures["var_df"],
                 )
+
+                # Drop bbox positions that have no spectrum (#88)
+                adata = self._drop_empty_pixels(adata)
 
                 # Add average spectrum to .uns
                 adata.uns["average_spectrum"] = avg_spectrum

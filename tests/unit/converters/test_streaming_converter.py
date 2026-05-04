@@ -139,6 +139,133 @@ class MockMSIReader:
     not SPATIALDATA_AVAILABLE,
     reason="SpatialData dependencies not available",
 )
+def test_drop_empty_pixels_removes_zero_rows_from_obs():
+    """Regression for #88: positions inside the bounding box but outside the
+    acquisition polygon (zero non-zeros in the matrix) must be dropped from
+    obs so the table reflects only actually-acquired pixels.
+    """
+    import pandas as pd
+    from anndata import AnnData
+    from scipy import sparse
+
+    reader = MockMSIReader(dimensions=(4, 4, 1))
+    with tempfile.TemporaryDirectory() as tmpdir:
+        converter = StreamingSpatialDataConverter(
+            reader=reader,
+            output_path=Path(tmpdir) / "out.zarr",
+        )
+
+    # 4x4 = 16 bbox pixels but only 10 have spectra (the rest sit in
+    # polygon-corner empty space).
+    n_rows = 16
+    n_cols = 100
+    rows_with_data = [0, 1, 3, 4, 5, 6, 9, 10, 13, 14]
+    indptr = np.zeros(n_rows + 1, dtype=np.int64)
+    indices = []
+    data = []
+    for r in range(n_rows):
+        if r in rows_with_data:
+            indices.extend([0, 1, 2])
+            data.extend([1.0, 2.0, 3.0])
+        indptr[r + 1] = len(indices)
+    matrix = sparse.csr_matrix(
+        (np.asarray(data), np.asarray(indices), indptr),
+        shape=(n_rows, n_cols),
+        dtype=np.float64,
+    )
+    obs = pd.DataFrame({"x": np.arange(n_rows), "y": np.zeros(n_rows, dtype=int)})
+    obs.index = obs.index.astype(str)
+    var = pd.DataFrame({"mz": np.linspace(100, 200, n_cols)})
+    var.index = var.index.astype(str)
+    adata = AnnData(X=matrix, obs=obs, var=var)
+
+    filtered = converter._drop_empty_pixels(adata)
+    assert filtered.n_obs == len(rows_with_data)
+    # All remaining rows still carry data
+    assert (np.asarray(filtered.X.getnnz(axis=1)).flatten() > 0).all()
+    # Coordinate columns are preserved (subset of original x indices)
+    assert filtered.obs["x"].tolist() == rows_with_data
+
+
+@pytest.mark.skipif(
+    not SPATIALDATA_AVAILABLE,
+    reason="SpatialData dependencies not available",
+)
+def test_drop_empty_pixels_no_op_when_all_rows_have_data():
+    """If every row has data (e.g. a fully-rectangular acquisition), the
+    helper must return the AnnData unchanged so we don't add overhead in
+    the common case.
+    """
+    import pandas as pd
+    from anndata import AnnData
+    from scipy import sparse
+
+    reader = MockMSIReader(dimensions=(2, 2, 1))
+    with tempfile.TemporaryDirectory() as tmpdir:
+        converter = StreamingSpatialDataConverter(
+            reader=reader,
+            output_path=Path(tmpdir) / "out.zarr",
+        )
+
+    n_rows = 4
+    matrix = sparse.csr_matrix(np.ones((n_rows, 5), dtype=np.float64))
+    obs = pd.DataFrame({"x": np.arange(n_rows)})
+    obs.index = obs.index.astype(str)
+    var = pd.DataFrame({"mz": np.linspace(100, 200, 5)})
+    var.index = var.index.astype(str)
+    adata = AnnData(X=matrix, obs=obs, var=var)
+
+    filtered = converter._drop_empty_pixels(adata)
+    assert filtered.n_obs == n_rows
+    # Same object returned (early-out path) when nothing is filtered
+    assert filtered is adata
+
+
+@pytest.mark.skipif(
+    not SPATIALDATA_AVAILABLE,
+    reason="SpatialData dependencies not available",
+)
+def test_estimate_output_size_uses_real_bins_for_width_based_config():
+    """Regression for #87: when ``target_bins`` is None, the size estimator
+    must resolve the bin count via ``width_at_mz`` rather than fall back to a
+    hardcoded 10,000 placeholder. A 10k fallback would also pick the wrong
+    streaming method against ``PCS_SIZE_THRESHOLD_GB``.
+    """
+    reader = MockMSIReader(
+        dimensions=(50, 50, 1),
+        peaks_per_spectrum=200,
+        mass_range=(100.0, 1000.0),
+    )
+    # Width-based config: bins NOT specified, only width_at_mz.
+    # With CONSTANT axis (mock falls through to DefaultDetector) and
+    # 5 mDa bin width over 100-1000 m/z, the resolved axis is 180,000 bins.
+    config = {
+        "method": "tic_preserving",
+        "target_bins": None,
+        "width_at_mz": 0.005,
+        "reference_mz": 1000.0,
+    }
+    with tempfile.TemporaryDirectory() as tmpdir:
+        converter = StreamingSpatialDataConverter(
+            reader=reader,
+            output_path=Path(tmpdir) / "out.zarr",
+            use_csc="auto",
+            resampling_config=config,
+        )
+        size_gb = converter._estimate_output_size_gb()
+
+    # 2500 pixels x 180k bins x 4 bytes = ~1.68 GB. With the buggy 10k
+    # fallback it would have been ~0.09 GB.
+    assert size_gb > 1.0, (
+        f"Expected size estimate > 1 GB (resolved bins), got {size_gb:.3f} GB. "
+        "Likely regression of #87 (10k hardcoded fallback)."
+    )
+
+
+@pytest.mark.skipif(
+    not SPATIALDATA_AVAILABLE,
+    reason="SpatialData dependencies not available",
+)
 def test_converter_initialization():
     """Test that the converter initializes correctly."""
     reader = MockMSIReader()

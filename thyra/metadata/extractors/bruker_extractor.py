@@ -204,7 +204,7 @@ class BrukerMetadataExtractor(MetadataExtractor):
             # Build final metadata objects
             dimensions = self._calculate_dimensions_from_coords(0.0, max_x, 0.0, max_y)
             coordinate_bounds = (0.0, float(max_x), 0.0, float(max_y))
-            pixel_size = (float(beam_x), float(beam_y)) if beam_x and beam_y else None
+            pixel_size = self._resolve_pixel_size_um(beam_x, beam_y)
             mass_range = (float(min_mass), float(max_mass))
             _, _, _, _, frame_count = frame_result
             n_spectra = int(frame_count) if frame_count else 0
@@ -242,6 +242,58 @@ class BrukerMetadataExtractor(MetadataExtractor):
             instrument_info=self._extract_instrument_info(),
             raw_metadata=self._extract_global_metadata(),
         )
+
+    def _resolve_pixel_size_um(
+        self,
+        beam_x: Optional[float],
+        beam_y: Optional[float],
+    ) -> Optional[Tuple[float, float]]:
+        """Resolve pixel pitch in micrometers, preferring .mis <Raster>.
+
+        The Bruker SDK exposes ``MaldiFrameLaserInfo.BeamScanSizeX/Y`` which is
+        the area each laser shot scans, not the raster step. When the
+        acquisition oversamples (BeamScanSize > Raster), these values disagree
+        and the canonical pixel pitch is the Raster step from the FlexImaging
+        ``.mis`` file. Prefer the Raster step; warn when it disagrees with
+        BeamScanSize. Fall back to BeamScanSize when no .mis is found.
+        """
+        from ...readers.bruker.mis_parser import (
+            find_mis_file_for_d_folder,
+            parse_mis_file,
+        )
+
+        raster: Optional[Tuple[float, float]] = None
+        mis_path = find_mis_file_for_d_folder(self.data_path)
+        if mis_path is not None:
+            mis_data = parse_mis_file(mis_path)
+            raster_xy = mis_data.get("raster")
+            if (
+                isinstance(raster_xy, list)
+                and len(raster_xy) == 2
+                and all(v > 0 for v in raster_xy)
+            ):
+                raster = (float(raster_xy[0]), float(raster_xy[1]))
+
+        beam: Optional[Tuple[float, float]] = (
+            (float(beam_x), float(beam_y)) if beam_x and beam_y else None
+        )
+
+        if raster is not None and beam is not None:
+            if raster != beam:
+                logger.warning(
+                    "Pixel size mismatch: .mis Raster=(%g, %g) um, "
+                    "BeamScanSize=(%g, %g) um. Acquisition is oversampled. "
+                    "Using Raster step. Override with --pixel-size if needed.",
+                    raster[0],
+                    raster[1],
+                    beam[0],
+                    beam[1],
+                )
+            return raster
+
+        if raster is not None:
+            return raster
+        return beam
 
     def _calculate_dimensions_from_coords(
         self,

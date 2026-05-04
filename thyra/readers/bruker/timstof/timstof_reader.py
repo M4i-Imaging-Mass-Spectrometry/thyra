@@ -10,7 +10,7 @@ import os
 import re
 import sqlite3
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
 import numpy as np
 from numpy.typing import NDArray
@@ -197,7 +197,7 @@ class BrukerReader(BrukerBaseMSIReader):
         memory_limit_gb: Optional[float] = None,
         batch_size: Optional[int] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None,
-        region: Optional[int] = None,
+        region: Optional[Union[int, str]] = None,
         **kwargs,
     ):
         """Initialize the Bruker reader.
@@ -213,9 +213,11 @@ class BrukerReader(BrukerBaseMSIReader):
             memory_limit_gb: Ignored, maintained for compatibility
             batch_size: Ignored, maintained for compatibility
             progress_callback: Optional callback for progress updates
-            region: Region number to process for multi-region datasets.
+            region: Region selector for multi-region datasets.
                 None (default): convert all regions (no filtering).
-                int: explicitly select that region number only.
+                int: select that DB RegionNumber (0-indexed).
+                str: select by FlexImaging .mis Area Name (e.g. "03"); falls back
+                to integer parse if the string doesn't match any area name.
             **kwargs: Additional arguments
         """
         super().__init__(data_path, **kwargs)
@@ -237,14 +239,16 @@ class BrukerReader(BrukerBaseMSIReader):
         self._initialize_sdk()
         self._initialize_database()
 
+        # Optical alignment data (parsed from .mis file + database).
+        # Loaded BEFORE _select_region so Area-Name -> RegionNumber resolution
+        # and startup logging have access to the area list.
+        self._mis_metadata: Dict[str, Any] = self._parse_mis_alignment()
+
         # Region detection and selection (must be after database init)
         self._region_info: List[Tuple[int, int]] = self._detect_regions()
         self._selected_region: Optional[int]
         self._region_frame_ids: Optional[set]
         self._selected_region, self._region_frame_ids = self._select_region()
-
-        # Optical alignment data (parsed from .mis file + database)
-        self._mis_metadata: Dict[str, Any] = self._parse_mis_alignment()
         self._positions: List[Dict[str, Any]] = self._build_positions_from_db()
         self._header: Dict[str, Any] = self._build_header_alignment()
 
@@ -533,6 +537,72 @@ class BrukerReader(BrukerBaseMSIReader):
         except sqlite3.OperationalError:
             return []
 
+    def _get_region_name_map(self) -> Dict[int, str]:
+        """Build a mapping from DB RegionNumber to .mis Area Name.
+
+        FlexImaging assigns ``MaldiFrameInfo.RegionNumber`` in the same order
+        the areas appear in the ``.mis`` document, so the mapping is purely
+        positional: the i-th area in the .mis file corresponds to
+        RegionNumber i.
+        """
+        areas = self._mis_metadata.get("areas") if self._mis_metadata else None
+        if not areas:
+            return {}
+        return {i: str(area.get("name", "")) for i, area in enumerate(areas)}
+
+    def _log_region_mapping(self) -> None:
+        """Log the DB RegionNumber to .mis Area Name mapping at startup.
+
+        Surfaces the (often confusing) fact that ``--region <N>`` selects by
+        DB index, not by the human-readable area label. Logged once per init.
+        """
+        if not self._region_info or len(self._region_info) <= 1:
+            return
+        name_map = self._get_region_name_map()
+        if not name_map:
+            return
+        lines = ["Region mapping (DB RegionNumber -> .mis Area Name):"]
+        for region_num, n_frames in self._region_info:
+            name = name_map.get(region_num, "?")
+            lines.append(
+                f"  RegionNumber {region_num} -> Area '{name}' ({n_frames:,} frames)"
+            )
+        logger.info("\n".join(lines))
+
+    def _resolve_requested_region(self) -> Optional[int]:
+        """Resolve ``self._requested_region`` to a DB RegionNumber int.
+
+        Accepts either an int (used as RegionNumber directly) or a string. A
+        string is first matched against ``.mis`` Area Names; if no name
+        matches it is parsed as an int.
+        """
+        if self._requested_region is None:
+            return None
+        if isinstance(self._requested_region, int):
+            return self._requested_region
+
+        request_str = str(self._requested_region)
+        name_map = self._get_region_name_map()
+        # Reverse map: name -> region_number (last writer wins; .mis names
+        # are conventionally unique).
+        name_to_num = {name: num for num, name in name_map.items() if name}
+        if request_str in name_to_num:
+            resolved = name_to_num[request_str]
+            logger.info(
+                f"Resolved --region '{request_str}' (Area Name) to "
+                f"RegionNumber {resolved}"
+            )
+            return resolved
+        try:
+            return int(request_str)
+        except ValueError:
+            available = ", ".join(sorted(name_to_num)) or "(none)"
+            raise ValueError(
+                f"--region '{request_str}' is not a recognised .mis Area "
+                f"Name and is not a valid integer. Available area names: "
+                f"{available}"
+            )
+
     def _select_region(self) -> Tuple[Optional[int], Optional[set]]:
         """Select region based on user request or convert all regions.
 
@@ -543,6 +613,10 @@ class BrukerReader(BrukerBaseMSIReader):
             Tuple of (selected_region_number, set_of_frame_ids).
             Both are None when no filtering is needed (default: all regions).
         """
+        # Always log the DB-number/name mapping for multi-region datasets so
+        # users can correlate the log with their .mis labels (#89).
+        self._log_region_mapping()
+
         if not self._region_info or len(self._region_info) <= 1:
             return (None, None)
 
@@ -550,27 +624,27 @@ class BrukerReader(BrukerBaseMSIReader):
         valid_regions = [r for r, _ in self._region_info]
         total_spectra = sum(n for _, n in self._region_info)
 
-        if self._requested_region is not None:
+        resolved = self._resolve_requested_region()
+        if resolved is not None:
             # User explicitly requested a specific region
-            if self._requested_region not in valid_regions:
+            if resolved not in valid_regions:
                 raise ValueError(
-                    f"Region {self._requested_region} not found. "
+                    f"Region {resolved} not found. "
                     f"Available regions: {valid_regions}"
                 )
-            selected = self._requested_region
 
             # Get frame IDs for selected region
             cursor = self.conn.cursor()
             cursor.execute(
                 "SELECT Frame FROM MaldiFrameInfo WHERE RegionNumber = ?",
-                (selected,),
+                (resolved,),
             )
             frame_ids = {int(row[0]) for row in cursor.fetchall()}
             logger.info(
-                f"Region {selected}: {len(frame_ids):,} frames selected "
+                f"Region {resolved}: {len(frame_ids):,} frames selected "
                 f"(use region=None to convert all regions)"
             )
-            return (selected, frame_ids)
+            return (resolved, frame_ids)
 
         # Default: convert all regions, no filtering
         logger.info(

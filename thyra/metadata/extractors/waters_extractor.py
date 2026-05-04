@@ -231,7 +231,7 @@ class WatersMetadataExtractor(MetadataExtractor):
             "n_functions": self._ml.get_number_of_functions(self._handle),
             "ms_functions": self._ms_functions,
             "function_types": {
-                f: ft.name if hasattr(ft, "name") else str(ft)
+                str(f): ft.name if hasattr(ft, "name") else str(ft)
                 for f, ft in self._function_types.items()
             },
             "pixel_count_x": self._imaging_grid.pixel_count_x,
