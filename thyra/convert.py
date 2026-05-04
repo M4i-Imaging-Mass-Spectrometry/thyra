@@ -256,7 +256,7 @@ def convert_msi(
     sparse_format: str = "csc",
     include_optical: bool = True,
     streaming: Union[bool, Literal["auto"]] = "auto",
-    region: Optional[int] = None,
+    region: Optional[Union[int, str]] = None,
     **kwargs: Any,
 ) -> bool:
     """Convert MSI data to the specified format.
@@ -284,7 +284,9 @@ def convert_msi(
             - True: Force streaming converter
             - False: Force standard converter
         region: For multi-region datasets (e.g. Bruker timsTOF),
-            select a specific region number. None (default)
+            select a specific region. Accepts an int (DB
+            RegionNumber) or a str (matched against .mis Area
+            Name, falling back to integer parse). None (default)
             converts all regions. Passed to the reader as
             reader_options["region"].
         **kwargs: Additional keyword arguments

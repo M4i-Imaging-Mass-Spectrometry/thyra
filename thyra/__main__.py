@@ -140,7 +140,8 @@ def _validate_input_path(input: Path) -> None:
         ibd_path = input.with_suffix(".ibd")
         if not ibd_path.exists():
             raise click.BadParameter(
-                f"ImzML file requires corresponding .ibd file, but not found: {ibd_path}"
+                "ImzML file requires corresponding .ibd file, but not "
+                f"found: {ibd_path}"
             )
     elif input.is_dir() and input.suffix.lower() == ".d":
         if (
@@ -148,7 +149,8 @@ def _validate_input_path(input: Path) -> None:
             and not (input / "analysis.tdf").exists()
         ):
             raise click.BadParameter(
-                f"Bruker .d directory requires analysis.tsf or analysis.tdf file: {input}"
+                "Bruker .d directory requires analysis.tsf or "
+                f"analysis.tdf file: {input}"
             )
 
 
@@ -394,9 +396,13 @@ class GroupedCommand(click.Command):
 )
 @click.option(
     "--region",
-    type=int,
+    type=str,
     default=None,
-    help="Convert specific region number (default: all regions)",
+    help=(
+        "Convert specific region (default: all regions). Accepts a "
+        ".mis Area Name (e.g. '03') or an integer DB RegionNumber. The "
+        "DB-to-name mapping is logged at startup for multi-region datasets."
+    ),
 )
 @click.option(
     "--resample/--no-resample",
@@ -537,7 +543,7 @@ def main(
     include_optical: bool,
     intensity_threshold: Optional[float],
     streaming: str,
-    region: Optional[int],
+    region: Optional[str],
 ):
     """Convert MSI data to SpatialData format.
 
