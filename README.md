@@ -70,6 +70,7 @@ Full documentation: **[M4i-Imaging-Mass-Spectrometry.github.io/thyra](https://M4
 - [Getting Started](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/getting-started/) -- installation, first conversion, common workflows
 - [CLI Reference](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/cli/) -- all command-line options
 - [Output Format](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/output-format/) -- understanding the zarr structure
+- [Coordinate Systems](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/coordinate-systems/) -- the ``"global"`` contract Thyra writes for downstream consumers
 - [API Reference](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/api/) -- Python API documentation
 
 ## Supported Formats

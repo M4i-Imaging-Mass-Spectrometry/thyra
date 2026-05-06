@@ -66,6 +66,7 @@ nav:
   - Getting Started: getting-started.md
   - CLI Reference: cli.md
   - Output Format: output-format.md
+  - Coordinate Systems: coordinate-systems.md
   - API Reference: api.md
   - Contributing: contributing.md
   - Code of Conduct: code-of-conduct.md

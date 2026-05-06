@@ -36,7 +36,7 @@ if SPATIALDATA_AVAILABLE:
     from anndata import AnnData
     from spatialdata import SpatialData
     from spatialdata.models import Image2DModel, ShapesModel, TableModel
-    from spatialdata.transformations import Affine, Identity
+    from spatialdata.transformations import Affine, Identity, Scale
 
 logger = logging.getLogger(__name__)
 
@@ -882,33 +882,29 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 # Add channel dimension to make it (c, y, x) as required by SpatialData
                 tic_values_with_channel = tic_values.reshape(1, y_size, x_size)
 
-                # When alignment exists, use raster indices + Affine transform
+                # The image array is intrinsically in raster pixel indices.
+                # The transform to "global" expresses the conversion from
+                # raster indices into the chosen global frame:
+                #   - With FlexImaging optical alignment: Affine into optical
+                #     image pixel space. global = optical pixels.
+                #   - Without alignment: Scale into physical micrometers, so
+                #     "global" agrees with the pixel-polygon shapes (which
+                #     are stored in um). global = micrometers.
+                tic_image = xr.DataArray(
+                    tic_values_with_channel,
+                    dims=("c", "y", "x"),
+                )
                 if self._tic_to_image_matrix is not None:
-                    tic_image = xr.DataArray(
-                        tic_values_with_channel,
-                        dims=("c", "y", "x"),
-                        coords={
-                            "c": [0],
-                            "y": np.arange(y_size),
-                            "x": np.arange(x_size),
-                        },
-                    )
                     transform = Affine(
                         self._tic_to_image_matrix,
                         input_axes=("x", "y"),
                         output_axes=("x", "y"),
                     )
                 else:
-                    tic_image = xr.DataArray(
-                        tic_values_with_channel,
-                        dims=("c", "y", "x"),
-                        coords={
-                            "c": [0],
-                            "y": np.arange(y_size) * self.pixel_size_um,
-                            "x": np.arange(x_size) * self.pixel_size_um,
-                        },
+                    transform = Scale(
+                        [self.pixel_size_um, self.pixel_size_um],
+                        axes=("x", "y"),
                     )
-                    transform = Identity()
 
                 # Create Image2DModel for the TIC image
                 data_structures["images"][f"{slice_id}_tic"] = Image2DModel.parse(
@@ -1570,33 +1566,29 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # Add channel dimension (c, y, x) as required by SpatialData
         tic_values_3d = tic_values.reshape(1, y_size, x_size)
 
-        # When alignment exists, use raster indices + Affine transform
+        # The image array is intrinsically in raster pixel indices.
+        # The transform to "global" expresses the conversion from raster
+        # indices into the chosen global frame:
+        #   - With FlexImaging optical alignment: Affine into optical
+        #     image pixel space. global = optical pixels.
+        #   - Without alignment: Scale into physical micrometers, so
+        #     "global" agrees with the pixel-polygon shapes (which are
+        #     stored in um). global = micrometers.
+        tic_xarray = xr.DataArray(
+            tic_values_3d,
+            dims=("c", "y", "x"),
+        )
         if self._tic_to_image_matrix is not None:
-            tic_xarray = xr.DataArray(
-                tic_values_3d,
-                dims=("c", "y", "x"),
-                coords={
-                    "c": [0],
-                    "y": np.arange(y_size),
-                    "x": np.arange(x_size),
-                },
-            )
             tic_transform = Affine(
                 self._tic_to_image_matrix,
                 input_axes=("x", "y"),
                 output_axes=("x", "y"),
             )
         else:
-            tic_xarray = xr.DataArray(
-                tic_values_3d,
-                dims=("c", "y", "x"),
-                coords={
-                    "c": [0],
-                    "y": np.arange(y_size) * self.pixel_size_um,
-                    "x": np.arange(x_size) * self.pixel_size_um,
-                },
+            tic_transform = Scale(
+                [self.pixel_size_um, self.pixel_size_um],
+                axes=("x", "y"),
             )
-            tic_transform = Identity()
 
         tic_image = Image2DModel.parse(
             tic_xarray,
