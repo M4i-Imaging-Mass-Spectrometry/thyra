@@ -1676,6 +1676,14 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             "conversion_timestamp": pd.Timestamp.now().isoformat(),
         }
 
+        # Structured coordinate-system contract describing what "global"
+        # actually means in this zarr. Consumers (e.g. Ousia, registration
+        # tooling) read this to know what unit "global" is in and how to
+        # convert to micrometers without guessing.
+        pixel_size_attrs["coordinate_systems"] = self._build_coordinate_systems_attr(
+            version
+        )
+
         # Add pixel size detection provenance if available
         if self._pixel_size_detection_info is not None:
             pixel_size_attrs["pixel_size_detection_info"] = dict(
@@ -1699,6 +1707,64 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         }
 
         return pixel_size_attrs
+
+    # Schema version for the structured `coordinate_systems` attr below.
+    # Bump when the schema shape changes in a way consumers need to notice.
+    _COORDINATE_SYSTEMS_SCHEMA_VERSION: int = 1
+
+    def _build_coordinate_systems_attr(self, thyra_version: str) -> Dict[str, Any]:
+        """Build the structured coordinate-system contract attr.
+
+        This describes what `"global"` means in the produced zarr so that
+        downstream consumers can render and convert without guessing.
+
+        Two variants are emitted depending on whether FlexImaging optical
+        alignment was applied during conversion:
+
+        - No alignment (`global = micrometer`): the TIC image carries a
+          `Scale(pixel_size_um)` and pixel-polygon shapes are stored in
+          micrometers with `Identity`. Both elements agree at `global`.
+          `pixel_size_um_x/y` are filled with the MSI grid pixel size,
+          since "global" is in physical micrometers and there is no
+          canonical raster image other than the MSI itself.
+
+        - With alignment (`global = pixel`): the TIC image carries an
+          `Affine` mapping raster indices to optical-image pixels and
+          shapes are stored directly in optical-image pixels with
+          `Identity`. The optical image is the canonical reference.
+          `pixel_size_um_x/y` are typically unknown at conversion time
+          (FlexImaging does not generally calibrate the optical photo
+          to um); leave them null and let the consumer fill in.
+
+        Returns:
+            Dict suitable for storing under
+            `zarr.attrs["coordinate_systems"]`.
+        """
+        if self._tic_to_image_matrix is not None:
+            unit = "pixel"
+            pixel_size_um_x: Optional[float] = None
+            pixel_size_um_y: Optional[float] = None
+            reference_element: Optional[str] = (
+                self._primary_optical_filename
+                if self._primary_optical_filename
+                else None
+            )
+        else:
+            unit = "micrometer"
+            pixel_size_um_x = float(self.pixel_size_um)
+            pixel_size_um_y = float(self.pixel_size_um)
+            reference_element = None
+
+        return {
+            "global": {
+                "unit": unit,
+                "pixel_size_um_x": pixel_size_um_x,
+                "pixel_size_um_y": pixel_size_um_y,
+                "reference_element": reference_element,
+                "convention_version": self._COORDINATE_SYSTEMS_SCHEMA_VERSION,
+                "produced_by": f"thyra/{thyra_version}",
+            }
+        }
 
     def _add_comprehensive_sections(
         self, pixel_size_attrs: Dict[str, Any], comprehensive_metadata_obj

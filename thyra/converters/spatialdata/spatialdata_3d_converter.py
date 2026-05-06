@@ -15,7 +15,7 @@ if SPATIALDATA_AVAILABLE:
     import xarray as xr
     from anndata import AnnData
     from spatialdata.models import Image2DModel, TableModel
-    from spatialdata.transformations import Identity
+    from spatialdata.transformations import Scale
 
 
 class SpatialData3DConverter(BaseSpatialDataConverter):
@@ -274,19 +274,18 @@ class SpatialData3DConverter(BaseSpatialDataConverter):
             # Add channel dimension for 3D image
             tic_values_with_channel = tic_values.reshape(1, z_size, y_size, x_size)
 
+            # The image is intrinsically in raster pixel indices.
+            # Scale into physical micrometers so "global" agrees with
+            # pixel-polygon shapes (which are stored in um).
             tic_image = xr.DataArray(
                 tic_values_with_channel,
                 dims=("c", "z", "y", "x"),
-                coords={
-                    "c": [0],  # Single channel
-                    "z": np.arange(z_size) * self.pixel_size_um,
-                    "y": np.arange(y_size) * self.pixel_size_um,
-                    "x": np.arange(x_size) * self.pixel_size_um,
-                },
             )
 
-            # Create Image model for 3D image
-            transform = Identity()
+            transform = Scale(
+                [self.pixel_size_um, self.pixel_size_um, self.pixel_size_um],
+                axes=("x", "y", "z"),
+            )
             try:
                 from spatialdata.models import Image3DModel
 
@@ -324,18 +323,17 @@ class SpatialData3DConverter(BaseSpatialDataConverter):
             # Add channel dimension to make it (c, y, x)
             tic_values_with_channel = tic_values.reshape(1, y_size, x_size)
 
+            # Image intrinsic CS is raster pixel indices; Scale into
+            # physical micrometers so "global" agrees with shapes (um).
             tic_image = xr.DataArray(
                 tic_values_with_channel,
                 dims=("c", "y", "x"),
-                coords={
-                    "c": [0],  # Single channel
-                    "y": np.arange(y_size) * self.pixel_size_um,
-                    "x": np.arange(x_size) * self.pixel_size_um,
-                },
             )
 
-            # Create Image2DModel for the TIC image
-            transform = Identity()
+            transform = Scale(
+                [self.pixel_size_um, self.pixel_size_um],
+                axes=("x", "y"),
+            )
             data_structures["images"][f"{self.dataset_id}_tic"] = Image2DModel.parse(
                 tic_image,
                 transformations={
