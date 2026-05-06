@@ -39,6 +39,14 @@ A converted dataset contains the following elements:
     The default `dataset_id` is `msi_dataset`, so typical keys look like
     `msi_dataset_z0`, `msi_dataset_z0_tic`, etc. Change it with `--dataset-id`.
 
+!!! info "Coordinate systems"
+    Every element above carries a transform to a single ``"global"``
+    coordinate system, and Thyra writes a self-describing
+    ``coordinate_systems`` metadata attr at the zarr top level so
+    consumers know what ``"global"`` is in (micrometers or pixels).
+    See [Coordinate Systems](coordinate-systems.md) for the contract
+    and how to read it.
+
 ---
 
 ## TIC Images
