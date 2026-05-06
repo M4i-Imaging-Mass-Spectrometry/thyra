@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v1.22.0 (2026-05-06)
+
+### Bug Fixes
+
+- Align global coordinate system across image and shapes
+  ([#93](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/93),
+  [`36938e7`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/36938e7facec910b9be095f60608931001f3e8a9))
+
+### Documentation
+
+- Document the coordinate-system contract
+  ([#93](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/93),
+  [`36938e7`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/36938e7facec910b9be095f60608931001f3e8a9))
+
+### Features
+
+- Unified "global" coordinate-system contract for produced zarrs
+  ([#93](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/93),
+  [`36938e7`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/36938e7facec910b9be095f60608931001f3e8a9))
+
+
 ## v1.21.0 (2026-05-04)
 
 ### Bug Fixes
