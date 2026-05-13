@@ -19,6 +19,7 @@ class BrukerMetadataExtractor(MetadataExtractor):
         data_path: Path,
         calibration_metadata: Optional[Dict[str, Any]] = None,
         region: Optional[int] = None,
+        skip_total_peaks: bool = False,
     ):
         """Initialize Bruker metadata extractor.
 
@@ -29,12 +30,20 @@ class BrukerMetadataExtractor(MetadataExtractor):
             region: Optional region number for multi-region datasets.
                 When set, coordinate bounds and frame counts are
                 computed from only this region's frames.
+            skip_total_peaks: If True, ``EssentialMetadata.total_peaks``
+                is reported as 0 without scanning the Frames table.
+                Used by metadata-only callers (preview_msi) to avoid
+                a SELECT SUM(NumPeaks) FROM Frames that is the slow
+                step against network-mounted .d folders.  The wizard
+                step 2 preview card does not display total_peaks, so
+                the missing value is safe.
         """
         super().__init__(conn)
         self.conn = conn
         self.data_path = data_path
         self.calibration_metadata = calibration_metadata
         self._region = region
+        self._skip_total_peaks = bool(skip_total_peaks)
 
     def _query_imaging_bounds(self, cursor):
         """Query imaging area bounds from GlobalMetadata."""
@@ -178,7 +187,10 @@ class BrukerMetadataExtractor(MetadataExtractor):
         bounds_data = self._query_imaging_bounds(cursor)
         laser_result = self._query_laser_info(cursor)
         frame_result = self._query_frame_info(cursor)
-        total_peaks = self._query_total_peaks(cursor)
+        if self._skip_total_peaks:
+            total_peaks = 0
+        else:
+            total_peaks = self._query_total_peaks(cursor)
 
         try:
             if not frame_result:
