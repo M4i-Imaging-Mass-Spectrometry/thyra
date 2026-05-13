@@ -198,6 +198,7 @@ class BrukerReader(BrukerBaseMSIReader):
         batch_size: Optional[int] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None,
         region: Optional[Union[int, str]] = None,
+        metadata_only: bool = False,
         **kwargs,
     ):
         """Initialize the Bruker reader.
@@ -218,12 +219,21 @@ class BrukerReader(BrukerBaseMSIReader):
                 int: select that DB RegionNumber (0-indexed).
                 str: select by FlexImaging .mis Area Name (e.g. "03"); falls back
                 to integer parse if the string doesn't match any area name.
+            metadata_only: If True, skip the Bruker SDK DLL load and the
+                NumPeaks preload pass.  All metadata reads (essential +
+                comprehensive) come from the sqlite database alone and
+                work without the vendor SDK.  Spectrum iteration is NOT
+                possible in this mode -- attempting to call iter_spectra
+                will raise SDKError because the SDK handle is None.
+                Used by ``thyra.preview_msi`` so the Import Wizard's
+                step 2 doesn't need the Bruker SDK to be installed.
             **kwargs: Additional arguments
         """
         super().__init__(data_path, **kwargs)
         self.use_recalibrated_state = use_recalibrated_state
         self.progress_callback = progress_callback
         self._requested_region = region
+        self._metadata_only = bool(metadata_only)
 
         # Validate and setup paths
         self._validate_data_path()
@@ -235,8 +245,18 @@ class BrukerReader(BrukerBaseMSIReader):
         # Initialize components
         self._setup_components(cache_coordinates, memory_limit_gb, batch_size)
 
-        # Initialize SDK and connections
-        self._initialize_sdk()
+        # Initialize SDK + connections.  In metadata-only mode we
+        # skip the SDK (no DLL load, no open_file) since all metadata
+        # reads come from the sqlite database.
+        if not self._metadata_only:
+            self._initialize_sdk()
+        else:
+            self.dll_manager = None
+            self.sdk = None
+            self.handle = None
+            logger.debug(
+                "BrukerReader: metadata_only=True, skipping SDK initialization"
+            )
         self._initialize_database()
 
         # Optical alignment data (parsed from .mis file + database).
@@ -258,13 +278,22 @@ class BrukerReader(BrukerBaseMSIReader):
         self._coordinate_offsets: Optional[Tuple[int, int, int]] = None
         self._closed: bool = False  # Track if resources have been closed
 
-        # Preload NumPeaks cache for buffer size optimization
-        self._num_peaks_cache: Dict[int, int] = self._preload_frame_num_peaks()
+        # Preload NumPeaks cache for buffer size optimization.  Skipped
+        # in metadata-only mode because the cache is only consulted
+        # during spectrum iteration, which metadata-only mode forbids.
+        if not self._metadata_only:
+            self._num_peaks_cache: Dict[int, int] = self._preload_frame_num_peaks()
+        else:
+            self._num_peaks_cache = {}
 
         cache_status = (
-            f"with {len(self._num_peaks_cache)} NumPeaks cached"
-            if self._num_peaks_cache
-            else "with fallback spectrum reading"
+            "metadata-only (SDK + NumPeaks skipped)"
+            if self._metadata_only
+            else (
+                f"with {len(self._num_peaks_cache)} NumPeaks cached"
+                if self._num_peaks_cache
+                else "with fallback spectrum reading"
+            )
         )
         logger.info(
             f"Initialized BrukerReader for {self.file_type.upper()} data at "

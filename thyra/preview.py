@@ -169,6 +169,12 @@ def _build_reader(path: Path) -> tuple[Optional[Any], Optional[str]]:
     ``None``, or ``reader`` is ``None`` and ``error`` carries the
     failure message.  Splitting this out keeps :func:`preview_msi`
     below the C901 complexity threshold.
+
+    We pass ``metadata_only=True`` as a kwarg so readers that have
+    expensive setup (notably :class:`BrukerReader`'s SDK DLL load)
+    can short-circuit it.  Readers that don't accept the kwarg
+    swallow it via their ``**kwargs`` -- :class:`BaseMSIReader` and
+    every concrete reader takes ``**kwargs``.
     """
     try:
         format_name = detect_format(path)
@@ -179,7 +185,7 @@ def _build_reader(path: Path) -> tuple[Optional[Any], Optional[str]]:
     except Exception as exc:  # pragma: no cover - defensive
         return None, f"No reader for format '{format_name}': {exc}"
     try:
-        return reader_class(path), None
+        return reader_class(path, metadata_only=True), None
     except Exception as exc:
         return None, f"Reader construction failed: {exc}"
 
