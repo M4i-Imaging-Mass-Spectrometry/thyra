@@ -21,6 +21,7 @@ except ImportError:
 from . import converters  # This triggers converter registrations  # noqa: F401
 from . import readers  # This triggers reader registrations  # noqa: F401
 from .convert import convert_msi
+from .preview import MsiPreview, preview_msi  # noqa: F401
 
 # Suppress remaining dependency warnings
 warnings.filterwarnings("ignore", category=FutureWarning, module="dask")
@@ -49,5 +50,7 @@ except ImportError:
 __all__ = [
     "__version__",
     "convert_msi",
+    "preview_msi",
+    "MsiPreview",
     "SpatialDataConverter",
 ]
