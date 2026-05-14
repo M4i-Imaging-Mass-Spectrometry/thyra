@@ -115,7 +115,14 @@ class DataCharacteristics:
         is_rapiflex = (
             format_specific.get("format") == "Rapiflex" if format_specific else False
         )
-        is_timstof = instrument_name == "timsTOF Maldi 2" if instrument_name else False
+        # Substring match: Bruker names timsTOF variants several ways
+        # ("timsTOF Maldi 2", "timsTOF Pro 2", "timsTOF fleX MALDI-2",
+        # "timsTOF SCP", etc.).  An exact match was missing every
+        # variant except the original Maldi 2, so the InstrumentDetectorChain
+        # silently fell through TimsTOFDetector and ended up at the
+        # DefaultDetector returning CONSTANT.  This match is permissive
+        # but case-sensitive on the brand "timsTOF" / "timstof".
+        is_timstof = bool(instrument_name and "timstof" in instrument_name.lower())
 
         return cls(
             spectrum_type=spectrum_type,

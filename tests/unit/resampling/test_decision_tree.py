@@ -50,6 +50,35 @@ class TestResamplingDecisionTree:
         axis_type = self.tree.select_axis_type(bruker_timstof_metadata)
         assert axis_type == AxisType.REFLECTOR_TOF
 
+    @pytest.mark.parametrize(
+        "instrument_name",
+        [
+            "timsTOF Maldi 2",
+            "timsTOF Pro 2",
+            "timsTOF fleX MALDI-2",
+            "timsTOF SCP",
+            "timsTOF HT",
+            "TIMSTOF",
+            "timstof flex",
+        ],
+    )
+    def test_timstof_variants_all_match(self, instrument_name):
+        """Every timsTOF variant Bruker ships should pick REFLECTOR_TOF.
+
+        Regression test for the original is_timstof exact-string-match
+        bug that caused every variant except the original Maldi 2 to
+        fall through to DefaultDetector and return CONSTANT.
+        """
+        metadata = {"GlobalMetadata": {"InstrumentName": instrument_name}}
+        assert self.tree.select_axis_type(metadata) == AxisType.REFLECTOR_TOF
+        assert self.tree.select_strategy(metadata) == ResamplingMethod.NEAREST_NEIGHBOR
+
+    def test_non_timstof_instrument_does_not_match(self):
+        """Names that just sound similar should not trigger TimsTOFDetector."""
+        metadata = {"GlobalMetadata": {"InstrumentName": "AB SCIEX TripleTOF 5600"}}
+        # Falls through to the DefaultDetector; that's CONSTANT.
+        assert self.tree.select_axis_type(metadata) == AxisType.CONSTANT
+
     def test_centroid_spectrum_detection(self):
         """Test centroid spectrum detection from essential_metadata."""
         metadata = {"essential_metadata": {"spectrum_type": SpectrumType.CENTROID}}
