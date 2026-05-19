@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v1.23.0 (2026-05-19)
+
+### Bug Fixes
+
+- **resampling**: Permissive timsTOF instrument-name match
+  ([`2a200db`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/2a200db4571d8d3cf3d59a6a0fa108ab8906e6b9))
+
+### Features
+
+- **preview**: Add thyra.preview_msi metadata-only shim
+  ([`2d06d1f`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/2d06d1f41e2cec63387b9e73c50e713a44c2fb68))
+
+- **preview**: Metadata-only mode for BrukerReader (skip SDK init)
+  ([`8f23ef7`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/8f23ef778f0084d4cf99f849a0f97120cd694f7e))
+
+### Performance Improvements
+
+- **preview**: Skip SUM(NumPeaks) scan in metadata_only mode
+  ([`ac3f214`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/ac3f21495c26c27138d185e7b08e30527b192f29))
+
+
 ## v1.22.0 (2026-05-06)
 
 ### Bug Fixes
