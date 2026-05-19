@@ -105,7 +105,7 @@ try:
     from shapely.geometry import box
     from spatialdata import SpatialData
     from spatialdata.models import Image2DModel, ShapesModel, TableModel
-    from spatialdata.transformations import Affine, Identity, Scale
+    from spatialdata.transformations import Affine, Identity, Scale, Sequence
 
     SPATIALDATA_AVAILABLE = True
 except (ImportError, NotImplementedError) as e:
@@ -126,6 +126,46 @@ except (ImportError, NotImplementedError) as e:
     gpd = None
 
 
+def _calc_optical_scale_factors(
+    smallest_dim: int,
+    min_coarsest_size: int = 1000,
+    factor: int = 2,
+) -> list:
+    """Pick pyramid scale factors for an optical image of given size.
+
+    Decides how many cumulative-doubling downsample levels to generate
+    based on the smallest spatial dimension; stops once the next
+    halving would drop the short side below ``min_coarsest_size``.
+
+    Mirrors :func:`spatialdata_io.readers._utils._utils.calc_scale_factors`
+    so wizard-converted microscopy and Thyra-bundled FlexImaging
+    brightfield share the same pyramid shape Xenium's own morphology
+    image gets out of spatialdata-io.
+
+    Returns a list of (cumulative) downsample factors to feed to
+    ``Image2DModel.parse(scale_factors=...)``.  Empty list means
+    "no pyramid needed" (image is already at or below the coarsest
+    target size).
+
+    Args:
+        smallest_dim: ``min(width, height)`` of the source image.
+        min_coarsest_size: stop adding levels once the next halving
+            would drop the short side below this value.  Default
+            ~1000 px matches spatialdata-io's convention and gives a
+            coarsest level that comfortably fits a single viewport
+            paint in a few hundred KB.
+        factor: downsample factor per step.  Default 2 (mip-map style).
+    """
+    if smallest_dim <= 0:
+        return []
+    factors: list = []
+    cur = smallest_dim / factor
+    while cur >= min_coarsest_size:
+        factors.append(factor)
+        cur /= factor
+    return factors
+
+
 class BaseSpatialDataConverter(BaseMSIConverter, ABC):
     """Base converter for MSI data to SpatialData format with shared functionality."""
 
@@ -141,6 +181,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         resampling_config: Optional[Union[Dict[str, Any], ResamplingConfig]] = None,
         sparse_format: str = "csc",
         include_optical: bool = True,
+        apply_optical_alignment: bool = True,
         **kwargs: Any,
     ) -> None:
         """Initialize the base SpatialData converter.
@@ -159,6 +200,15 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             sparse_format: Sparse matrix format ('csc' or 'csr', default: 'csc')
             include_optical: Whether to include optical images in output
                 (default: True)
+            apply_optical_alignment: If True (default) and the MSI source
+                has FlexImaging Area metadata, compute an alignment that
+                places MSI raster coordinates in optical-image pixel
+                space.  Set to False when a downstream tool owns the
+                alignment (e.g. Ousia's wizard registers MSI to Xenium
+                via EscDat and does not want Thyra to pre-rotate the
+                MSI into FlexImaging's optical frame).  When False the
+                MSI elements land in pure micrometer coordinates at
+                ``"global"``.
             **kwargs: Additional keyword arguments
 
         Raises:
@@ -209,6 +259,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         )
         self._sparse_format = sparse_format.lower()
         self._include_optical = include_optical
+        self._apply_optical_alignment = apply_optical_alignment
         if self._sparse_format not in ("csc", "csr"):
             raise ValueError(
                 f"sparse_format must be 'csc' or 'csr', got '{sparse_format}'"
@@ -747,9 +798,25 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             else:
                 self._region_info = [{"region_number": 1, "n_spectra": self._n_spectra}]
 
-            # Compute optical alignment for FlexImaging data
+            # Compute optical alignment for FlexImaging data when
+            # available.  The alignment data is computed REGARDLESS of
+            # apply_optical_alignment so it can be used to place the
+            # FlexImaging optical image relative to the MSI -- even
+            # when a downstream tool (e.g. Ousia's wizard) is doing
+            # its own MSI-to-target registration and does not want
+            # Thyra to pre-rotate the MSI itself.  The flag only
+            # controls whether MSI elements use the alignment; the
+            # optical image always uses it (if available) to land in
+            # the same "global" frame as the MSI.
             self._compute_optical_alignment()
             self._build_tic_to_image_affine()
+            if not self._apply_optical_alignment:
+                logger.info(
+                    "apply_optical_alignment=False: MSI elements will "
+                    "use micrometer coordinates; optical image (if "
+                    "any) will use inverse-alignment to land in the "
+                    "same micrometer frame."
+                )
 
             logger.info(f"Dataset dimensions: {self._dimensions}")
             logger.info(f"Coordinate bounds: {self._coordinate_bounds}")
@@ -1193,7 +1260,16 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # Track valid indices (for alignment mode where we skip empty positions)
         valid_indices: Optional[List[int]] = None
 
-        if self._alignment_result is not None:
+        # Use FlexImaging alignment for MSI shapes only when both
+        # data is available AND the caller hasn't opted out via
+        # apply_optical_alignment=False.  Opt-out leaves MSI in pure
+        # micrometer coordinates so a downstream alignment step
+        # (e.g. Ousia's EscDat registration) is the canonical mapping.
+        use_msi_alignment = (
+            self._apply_optical_alignment and self._alignment_result is not None
+        )
+
+        if use_msi_alignment:
             # Use optical alignment - transform raster coords to image pixels
             # Only create shapes for positions that have actual spectra (in pos_to_region)
             raster_x: NDArray[np.int_] = adata.obs["x"].values
@@ -1474,6 +1550,45 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         logger.info(f"  Scale to primary: ({scale_x:.4f}, {scale_y:.4f})")
         return Scale([scale_x, scale_y], axes=("x", "y"))
 
+    def _build_optical_to_um_transform(self) -> Any:
+        """Build an Affine mapping primary-optical pixels to MSI um.
+
+        Composes the inverse of the tic-to-image affine (so optical
+        pixel -> MSI raster index) with the MSI pixel size (so raster
+        index -> um).  Used only when ``apply_optical_alignment=False``
+        and FlexImaging metadata is available -- it places the optical
+        image into the same micrometer "global" frame as the MSI so a
+        downstream registration step (e.g. Ousia's EscDat wizard) can
+        map both elements together with a single composed affine.
+
+        The math: ``tic_to_image_matrix`` is a 3x3 affine encoding
+        ``image_pixel = scale * raster_index + offset``.  Inverting
+        and composing with scale-by-pixel-size yields::
+
+            um = pixel_size_um * inv(tic_to_image) @ optical_pixel
+
+        Returns an :class:`Affine` over ``(x, y)`` input + output axes.
+        Caller should not invoke when ``_tic_to_image_matrix`` is None.
+        """
+        if self._tic_to_image_matrix is None:
+            raise RuntimeError(
+                "_build_optical_to_um_transform called without "
+                "a tic_to_image_matrix; check call-site guard."
+            )
+        inv = np.linalg.inv(self._tic_to_image_matrix)
+        # Scale matrix: [[ps, 0, 0], [0, ps, 0], [0, 0, 1]]
+        ps = float(self.pixel_size_um)
+        scale_mat = np.array(
+            [[ps, 0.0, 0.0], [0.0, ps, 0.0], [0.0, 0.0, 1.0]],
+            dtype=np.float64,
+        )
+        matrix = scale_mat @ inv
+        return Affine(
+            matrix,
+            input_axes=("x", "y"),
+            output_axes=("x", "y"),
+        )
+
     def _load_single_optical_image(
         self, tiff_path: Path, data_structures: Dict[str, Any]
     ) -> None:
@@ -1529,29 +1644,92 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 },
             )
 
-            # Determine transform: primary image gets Identity,
-            # others get Scale to align with primary image space
+            # Determine transform.  Two cases:
+            #
+            # 1. apply_optical_alignment=True (default): "global" is
+            #    optical-image pixel space.  Primary image is Identity;
+            #    non-primary images Scale to match primary dims.
+            #
+            # 2. apply_optical_alignment=False (e.g. Ousia wizard):
+            #    "global" is MSI micrometer space.  Map the primary
+            #    image's pixel coordinates into MSI um using the inverse
+            #    of the tic-to-image affine, then scale by pixel_size_um.
+            #    This way the optical image lands alongside the MSI in
+            #    the same um frame and downstream registration steps
+            #    map both together.
             is_primary = self._is_primary_optical(tiff_path)
             if is_primary:
-                transform = Identity()
                 self._primary_optical_dims = (x_size, y_size)
-                logger.info(f"  Primary alignment image: {x_size}x{y_size}")
+                if (
+                    not self._apply_optical_alignment
+                    and self._tic_to_image_matrix is not None
+                ):
+                    transform = self._build_optical_to_um_transform()
+                    logger.info(
+                        f"  Primary image -> um via inverse alignment: "
+                        f"{x_size}x{y_size}"
+                    )
+                else:
+                    transform = Identity()
+                    logger.info(f"  Primary alignment image: {x_size}x{y_size}")
             elif self._primary_optical_dims is not None:
-                transform = self._compute_optical_scale_transform(x_size, y_size)
+                # Non-primary: first scale to match primary, then if
+                # we're in um-mode, chain through the same um affine.
+                base = self._compute_optical_scale_transform(x_size, y_size)
+                if (
+                    not self._apply_optical_alignment
+                    and self._tic_to_image_matrix is not None
+                ):
+                    transform = Sequence([base, self._build_optical_to_um_transform()])
+                else:
+                    transform = base
             else:
                 transform = Identity()
 
-            data_structures["images"][image_name] = Image2DModel.parse(
-                optical_image,
-                transformations={
+            # Multi-scale pyramid + chunked layout.
+            #
+            # Without scale_factors, Image2DModel.parse writes a
+            # single-scale image and any downstream viewer has to read
+            # full-resolution tiles at every zoom level.  For a typical
+            # FlexImaging brightfield (10k x 10k+ pixels) that is the
+            # difference between an instant first paint and a multi-
+            # second stall every time the user pans or zooms.
+            #
+            # We mirror what spatialdata-io's xenium reader does for
+            # its morphology images: scale_factors=[2, 2, 2, 2] gives
+            # the viewer five pyramid levels.  Here we adapt the level
+            # count to the image's smallest spatial dimension so tiny
+            # images don't waste levels and huge ones get enough to
+            # keep the coarsest level fast (< ~1000 px short side).
+            #
+            # chunks=(1, 4096, 4096) stores each channel as 4k x 4k
+            # blocks so a viewer's 512 x 512 tile read decompresses
+            # at most one chunk per request.
+            smallest = min(y_size, x_size)
+            scale_factors = _calc_optical_scale_factors(smallest)
+            parse_kwargs: Dict[str, Any] = {
+                "transformations": {
                     self.dataset_id: transform,
                     "global": transform,
                 },
+                "chunks": (1, 4096, 4096),
+            }
+            if scale_factors:
+                parse_kwargs["scale_factors"] = scale_factors
+
+            data_structures["images"][image_name] = Image2DModel.parse(
+                optical_image,
+                **parse_kwargs,
             )
 
+            pyramid_desc = (
+                f", {len(scale_factors)} pyramid level{'s' if len(scale_factors) != 1 else ''}"
+                if scale_factors
+                else " (no pyramid; image small enough)"
+            )
             logger.info(
                 f"Added optical image '{image_name}': {x_size}x{y_size} "
-                f"({n_channels} channel{'s' if n_channels > 1 else ''})"
+                f"({n_channels} channel{'s' if n_channels > 1 else ''}){pyramid_desc}"
             )
 
     def _generate_optical_image_name(self, tiff_path: Path) -> str:

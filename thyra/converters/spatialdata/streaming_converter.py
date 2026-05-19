@@ -36,7 +36,7 @@ if SPATIALDATA_AVAILABLE:
     from anndata import AnnData
     from spatialdata import SpatialData
     from spatialdata.models import Image2DModel, ShapesModel, TableModel
-    from spatialdata.transformations import Affine, Identity, Scale
+    from spatialdata.transformations import Affine, Identity, Scale, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -894,7 +894,16 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                     tic_values_with_channel,
                     dims=("c", "y", "x"),
                 )
-                if self._tic_to_image_matrix is not None:
+                # Gate the alignment-based affine on apply_optical_alignment.
+                # When the caller opts out (e.g. Ousia's wizard), MSI lands
+                # in pure micrometer coordinates so downstream registration
+                # is the canonical alignment step.  The optical image still
+                # uses the alignment internally to land in this same um
+                # frame (see _load_single_optical_image).
+                if (
+                    self._apply_optical_alignment
+                    and self._tic_to_image_matrix is not None
+                ):
                     transform = Affine(
                         self._tic_to_image_matrix,
                         input_axes=("x", "y"),
@@ -1578,7 +1587,10 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             tic_values_3d,
             dims=("c", "y", "x"),
         )
-        if self._tic_to_image_matrix is not None:
+        # Gate on apply_optical_alignment so the wizard's opt-out
+        # path leaves the MSI TIC in micrometers (and the optical
+        # image gets the inverse-alignment treatment elsewhere).
+        if self._apply_optical_alignment and self._tic_to_image_matrix is not None:
             tic_transform = Affine(
                 self._tic_to_image_matrix,
                 input_axes=("x", "y"),
@@ -1669,8 +1681,13 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
         valid_indices: Optional[List[int]] = None
 
+        # Gate on apply_optical_alignment so the wizard's opt-out
+        # path produces pixel-polygon shapes in pure micrometer
+        # coordinates (matching the MSI TIC image, which also takes
+        # the micrometer Scale branch above).
         if (
-            self._alignment_result is not None
+            self._apply_optical_alignment
+            and self._alignment_result is not None
             and self._alignment_result.region_mappings
         ):
             # Use optical alignment - transform raster coords to image pixels.
@@ -1787,17 +1804,45 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                         },
                     )
 
-                    # Determine transform: primary gets Identity,
-                    # others get Scale to align with primary
+                    # Determine transform.  Mirrors the logic in
+                    # base_spatialdata_converter._load_single_optical_image:
+                    #   - apply_optical_alignment=True (default):
+                    #       primary -> Identity, others -> Scale to primary.
+                    #   - apply_optical_alignment=False:
+                    #       primary -> Affine(optical_to_um), others ->
+                    #       Sequence(scale_to_primary, optical_to_um).
+                    # This way the wizard gets the FlexImaging optical
+                    # image landing in MSI-micrometer space at "global",
+                    # so the assemble step's EscDat affine maps both
+                    # MSI and optical into Xenium pixel space together.
                     is_primary = self._is_primary_optical(tiff_path)
                     if is_primary:
-                        transform = Identity()
                         self._primary_optical_dims = (x_size, y_size)
-                        logger.info(f"    Primary alignment image: {x_size}x{y_size}")
+                        if (
+                            not self._apply_optical_alignment
+                            and self._tic_to_image_matrix is not None
+                        ):
+                            transform = self._build_optical_to_um_transform()
+                            logger.info(
+                                f"    Primary image -> um via inverse "
+                                f"alignment: {x_size}x{y_size}"
+                            )
+                        else:
+                            transform = Identity()
+                            logger.info(
+                                f"    Primary alignment image: " f"{x_size}x{y_size}"
+                            )
                     elif self._primary_optical_dims is not None:
-                        transform = self._compute_optical_scale_transform(
-                            x_size, y_size
-                        )
+                        base = self._compute_optical_scale_transform(x_size, y_size)
+                        if (
+                            not self._apply_optical_alignment
+                            and self._tic_to_image_matrix is not None
+                        ):
+                            transform = Sequence(
+                                [base, self._build_optical_to_um_transform()]
+                            )
+                        else:
+                            transform = base
                     else:
                         transform = Identity()
 

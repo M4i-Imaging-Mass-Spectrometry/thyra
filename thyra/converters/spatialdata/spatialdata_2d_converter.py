@@ -362,7 +362,16 @@ class SpatialData2DConverter(BaseSpatialDataConverter):
                     tic_values_with_channel,
                     dims=("c", "y", "x"),
                 )
-                if self._tic_to_image_matrix is not None:
+                # Gate the alignment-based affine on apply_optical_alignment.
+                # When the caller opts out (e.g. Ousia's wizard), MSI lands
+                # in pure micrometer coordinates so downstream registration
+                # is the canonical alignment step.  The optical image (in
+                # _add_optical_images) still uses the alignment internally
+                # to land in this same um frame.
+                if (
+                    self._apply_optical_alignment
+                    and self._tic_to_image_matrix is not None
+                ):
                     transform = Affine(
                         self._tic_to_image_matrix,
                         input_axes=("x", "y"),

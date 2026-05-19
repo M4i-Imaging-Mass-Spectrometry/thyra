@@ -182,6 +182,7 @@ def _create_converter(
     resampling_config: Optional[Dict[str, Any]] = None,
     sparse_format: str = "csc",
     include_optical: bool = True,
+    apply_optical_alignment: bool = True,
     streaming: Union[bool, Literal["auto"]] = "auto",
     **kwargs: Any,
 ) -> Any:
@@ -195,6 +196,7 @@ def _create_converter(
         "resampling_config": resampling_config,
         "sparse_format": sparse_format,
         "include_optical": include_optical,
+        "apply_optical_alignment": apply_optical_alignment,
         **kwargs,
     }
 
@@ -255,6 +257,7 @@ def convert_msi(
     reader_options: Optional[Dict[str, Any]] = None,
     sparse_format: str = "csc",
     include_optical: bool = True,
+    apply_optical_alignment: bool = True,
     streaming: Union[bool, Literal["auto"]] = "auto",
     region: Optional[Union[int, str]] = None,
     **kwargs: Any,
@@ -279,6 +282,12 @@ def convert_msi(
               use active/recalibrated calibration (default True).
         sparse_format: Sparse matrix format ('csc' or 'csr')
         include_optical: Include optical images (default: True)
+        apply_optical_alignment: If True (default) and the MSI source
+            carries FlexImaging Area metadata, MSI elements are placed
+            in optical-image pixel space at ``"global"``.  Set to
+            False to keep MSI in pure micrometer coordinates -- needed
+            when a downstream tool (e.g. Ousia's wizard) computes its
+            own MSI-to-target registration.
         streaming: Use streaming converter for large datasets.
             - "auto": Auto-detect based on dataset size >10GB (default)
             - True: Force streaming converter
@@ -339,6 +348,7 @@ def convert_msi(
             resampling_config,
             sparse_format,
             include_optical=include_optical,
+            apply_optical_alignment=apply_optical_alignment,
             streaming=streaming,
             **kwargs,
         )
