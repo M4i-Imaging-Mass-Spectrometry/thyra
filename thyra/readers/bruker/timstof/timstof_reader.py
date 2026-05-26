@@ -41,6 +41,13 @@ from .sdk.sdk_functions import SDKFunctions
 
 logger = logging.getLogger(__name__)
 
+# Module-level dedupe for the "No calibration.sqlite" warning.  The
+# reader is constructed multiple times per dataset open (preview +
+# metadata + actual extraction); warning every time floods consumer
+# session logs.  Keys are the resolved data_path strings; entries
+# never get cleared (process lifetime is short enough).
+_NO_CALIBRATION_WARNED: set = set()
+
 
 def build_raw_mass_axis(
     spectra_iterator: Generator[
@@ -384,7 +391,14 @@ class BrukerReader(BrukerBaseMSIReader):
         cal_file = self.data_path / "calibration.sqlite"
 
         if not cal_file.exists():
-            logger.warning(f"No calibration.sqlite found in {self.data_path}")
+            # Dedupe: this reader is instantiated multiple times per
+            # dataset open (preview + metadata extraction + actual
+            # read), so warning every time floods consumer logs.
+            # Warn once per unique data_path per process.
+            key = str(self.data_path)
+            if key not in _NO_CALIBRATION_WARNED:
+                _NO_CALIBRATION_WARNED.add(key)
+                logger.warning(f"No calibration.sqlite found in {self.data_path}")
             return None
 
         try:
