@@ -56,7 +56,10 @@ packages = [{include = "thyra"}]
 [tool.poetry.dependencies]
 python = ">=3.11, <3.14"
 
-dask = ">=2023.0.0"
+# Upper bound: dask >= 2025.12 forwards `zarr_format` kwarg from ome_zarr's
+# da.to_zarr() into zarr's Group.create_array(), which doesn't accept it.
+# Breaks SpatialData writes. Re-evaluate when upstream ships a fix.
+dask = ">=2023.0.0,<2025.12"
 geopandas = ">=0.9.0"
 lxml = ">=4.6.0"
 numpy = ">=2.0.0"

@@ -1,4 +1,6 @@
-# Thyra
+<p align="center">
+  <img src="docs/assets/thyra-logotype.png" alt="Thyra" width="420">
+</p>
 
 [![Tests](https://img.shields.io/github/actions/workflow/status/M4i-Imaging-Mass-Spectrometry/thyra/tests.yml?branch=main&logo=github)](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/actions/workflows/tests.yml)
 [![PyPI](https://img.shields.io/pypi/v/thyra?logo=pypi&logoColor=white)](https://pypi.org/project/thyra/)
