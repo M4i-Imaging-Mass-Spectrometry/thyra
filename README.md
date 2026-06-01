@@ -119,3 +119,10 @@ MIT -- see [LICENSE](LICENSE).
 - Built with [SpatialData](https://spatialdata.scverse.org/) ecosystem
 - Powered by [Zarr](https://zarr.readthedocs.io/) for efficient storage
 - Uses [pyimzML](https://github.com/alexandrovteam/pyimzML) for ImzML parsing
+
+### Visual identity
+
+Logomark and logotype designed by **Nepsis Scriptorium**.
+
+[![Instagram @nepsis.scriptorium](https://img.shields.io/badge/Instagram-%40nepsis.scriptorium-E4405F?logo=instagram&logoColor=white)](https://www.instagram.com/nepsis.scriptorium/)
+[![Email nepsisscriptorium@gmail.com](https://img.shields.io/badge/Email-nepsisscriptorium%40gmail.com-EA4335?logo=gmail&logoColor=white)](mailto:nepsisscriptorium@gmail.com)

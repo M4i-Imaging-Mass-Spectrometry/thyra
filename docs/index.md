@@ -1,4 +1,6 @@
-# Thyra
+<p align="center">
+  <img src="assets/thyra-logotype.png" alt="Thyra" width="420">
+</p>
 
 [![PyPI](https://img.shields.io/pypi/v/thyra?logo=pypi&logoColor=white)](https://pypi.org/project/thyra/)
 [![Tests](https://img.shields.io/github/actions/workflow/status/M4i-Imaging-Mass-Spectrometry/thyra/tests.yml?branch=main&logo=github)](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/actions/workflows/tests.yml)
@@ -108,3 +110,20 @@ tic = np.asarray(sdata.images["msi_dataset_z0_tic"])[0]
 - **[CLI Reference](cli.md)** -- every command-line option explained
 - **[Output Format](output-format.md)** -- what the .zarr contains and how to use it
 - **[API Reference](api.md)** -- Python API documentation
+
+---
+
+## Acknowledgments
+
+### Visual identity
+
+The Thyra logomark and logotype were designed by **Nepsis Scriptorium**.
+
+[![Instagram @nepsis.scriptorium](https://img.shields.io/badge/Instagram-%40nepsis.scriptorium-E4405F?logo=instagram&logoColor=white)](https://www.instagram.com/nepsis.scriptorium/)
+[![Email nepsisscriptorium@gmail.com](https://img.shields.io/badge/Email-nepsisscriptorium%40gmail.com-EA4335?logo=gmail&logoColor=white)](mailto:nepsisscriptorium@gmail.com)
+
+### Built on
+
+- [SpatialData](https://spatialdata.scverse.org/) ecosystem
+- [Zarr](https://zarr.readthedocs.io/) for efficient storage
+- [pyimzML](https://github.com/alexandrovteam/pyimzML) for ImzML parsing
