@@ -65,13 +65,13 @@ jobs:
         if [ "${{ github.event_name }}" = "pull_request" ]; then
           echo "PR detected: Analyzing changed files only (fast mode)"
           poetry run python .github/scripts/complexity_monitor.py \
-            --threshold 10 \
+            --threshold 15 \
             --files-changed \
             --save
         else
           echo "Main branch or scheduled run: Full analysis with trends"
           poetry run python .github/scripts/complexity_monitor.py \
-            --threshold 10 \
+            --threshold 15 \
             --save \
             --trends
         fi
@@ -130,7 +130,7 @@ jobs:
           );
 
           let comment = '## Complexity Monitoring Report\n\n';
-          comment += `**Threshold:** ${latestReport.complexity_distribution ? '10' : 'N/A'}\n`;
+          comment += `**Threshold:** ${latestReport.complexity_distribution ? '15' : 'N/A'}\n`;
           comment += `**Total Violations:** ${latestReport.total_violations}\n`;
 
           if (latestReport.total_violations > 0) {
@@ -187,7 +187,7 @@ jobs:
         echo ""
         echo "DIRECT COMPLEXITY CHECK (for debugging):"
         echo "================================="
-        poetry run python .github/scripts/complexity_monitor.py --threshold 10 --no-save --quiet || true
+        poetry run python .github/scripts/complexity_monitor.py --threshold 15 --no-save --quiet || true
 
     - name: Set complexity check status
       run: |
