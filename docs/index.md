@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/thyra-logotype.png" alt="Thyra" width="420">
+  <img src="assets/thyra-logotype.svg" alt="Thyra" width="420">
 </p>
 
 [![PyPI](https://img.shields.io/pypi/v/thyra?logo=pypi&logoColor=white)](https://pypi.org/project/thyra/)

@@ -7,8 +7,8 @@ repo_name: M4i-Imaging-Mass-Spectrometry/thyra
 theme:
   name: material
   font: false  # Use brand fonts from extra.css instead of Google Fonts
-  logo: assets/thyra-logomark.png
-  favicon: assets/favicon.png
+  logo: assets/thyra-logomark.svg
+  favicon: assets/favicon.svg
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
