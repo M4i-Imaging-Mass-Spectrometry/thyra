@@ -56,10 +56,12 @@ packages = [{include = "thyra"}]
 [tool.poetry.dependencies]
 python = ">=3.11, <3.14"
 
-# Upper bound: dask >= 2025.12 forwards `zarr_format` kwarg from ome_zarr's
-# da.to_zarr() into zarr's Group.create_array(), which doesn't accept it.
-# Breaks SpatialData writes. Re-evaluate when upstream ships a fix.
-dask = ">=2023.0.0,<2025.12"
+# Lower bound stops the resolver from picking pre-2025.12 dask where
+# old ome_zarr 0.12.2's zarr_format kwarg leaked through. ome_zarr
+# >=0.14 below fixes the leak at source; the actual upper bound on dask
+# is set transitively by whichever SpatialData version is installed
+# (0.7.3 wants <2026.1.2, main wants >=2026.3.0).
+dask = ">=2025.12.0"
 geopandas = ">=0.9.0"
 lxml = ">=4.6.0"
 numpy = ">=2.0.0"
@@ -68,6 +70,10 @@ pyimzML = ">=1.4.0"
 scipy = ">=1.7.0"
 Shapely = ">=2.0.0"
 spatialdata = ">=0.6.0"
+# Floor pulls the fix for the zarr_format/Group.create_array() bug that
+# bit ome_zarr 0.12.x with newer dask. Source-level fix beats the
+# previous dask version cap.
+ome-zarr = ">=0.14.0"
 tqdm = ">=4.50.0"
 zarr = ">=3.0.0"
 imagecodecs = ">=2024.1.1"  # For reading compressed TIFF optical images
@@ -118,7 +124,6 @@ markers = [
 addopts = "-v --tb=short -m \"not integration\""
 filterwarnings = [
     "ignore::DeprecationWarning:pkg_resources.*:",
-    "ignore::DeprecationWarning:xarray_schema.*:",
     "ignore::UserWarning:spatialdata.models.models:1053"
 ]
 
