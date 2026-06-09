@@ -21,7 +21,6 @@ os.environ["DASK_DATAFRAME__QUERY_PLANNING"] = "True"
 
 # Suppress dependency warnings at the earliest possible moment
 warnings.filterwarnings("ignore", category=FutureWarning, module="dask")
-warnings.filterwarnings("ignore", category=UserWarning, module="xarray_schema")
 warnings.filterwarnings(
     "ignore", message="pkg_resources is deprecated", category=UserWarning
 )

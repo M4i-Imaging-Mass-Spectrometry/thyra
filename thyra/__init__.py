@@ -27,7 +27,6 @@ from .preview import MsiPreview, preview_msi  # noqa: F401
 warnings.filterwarnings("ignore", category=FutureWarning, module="dask")
 warnings.filterwarnings("ignore", category=FutureWarning, module="spatialdata")
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="numba")
-warnings.filterwarnings("ignore", category=UserWarning, module="xarray_schema")
 warnings.filterwarnings(
     "ignore", message="pkg_resources is deprecated", category=UserWarning
 )
