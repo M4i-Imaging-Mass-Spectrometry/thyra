@@ -752,6 +752,39 @@ def test_custom_temp_directory():
         assert success, "Conversion with custom temp dir should succeed"
 
 
+def test_temp_storage_cleaned_on_conversion_failure(tmp_path, monkeypatch):
+    """Temp storage must be cleaned even when conversion errors mid-way.
+
+    Regression for a leak that accumulated 79.5 GiB of ``streaming_coo_*``
+    directories in the system temp on a user's box: cleanup was only
+    called on the COO success path, so any failure (OOM, downstream
+    Zarr write error) left the mkdtemp behind.  Cleanup now lives in
+    the ``convert()`` finally block.
+    """
+    reader = MockMSIReader(dimensions=(3, 3, 1), peaks_per_spectrum=50)
+    output_path = tmp_path / "test_cleanup.zarr"
+
+    converter = StreamingSpatialDataConverter(
+        reader=reader,
+        output_path=output_path,
+        dataset_id="cleanup_test",
+        use_csc=False,  # Force COO path so _setup_temp_storage runs.
+    )
+
+    # Force a failure AFTER _setup_temp_storage has created the dir.
+    def _boom(self):
+        raise RuntimeError("simulated COO build failure")
+
+    monkeypatch.setattr(StreamingSpatialDataConverter, "_stream_build_coo", _boom)
+
+    success = converter.convert()
+    assert not success, "Conversion should report failure"
+    assert converter._temp_path is None, (
+        "Temp storage path should be cleared after cleanup -- "
+        "otherwise the mkdtemp directory was leaked on the failure path."
+    )
+
+
 class MockMSIReaderWithOptical(MockMSIReader):
     """Mock reader that provides optical images."""
 
