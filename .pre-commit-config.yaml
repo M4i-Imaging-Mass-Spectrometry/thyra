@@ -47,7 +47,7 @@ repos:
           "--max-line-length=100",
           "--extend-ignore=E203,W503",  # E203: black compatibility, W503: line break before binary operator (conflicts with W504)
           "--per-file-ignores=__init__.py:F401,F403",  # Allow unused imports in __init__.py files only
-          "--max-complexity=10"
+          "--max-complexity=15"  # match the CI complexity gate (complexity-monitoring.yml, raised 10->15 in d8f1e42)
         ]
 
   # Type checking
