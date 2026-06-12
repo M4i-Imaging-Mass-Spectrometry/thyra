@@ -206,7 +206,6 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 data_structures = self._create_data_structures_from_coo(coo_result)
                 self._finalize_data(data_structures)
                 self._save_output(data_structures)
-                self._cleanup_temp_storage()
                 logger.info("Zero-copy COO conversion complete")
 
             return True
@@ -219,6 +218,16 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             return False
 
         finally:
+            # Temp cleanup must run on EVERY exit path: success, exception,
+            # and KeyboardInterrupt.  Previously it only fired on the COO
+            # success path, so any failure mid-COO (most commonly OOM or a
+            # downstream Zarr write error) leaked a ``streaming_coo_*``
+            # directory in the system temp -- 79.5 GiB accumulated on one
+            # user's box before manual sweep.  ``_cleanup_temp_storage``
+            # is idempotent (gated on ``_cleanup_temp`` + ``_temp_path``
+            # being set), so calling it from the PCS path where temp
+            # storage was never created is a no-op.
+            self._cleanup_temp_storage()
             self.reader.close()
 
     def _setup_temp_storage(self) -> None:
@@ -237,13 +246,20 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         self._zarr_store = zarr.open_group(str(zarr_path), mode="w")
 
     def _cleanup_temp_storage(self) -> None:
-        """Clean up temporary storage."""
+        """Clean up temporary storage.
+
+        Idempotent: safe to call from the convert() finally block even
+        when the conversion never reached _setup_temp_storage (e.g. PCS
+        path, or an early failure).  Clears _temp_path after rmtree so
+        a second call is a no-op rather than re-walking a stale path.
+        """
         if self._cleanup_temp and self._temp_path is not None:
             try:
                 shutil.rmtree(self._temp_path, ignore_errors=True)
                 logger.debug(f"Cleaned up temp storage: {self._temp_path}")
             except Exception as e:
                 logger.warning(f"Failed to cleanup temp storage: {e}")
+            self._temp_path = None
 
     def _stream_build_coo(self) -> Dict[str, Any]:
         """Stream-build CSR matrix using two-pass direct Zarr write.
