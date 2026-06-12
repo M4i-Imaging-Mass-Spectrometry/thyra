@@ -18,6 +18,7 @@ from ...core.base_reader import BaseMSIReader
 from ...metadata.types import ComprehensiveMetadata, EssentialMetadata
 from ...resampling import ResamplingDecisionTree, ResamplingMethod
 from ...resampling.types import ResamplingConfig
+from ._chunking import image_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -1712,7 +1713,9 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                     self.dataset_id: transform,
                     "global": transform,
                 },
-                "chunks": (1, 4096, 4096),
+                "chunks": image_chunks(
+                    2
+                ),  # (1, 4096, 4096); sharding seam, see _chunking
             }
             if scale_factors:
                 parse_kwargs["scale_factors"] = scale_factors
