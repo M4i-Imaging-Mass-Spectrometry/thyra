@@ -2,6 +2,29 @@
 
 <!-- version list -->
 
+## v1.25.0 (2026-06-12)
+
+### Bug Fixes
+
+- **streaming**: Clean up temp storage on every convert() exit path
+  ([#96](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/96),
+  [`c56f0bb`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/c56f0bbff491b704f64e907e93db49bd1a347a91))
+
+### Documentation
+
+- Credit Nepsis Scriptorium and place logotype on docs landing
+  ([`b6e629e`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/b6e629e890b9857c7b372982c0eaf244d1bef7e7))
+
+- Switch brand assets from PNG to SVG
+  ([`344e152`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/344e1524dafeb78e0cdea5c642173210b98d8b2b))
+
+### Features
+
+- **spatialdata**: Centralize image chunk policy as the sharding seam (foundation)
+  ([#95](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/95),
+  [`59eb93b`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/59eb93b8bacb2dd5f8bf9feabb25439ee9ea53dc))
+
+
 ## v1.24.0 (2026-06-01)
 
 
