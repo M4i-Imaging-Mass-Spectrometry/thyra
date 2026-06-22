@@ -36,7 +36,7 @@ if SPATIALDATA_AVAILABLE:
     from anndata import AnnData
     from spatialdata import SpatialData
     from spatialdata.models import Image2DModel, ShapesModel, TableModel
-    from spatialdata.transformations import Affine, Identity, Scale, Sequence
+    from spatialdata.transformations import Affine, Identity, Scale
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +205,8 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 coo_result = self._stream_build_coo()
                 data_structures = self._create_data_structures_from_coo(coo_result)
                 self._finalize_data(data_structures)
-                self._save_output(data_structures)
+                if not self._save_output(data_structures):
+                    raise RuntimeError("Failed to write SpatialData output (COO path)")
                 logger.info("Zero-copy COO conversion complete")
 
             return True
@@ -1638,43 +1639,62 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             },
         )
 
-        # === Write to existing store using SpatialData ===
-        # Open the store and add elements
-        try:
-            with _suppress_upstream_warnings():
-                # Also suppress table-annotating-missing-shapes warning (shapes
-                # are created and written immediately after this read).
-                warnings.filterwarnings(
-                    "ignore",
-                    message="The table is annotating.*which is not present",
-                    category=UserWarning,
-                )
-                sdata = SpatialData.read(str(self.output_path))
+        # === Write images and shapes via spatialdata's own element writer ===
+        #
+        # The CSC table is already hand-written to the Zarr store to keep
+        # memory bounded.  The TIC image, pixel shapes, and any optical
+        # images are small, so we let spatialdata write them through its
+        # normal element writer.  That guarantees the produced OME-NGFF
+        # metadata (``ome.version`` + ``multiscales``) matches whatever
+        # spatialdata version is installed, so ``spatialdata.read_zarr``
+        # round-trips on both the stock package and the Ousia fork.
+        #
+        # We deliberately do NOT call ``SpatialData.read(self.output_path)``
+        # first: re-reading the hand-written store coupled element writing
+        # to the hand-crafted store layout and -- combined with the
+        # swallow below -- previously let a half-written, unreadable image
+        # group pass as a successful conversion.  A fresh in-memory
+        # SpatialData pointed at the existing store writes only the named
+        # elements and leaves the hand-written table untouched.
+        #
+        # No try/except: any failure here propagates to convert(), which
+        # returns False.  A corrupt zarr must never be reported as success.
+        tic_name = f"{slice_id}_tic"
+        data_structures: Dict[str, Any] = {
+            "images": {tic_name: tic_image},
+            "shapes": {region_key: shapes},
+            "tables": {},
+        }
 
-                # Add TIC image
-                tic_name = f"{slice_id}_tic"
-                sdata.images[tic_name] = tic_image
+        # Load optical images through the COO converter's path so they get
+        # the same multi-scale pyramid + chunked layout and identical
+        # transforms.  Honours self._include_optical internally.
+        self._add_optical_images(data_structures)
 
-                # Add shapes
-                sdata.shapes[region_key] = shapes
+        with _suppress_upstream_warnings():
+            # This SpatialData intentionally carries no table (the table is
+            # already on disk), so suppress the "table is annotating ...
+            # which is not present" warning for the region it annotates.
+            warnings.filterwarnings(
+                "ignore",
+                message="The table is annotating.*which is not present",
+                category=UserWarning,
+            )
+            sdata = SpatialData(
+                images=data_structures["images"],
+                shapes=data_structures["shapes"],
+            )
+            sdata.path = Path(self.output_path)
+            element_names = list(data_structures["images"].keys()) + list(
+                data_structures["shapes"].keys()
+            )
+            sdata.write_element(element_names, overwrite=True)
 
-                # Write elements to disk
-                sdata.write_element(tic_name, overwrite=True)
-                sdata.write_element(region_key, overwrite=True)
-
-                logger.info(
-                    f"  Added TIC image '{tic_name}' ({x_size}x{y_size}) and "
-                    f"{n_rows:,} pixel shapes"
-                )
-
-                # Add optical images if available
-                self._add_optical_images_to_sdata(sdata, slice_id)
-
-        except Exception as e:
-            logger.warning(f"Failed to add TIC image and shapes: {e}")
-            import traceback
-
-            logger.debug(f"Traceback:\n{traceback.format_exc()}")
+        n_optical = len(data_structures["images"]) - 1
+        logger.info(
+            f"  Wrote TIC image '{tic_name}' ({x_size}x{y_size}), "
+            f"{n_rows:,} pixel shapes, and {n_optical} optical image(s)"
+        )
 
     def _create_streaming_pixel_shapes(
         self, n_rows: int, n_x: int, n_y: int
@@ -1757,126 +1777,3 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         else:
             instance_ids = [str(i) for i in range(n_rows)]
         return gpd.GeoDataFrame(geometry=geometries, index=instance_ids)
-
-    def _add_optical_images_to_sdata(self, sdata: "SpatialData", slice_id: str) -> None:
-        """Add optical images directly to SpatialData store.
-
-        The primary alignment image (from .mis <ImageFile>) gets an Identity
-        transform and is loaded first. Other images get a Scale transform
-        mapping their pixel coordinates to the primary image's space.
-
-        Args:
-            sdata: SpatialData object to add images to
-            slice_id: Slice identifier for transformations
-        """
-        if not self._include_optical:
-            return
-
-        optical_paths = self.reader.get_optical_image_paths()
-        if not optical_paths:
-            logger.debug("No optical images found")
-            return
-
-        import tifffile
-
-        logger.info(f"  Adding {len(optical_paths)} optical image(s)...")
-
-        # Load primary image first so we know its dimensions for scaling others
-        primary_paths = [p for p in optical_paths if self._is_primary_optical(p)]
-        other_paths = [p for p in optical_paths if not self._is_primary_optical(p)]
-
-        for tiff_path in primary_paths + other_paths:
-            try:
-                # Generate image name
-                image_name = self._generate_optical_image_name(tiff_path)
-
-                logger.info(f"    Loading: {tiff_path.name} as '{image_name}'")
-
-                # Read TIFF
-                with tifffile.TiffFile(tiff_path) as tif:
-                    img_data = tif.pages[0].asarray()
-
-                    # Convert to (c, y, x) format
-                    if img_data.ndim == 2:
-                        img_data = img_data[np.newaxis, :, :]
-                    elif img_data.ndim == 3:
-                        img_data = np.moveaxis(img_data, -1, 0)
-                    else:
-                        logger.warning(
-                            f"Unexpected dimensions {img_data.ndim} for {tiff_path.name}"
-                        )
-                        continue
-
-                    n_channels, y_size, x_size = img_data.shape
-
-                    # Create xarray DataArray
-                    optical_xarray = xr.DataArray(
-                        img_data,
-                        dims=("c", "y", "x"),
-                        coords={
-                            "c": list(range(n_channels)),
-                            "y": np.arange(y_size),
-                            "x": np.arange(x_size),
-                        },
-                    )
-
-                    # Determine transform.  Mirrors the logic in
-                    # base_spatialdata_converter._load_single_optical_image:
-                    #   - apply_optical_alignment=True (default):
-                    #       primary -> Identity, others -> Scale to primary.
-                    #   - apply_optical_alignment=False:
-                    #       primary -> Affine(optical_to_um), others ->
-                    #       Sequence(scale_to_primary, optical_to_um).
-                    # This way the wizard gets the FlexImaging optical
-                    # image landing in MSI-micrometer space at "global",
-                    # so the assemble step's EscDat affine maps both
-                    # MSI and optical into Xenium pixel space together.
-                    is_primary = self._is_primary_optical(tiff_path)
-                    if is_primary:
-                        self._primary_optical_dims = (x_size, y_size)
-                        if (
-                            not self._apply_optical_alignment
-                            and self._tic_to_image_matrix is not None
-                        ):
-                            transform = self._build_optical_to_um_transform()
-                            logger.info(
-                                f"    Primary image -> um via inverse "
-                                f"alignment: {x_size}x{y_size}"
-                            )
-                        else:
-                            transform = Identity()
-                            logger.info(
-                                f"    Primary alignment image: " f"{x_size}x{y_size}"
-                            )
-                    elif self._primary_optical_dims is not None:
-                        base = self._compute_optical_scale_transform(x_size, y_size)
-                        if (
-                            not self._apply_optical_alignment
-                            and self._tic_to_image_matrix is not None
-                        ):
-                            transform = Sequence(
-                                [base, self._build_optical_to_um_transform()]
-                            )
-                        else:
-                            transform = base
-                    else:
-                        transform = Identity()
-
-                    optical_image = Image2DModel.parse(
-                        optical_xarray,
-                        transformations={
-                            self.dataset_id: transform,
-                            "global": transform,
-                        },
-                    )
-
-                    # Add to SpatialData and write
-                    sdata.images[image_name] = optical_image
-                    sdata.write_element(image_name, overwrite=True)
-
-                    logger.info(
-                        f"    Added optical image ({x_size}x{y_size}, {n_channels}ch)"
-                    )
-
-            except Exception as e:
-                logger.warning(f"Failed to load optical image {tiff_path.name}: {e}")
