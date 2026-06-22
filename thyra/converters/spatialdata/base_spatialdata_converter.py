@@ -1762,6 +1762,40 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         return f"{self.dataset_id}_optical_{suffix}"
 
+    @staticmethod
+    def _coerce_table_strings_to_object(df: pd.DataFrame) -> None:
+        """Coerce pandas string-extension dtypes in ``df`` to NumPy ``object``.
+
+        Under pandas >= 3.0 (or with ``future.infer_string`` enabled) string
+        columns and string indices are backed by ``ArrowStringArray``
+        (``pandas.StringDtype``), for which anndata's Zarr writer has no
+        registered serialization method -- writing such a table raises
+        ``IORegistryError: No method registered for writing ArrowStringArray
+        into zarr.core.group.Group``. Converting these to ``object`` dtype
+        restores writeability without changing any values, and is a no-op on
+        pandas < 3.0 where the same columns are already ``object``.
+
+        Operates on an AnnData ``obs``/``var`` table in place. Categorical
+        columns whose categories are string-backed (e.g. the ``region`` column)
+        have their categories coerced to ``object`` while preserving codes.
+
+        Args:
+            df: An AnnData ``obs`` or ``var`` table to sanitize in place.
+        """
+        if isinstance(df.index.dtype, pd.StringDtype):
+            df.index = df.index.astype(object)
+
+        for column in df.columns:
+            dtype = df[column].dtype
+            if isinstance(dtype, pd.StringDtype):
+                df[column] = df[column].astype(object)
+            elif isinstance(dtype, pd.CategoricalDtype) and isinstance(
+                dtype.categories.dtype, pd.StringDtype
+            ):
+                df[column] = df[column].cat.rename_categories(
+                    dtype.categories.astype(object)
+                )
+
     def _save_output(self, data_structures: Dict[str, Any]) -> bool:
         """Save the data to SpatialData format.
 
@@ -1775,6 +1809,18 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             raise ImportError("SpatialData dependencies not available")
 
         try:
+            # Coerce pandas string-extension dtypes (ArrowStringArray under
+            # pandas >= 3.0 / future.infer_string) back to ``object`` so
+            # anndata's Zarr writer can serialize the table indices and string
+            # columns. No-op on pandas < 3.0 (already ``object``).
+            for table in data_structures["tables"].values():
+                obs = getattr(table, "obs", None)
+                if isinstance(obs, pd.DataFrame):
+                    self._coerce_table_strings_to_object(obs)
+                var = getattr(table, "var", None)
+                if isinstance(var, pd.DataFrame):
+                    self._coerce_table_strings_to_object(var)
+
             # Create SpatialData object with images included
             sdata = SpatialData(
                 tables=data_structures["tables"],
