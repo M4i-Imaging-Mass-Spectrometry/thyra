@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.25.2 (2026-06-22)
+
+### Bug Fixes
+
+- **convert**: Make auto-streaming threshold RAM-aware
+  ([#98](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/98),
+  [`4e82aa3`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/4e82aa3a890a211d585a7925723548ec4d392886))
+
+
 ## v1.25.1 (2026-06-22)
 
 ### Bug Fixes
