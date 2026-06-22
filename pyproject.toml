@@ -71,7 +71,14 @@ defusedxml = ">=0.7.1"  # Secure XML parsing for the Bruker Rapiflex reader
 geopandas = ">=0.9.0"
 lxml = ">=4.6.0"
 numpy = ">=2.0.0, <3"
-pandas = ">=2.0.0"
+# pandas 3.0 makes `future.infer_string` the default, which gives the table
+# indices and string columns a dtype the pinned anndata cannot serialize.
+# `BaseSpatialDataConverter._coerce_table_strings_to_object` handles that, so
+# the ceiling is NOT `<3`: capping there would strand users whose other
+# packages want pandas 3, for a defect we already fix. `<4` records the newest
+# major actually exercised -- the unit suite passes on 2.3.2 (the lockfile)
+# and on 3.0.5 with this dependency set.
+pandas = ">=2.0.0, <4"              # tested 2.3.2 and 3.0.5
 pyimzML = ">=1.4.0"
 scipy = ">=1.7.0"
 Shapely = ">=2.0.0"
@@ -83,6 +90,11 @@ ome-zarr = ">=0.14.0, <0.16"        # tested 0.15.0
 tqdm = ">=4.50.0"
 zarr = ">=3.0.0, <3.2"              # tested 3.1.3
 imagecodecs = ">=2024.1.1"  # For reading compressed TIFF optical images
+# Moving this ceiling is the removal trigger for the pandas 3 string-dtype
+# coercion in base_spatialdata_converter.py: anndata 0.12.19 carries its own
+# `pandas<3` cap, so bumping to a release with pandas 3 support (#2221,
+# milestone 0.14.0) both opens the pandas 3 door and makes that coercion dead
+# code. Delete it in the same change.
 anndata = ">=0.11.0, <0.13"         # tested 0.12.2
 psutil = ">=5.0.0"
 
