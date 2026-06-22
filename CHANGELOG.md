@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.25.1 (2026-06-22)
+
+### Bug Fixes
+
+- **deps**: Declare defusedxml as runtime dependency for Bruker reader
+  ([#97](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/97),
+  [`2bc4f86`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/2bc4f86d87ff1d32c7c0f735f1826be511cc0b6b))
+
+
 ## v1.25.0 (2026-06-12)
 
 ### Bug Fixes
