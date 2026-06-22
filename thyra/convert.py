@@ -1,5 +1,6 @@
 # thyra/convert.py
 import logging
+import os
 import traceback
 import warnings
 from pathlib import Path
@@ -145,6 +146,44 @@ def _determine_pixel_size(
     return final_pixel_size, PixelSizeSource.AUTO_DETECTED, pixel_size_detection_info
 
 
+# Auto-streaming budget. The standard converter pre-allocates the whole
+# dataset's sparse matrix up front, so once the estimated footprint would
+# claim a meaningful share of RAM we switch to the streaming converter
+# (which writes CSR straight to Zarr without holding the matrix in RAM).
+# Budget = min(absolute cap, fraction of *currently available* RAM): a
+# 16 GB laptop streams sooner than a 256 GB workstation, but neither lets
+# the in-memory build run away. The old fixed 10 GB threshold let multi-GB
+# mid-size datasets take the in-memory path on every machine.
+_STREAMING_ABS_CAP_GB = 4.0
+_STREAMING_RAM_FRACTION = 0.5
+
+
+def _streaming_memory_budget_gb() -> float:
+    """Footprint threshold (GB) above which auto-mode uses streaming.
+
+    ``min(_STREAMING_ABS_CAP_GB, _STREAMING_RAM_FRACTION * available_RAM)``.
+    Override the absolute cap with the ``THYRA_STREAMING_MAX_GB`` env var.
+    Falls back to the cap if psutil/RAM info is unavailable.
+    """
+    cap_gb = _STREAMING_ABS_CAP_GB
+    env = os.environ.get("THYRA_STREAMING_MAX_GB")
+    if env:
+        try:
+            cap_gb = float(env)
+        except ValueError:
+            logger.warning(
+                "Invalid THYRA_STREAMING_MAX_GB=%r; using %.1f GB", env, cap_gb
+            )
+    try:
+        import psutil
+
+        available_gb = float(psutil.virtual_memory().available) / (1024**3)
+        return min(cap_gb, _STREAMING_RAM_FRACTION * available_gb)
+    except Exception as e:  # pragma: no cover - psutil edge cases
+        logger.debug(f"Could not read RAM for streaming budget: {e}")
+        return cap_gb
+
+
 def _should_use_streaming(streaming: Union[bool, Literal["auto"]], reader: Any) -> bool:
     """Determine if streaming converter should be used."""
     if streaming is True:
@@ -152,17 +191,21 @@ def _should_use_streaming(streaming: Union[bool, Literal["auto"]], reader: Any) 
     if streaming != "auto":
         return False
 
-    # Auto-detect based on estimated dataset size (>10GB)
+    # Auto-detect: stream when the estimated in-memory footprint exceeds
+    # the RAM-aware budget (see _streaming_memory_budget_gb).
     try:
         essential_meta = reader.get_essential_metadata()
         dims = essential_meta.dimensions
         n_pixels = dims[0] * dims[1] * dims[2]
-        # Rough estimate: assume average 10k peaks per spectrum, 8 bytes each
+        # Conservative proxy for the standard converter's peak footprint:
+        # ~10k non-zeros/spectrum x 8 bytes. (Its COO arrays are ~2k
+        # peaks x 16 B/nnz plus a CSC copy, of the same order.)
         estimated_gb = (n_pixels * 10000 * 8) / (1024**3)
-        if estimated_gb > 10:
+        budget_gb = _streaming_memory_budget_gb()
+        if estimated_gb > budget_gb:
             logger.info(
-                f"Auto-detected large dataset (~{estimated_gb:.1f} GB), "
-                "using streaming converter"
+                f"Auto-detected large dataset (~{estimated_gb:.1f} GB est. "
+                f"peak > {budget_gb:.1f} GB budget), using streaming converter"
             )
             return True
     except Exception as e:
