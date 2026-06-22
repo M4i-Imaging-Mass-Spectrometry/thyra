@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.25.4 (2026-06-22)
+
+### Bug Fixes
+
+- **streaming**: Write PCS images via spatialdata and fail loudly on error
+  ([#100](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/100),
+  [`5347a76`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/5347a76746406efa9fd838b1e673a3c10a5a68ec))
+
+
 ## v1.25.3 (2026-06-22)
 
 ### Bug Fixes
