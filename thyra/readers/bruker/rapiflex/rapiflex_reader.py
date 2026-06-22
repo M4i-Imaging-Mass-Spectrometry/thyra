@@ -24,7 +24,18 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, Optional
 if TYPE_CHECKING:
     from xml.etree.ElementTree import Element  # nosec B405 - type hint only
 
-import defusedxml.ElementTree as ET
+try:
+    # Prefer defusedxml for secure parsing of instrument XML files.
+    import defusedxml.ElementTree as ET
+except ImportError:
+    # Fallback to the standard library so the reader still works when
+    # defusedxml is unavailable (mirrors imzml_extractor._get_xml_parser).
+    import xml.etree.ElementTree as ET  # nosec B405
+
+    logging.getLogger(__name__).warning(
+        "defusedxml not available, using xml.etree.ElementTree"
+    )
+
 import numpy as np
 from numpy.typing import NDArray
 from tqdm import tqdm
@@ -324,7 +335,9 @@ class RapiflexReader(BrukerBaseMSIReader):
         metadata: Dict[str, Any] = {}
 
         try:
-            tree = ET.parse(path)
+            tree = ET.parse(
+                path
+            )  # nosec B314 - defusedxml preferred; trusted local instrument file
             root = tree.getroot()
 
             self._extract_basic_elements(root, metadata)
