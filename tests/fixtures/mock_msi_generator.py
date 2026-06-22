@@ -1,10 +1,14 @@
-"""Generate mock MSI data for testing streaming SpatialData conversion.
+"""Generate mock MSI data for testing SpatialData conversion.
 
-This script creates synthetic MSI-like data without needing real datasets,
-making it easy to test and iterate on memory-efficient conversion approaches.
+This module provides a synthetic MSI reader so the converters can be
+exercised end-to-end without real datasets.  ``MockMSIReader`` implements
+the full :class:`thyra.core.base_reader.BaseMSIReader` interface (including
+``get_region_map``/``get_region_info``/``reset``/``close`` and the metadata
+extractor contract), so it is a drop-in stand-in for a real reader.
 
-Usage:
-    poetry run python mock_msi_generator.py [--size small|medium|large|huge]
+Run as a script for a quick streaming-conversion smoke test:
+
+    poetry run python tests/fixtures/mock_msi_generator.py [--size small|medium|large|huge]
 
 Sizes:
     small  : 100x100 pixels, ~10k spectra (quick test, <1s)
@@ -15,7 +19,7 @@ Sizes:
 The mock data simulates processed MSI data with:
 - Sparse spectra (typical ~50-200 peaks per pixel)
 - Realistic m/z range (100-2000 Da)
-- Gaussian peak shapes with noise
+- Peaks placed exactly on the common mass axis so they map without loss
 """
 
 import sys
@@ -23,9 +27,14 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Optional, Tuple
+from typing import Generator, List, Optional, Tuple
 
 import numpy as np
+from numpy.typing import NDArray
+
+from thyra.core.base_extractor import MetadataExtractor
+from thyra.core.base_reader import BaseMSIReader
+from thyra.metadata.types import ComprehensiveMetadata, EssentialMetadata
 
 
 @dataclass
@@ -43,6 +52,7 @@ class MockMSIConfig:
     noise_level: float = 0.1
     sparsity: float = 0.0  # Fraction of empty pixels (0-1)
     seed: Optional[int] = 42
+    pixel_size_um: float = 10.0
 
 
 PRESETS = {
@@ -53,17 +63,69 @@ PRESETS = {
 }
 
 
-class MockMSIReader:
+class _MockMetadataExtractor(MetadataExtractor):
+    """Metadata extractor backed by a :class:`MockMSIConfig`."""
+
+    def __init__(self, config: MockMSIConfig, n_spectra: int):
+        super().__init__(data_source=None)
+        self._config = config
+        self._n_spectra = n_spectra
+
+    def _extract_essential_impl(self) -> EssentialMetadata:
+        cfg = self._config
+        n_pixels = cfg.n_x * cfg.n_y * cfg.n_z
+        avg_peaks = sum(cfg.peaks_per_spectrum) // 2
+        return EssentialMetadata(
+            dimensions=(cfg.n_x, cfg.n_y, cfg.n_z),
+            coordinate_bounds=(
+                0.0,
+                float(cfg.n_x - 1),
+                0.0,
+                float(cfg.n_y - 1),
+            ),
+            mass_range=(cfg.mz_min, cfg.mz_max),
+            pixel_size=(cfg.pixel_size_um, cfg.pixel_size_um),
+            n_spectra=self._n_spectra,
+            total_peaks=self._n_spectra * avg_peaks,
+            estimated_memory_gb=n_pixels * 150 * 8 / (1024**3),
+            source_path="mock_msi_data",
+            spectrum_type="processed",
+        )
+
+    def _extract_comprehensive_impl(self) -> ComprehensiveMetadata:
+        return ComprehensiveMetadata(
+            essential=self._extract_essential_impl(),
+            format_specific={"format": "mock"},
+            acquisition_params={},
+            instrument_info={"instrument": "mock"},
+            raw_metadata={"source": "mock"},
+        )
+
+
+class MockMSIReader(BaseMSIReader):
     """Mock MSI reader that generates synthetic data on-the-fly.
 
-    This reader mimics the interface of ImzMLReader but generates
-    random MSI-like data, useful for testing conversion pipelines
-    without needing real data files.
+    Implements the full :class:`BaseMSIReader` interface so it can be passed
+    directly to the converters.  Generated peaks sit exactly on the common
+    mass axis, so they survive nearest-neighbour mapping and produce a
+    non-empty table (mirroring continuous-then-binned real data).
     """
 
-    def __init__(self, config: MockMSIConfig):
-        """Initialize the mock MSI reader with the given configuration."""
+    def __init__(
+        self,
+        config: MockMSIConfig,
+        optical_image_paths: Optional[List[Path]] = None,
+    ):
+        """Initialize the mock MSI reader.
+
+        Args:
+            config: Mock data generation configuration.
+            optical_image_paths: Optional list of TIFF paths to expose via
+                ``get_optical_image_paths`` for testing optical handling.
+        """
+        super().__init__(data_path=Path("mock_msi_data"))
         self.config = config
+        self._seed = config.seed
         self._rng = np.random.default_rng(config.seed)
 
         # Build common mass axis
@@ -72,141 +134,127 @@ class MockMSIReader:
         )
 
         # Simulate some "real" peaks that appear in multiple spectra
-        # These are like biomarker peaks
+        # (like biomarker peaks).
         n_common_peaks = 20
         self._common_peak_indices = self._rng.choice(
             config.n_mz_bins, size=n_common_peaks, replace=False
         )
 
-        # Pre-generate which pixels are empty (for sparse datasets)
+        # Pre-generate which pixels are empty (for sparse datasets).
         self._n_pixels = config.n_x * config.n_y * config.n_z
-        self._empty_pixels = set()
+        self._empty_pixels: set = set()
         if config.sparsity > 0:
             n_empty = int(self._n_pixels * config.sparsity)
             self._empty_pixels = set(
-                self._rng.choice(self._n_pixels, size=n_empty, replace=False)
+                self._rng.choice(self._n_pixels, size=n_empty, replace=False).tolist()
             )
 
-        # Mock data path for compatibility
-        self.data_path = Path("mock_msi_data")
+        self._optical_image_paths: List[Path] = list(optical_image_paths or [])
 
-        # Mock has_shared_mass_axis for continuous mode detection
-        self.has_shared_mass_axis = False  # Mock data is processed mode
+    @property
+    def _n_spectra(self) -> int:
+        return self._n_pixels - len(self._empty_pixels)
 
-    def get_essential_metadata(self):
-        """Return metadata matching the EssentialMetadata interface."""
+    def _create_metadata_extractor(self) -> MetadataExtractor:
+        """Create the mock metadata extractor."""
+        return _MockMetadataExtractor(self.config, self._n_spectra)
 
-        class MockMetadata:
-            """Mock metadata object for testing."""
+    @property
+    def has_shared_mass_axis(self) -> bool:
+        """Mock data is processed mode (no shared m/z axis)."""
+        return False
 
-            dimensions: Tuple[int, int, int]
-            n_spectra: int
-            mass_range: Tuple[float, float]
-            spectrum_type: str
-            pixel_size: Tuple[float, float]
-            coordinate_bounds: dict
-            estimated_memory_gb: float
+    def get_common_mass_axis(self) -> NDArray[np.float64]:
+        """Return the common mass axis."""
+        return self._common_mass_axis
 
-        meta = MockMetadata()
-        meta.dimensions = (self.config.n_x, self.config.n_y, self.config.n_z)
-        meta.n_spectra = self._n_pixels - len(self._empty_pixels)
-        meta.mass_range = (self.config.mz_min, self.config.mz_max)
-        meta.spectrum_type = "processed"
-        meta.pixel_size = (10.0, 10.0)  # (x, y) pixel size in um
-        meta.coordinate_bounds = {
-            "x": (0, self.config.n_x - 1),
-            "y": (0, self.config.n_y - 1),
-            "z": (0, self.config.n_z - 1),
-        }
-        meta.estimated_memory_gb = (
-            self._n_pixels * 150 * 8 / (1024**3)
-        )  # rough estimate
-        return meta
+    def get_optical_image_paths(self) -> List[Path]:
+        """Return configured optical image paths (empty by default)."""
+        return list(self._optical_image_paths)
 
-    def scan_mass_range(self):
-        """Scan mass range - returns min/max m/z."""
-        return self.config.mz_min, self.config.mz_max
+    def get_peak_counts_per_pixel(self) -> Optional[NDArray[np.int32]]:
+        """Return None to exercise the two-pass counting fallback."""
+        return None
 
-    def iter_spectra(
-        self, batch_size: int = 1000
-    ) -> Iterator[Tuple[Tuple[int, int, int], np.ndarray, np.ndarray]]:
+    def reset(self) -> None:
+        """Reset reader state for re-iteration.
+
+        Spectra are a pure function of pixel coordinates (see
+        ``_generate_spectrum``), so re-iteration is already reproducible and
+        this is effectively a no-op.  It exists to satisfy readers whose
+        two-pass converters call ``reset()`` between passes.
+        """
+        self._rng = np.random.default_rng(self._seed)
+
+    def iter_spectra(self, batch_size: Optional[int] = None) -> Generator[
+        Tuple[Tuple[int, int, int], NDArray[np.float64], NDArray[np.float64]],
+        None,
+        None,
+    ]:
         """Iterate through synthetic spectra.
 
         Yields:
-            Tuple of (coords, mz_values, intensities) for each pixel
+            Tuple of ``((x, y, z), mz_values, intensities)`` for each
+            non-empty pixel.
         """
         cfg = self.config
-
         for z in range(cfg.n_z):
             for y in range(cfg.n_y):
                 for x in range(cfg.n_x):
                     pixel_idx = z * (cfg.n_x * cfg.n_y) + y * cfg.n_x + x
-
-                    # Skip empty pixels
                     if pixel_idx in self._empty_pixels:
                         continue
-
-                    # Generate spectrum for this pixel
-                    mz_indices, intensities = self._generate_spectrum()
+                    mz_indices, intensities = self._generate_spectrum(pixel_idx)
                     mz_values = self._common_mass_axis[mz_indices]
-
                     yield (x, y, z), mz_values, intensities
 
-    def _generate_spectrum(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Generate a single synthetic spectrum."""
+    def _generate_spectrum(
+        self, pixel_idx: int
+    ) -> Tuple[NDArray[np.int32], NDArray[np.float64]]:
+        """Generate a single synthetic spectrum for a pixel.
+
+        Deterministic in ``pixel_idx``: the streaming PCS/COO paths iterate
+        the reader twice (count then write) and require the second pass to
+        reproduce the first exactly, so the spectrum must not depend on RNG
+        history or iteration order.
+        """
         cfg = self.config
+        base_seed = self._seed if self._seed is not None else 0
+        rng = np.random.default_rng([base_seed, pixel_idx])
 
-        # Random number of peaks
-        n_peaks = self._rng.integers(
-            cfg.peaks_per_spectrum[0], cfg.peaks_per_spectrum[1]
-        )
+        n_peaks = rng.integers(cfg.peaks_per_spectrum[0], cfg.peaks_per_spectrum[1])
 
-        # Include some common peaks (biomarkers)
+        # Include some common peaks (biomarkers).
         n_common = min(len(self._common_peak_indices), n_peaks // 3)
-        common_indices = self._rng.choice(
+        common_indices = rng.choice(
             self._common_peak_indices, size=n_common, replace=False
         )
 
-        # Random peaks
+        # Random peaks.
         n_random = n_peaks - n_common
-        random_indices = self._rng.choice(cfg.n_mz_bins, size=n_random, replace=False)
+        random_indices = rng.choice(cfg.n_mz_bins, size=n_random, replace=False)
 
-        # Combine and sort
         all_indices = np.unique(np.concatenate([common_indices, random_indices]))
 
-        # Generate intensities with log-normal distribution
-        intensities = self._rng.lognormal(
-            mean=np.log(1000), sigma=1.5, size=len(all_indices)
-        )
-
-        # Clip to range
+        # Log-normal intensities clipped to the configured range.
+        intensities = rng.lognormal(mean=np.log(1000), sigma=1.5, size=len(all_indices))
         intensities = np.clip(
             intensities, cfg.intensity_range[0], cfg.intensity_range[1]
         )
 
-        # Add noise
         if cfg.noise_level > 0:
-            noise = self._rng.normal(0, cfg.noise_level * intensities)
+            noise = rng.normal(0, cfg.noise_level * intensities)
             intensities = np.maximum(intensities + noise, 0)
 
         return all_indices.astype(np.int32), intensities.astype(np.float64)
 
-    def get_common_mass_axis(self) -> np.ndarray:
-        """Return the common mass axis."""
-        return self._common_mass_axis
-
-    def get_peak_counts_per_pixel(self) -> Optional[np.ndarray]:
-        """Return per-pixel peak counts for CSR indptr construction.
-
-        For mock data, we estimate based on average peaks per spectrum.
-        Returns None to trigger the fallback estimation in the converter.
-        """
-        # Return None to test the fallback path
+    def close(self) -> None:
+        """No-op close (mock holds no file handles)."""
         return None
 
 
-def test_streaming_conversion(config: MockMSIConfig, output_dir: Path):
-    """Test the streaming converter with mock data."""
+def run_streaming_demo(config: MockMSIConfig, output_dir: Path) -> Path:
+    """Run the streaming converter on mock data and report basic stats."""
     import tracemalloc
 
     from thyra.converters.spatialdata.streaming_converter import (
@@ -220,14 +268,10 @@ def test_streaming_conversion(config: MockMSIConfig, output_dir: Path):
     print(f"  Peaks per spectrum: {config.peaks_per_spectrum}")
     print(f"  Sparsity: {config.sparsity * 100:.1f}%")
 
-    # Create mock reader
     reader = MockMSIReader(config)
-
     output_path = output_dir / "mock_streaming.zarr"
 
-    # Start memory tracking
     tracemalloc.start()
-
     print("\nConverting with streaming method...")
     start_time = time.time()
 
@@ -235,29 +279,14 @@ def test_streaming_conversion(config: MockMSIConfig, output_dir: Path):
         reader=reader,
         output_path=output_path,
         dataset_id="mock",
-        pixel_size_um=10.0,
-        zero_copy=True,
+        pixel_size_um=config.pixel_size_um,
         chunk_size=5000,
+        use_csc=True,  # force the memory-bounded PCS path
     )
-
-    # Pre-set the mass axis and dimensions to skip initialization
-    # (mock reader doesn't support full initialization flow)
-    converter._common_mass_axis = reader.get_common_mass_axis()
-    converter._dimensions = (config.n_x, config.n_y, config.n_z)
-
-    # Call the direct zarr method directly
-    try:
-        converter._stream_write_direct_zarr()
-        success = True
-    except Exception as e:
-        print(f"Error: {e}")
-        import traceback
-
-        traceback.print_exc()
-        success = False
+    success = converter.convert()
 
     elapsed = time.time() - start_time
-    current, peak = tracemalloc.get_traced_memory()
+    _, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
 
     print(f"\nConversion: {'SUCCESS' if success else 'FAILED'}")
@@ -265,52 +294,29 @@ def test_streaming_conversion(config: MockMSIConfig, output_dir: Path):
     print(f"Peak memory: {peak / (1024 * 1024):.1f} MB")
 
     if success:
-        # Verify output
-        print("\nVerifying output...")
-
-        import zarr
-
-        store = zarr.open_group(str(output_path), mode="r")
-
-        if "tables" in store:
-            table_name = list(store["tables"].keys())[0]
-            X = store[f"tables/{table_name}/X"]
-            shape = X.attrs.get("shape", [0, 0])
-            indptr = X["indptr"][-1]
-
-            print(f"  Shape: {shape[0]:,} x {shape[1]:,}")
-            print(f"  Total NNZ: {indptr:,}")
-
-            # Estimate expected NNZ
-            n_spectra = config.n_x * config.n_y - len(reader._empty_pixels)
-            avg_peaks = sum(config.peaks_per_spectrum) / 2
-            expected_nnz = int(n_spectra * avg_peaks)
-
-            print(f"  Expected NNZ (approx): {expected_nnz:,}")
-
-        # Test SpatialData reading
-        print("\nTesting SpatialData.read()...")
+        print("\nVerifying output with spatialdata.read_zarr ...")
         try:
-            from spatialdata import SpatialData
+            import spatialdata
 
-            sdata = SpatialData.read(str(output_path), selection=("tables",))
+            sdata = spatialdata.read_zarr(str(output_path))
             table = list(sdata.tables.values())[0]
-            print("  SpatialData read: SUCCESS")
+            print("  read_zarr: SUCCESS")
             print(f"  Table shape: {table.X.shape}")
             print(f"  Table NNZ: {table.X.nnz:,}")
-        except Exception as e:
-            print(f"  SpatialData read: FAILED - {e}")
+            print(f"  Images: {list(sdata.images.keys())}")
+            print(f"  Shapes: {list(sdata.shapes.keys())}")
+        except Exception as e:  # pragma: no cover - demo diagnostics
+            print(f"  read_zarr: FAILED - {e}")
 
     return output_path
 
 
-def main():
-    """Run the mock MSI data generator test."""
+def main() -> None:
+    """Run the mock MSI data generator smoke test."""
     print("=" * 70)
     print("  MOCK MSI DATA GENERATOR FOR STREAMING CONVERSION TEST")
     print("=" * 70)
 
-    # Get size from command line
     size = "small"
     for arg in sys.argv[1:]:
         if arg.startswith("--size="):
@@ -326,16 +332,13 @@ def main():
     config = PRESETS[size]
     print(f"\nUsing preset: {size}")
 
-    # Create temp directory
     temp_dir = Path(tempfile.mkdtemp(prefix="mock_msi_"))
     print(f"Output directory: {temp_dir}")
 
-    # Run test
-    output_path = test_streaming_conversion(config, temp_dir)
+    output_path = run_streaming_demo(config, temp_dir)
 
     print("\n" + "=" * 70)
     print(f"Output saved to: {output_path}")
-    print(f'To clean up: rmdir /s /q "{temp_dir}"')
 
 
 if __name__ == "__main__":
