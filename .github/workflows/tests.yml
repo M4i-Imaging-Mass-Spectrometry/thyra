@@ -35,3 +35,36 @@ jobs:
         flags: unittests
         name: codecov-umbrella
         fail_ci_if_error: false
+
+  # Installs thyra the way an end user does: a plain `pip install .` that
+  # resolves dependencies fresh from PyPI, WITHOUT poetry.lock. This is the
+  # only job that exercises the pip resolver against the version bounds in
+  # pyproject.toml, so it catches mismatched dependency sets (e.g. a stale
+  # spatialdata paired with too-new ome-zarr/dask) that the lockfile hides.
+  clean-venv-install:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.13']
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install thyra from a clean venv (no lockfile)
+      run: |
+        python -m pip install --upgrade pip
+        pip install .
+        pip install pytest pytest-cov mock
+    - name: Report the resolved dependency set
+      run: pip list
+    - name: Verify save / read-back round-trip on the resolved set
+      # thyra + its dependencies come from the non-editable pip install
+      # above; PYTHONPATH only puts the repo root on sys.path so the
+      # in-repo test helpers (the `tests` namespace package, which has no
+      # __init__.py) import. Editable installs get this for free via a
+      # .pth file, so the lockfile job never needs it.
+      run: PYTHONPATH=. pytest -m "not integration" --disable-warnings
