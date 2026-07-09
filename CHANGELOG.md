@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.25.5 (2026-07-09)
+
+### Bug Fixes
+
+- **deps**: Add upper bounds so pip install lands on a working set
+  ([#102](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/102),
+  [`0210b0e`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/0210b0ed55199b81b7947e8313e48d82da933492))
+
+
 ## v1.25.4 (2026-06-22)
 
 ### Bug Fixes
