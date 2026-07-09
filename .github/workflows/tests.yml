@@ -62,4 +62,9 @@ jobs:
     - name: Report the resolved dependency set
       run: pip list
     - name: Verify save / read-back round-trip on the resolved set
-      run: pytest -m "not integration" --disable-warnings
+      # thyra + its dependencies come from the non-editable pip install
+      # above; PYTHONPATH only puts the repo root on sys.path so the
+      # in-repo test helpers (the `tests` namespace package, which has no
+      # __init__.py) import. Editable installs get this for free via a
+      # .pth file, so the lockfile job never needs it.
+      run: PYTHONPATH=. pytest -m "not integration" --disable-warnings
