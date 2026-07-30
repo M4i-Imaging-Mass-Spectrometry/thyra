@@ -137,6 +137,12 @@ quantitation.
 Use it whenever the total ion count per pixel has to stay comparable before and
 after conversion.
 
+The total that is preserved is the one inside the axis range. If you crop with
+`--resample-min-mz` or `--resample-max-mz`, intensity outside the window is
+dropped rather than redistributed over the bins you kept, so the per-pixel total
+falls by whatever you cropped out. With the default axis, which spans the
+dataset's own mass range, nothing is dropped and the total is unchanged.
+
 ---
 
 ## Axis types

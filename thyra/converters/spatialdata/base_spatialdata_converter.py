@@ -1091,11 +1091,40 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
     def _tic_preserving_resample(
         self, mzs: NDArray[np.float64], intensities: NDArray[np.float64]
     ) -> NDArray[np.float64]:
-        """Resample using TIC-preserving linear interpolation - optimized."""
+        """Resample onto the common axis, preserving total ion current.
+
+        Linear interpolation onto the target axis, followed by rescaling so
+        the resampled spectrum carries the same total ion current as the
+        input -- the behaviour ``ResamplingMethod.TIC_PRESERVING`` and
+        docs/resampling.md both describe.
+
+        The rescaling is not cosmetic. Interpolation samples the spectrum at
+        every target point, so the raw interpolated sum scales with the
+        density of the target axis rather than staying fixed. Onto the
+        default 190,000-bin axis, 4,000 source points came back with 47x the
+        input TIC, and a 150-peak centroid spectrum with over 1000x.
+
+        The TIC preserved is that of the input peaks lying inside the target
+        axis range. ``np.interp`` drops anything outside it (``left=0``,
+        ``right=0``), so normalising against the whole input TIC would
+        redistribute the dropped intensity over the bins that remain --
+        inventing signal inside a range the caller deliberately cropped with
+        ``--resample-min-mz`` / ``--resample-max-mz``. When the axis spans
+        the spectrum, which is the default, the two are the same number.
+
+        Args:
+            mzs: Original m/z values from the spectrum.
+            intensities: Corresponding intensity values.
+
+        Returns:
+            Intensities on the common mass axis, of the axis's length.
+        """
         if self._common_mass_axis is None:
             raise RuntimeError("Common mass axis is not initialized")
+
+        axis = self._common_mass_axis
         if mzs.size == 0:
-            return np.zeros(len(self._common_mass_axis))
+            return np.zeros(len(axis))
 
         # OPTIMIZED: Check if already sorted to avoid unnecessary sorting
         if np.all(mzs[:-1] <= mzs[1:]):
@@ -1108,17 +1137,40 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             mzs_sorted = mzs[sort_indices]
             intensities_sorted = intensities[sort_indices]
 
+        # The intensity the output is required to carry. Peaks outside the
+        # axis are dropped by the interpolation and must not reappear.
+        in_range = (mzs_sorted >= axis[0]) & (mzs_sorted <= axis[-1])
+        target_tic = float(intensities_sorted[in_range].sum())
+        if target_tic <= 0.0:
+            return np.zeros(len(axis))
+
+        if mzs_sorted.size == 1:
+            # np.interp cannot interpolate a lone point onto a grid that
+            # does not contain it -- it would return all zeros and lose the
+            # peak. Place it in its nearest bin, as the nearest_neighbor
+            # path and TICPreservingStrategy both do.
+            resampled = np.zeros(len(axis))
+            resampled[int(np.argmin(np.abs(axis - mzs_sorted[0])))] = target_tic
+            return resampled
+
         # Interpolate onto the common mass axis (np.interp is highly optimized)
-        if self._common_mass_axis is None:
-            raise RuntimeError("Common mass axis is not initialized")
         resampled = np.interp(
-            self._common_mass_axis,
+            axis,
             mzs_sorted,
             intensities_sorted,
             left=0,
             right=0,
         )
 
+        # Rescale to the required TIC. This is the step that makes the
+        # method live up to its name.
+        resampled_tic = float(resampled.sum())
+        if resampled_tic <= 0.0:
+            # Every peak landed strictly between two axis points. There is
+            # nothing to rescale and nothing to recover.
+            return resampled
+
+        resampled *= target_tic / resampled_tic
         return resampled
 
     def _process_resampled_spectrum(
