@@ -1830,8 +1830,9 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         return f"{self.dataset_id}_optical_{suffix}"
 
     # --- pandas 3 string dtypes: removal trigger ---------------------------
-    # anndata #2221 ("Pandas 3.0 compatibility") is open and milestoned
-    # 0.14.0: the plan is to warn in 0.13 and flip the defaults in 0.14.
+    # anndata #2221 ("Pandas 3.0 compatibility") was closed by anndata #2133
+    # and shipped in anndata 0.13.0 (2026-07-07), so this is already fixed
+    # upstream -- just not in a version this project's ceiling admits.
     # anndata #2377 is this exact IORegistryError, closed as a duplicate of
     # it, and spatialdata-io #364 is the same failure in spatialdata's own
     # Xenium writer, so this is an ecosystem gap and not a Thyra bug.
@@ -1840,8 +1841,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
     # `pd.set_option("mode.string_storage", "python")` both still raise.
     #
     # Delete `_coerce_table_strings_to_object` and its call in `_save_output`
-    # once the anndata ceiling in pyproject.toml moves to a release with
-    # pandas 3 support (>= 0.14). Until then this is the only thing keeping
+    # once the anndata ceiling in pyproject.toml moves to >= 0.13. Verified
+    # 2026-07-30: anndata 0.13.2 writes these tables cleanly on both pandas
+    # 2.3.2 with future.infer_string and pandas 3.0.5. spatialdata 0.7.3
+    # requires only anndata >= 0.9.1, so that bump is not blocked by the
+    # spatialdata pin. Until it happens this is the only thing keeping
     # non-PCS conversions writable, so it is not dead code yet:
     # tests/unit/converters/test_pandas3_string_dtypes.py
     # ::test_anndata_can_write_arrow_backed_strings XPASSes when it becomes so.

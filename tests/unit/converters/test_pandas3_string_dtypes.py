@@ -252,10 +252,12 @@ def test_coercion_is_a_noop_on_object_dtypes():
 @pytest.mark.xfail(
     strict=False,
     reason=(
-        "The pinned anndata cannot serialize pandas' str dtype -- see anndata "
-        "#2221 ('Pandas 3.0 compatibility', milestone 0.14.0). An XPASS here "
-        "means the installed anndata can write Arrow-backed strings and "
-        "_coerce_table_strings_to_object can be deleted."
+        "The pinned anndata (< 0.13) cannot serialize pandas' str dtype. "
+        "anndata #2221 ('Pandas 3.0 compatibility') was fixed by anndata "
+        "#2133 and released in 0.13.0, so raising the ceiling is what makes "
+        "this XPASS. An XPASS here means the installed anndata can write "
+        "Arrow-backed strings and _coerce_table_strings_to_object can be "
+        "deleted."
     ),
 )
 def test_anndata_can_write_arrow_backed_strings(tmp_path):
