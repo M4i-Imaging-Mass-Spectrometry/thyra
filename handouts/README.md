@@ -15,10 +15,15 @@ spatialdata 0.7.3 / zarr 3.1.3.
 | C | [write-amplification.md](write-amplification.md) | `perf/write-amplification` | `../Thyra-perf` | after A |
 | D | [toolchain-hygiene.md](toolchain-hygiene.md) | `chore/toolchain-hygiene` | `../Thyra-toolchain` | independent |
 | E | [upstream-lazy-table-pr.md](upstream-lazy-table-pr.md) | *upstream* | *scverse/spatialdata* | independent |
+| F | [interpolation-resampling.md](interpolation-resampling.md) | *not created* | `../Thyra-interp` | backlog |
 
 Handout E is work in `scverse/spatialdata`, not here. It is listed because
 it is the critical path for Ousia reading Thyra output lazily, and because
 its findings change how B and C should be judged.
+
+Handout F is backlog, not a defect: a capability `main` does not have, whose
+only prior art was about to be deleted with a stale branch. It is written up
+so the decision can be made deliberately rather than by attrition.
 
 ## The lazy-reading picture
 
@@ -102,25 +107,35 @@ Two things to know about working in a worktree here:
   `thyra/metadata/extractors/waters_extractor.py:130`. They are not yours
   unless you are on handout D.
 
-## Branch cleanup (do this once, anywhere)
+## Branch cleanup — done 2026-07-30
 
-Two remote branches are dead and should be deleted so they stop looking
-like work in progress:
+This section used to list two dead branches. The sweep it asked for has
+happened and went further: 56 stale local branches and 5 remote ones are
+gone, leaving `main`, `gh-pages`, and the three live lane branches.
 
-- `origin/fix/streaming-pcs-image-write` — already merged. `git cherry -v
-  main origin/fix/streaming-pcs-image-write` reports `-`, and
-  `tests/unit/converters/test_streaming_pcs_roundtrip.py` is on `main`.
-- `origin/feature/lazy-loading-support` — superseded, 83 commits behind.
-  `main` already writes every `encoding-type` / `encoding-version` attr the
-  branch adds, and does it **better**: `main` distinguishes `"string"` for
-  0-d scalars in `uns` from `"string-array"` for arrays, which the branch's
-  binary `_set_encoding_attrs(is_string=...)` helper cannot express.
-  Verified that `anndata.experimental.read_lazy()` already works on `main`
-  output (see handout C for the transcript).
+Each was classified before deletion, not deleted by age:
 
-`origin/fix/streaming-coo-arrow-string-write` is **live and wanted** — it is
-the subject of handout A. Do not delete it.
+| Basis | Count |
+|---|---|
+| ancestor of `main` (`git branch -d`, git verifies the merge itself) | 22 |
+| squash/rebase-merged — every commit's patch already upstream (`git cherry` all `-`) | 14 |
+| superseded, verified individually | 20 |
 
-The stale worktree at `../Thyra-coo-fix` sits on that branch 19 commits
-behind `main`. Handout A supersedes it; remove it with
-`git worktree remove ../Thyra-coo-fix` once A has landed.
+SHAs are recorded in `.git/deleted-branches-2026-07-30.txt`; restore any with
+`git branch <name> <sha>`.
+
+Two findings came out of the sweep and are the reason it was worth doing
+branch by branch rather than in bulk:
+
+- `feature/lazy-loading-support` carried the **only** test of the
+  `encoding-type` / `encoding-version` attrs the PCS path hand-writes —
+  `git grep encoding-type tests/` on `main` was empty. Its implementation
+  was genuinely superseded (`main` distinguishes `"string"` for 0-d scalars
+  in `uns` from `"string-array"` for arrays, which the branch's binary
+  `_set_encoding_attrs(is_string=...)` helper could not express), but the
+  test was not. Ported to `main` in #108 *before* the branch was deleted.
+- `feature/conservative-interpolation-implementation` held a capability
+  `main` still lacks. Archived as tag `archive/conservative-interpolation`
+  and written up as handout F.
+
+Everything else was already on `main` in equal or better form.
