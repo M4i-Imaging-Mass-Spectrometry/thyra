@@ -18,6 +18,7 @@ from ...core.base_reader import BaseMSIReader
 from ...metadata.types import ComprehensiveMetadata, EssentialMetadata
 from ...resampling import ResamplingDecisionTree, ResamplingMethod
 from ...resampling.types import ResamplingConfig
+from ...utils.zarr_atomic_write import install_windows_atomic_write_retry
 from ._chunking import image_chunks
 
 logger = logging.getLogger(__name__)
@@ -270,6 +271,12 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 f"conflicts."
             )
             raise ImportError(error_msg)
+
+        # Every Zarr write below this point goes through Zarr's atomic
+        # rename, which on Windows intermittently loses a race against
+        # whatever else has the destination open. Idempotent and a no-op
+        # off Windows.
+        install_windows_atomic_write_retry()
 
         # Validate inputs
         if pixel_size_um <= 0:

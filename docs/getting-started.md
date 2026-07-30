@@ -186,8 +186,14 @@ thyra large_dataset.d output.zarr --streaming false
 
 ### "WinError 5: Access is denied"
 
-This means the output `.zarr` directory is locked by another process (e.g., a
-Python session, napari, or a Jupyter notebook that loaded it).
+Windows has no atomic file replace, so Zarr's metadata writes have to delete the
+destination before renaming the new copy over it. If any handle is open on that
+file at that instant the rename fails outright instead of waiting.
+
+Thyra retries these renames a few times, which clears the transient contention
+Zarr's own concurrent writes create. A failure that survives the retries means
+something is holding the store open for longer than that -- typically a Python
+session, napari, or a Jupyter notebook that loaded it.
 
 **Fix:** Close any program that has the zarr open, or write to a different output
 path.
