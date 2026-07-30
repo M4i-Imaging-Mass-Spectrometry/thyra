@@ -1,9 +1,6 @@
 """Linear/uniform mass axis generator with constant spacing."""
 
-from typing import Any
-
 import numpy as np
-import numpy.typing as npt
 
 from ..types import AxisType, MassAxis
 from .base_generator import BaseAxisGenerator
@@ -17,7 +14,14 @@ class LinearAxisGenerator(BaseAxisGenerator):
     generation.
     """
 
-    def generate_axis(self, min_mz: float, max_mz: float, target_bins: int) -> MassAxis:
+    def generate_axis(
+        self,
+        min_mz: float,
+        max_mz: float,
+        target_bins: int,
+        reference_mz: float = 1000.0,
+        reference_width: float = 0.005,
+    ) -> MassAxis:
         """Generate uniform mass axis with constant spacing.
 
         Parameters
@@ -28,6 +32,13 @@ class LinearAxisGenerator(BaseAxisGenerator):
             Maximum m/z value
         target_bins : int
             Number of bins
+        reference_mz : float
+            Unused. Constant spacing has no reference-m/z dependence; the
+            parameter exists so every generator shares one signature.
+        reference_width : float
+            Unused, for the same reason. The realized width is
+            ``(max_mz - min_mz) / (target_bins - 1)``, and the caller sizes
+            ``target_bins`` to make that the width it wants.
 
         Returns
         -------
@@ -47,21 +58,3 @@ class LinearAxisGenerator(BaseAxisGenerator):
     def get_axis_type(self) -> AxisType:
         """Return the axis type for uniform spacing."""
         return AxisType.CONSTANT
-
-    def generate_axis_bins(
-        self, min_mz: float, max_mz: float, num_bins: int
-    ) -> npt.NDArray[np.floating[Any]]:
-        """Generate uniform axis with fixed number of bins."""
-        return np.linspace(min_mz, max_mz, num_bins)
-
-    def generate_axis_width(
-        self,
-        min_mz: float,
-        max_mz: float,
-        width_da: float,
-        reference_mz: float = 500.0,
-    ) -> npt.NDArray[np.floating[Any]]:
-        """Generate uniform axis based on constant mass width."""
-        # For uniform spacing, width is constant across the range
-        num_bins = int((max_mz - min_mz) / width_da) + 1
-        return np.linspace(min_mz, max_mz, num_bins)
