@@ -41,7 +41,7 @@ class TestBasicImports:
         """Test dataclasses can be created."""
         config = ResamplingConfig(target_bins=300000)
         assert config.target_bins == 300000
-        assert config.reference_mz == 500.0  # default
+        assert config.reference_mz == 1000.0  # default, matches the CLI default
 
     def test_resampling_config_with_axis_type(self):
         """Test ResamplingConfig can be created with axis_type field."""
