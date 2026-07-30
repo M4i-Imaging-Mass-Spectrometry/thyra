@@ -1,5 +1,50 @@
 # D. Line-ending churn and hook config drift
 
+> **RESOLVED** -- `pre-commit run --all-files` now passes and leaves
+> `git status` empty, verified three times running on a fresh clone made with
+> `core.autocrlf=true`.
+>
+> Four corrections to the brief below, found while investigating:
+>
+> * **The line-ending fix is one attribute, not a normalisation.** The index
+>   was already pure LF: `git ls-files --eol` reported `i/lf` for all 179
+>   tracked text files. Only the *checkout* side was converting, because
+>   `* text=auto` leaves that to `core.eol`, which defaults to `native`.
+>   Adding `eol=lf` fixed it with no content diff, so there was no blame
+>   pollution and nothing to put in `.git-blame-ignore-revs`. The count is 179
+>   rather than 137, and those paths were never really modified: `git diff`
+>   was empty throughout, and git only reported them because the CRLF round
+>   trip is unstable, so the stat cache could never settle.
+> * **pydocstyle was not a pyproject-versus-hook precedence problem.** The
+>   hook does read `pyproject.toml`, verified against both cached hook
+>   environments. The bug was quoting: `args: [--convention=google,
+>   --add-ignore=D100,D104,D105]` is a YAML flow sequence, so it splits on
+>   every comma and pydocstyle received `--add-ignore=D100` plus two stray
+>   positional arguments, `D104` and `D105`. Dropping the args entirely, as
+>   flake8 already does, removes both the duplication and the trap.
+> * **The bandit finding is real but invisible from a worktree.** B404
+>   reproduces on any ordinary checkout and never from `../Thyra-toolchain`.
+>   Bandit's default exclusions contain the bare string `.git`, and it only
+>   appends a path separator when that entry resolves to a directory
+>   (`bandit/core/manager.py`). In a linked worktree `.git` is a file, so the
+>   entry stays a bare substring and silently excludes everything under
+>   `.github/`. Anything verifying bandit from a worktree is verifying nothing.
+> * **The two mypy errors are the hook's flag set, not a bare run.** They are
+>   what `mypy --ignore-missing-imports --no-strict-optional thyra` reports;
+>   both are fixed at the root and that run is now clean. A bare
+>   `mypy thyra` reports 15 further errors, all of them strict-optional
+>   complaints that the project's own hook config switches off.
+>
+> Also fixed here: `.gitignore` carried an unanchored `scripts/`, which
+> matched `.github/scripts/` and made git refuse to stage its tracked
+> complexity monitor without `-f`.
+>
+> Two verification steps in this document cannot run in this environment, on
+> `main` as much as on this branch. The Poetry venv has neither mypy nor the
+> declared mkdocs plugins installed, so `poetry run mypy` and
+> `poetry run mkdocs` fall through to the Anaconda copies on PATH;
+> `mkdocs build --strict` aborts on a missing `mkdocs-jupyter`.
+
 **Branch:** `chore/toolchain-hygiene`
 **Worktree:** `../Thyra-toolchain`
 **Priority:** independent, touches no Python in `thyra/`. Do this one first

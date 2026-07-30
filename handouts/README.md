@@ -85,11 +85,17 @@ Two things to know about working in a worktree here:
    This bit me while verifying handout A: two runs reported identical
    results because both imported `main`.
 
-2. **Line endings.** Every commit that touches a file will fail the
-   `mixed-line-ending` hook once, rewrite the file to LF, and need a second
-   `git add` + `git commit`. This is expected until handout D lands. Do not
-   run `pre-commit run --all-files` as a check: it rewrites ~137 unrelated
-   files.
+2. **Line endings.** Fixed by handout D. Commits no longer fail the
+   `mixed-line-ending` hook on the first attempt, and
+   `pre-commit run --all-files` is safe to run as a pre-push check: it passes
+   and leaves `git status` empty. Worktrees created before that landed still
+   hold CRLF files; `git add --renormalize .` settles them without producing
+   a diff.
+
+   One thing worktrees still hide: bandit silently skips everything under
+   `.github/`, because its default exclusions contain the bare string `.git`
+   and a worktree's `.git` is a file rather than a directory. Verify bandit
+   findings from an ordinary checkout.
 
 ## Shared conventions
 
