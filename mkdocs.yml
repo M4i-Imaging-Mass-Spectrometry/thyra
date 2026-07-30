@@ -36,6 +36,11 @@ extra_css:
 
 plugins:
   - search
+  - mkdocs-jupyter:
+      include: ["*.ipynb"]
+      execute: false          # notebooks are committed with their outputs
+      include_source: true    # offer the .ipynb for download
+      ignore_h1_titles: true
   - mkdocstrings:
       handlers:
         python:
@@ -64,7 +69,10 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
+  - Tutorial: tutorial.md
+  - Explore the Output: explore-the-output.ipynb
   - CLI Reference: cli.md
+  - Resampling: resampling.md
   - Output Format: output-format.md
   - Coordinate Systems: coordinate-systems.md
   - API Reference: api.md

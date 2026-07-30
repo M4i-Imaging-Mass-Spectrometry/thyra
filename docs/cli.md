@@ -87,12 +87,16 @@ chooses an appropriate method and bin count.
 | `--resample-reference-mz FLOAT` | `1000.0` | Reference m/z for width specification |
 
 !!! info "Choosing a resampling method"
-    - **`nearest_neighbor`** -- Fast, simple assignment to nearest bin. Good for
-      data that is already close to uniformly spaced.
-    - **`tic_preserving`** -- Distributes intensity proportionally across bins.
-      Better for high-resolution data (Orbitrap, FTICR) where bin widths vary.
-    - **`auto`** -- Picks `tic_preserving` for high-resolution instruments,
-      `nearest_neighbor` otherwise.
+    - **`nearest_neighbor`** -- Each target bin takes the nearest original m/z
+      value. Correct for **centroid** data, where peaks are discrete masses.
+    - **`tic_preserving`** -- Linear interpolation, rescaled so the total ion
+      current is unchanged. Correct for **profile** data, and whenever
+      quantitation must survive rebinning.
+    - **`auto`** -- Picks `tic_preserving` for profile MALDI-TOF data and
+      `nearest_neighbor` for everything else, including Orbitrap and FT-ICR
+      (which are normally centroided). See
+      [Resampling](resampling.md#which-detector-wins) for the full decision
+      table.
 
 !!! info "Choosing a mass axis type"
     The axis type determines how bin widths scale with m/z:
