@@ -64,4 +64,7 @@ benchmarks/test_*.py
 # Claude Code files - should not be committed
 .claude/
 CLAUDE.md
-scripts/
+# Leading slash: anchor to the repository root. Unanchored, this also matched
+# .github/scripts/, the one tracked scripts directory, so git refused to add
+# changes to the complexity monitor without -f.
+/scripts/
