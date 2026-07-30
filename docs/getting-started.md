@@ -210,14 +210,11 @@ such as `C:\msi\out.zarr` is always safe. Alternatively, enable long path
 support system-wide (`HKLM\SYSTEM\CurrentControlSet\Control\FileSystem`,
 `LongPathsEnabled` = 1, requires administrator rights and a reboot).
 
-!!! warning "Check the output before relying on it"
-    A conversion that fails this way leaves a partially written `.zarr` behind,
-    and the `thyra` command still exits with status 0. Confirm the output loads
-    before treating a conversion as successful:
-    ```python
-    import spatialdata as sd
-    sd.read_zarr("output.zarr")   # raises if the store is incomplete
-    ```
+!!! info "Failed conversions exit non-zero and move the partial store aside"
+    Any failed conversion exits with status 1, so a script or CI job wrapping
+    `thyra` sees the failure. The partially written store is renamed to
+    `<output>.zarr.failed` rather than left at the destination, which keeps it
+    available for diagnosis and leaves the output path free for a retry.
 
 ### "No module named 'timsdata'" or Bruker SDK errors
 

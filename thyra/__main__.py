@@ -276,6 +276,49 @@ def _parse_streaming_option(streaming: str) -> bool | Literal["auto"]:
     return "auto"
 
 
+def _quarantine_partial_output(output: Path) -> None:
+    """Move a partially written store aside after a failed conversion.
+
+    A conversion that fails part-way through writing leaves an
+    incomplete ``.zarr`` at the destination. That store cannot be opened
+    (``spatialdata.read_zarr()`` raises), but it looks like a plausible
+    artifact, and it also blocks a retry because the CLI refuses to write
+    to an existing path. Rename it to a sibling ``.failed`` path so the
+    destination is clear while the partial store remains available for
+    diagnosis.
+
+    The CLI validates that the output path does not exist before
+    converting, so anything present at this point was written by this
+    run and is safe to move.
+    """
+    if not output.exists():
+        return
+
+    quarantine = output.with_name(f"{output.name}.failed")
+    attempt = 1
+    while quarantine.exists():
+        attempt += 1
+        quarantine = output.with_name(f"{output.name}.failed{attempt}")
+
+    try:
+        output.rename(quarantine)
+    except OSError as e:
+        logger.error(
+            "The incomplete output was left at %s because it could not be "
+            "moved aside (%s). It will not open with "
+            "spatialdata.read_zarr(); delete it before retrying.",
+            output,
+            e,
+        )
+        return
+
+    logger.error(
+        "The incomplete output was moved to %s. It will not open with "
+        "spatialdata.read_zarr(); delete it once you no longer need it.",
+        quarantine,
+    )
+
+
 def _handle_post_conversion(
     success: bool,
     optimize_chunks: bool,
@@ -284,13 +327,14 @@ def _handle_post_conversion(
     dataset_id: str,
 ) -> None:
     """Handle chunk optimization and result logging after conversion."""
-    if success and optimize_chunks and format == "spatialdata":
-        optimize_zarr_chunks(str(output), f"tables/{dataset_id}/X")
-
     if success:
+        if optimize_chunks and format == "spatialdata":
+            optimize_zarr_chunks(str(output), f"tables/{dataset_id}/X")
         logger.info(f"Conversion completed successfully. Output stored at {output}")
-    else:
-        logger.error("Conversion failed.")
+        return
+
+    logger.error("Conversion failed.")
+    _quarantine_partial_output(output)
 
 
 class GroupedCommand(click.Command):
@@ -609,6 +653,11 @@ def main(
     )
 
     _handle_post_conversion(success, optimize_chunks, format, output, dataset_id)
+
+    # Surface failure to the shell: without this a script or CI wrapper
+    # calling `thyra` sees success even though nothing usable was written.
+    if not success:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
