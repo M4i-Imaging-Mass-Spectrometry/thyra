@@ -14,6 +14,35 @@ spatialdata 0.7.3 / zarr 3.1.3.
 | B | [optimize-chunks.md](optimize-chunks.md) | `fix/optimize-chunks-sparse` | `../Thyra-chunks` | independent |
 | C | [write-amplification.md](write-amplification.md) | `perf/write-amplification` | `../Thyra-perf` | after A |
 | D | [toolchain-hygiene.md](toolchain-hygiene.md) | `chore/toolchain-hygiene` | `../Thyra-toolchain` | independent |
+| E | [upstream-lazy-table-pr.md](upstream-lazy-table-pr.md) | *upstream* | *scverse/spatialdata* | independent |
+
+Handout E is work in `scverse/spatialdata`, not here. It is listed because
+it is the critical path for Ousia reading Thyra output lazily, and because
+its findings change how B and C should be judged.
+
+## The lazy-reading picture
+
+Worth reading before B or C. spatialdata PR #1055 (yours) adds
+`read_zarr(..., lazy=True)`. It was tested against stores from all three
+Thyra write paths and **works today**:
+
+```
+in_memory      X=Array  obs=Dataset2D  block_equal=True
+streaming_pcs  X=Array  obs=Dataset2D  block_equal=True
+streaming_coo  X=Array  obs=Dataset2D  block_equal=True
+```
+
+Two consequences:
+
+- **Thyra's on-disk format is already right for lazy reading.** Nothing
+  needs to change here to support it. What must not happen is a change that
+  breaks it, which is why B and C both carry a "assert `read_lazy` still
+  works" constraint.
+- **Wide `var` axes are the design target, not a defect.** The PR's own
+  benchmark is 100,000 pixels x 100,000 m/z bins. That materially weakens
+  handout C's lead 2 (default bin counts upsampling 45x): lazy loading is
+  the answer to wide axes, so shrinking the default is less obviously
+  right than it looked. Handout C says so.
 
 ## Ordering and overlap
 

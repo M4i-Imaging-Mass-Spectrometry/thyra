@@ -82,6 +82,20 @@ Compare against what `thyra/converters/spatialdata/_chunking.py` already
 does. That module was introduced as "the sharding seam" and may already set
 sensible chunks at write time, making a post-hoc pass pointless.
 
+There is a live reason it might buy something. spatialdata PR #1055 — see
+[handout E](upstream-lazy-table-pr.md) — adds `read_zarr(..., lazy=True)`,
+and it already works on Thyra output. Under lazy reading the chunk sizes of
+`data`, `indices`, and `indptr` **directly determine read performance**,
+because a lazy consumer pulls chunks rather than the whole array. So
+"chunking is right for the access pattern" stops being cosmetic.
+
+If you take Option 1, benchmark against the lazy access pattern, not just
+the eager one: an ion image over an m/z window, and a single pixel's
+spectrum, via `read_zarr(..., lazy=True)`. That is how Ousia will read
+these stores. Note that whole-array dask reductions over sparse `X` do not
+work at all (a dask/scipy-sparse limitation described in handout E), so do
+not build a benchmark around `X.sum()`.
+
 ### Option 2: remove the flag and the function
 
 If `_chunking.py` already covers it, deleting is the better answer: a
