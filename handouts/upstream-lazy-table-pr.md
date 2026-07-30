@@ -3,6 +3,7 @@
 **Repo:** `scverse/spatialdata`, not this one
 **PR:** https://github.com/scverse/spatialdata/pull/1055
 **Branch:** `Tomatokeftes:spatialdata:feature/lazy-table-loading`
+**Head:** `4b1da50`, rebased onto `main` (`eb4fb3d`) on 2026-07-30
 **Priority:** highest leverage for Ousia. Independent of everything else here.
 
 This is the only handout whose work happens outside the Thyra repo. It is
@@ -12,21 +13,25 @@ judged.
 
 ---
 
-## State as of 2026-07-30
+## State as of 2026-07-30 (after the rebase)
 
 | | |
 |---|---|
-| Status | **open, mergeable, zero human reviews** |
+| Status | **open, mergeable, green, zero human reviews** |
 | Opened | 2026-01-27 (six months) |
-| Last touched | 2026-07-13 |
-| Size | 8 files, +208 / -58 |
-| Divergence | 13 ahead, **5 behind** `main` |
-| Patch coverage | 96.55% (codecov, 1 line uncovered) |
-| Only comment | the codecov bot |
+| Last touched | 2026-07-30 — rebased, fixed, review requested |
+| Size | 7 files, +345 / -63, in 5 commits (squashed from 13) |
+| Divergence | 5 ahead, **0 behind** `main` |
+| CI | all 10 checks pass |
+| Comments | the codecov bot, plus your review request |
+
+The 10 green checks are ubuntu / macOS / Windows across Python 3.12, 3.13
+and 3.14, the min-dask job, pre-commit.ci, Read the Docs, and codecov.
 
 Nothing has been requested by a maintainer. It is not blocked on changes; it
-is simply unattended. Five commits behind is nothing — this is very
-rebasable.
+is simply unattended. What has changed is that there is no longer any
+housekeeping reason to leave it alone: it is rebased, green, documented, and
+carries a regression test.
 
 ## What it does
 
@@ -43,10 +48,36 @@ Reported benchmark, 100,000 pixels x 100,000 m/z bins, ~296M non-zeros:
 
 ---
 
+## Found while rebasing: the PR was silently broken
+
+Upstream #1131 rewrote the join helpers to call `reset_index()` and
+`groupby()` directly on `table.obs`. For a lazily-read table, `obs` is an
+xarray `Dataset2D`, not a `DataFrame`, so those calls raise
+`AttributeError`. That took out `bounding_box_query`, `get_values`, and all
+five `join_spatialelement_table` modes — the exact paths the PR exists to
+support.
+
+This was reproduced on the **pre-rebase** head `bfd2b5f`, so it was
+pre-existing rather than rebase-induced: the PR had been quietly broken by
+upstream movement for some time, and nothing in CI or the review queue
+surfaced it.
+
+The PR now carries the fix: an `_obs_as_dataframe()` helper in
+`relational_query.py`, called at the five sites that touch `obs`, plus
+computing `X` in `get_values`. A regression test
+(`test_lazy_table_relational_queries_match_eager`) asserts lazy and eager
+relational queries agree, so the next upstream refactor of these helpers
+fails loudly instead of silently.
+
+If a maintainer asks why a single-feature PR carries a bug fix, that is the
+answer.
+
+---
+
 ## Verified: Thyra output already works with it
 
-This was tested directly, by checking out the PR head
-(`bfd2b5f`) and pointing it at stores produced by every Thyra write path:
+This was tested directly, against the pre-rebase head (`bfd2b5f`) and
+pointed at stores produced by every Thyra write path:
 
 ```
 in_memory      X=Array  obs=Dataset2D  block_equal=True  nnz=12  var=60
@@ -56,6 +87,9 @@ streaming_coo  X=Array  obs=Dataset2D  block_equal=True  nnz=12  var=60
 
 `block_equal=True` means a lazy `X[:6, :30].compute()` is identical to the
 eager read of the same block, and `obs["x"]` resolves to the right values.
+That result is about the on-disk format and still holds; the relational-query
+breakage above was in spatialdata's own join helpers, not in anything Thyra
+writes.
 
 **So no change is needed in Thyra for the lazy path to work.** The
 `encoding-type` / `encoding-version` attrs `main` already writes are
@@ -64,32 +98,49 @@ sufficient. This also confirms the Thyra branch
 
 ### One practical caveat worth knowing
 
-Dask reductions over the sparse `X` do not work:
+Dask reductions over the sparse `X` do not work — and this is broader than
+`sum`. All four common reductions fail, each in its own way:
 
 ```python
-lazy.X.sum().compute()
-# TypeError: _cs_matrix.sum() got an unexpected keyword argument 'keepdims'
+lazy.X.sum()    # TypeError: _cs_matrix.sum() got an unexpected keyword argument 'keepdims'
+lazy.X.mean()   # IndexError: Index dimension must be 1 or 2
+lazy.X.std()    # IndexError: Index dimension must be 1 or 2
+lazy.X.max()    # TypeError about 'ndmin'
 ```
 
-Dask passes `keepdims` into `scipy.sparse`'s `sum`, which does not accept
-it. This is a dask/scipy-sparse interop limitation, not something the PR or
+Note the absence of `.compute()` in those lines: they raise while dask is
+**building the graph**, not at compute time. Dask derives a reduction's
+result metadata by calling the matching NumPy reduction on one
+`scipy.sparse` block, and `scipy.sparse` rejects the `keepdims` / `ndmin`
+arguments NumPy forwards. Confirmed on both dask 2026.7.1 / scipy 1.18.0 and
+dask 2026.1.1 / scipy 1.16.0, so it is not a single-version accident.
+
+This is a dask/scipy-sparse interop limitation, not something the PR or
 Thyra causes, and not something either can fix. Slicing and `.compute()`
 work fine, which is the realistic MSI access pattern (extract an ion image,
 pull one pixel's spectrum). Ousia should avoid whole-array dask reductions
-on lazy tables, or call `.to_memory()` on a slice first.
+on lazy tables, reduce a materialized slice (`X[:1000].compute().sum()`), or
+use `map_blocks` with a sparse-aware function.
+
+The limitation is now documented in the docstrings of `read_zarr()` and
+`SpatialData.read()`, with those workarounds spelled out.
 
 ---
 
 ## The real blocker for Ousia: dependency ceilings
 
 Even once this merges, **Thyra users cannot reach it** without Thyra moving
-three pins. The PR branch declares:
+three pins. Current spatialdata `main` declares:
 
 ```
 dask>=2026.3.0
 ome_zarr>=0.16.0
 distributed>=2026.3.0
 ```
+
+Those floors come from upstream `main`, not from this PR — the PR touches no
+`pyproject.toml` at all. They are the ambient cost of tracking spatialdata,
+and they would apply to any release carrying #1055.
 
 Thyra's `pyproject.toml` pins:
 
@@ -109,7 +160,7 @@ to keep them honest. They are not accidental and should not be bumped
 casually.
 
 Encouraging data point: the PR branch **imported and ran correctly against
-Thyra's installed dask 2026.1.1 and ome_zarr 0.15.0**, below its declared
+Thyra's installed dask 2026.1.1 and ome_zarr 0.15.0**, below the declared
 floors. So the floors may be conservative and the real compatibility window
 may be wider than the metadata claims. Worth establishing rather than
 assuming.
@@ -118,19 +169,24 @@ assuming.
 
 ## Suggested work
 
-1. **Rebase onto `main`** (only 5 commits behind) so it is trivially
-   mergeable and CI is green against current `main`.
-2. **Ping for review.** Six months with no maintainer response usually means
-   it fell off the queue rather than that anyone objects. A comment with the
-   benchmark table and a concrete downstream consumer named (MSI data via
-   Thyra, for Ousia) is the useful nudge. Consider the scverse Zulip.
-3. **Cover the caveat.** A note in the docstring or docs that dask
-   reductions over sparse `X` are unsupported would save the next person the
-   confusion, and pre-empts a "lazy loading is broken" issue.
+Three of the four items below were done on 2026-07-30 and are recorded here
+so the reasoning survives rather than being deleted.
+
+1. ~~**Rebase onto `main`.**~~ Done. 13 commits squashed to 5, replayed onto
+   `eb4fb3d`, force-pushed to `4b1da50`. All 10 checks green.
+2. ~~**Ping for review.**~~ Done. A comment with the benchmark and Thyra
+   named as the concrete downstream consumer (MSI data, for Ousia) is
+   posted. Still zero human reviews — the scverse Zulip remains the next
+   escalation if it stays quiet.
+3. ~~**Cover the caveat.**~~ Done. The sparse-reduction limitation is
+   documented in the docstrings of `read_zarr()` and `SpatialData.read()`,
+   including which reductions fail, that they fail at graph-build time, and
+   what to do instead.
 4. **Once it lands**, open a follow-up in Thyra to raise the
    `spatialdata` / `dask` / `ome-zarr` ceilings together, exercised by the
    existing clean-venv CI job. That is the step that actually delivers lazy
-   reading to Ousia.
+   reading to Ousia. **This is the only item still open here**, and it is
+   gated on a maintainer, not on you.
 
 ## Related upstream gap you are positioned to fix
 
