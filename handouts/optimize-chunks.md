@@ -1,5 +1,26 @@
 # B. `--optimize-chunks` has never worked
 
+> **RESOLVED** -- Option 2 (remove) was taken. `optimize_zarr_chunks` and
+> `thyra/utils/data_processors.py` are gone; the flag survives as a hidden,
+> deprecated no-op that warns, so scripts passing it keep running.
+>
+> Three corrections to the brief below, found while investigating:
+>
+> * `_chunking.py` covers **raster images only**, not tables -- but the real
+>   finding is that *four* writers produce `tables/<id>/X` and only the
+>   streaming-CSC one sets chunks deliberately; the rest inherit zarr's
+>   `_guess_chunks`. Both layouts are sensible, which is why removal won.
+> * The function was broken on **dense arrays too**: it reads
+>   `array.compressor`, which zarr 3 removed.
+> * A third defect, unlisted below: the CLI built `tables/<dataset_id>/X`, but
+>   the 2D and streaming converters write `tables/<dataset_id>_z0/X`, so via the
+>   CLI the key never resolved. (The 3D converter *does* use the bare id, which
+>   is the one path where the documented `.shape` error is reachable.)
+> * The attrs claim at line ~123 is wrong: `encoding-type`/`encoding-version` on
+>   `data`/`indices`/`indptr` are **not** load-bearing and are absent on three of
+>   four write paths. The load-bearing attrs are on the `X` group and the table
+>   group. See `tests/unit/test_read_lazy_contract.py`.
+
 **Branch:** `fix/optimize-chunks-sparse`
 **Worktree:** `../Thyra-chunks`
 **Priority:** independent, shares no files with the other handouts.
