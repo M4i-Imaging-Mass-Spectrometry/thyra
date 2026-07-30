@@ -3,14 +3,22 @@
 This strategy uses linear interpolation while preserving the Total Ion
 Current (TIC) of the original spectrum, making it ideal for profile data
 from most MS instruments.
+
+The rule for *which* total is preserved lives in ``thyra.resampling.tic``
+and is shared with the converters' per-pixel path, so the two
+implementations of ``tic_preserving`` cannot drift apart again. In short:
+the preserved total is the share of the spectrum lying inside the target
+axis range, so resampling onto an axis that crops the spectrum drops the
+cropped intensity rather than redistributing it over the bins that remain.
+When the axis spans the spectrum, the whole TIC is preserved exactly.
 """
 
 from typing import Any
 
 import numpy as np
 import numpy.typing as npt
-from scipy import interpolate
 
+from ..tic import preserved_tic, rescale_to_preserved_tic
 from .base import ResamplingStrategy, Spectrum
 
 
@@ -22,8 +30,12 @@ class TICPreservingStrategy(ResamplingStrategy):
     ) -> Spectrum:
         """Resample spectrum using TIC-preserving linear interpolation.
 
-        Uses scipy's linear interpolation and then scales the result
-        to preserve the original Total Ion Current (TIC).
+        Linearly interpolates onto ``target_axis`` and then scales the
+        result so it carries the Total Ion Current the axis is entitled to
+        -- the whole input TIC when the axis spans the spectrum, and the
+        share lying inside the axis otherwise. See ``thyra.resampling.tic``
+        for why the share is measured by integration rather than by counting
+        the source points that fall in range.
 
         Parameters
         ----------
@@ -47,11 +59,20 @@ class TICPreservingStrategy(ResamplingStrategy):
             )
 
         if len(spectrum.mz) == 1:
-            # Handle single point spectrum with nearest neighbor
-            distances = np.abs(target_axis - spectrum.mz[0])
-            closest_idx = np.argmin(distances)
+            # A lone point cannot be interpolated onto a grid that does not
+            # contain it, so place it in its nearest bin -- unless it falls
+            # outside the axis, in which case it is cropped away like any
+            # other out-of-range peak and preserved_tic returns 0.
             resampled_intensity = np.zeros_like(target_axis)
-            resampled_intensity[closest_idx] = spectrum.intensity[0]
+            kept = preserved_tic(
+                np.asarray(spectrum.mz, dtype=np.float64),
+                np.asarray(spectrum.intensity, dtype=np.float64),
+                float(target_axis[0]),
+                float(target_axis[-1]),
+            )
+            if kept > 0.0:
+                closest_idx = np.argmin(np.abs(target_axis - spectrum.mz[0]))
+                resampled_intensity[closest_idx] = kept
 
             return Spectrum(
                 mz=target_axis.copy(),
@@ -60,10 +81,7 @@ class TICPreservingStrategy(ResamplingStrategy):
                 metadata=spectrum.metadata,
             )
 
-        # Calculate original TIC
-        original_tic = np.sum(spectrum.intensity)
-
-        if original_tic == 0:
+        if np.sum(spectrum.intensity) == 0:
             # Handle zero intensity spectrum
             return Spectrum(
                 mz=target_axis.copy(),
@@ -72,34 +90,33 @@ class TICPreservingStrategy(ResamplingStrategy):
                 metadata=spectrum.metadata,
             )
 
-        # Perform linear interpolation
-        # Use bounds_error=False and fill_value=0 for extrapolation
-        interp_func = interpolate.interp1d(
-            spectrum.mz,
-            spectrum.intensity,
-            kind="linear",
-            bounds_error=False,
-            fill_value=0.0,
-            assume_sorted=False,  # Don't assume sorted for safety
-        )
+        # np.interp and preserved_tic both require ascending m/z.
+        order = np.argsort(spectrum.mz)
+        mzs_sorted = np.asarray(spectrum.mz, dtype=np.float64)[order]
+        intensities_sorted = np.asarray(spectrum.intensity, dtype=np.float64)[order]
 
-        # Interpolate to target axis
-        interpolated_intensity = interp_func(target_axis)
+        # Interpolate to target axis, dropping anything outside the source
+        # range. Equivalent to the previous interp1d(bounds_error=False,
+        # fill_value=0.0) for linear interpolation, without the scipy call.
+        interpolated_intensity = np.interp(
+            target_axis,
+            mzs_sorted,
+            intensities_sorted,
+            left=0.0,
+            right=0.0,
+        )
 
         # Ensure no negative values (can happen with extrapolation)
         interpolated_intensity = np.maximum(interpolated_intensity, 0.0)
 
-        # Calculate new TIC and preserve original TIC
-        new_tic = np.sum(interpolated_intensity)
-
-        if new_tic > 0:
-            # Scale to preserve TIC
-            scaling_factor = original_tic / new_tic
-            interpolated_intensity *= scaling_factor
-        else:
-            # If interpolation resulted in zero TIC, handle gracefully
-            # This shouldn't happen with proper data, but be defensive
-            interpolated_intensity = np.zeros_like(target_axis)
+        # Scale onto the TIC the target axis is entitled to carry. Shared
+        # with the converters' hot path so the two cannot drift apart again.
+        rescale_to_preserved_tic(
+            interpolated_intensity,
+            np.asarray(target_axis, dtype=np.float64),
+            mzs_sorted,
+            intensities_sorted,
+        )
 
         return Spectrum(
             mz=target_axis.copy(),

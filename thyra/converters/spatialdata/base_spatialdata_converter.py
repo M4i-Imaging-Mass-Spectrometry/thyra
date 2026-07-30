@@ -17,6 +17,7 @@ from ...core.base_converter import BaseMSIConverter, PixelSizeSource
 from ...core.base_reader import BaseMSIReader
 from ...metadata.types import ComprehensiveMetadata, EssentialMetadata
 from ...resampling import ResamplingDecisionTree, ResamplingMethod
+from ...resampling.tic import preserved_tic, rescale_to_preserved_tic
 from ...resampling.types import ResamplingConfig
 from ...utils.zarr_atomic_write import install_windows_atomic_write_retry
 from ._chunking import image_chunks
@@ -1104,13 +1105,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         default 190,000-bin axis, 4,000 source points came back with 47x the
         input TIC, and a 150-peak centroid spectrum with over 1000x.
 
-        The TIC preserved is that of the input peaks lying inside the target
-        axis range. ``np.interp`` drops anything outside it (``left=0``,
-        ``right=0``), so normalising against the whole input TIC would
-        redistribute the dropped intensity over the bins that remain --
-        inventing signal inside a range the caller deliberately cropped with
-        ``--resample-min-mz`` / ``--resample-max-mz``. When the axis spans
-        the spectrum, which is the default, the two are the same number.
+        The TIC preserved is the share of the spectrum lying inside the
+        target axis range -- see ``thyra.resampling.tic``, which holds the
+        rule and the reasoning, and which ``TICPreservingStrategy`` uses too.
+        When the axis spans the spectrum, which is the default, that share
+        is the whole input TIC.
 
         Args:
             mzs: Original m/z values from the spectrum.
@@ -1137,20 +1136,17 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             mzs_sorted = mzs[sort_indices]
             intensities_sorted = intensities[sort_indices]
 
-        # The intensity the output is required to carry. Peaks outside the
-        # axis are dropped by the interpolation and must not reappear.
-        in_range = (mzs_sorted >= axis[0]) & (mzs_sorted <= axis[-1])
-        target_tic = float(intensities_sorted[in_range].sum())
-        if target_tic <= 0.0:
-            return np.zeros(len(axis))
-
         if mzs_sorted.size == 1:
             # np.interp cannot interpolate a lone point onto a grid that
             # does not contain it -- it would return all zeros and lose the
             # peak. Place it in its nearest bin, as the nearest_neighbor
             # path and TICPreservingStrategy both do.
             resampled = np.zeros(len(axis))
-            resampled[int(np.argmin(np.abs(axis - mzs_sorted[0])))] = target_tic
+            target_tic = preserved_tic(
+                mzs_sorted, intensities_sorted, float(axis[0]), float(axis[-1])
+            )
+            if target_tic > 0.0:
+                resampled[int(np.argmin(np.abs(axis - mzs_sorted[0])))] = target_tic
             return resampled
 
         # Interpolate onto the common mass axis (np.interp is highly optimized)
@@ -1164,14 +1160,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         # Rescale to the required TIC. This is the step that makes the
         # method live up to its name.
-        resampled_tic = float(resampled.sum())
-        if resampled_tic <= 0.0:
-            # Every peak landed strictly between two axis points. There is
-            # nothing to rescale and nothing to recover.
-            return resampled
-
-        resampled *= target_tic / resampled_tic
-        return resampled
+        return rescale_to_preserved_tic(resampled, axis, mzs_sorted, intensities_sorted)
 
     def _process_resampled_spectrum(
         self,

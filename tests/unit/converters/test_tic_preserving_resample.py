@@ -123,15 +123,19 @@ class TestCroppedAxis:
     """
 
     def test_out_of_range_intensity_is_not_redistributed(self):
-        # Three peaks; the axis covers only the middle one.
+        # Five points; the axis covers a window around the middle one.
         mzs = np.array([300.0, 400.0, 500.0, 600.0, 700.0])
         intensities = np.array([100.0, 100.0, 50.0, 100.0, 100.0])
         axis = _axis(5_000, lo=450.0, hi=550.0)
 
         out = _resample(axis, mzs, intensities)
 
-        # Only the 500.0 peak is inside [450, 550].
-        assert out.sum() == pytest.approx(50.0, rel=1e-9)
+        # The kept share is measured by area, not by counting the source
+        # points that happen to fall inside. Trapezoid area over the whole
+        # spectrum is 35,000; over [450, 550] -- taking the interpolated
+        # value 75 at each cut point and the sample 50 at 500 -- it is
+        # 6,250. So 6250/35000 of a 450 TIC survives.
+        assert out.sum() == pytest.approx(450.0 * 6250.0 / 35000.0, rel=1e-9)
         assert out.sum() < intensities.sum()
 
     def test_full_range_axis_preserves_whole_tic(self):
@@ -139,6 +143,36 @@ class TestCroppedAxis:
         mzs, intensities = _centroid_spectrum()
         out = _resample(_axis(10_000), mzs, intensities)
         assert out.sum() == pytest.approx(intensities.sum(), rel=1e-9)
+
+    def test_window_narrower_than_source_spacing_is_not_blanked(self):
+        """A window containing no source point must still carry signal.
+
+        Counting the source points inside the range reports zero here --
+        the nearest samples sit at 500.0 and 501.0, outside a window of
+        [500.2, 500.8] -- and would blank a spectrum that interpolation
+        represents perfectly well. Measuring the kept share by area does
+        not have that discontinuity.
+        """
+        mzs = np.arange(400.0, 601.0, 1.0)
+        intensities = np.full_like(mzs, 10.0)
+        axis = _axis(500, lo=500.2, hi=500.8)
+
+        out = _resample(axis, mzs, intensities)
+
+        assert out.sum() > 0.0
+        # Flat spectrum: the window holds 0.6 Da of a 200 Da span.
+        assert out.sum() == pytest.approx(intensities.sum() * 0.6 / 200.0, rel=1e-6)
+
+    def test_kept_share_grows_with_window_width(self):
+        """Widening the window must not shrink what is preserved."""
+        mzs = np.arange(400.0, 601.0, 1.0)
+        intensities = np.full_like(mzs, 10.0)
+
+        totals = [
+            _resample(_axis(500, lo=500.0 - w, hi=500.0 + w), mzs, intensities).sum()
+            for w in (0.3, 1.0, 5.0, 25.0)
+        ]
+        assert totals == sorted(totals)
 
 
 class TestDegenerateInput:
