@@ -34,6 +34,9 @@ Two findings fall outside the four leads and are larger than three of them:
   own `ResamplingMethod` docstring, a second implementation in
   `thyra/resampling/strategies/tic_preserving.py` that *does* renormalise, and
   [the Resampling page](../docs/resampling.md#tic_preserving).
+  **Fixed in [PR #112](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/112)**,
+  which also moves the rule into `thyra/resampling/tic.py` so the converter and
+  the strategy share one definition rather than two that can drift.
 - With `streaming=True`, a processed-mode conversion issues **4N**
   `getspectrum` calls rather than 3N -- the streaming converter reads every
   spectrum twice. Confirmed two independent ways: call counting, and counting
@@ -824,7 +827,7 @@ be the full arange.
 
 | # | Change | Evidence | Size |
 |---|---|---|---|
-| 1 | Make `_tic_preserving_resample` (`base_spatialdata_converter.py:1091-1122`) either preserve TIC or stop claiming to | TIC ratio 47.5 for profile to 1275 for centroid at the auto default; contradicts `resampling/types.py`, `resampling/strategies/tic_preserving.py:93-98`, and `docs/resampling.md` | Correctness bug on a live default path |
+| 1 | **Done -- [PR #112](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/112).** Make `_tic_preserving_resample` (`base_spatialdata_converter.py:1091-1122`) either preserve TIC or stop claiming to | TIC ratio 47.5 for profile to 1275 for centroid at the auto default; contradicts `resampling/types.py`, `resampling/strategies/tic_preserving.py:93-98`, and `docs/resampling.md` | Correctness bug on a live default path |
 | 2 | Bound the memory of `ImzMLReader._collect_processed_mzs` and `_finalize_mass_axis` with a k-way merge of the already-ascending per-spectrum arrays | Peak RSS 3.30x the m/z payload, measured across a 131x payload range; extrapolated hard OOM at ~40 GB input; the streaming path does not escape it | Blocker for the stated 100+ GB use case |
 | 3 | Replace `tic_preserving`'s point-sampling with conservative rebinning, which subsumes item 1 | Output nnz 2,988 versus 71,314 at 190k bins, independent of bin count; TIC ratio exactly 1.0; 4.4x faster at 190k bins, 14.8x at 1M | Removes the 142.9 GB extrapolated store and the 3,124 us per pixel store cost |
 | 4 | Fix the `streaming=True` double read of every spectrum, 4N versus 3N `getspectrum` calls | Confirmed two ways: call counting, and 4.00x file-size byte counting | 100% redundant read on the large-dataset path |
