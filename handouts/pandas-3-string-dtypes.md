@@ -63,6 +63,13 @@ Checked directly:
 - **spatialdata-io #364** is the same failure hitting spatialdata's own
   Xenium writer, so this is an ecosystem gap, not a Thyra bug.
 
+The repo owner is a spatialdata contributor with an open PR there (#1055,
+see [handout E](upstream-lazy-table-pr.md)). The same coercion arguably
+belongs in spatialdata's own table write path, which would make Thyra's
+copy redundant. That is a good thing to raise on #364, but it is not a
+reason to delay this handout: Thyra cannot wait on an upstream release
+cycle for a bug that breaks conversions today.
+
 `pyproject.toml` pins `anndata = ">=0.11.0, <0.13"`, so even 0.13's warnings
 are out of range and 0.14 is far out.
 

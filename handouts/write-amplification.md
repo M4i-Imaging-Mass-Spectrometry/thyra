@@ -66,17 +66,34 @@ The default is 5 mDa at m/z 1000 for every axis type except `linear_tof`
 **190,000 bins from 4,000 source m/z values**, a 45x upsample.
 
 The store stays small (~29 MB) because it is sparse, so this is not a disk
-problem. It is a problem for every consumer, which pays for a 190k-wide
-`var` axis, and for lead 4 below.
+problem. It costs every consumer that materialises the table, and it feeds
+lead 4 below.
 
 See `_calculate_bins_from_width` in
 `thyra/converters/spatialdata/base_spatialdata_converter.py` and the
 bin-count table in `docs/resampling.md`.
 
-Consider deriving the default from observed source spacing — `peak density`
-is already collected in `DataCharacteristics` — instead of a fixed width.
-Then measure what that does to real Bruker and imzML data, not just the
-synthetic phantom.
+**Treat this lead sceptically.** It looked stronger before the upstream
+lazy-loading work was taken into account. spatialdata PR #1055 — see
+[handout E](upstream-lazy-table-pr.md) — benchmarks itself at **100,000
+pixels x 100,000 m/z bins** and works on Thyra output today. Wide `var`
+axes are the design target of the lazy path, not a pathology it struggles
+with. If the intended consumption mode is `read_zarr(..., lazy=True)`, a
+190k-wide axis is largely free to the consumer and shrinking the default
+buys much less than it appears to.
+
+So the question to answer is not "are 190,000 bins too many" but:
+
+- who actually pays for the width, once lazy reading is in play? Measure a
+  realistic Ousia-style access (ion image over an m/z window, single-pixel
+  spectrum) against a wide and a narrow axis.
+- is 45x upsampling scientifically meaningful, or is it inventing
+  resolution the instrument never had? That is a different argument from
+  the performance one and may be the stronger reason to change.
+
+Deriving the default from observed source spacing — `peak density` is
+already collected in `DataCharacteristics` — remains a reasonable idea. But
+justify it on the numbers above, not on the raw bin count looking large.
 
 **This is a behaviour change with compatibility impact.** Thyra is a library
 with an external consumer (Ousia). Changing default bin counts changes the
