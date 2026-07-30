@@ -1,7 +1,7 @@
 """Utility functions and classes for MSI data processing.
 
-This module provides common utilities including data processing
-functions, logging configuration, and custom exception classes.
+This module provides common utilities including logging configuration
+and custom exception classes.
 """
 
 from .bruker_exceptions import (
@@ -12,11 +12,9 @@ from .bruker_exceptions import (
     MemoryError,
     SDKError,
 )
-from .data_processors import optimize_zarr_chunks
 from .logging_config import setup_logging
 
 __all__ = [
-    "optimize_zarr_chunks",
     "setup_logging",
     "BrukerReaderError",
     "ConfigurationError",

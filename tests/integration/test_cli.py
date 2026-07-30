@@ -33,7 +33,10 @@ class TestCommandLineInterface:
         assert "--dataset-id" in captured.out
         assert "--pixel-size" in captured.out
         assert "--handle-3d" in captured.out
-        assert "--optimize-chunks" in captured.out
+
+        # --optimize-chunks is a deprecated no-op: still accepted so existing
+        # scripts keep running, but no longer advertised.
+        assert "--optimize-chunks" not in captured.out
 
     def test_cli_convert(self, create_minimal_imzml, temp_dir, monkeypatch):
         """Test basic CLI conversion."""
