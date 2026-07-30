@@ -92,10 +92,21 @@ zarr = ">=3.0.0, <3.2"              # tested 3.1.3
 imagecodecs = ">=2024.1.1"  # For reading compressed TIFF optical images
 # Moving this ceiling is the removal trigger for the pandas 3 string-dtype
 # coercion in base_spatialdata_converter.py: anndata 0.12.19 carries its own
-# `pandas<3` cap, so bumping to a release with pandas 3 support (#2221,
-# milestone 0.14.0) both opens the pandas 3 door and makes that coercion dead
-# code. Delete it in the same change.
-anndata = ">=0.11.0, <0.13"         # tested 0.12.2
+# `pandas<3` cap, so bumping to a release with pandas 3 support both opens the
+# pandas 3 door and makes that coercion dead code.
+#
+# That release is anndata 0.13.0 (anndata #2221, fixed by anndata #2133). Do
+# not trust #2221's milestone label, which still reads 0.14.0 even though the
+# fix shipped in 0.13.0.
+#
+# The bump is NOT mechanical -- see issue #117, where it was measured:
+#   - anndata 0.13.x requires Python >= 3.12, which this project does not.
+#   - anndata 0.13 moved `X` into `layers` under a None key, which spatialdata
+#     0.7.3's validate_table_attr_keys chokes on, breaking every write path.
+#     Fixed by spatialdata #1122, which is in v0.8.0 -- so this ceiling cannot
+#     move until the spatialdata ceiling does, despite 0.7.3 declaring only
+#     `anndata>=0.9.1`.
+anndata = ">=0.11.0, <0.13"         # tested 0.12.2; 0.13.2 fails, see #117
 psutil = ">=5.0.0"
 
 [tool.poetry.group.test.dependencies]
