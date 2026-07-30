@@ -12,7 +12,7 @@ spatialdata 0.7.3 / zarr 3.1.3.
 |---|---|---|---|---|
 | A | [pandas-3-string-dtypes.md](pandas-3-string-dtypes.md) | `fix/pandas3-string-dtypes` | `../Thyra-pandas3` | **first** |
 | B | [optimize-chunks.md](optimize-chunks.md) | `fix/optimize-chunks-sparse` | `../Thyra-chunks` | independent |
-| C | [write-amplification.md](write-amplification.md) | `perf/write-amplification` | `../Thyra-perf` | after A |
+| C | [write-amplification.md](write-amplification.md) | `perf/write-amplification` | `../Thyra-perf` | after A -- **[findings](findings-write-amplification.md)** |
 | D | [toolchain-hygiene.md](toolchain-hygiene.md) | `chore/toolchain-hygiene` | `../Thyra-toolchain` | independent |
 | E | [upstream-lazy-table-pr.md](upstream-lazy-table-pr.md) | *upstream* | *scverse/spatialdata* | independent |
 

@@ -9,6 +9,12 @@
 git fetch origin && git worktree add -b perf/write-amplification ../Thyra-perf origin/main
 ```
 
+> **This handout has been answered.** See
+> [findings-write-amplification.md](findings-write-amplification.md) for the
+> measurements. Several numbers below did not survive verification -- notably
+> the per-key write counts in lead 1 and the `benchmarks/` directory referenced
+> under Framing, which does not exist. Read the findings alongside this.
+
 ---
 
 ## Framing
