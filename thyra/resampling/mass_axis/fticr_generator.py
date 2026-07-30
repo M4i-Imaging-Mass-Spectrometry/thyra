@@ -56,8 +56,12 @@ class FTICRAxisGenerator(BaseAxisGenerator):
         inv_max = 1.0 / max_mz
         # inv_range = inv_min - inv_max  # Note: min > max in 1/mz space
 
-        # Create uniform grid in 1/mz space
-        inv_values = np.linspace(inv_max, inv_min, target_bins + 1)
+        # Create uniform grid in 1/mz space. Walk 1/mz downwards, from
+        # 1/min_mz to 1/max_mz, so the resulting m/z axis comes out
+        # ascending: it is assigned straight to the converter's common mass
+        # axis, and everything downstream (np.searchsorted binning, the
+        # stored var["mz"] column) requires increasing m/z.
+        inv_values = np.linspace(inv_min, inv_max, target_bins + 1)
         mz_values = 1.0 / inv_values
 
         # Use bin centers

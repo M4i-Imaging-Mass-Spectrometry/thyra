@@ -58,8 +58,12 @@ class OrbitrapAxisGenerator(BaseAxisGenerator):
         inv_sqrt_max = 1.0 / np.sqrt(max_mz)
         # inv_sqrt_range = inv_sqrt_min - inv_sqrt_max  # Note: min > max in 1/sqrt space
 
-        # Create uniform grid in 1/sqrt(mz) space
-        inv_sqrt_values = np.linspace(inv_sqrt_max, inv_sqrt_min, target_bins + 1)
+        # Create uniform grid in 1/sqrt(mz) space. Walk 1/sqrt(mz) downwards,
+        # from 1/sqrt(min_mz) to 1/sqrt(max_mz), so the resulting m/z axis
+        # comes out ascending: it is assigned straight to the converter's
+        # common mass axis, and everything downstream (np.searchsorted
+        # binning, the stored var["mz"] column) requires increasing m/z.
+        inv_sqrt_values = np.linspace(inv_sqrt_min, inv_sqrt_max, target_bins + 1)
         mz_values = 1.0 / (inv_sqrt_values**2)
 
         # Use bin centers
