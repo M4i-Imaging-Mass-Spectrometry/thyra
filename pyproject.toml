@@ -112,11 +112,13 @@ ptitprince = "^0.3.1"
 [tool.poetry.group.docs.dependencies]
 mkdocs = ">=1.6, <2"
 mkdocs-material = ">=9.5"
+mkdocs-jupyter = ">=0.25, <1"       # renders docs/*.ipynb as site pages
 mkdocstrings = {extras = ["python"], version = ">=0.27"}
 
 [tool.poetry.scripts]
 thyra = "thyra.__main__:main"
 thyra-check-ontology = "thyra.tools.check_ontology:main"
+thyra-example-data = "thyra.tools.make_example_data:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
