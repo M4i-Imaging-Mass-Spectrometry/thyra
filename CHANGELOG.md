@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.27.1 (2026-07-30)
+
+### Bug Fixes
+
+- **spatialdata**: Coerce pandas 3 string dtypes to object on write
+  ([`86ffb1d`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/86ffb1d5dd0af817b02502f4f3ba0bd121098d66))
+
+### Documentation
+
+- Add handouts for the four parallel workstreams
+  ([`70be229`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/70be229a0ff7cf989b840da308a6b12cb76f3708))
+
+- **handouts**: Fold in findings from spatialdata PR #1055
+  ([`2d0851a`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/2d0851a8c85df7888eec3afdc659c353d761772e))
+
+
 ## v1.27.0 (2026-07-30)
 
 ### Bug Fixes
