@@ -12,7 +12,6 @@ import click  # noqa: E402
 
 from thyra import __version__  # noqa: E402
 from thyra.convert import convert_msi  # noqa: E402
-from thyra.utils.data_processors import optimize_zarr_chunks  # noqa: E402
 from thyra.utils.logging_config import setup_logging  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -320,22 +319,22 @@ def _quarantine_partial_output(output: Path) -> None:
     )
 
 
-def _handle_post_conversion(
-    success: bool,
-    optimize_chunks: bool,
-    format: str,
-    output: Path,
-    dataset_id: str,
-) -> None:
-    """Handle chunk optimization and result logging after conversion."""
+def _handle_post_conversion(success: bool, output: Path) -> bool:
+    """Report the conversion result, quarantining a partial store on failure.
+
+    Returns whether the run succeeded. There are no fallible post-conversion
+    steps left, so today this is just ``success`` -- but the caller keys the
+    process exit status off the return value rather than off ``convert_msi``'s
+    bool, so the next step added here has to report its failure instead of
+    dropping it on the floor the way ``--optimize-chunks`` did.
+    """
     if success:
-        if optimize_chunks and format == "spatialdata":
-            optimize_zarr_chunks(str(output), f"tables/{dataset_id}/X")
         logger.info(f"Conversion completed successfully. Output stored at {output}")
-        return
+        return True
 
     logger.error("Conversion failed.")
     _quarantine_partial_output(output)
+    return False
 
 
 class GroupedCommand(click.Command):
@@ -361,7 +360,7 @@ class GroupedCommand(click.Command):
             "--resample-width-at-mz",
             "--resample-reference-mz",
         ],
-        "Performance": ["--streaming", "--optimize-chunks", "--sparse-format"],
+        "Performance": ["--streaming", "--sparse-format"],
         "Bruker-specific": [
             "--use-recalibrated",
             "--no-recalibrated",
@@ -483,7 +482,8 @@ class GroupedCommand(click.Command):
 @click.option(
     "--optimize-chunks",
     is_flag=True,
-    help="Optimize Zarr chunks after conversion",
+    hidden=True,
+    help="Deprecated no-op, accepted so existing scripts keep running.",
 )
 @click.option(
     "--sparse-format",
@@ -613,6 +613,17 @@ def main(
     # Configure logging
     setup_logging(log_level=getattr(logging, log_level), log_file=log_file)
 
+    # Warn before doing any work: on a multi-hour conversion, telling the user
+    # at the end that the flag was dead is too late to be useful.
+    if optimize_chunks:
+        logger.warning(
+            "--optimize-chunks is deprecated and does nothing. Chunk sizes for "
+            "the converted store are chosen at write time; the post-hoc pass "
+            "this flag used to invoke never worked and has been removed. The "
+            "flag is still accepted so existing scripts keep running, and will "
+            "be dropped in a future release."
+        )
+
     # If input folder has multiple .d datasets, let the user choose
     input = _select_bruker_dataset(input)
 
@@ -654,11 +665,11 @@ def main(
         region=region,
     )
 
-    _handle_post_conversion(success, optimize_chunks, format, output, dataset_id)
+    ok = _handle_post_conversion(success, output)
 
     # Surface failure to the shell: without this a script or CI wrapper
     # calling `thyra` sees success even though nothing usable was written.
-    if not success:
+    if not ok:
         raise SystemExit(1)
 
 

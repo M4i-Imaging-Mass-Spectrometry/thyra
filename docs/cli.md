@@ -155,7 +155,6 @@ thyra input.imzML output.zarr \
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--streaming [auto\|true\|false]` | `auto` | Streaming mode for large datasets |
-| `--optimize-chunks` | off | Optimise Zarr chunks after conversion |
 | `--sparse-format [csc\|csr]` | `csc` | Sparse matrix storage format |
 
 !!! info "Streaming mode"
@@ -173,9 +172,6 @@ thyra input.imzML output.zarr \
 # Force streaming for a large dataset
 thyra large.d output.zarr --streaming true
 
-# Optimise chunk layout for downstream column-access patterns
-thyra input.imzML output.zarr --optimize-chunks
-
 # Use CSR format (faster row access, slower column access)
 thyra input.imzML output.zarr --sparse-format csr
 ```
@@ -184,6 +180,15 @@ thyra input.imzML output.zarr --sparse-format csr
     **CSC** (default) is optimised for extracting ion images (one m/z across all
     pixels). **CSR** is optimised for extracting spectra (one pixel across all
     m/z values). Choose based on your downstream access pattern.
+
+!!! warning "`--optimize-chunks` is deprecated"
+    The flag is still accepted, so existing scripts keep running, but it does
+    nothing and now logs a warning. It will be dropped in a future release.
+
+    It never did anything: the post-hoc pass it invoked was written for a dense
+    4-D image layout and could not read the sparse table the converter actually
+    writes, so it failed on every conversion and the CLI still exited 0. Chunk
+    sizes are chosen at write time instead.
 
 ---
 

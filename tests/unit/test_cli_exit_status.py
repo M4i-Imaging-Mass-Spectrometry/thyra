@@ -8,6 +8,8 @@ destination path where it can be mistaken for a finished conversion.
 
 from __future__ import annotations
 
+import importlib
+
 import pytest
 from click.testing import CliRunner
 
@@ -134,6 +136,89 @@ class TestPartialOutputQuarantine:
         assert not output_path.exists()
         assert not (temp_dir / "out.zarr.failed").exists()
         assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+class TestOptimizeChunksDeprecation:
+    """``--optimize-chunks`` is a no-op that warns, and is no longer advertised.
+
+    It never worked: the post-hoc pass it invoked was written for a dense 4-D
+    image layout and could not read the sparse ``tables/<id>/X`` group the
+    converter writes, so it failed on every conversion while the CLI still
+    exited 0. The flag stays accepted so scripts passing it keep running.
+    """
+
+    def test_flag_is_still_accepted(
+        self, create_minimal_imzml, temp_dir, monkeypatch, runner
+    ):
+        """A script passing the flag must not die on an unknown option."""
+        imzml_path, _, _, _ = create_minimal_imzml
+        output_path = temp_dir / "out.zarr"
+
+        monkeypatch.setattr("thyra.__main__.convert_msi", lambda *a, **k: True)
+
+        result = _invoke(runner, imzml_path, output_path, "--optimize-chunks")
+
+        # click reports an unknown option as exit code 2.
+        assert result.exit_code == 0, result.output
+
+    def test_flag_warns_that_it_does_nothing(
+        self, create_minimal_imzml, temp_dir, monkeypatch, runner
+    ):
+        """The user must be told the flag is dead.
+
+        Asserted against the CLI's own output rather than ``caplog``:
+        ``setup_logging`` sets ``propagate = False`` on the ``thyra`` logger and
+        attaches a ``StreamHandler(sys.stdout)``, so records never reach the root
+        handler ``caplog`` installs. Reading stdout also asserts on what the user
+        actually sees.
+        """
+        imzml_path, _, _, _ = create_minimal_imzml
+        output_path = temp_dir / "out.zarr"
+
+        monkeypatch.setattr("thyra.__main__.convert_msi", lambda *a, **k: True)
+
+        result = _invoke(runner, imzml_path, output_path, "--optimize-chunks")
+
+        assert result.exit_code == 0, result.output
+        assert "--optimize-chunks is deprecated" in result.output
+        assert "WARNING" in result.output
+
+    def test_flag_is_silent_when_not_passed(
+        self, create_minimal_imzml, temp_dir, monkeypatch, runner
+    ):
+        """The warning must only fire for users who actually pass the flag."""
+        imzml_path, _, _, _ = create_minimal_imzml
+        output_path = temp_dir / "out.zarr"
+
+        monkeypatch.setattr("thyra.__main__.convert_msi", lambda *a, **k: True)
+
+        result = _invoke(runner, imzml_path, output_path)
+
+        assert result.exit_code == 0, result.output
+        assert "--optimize-chunks" not in result.output
+
+    def test_flag_does_not_mask_a_failed_conversion(
+        self, create_minimal_imzml, temp_dir, monkeypatch, runner
+    ):
+        """The deprecation branch must not swallow the non-zero exit."""
+        imzml_path, _, _, _ = create_minimal_imzml
+        output_path = temp_dir / "out.zarr"
+
+        monkeypatch.setattr("thyra.__main__.convert_msi", lambda *a, **k: False)
+
+        result = _invoke(runner, imzml_path, output_path, "--optimize-chunks")
+
+        assert result.exit_code != 0, result.output
+
+    def test_the_dead_helper_is_gone(self):
+        """``optimize_zarr_chunks`` and its module must not come back."""
+        import thyra.utils
+
+        assert not hasattr(thyra.utils, "optimize_zarr_chunks")
+        assert "optimize_zarr_chunks" not in thyra.utils.__all__
+
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module("thyra.utils.data_processors")
 
 
 class TestVersionOption:
