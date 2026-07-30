@@ -1836,9 +1836,13 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
     # anndata #2377 is this exact IORegistryError, closed as a duplicate of
     # it, and spatialdata-io #364 is the same failure in spatialdata's own
     # Xenium writer, so this is an ecosystem gap and not a Thyra bug.
-    # anndata's documented escape hatches do not help on the pinned 0.12.2:
-    # `ad.settings.allow_write_nullable_strings = True` and
-    # `pd.set_option("mode.string_storage", "python")` both still raise.
+    # anndata's documented escape hatches do not help individually on the
+    # pinned 0.12.2: `ad.settings.allow_write_nullable_strings = True` and
+    # `pd.set_option("mode.string_storage", "python")` each still raise. On
+    # pandas 3 the two together do write cleanly, but they are global process
+    # state that a library has no business setting for its users, and they do
+    # not help at all under future.infer_string on pandas 2, which is what CI
+    # runs. A local coercion here stays the right layer.
     #
     # Delete `_coerce_table_strings_to_object` and its call in `_save_output`
     # once the anndata ceiling in pyproject.toml moves to >= 0.13. Verified
