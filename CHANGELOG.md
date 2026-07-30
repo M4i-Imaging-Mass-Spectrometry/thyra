@@ -2,6 +2,32 @@
 
 <!-- version list -->
 
+## v1.27.3 (2026-07-30)
+
+### Bug Fixes
+
+- **ci**: Mark the complexity monitor's subprocess import as reviewed
+  ([`bfe811b`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/bfe811b5a71e169b67a0cdc42a1cf01f3f54706c))
+
+### Build System
+
+- Check out LF line endings on every platform
+  ([`04879ab`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/04879ab2dd1bfddae2837f536062635f0804d570))
+
+- Make pyproject.toml the single source of truth for pydocstyle
+  ([`eecabb2`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/eecabb2537fcd4bd3c18e739c68fc9ce1f48af42))
+
+### Documentation
+
+- **handouts**: Record how the toolchain-hygiene lane resolved
+  ([`41d9c62`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/41d9c62639574b42d16946059585cecb2a191c79))
+
+### Refactoring
+
+- **types**: Drop the two no-any-return errors from a full mypy run
+  ([`f207f8d`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f207f8d22c1adbb25b41c3582c22190a31273139))
+
+
 ## v1.27.2 (2026-07-30)
 
 ### Bug Fixes
