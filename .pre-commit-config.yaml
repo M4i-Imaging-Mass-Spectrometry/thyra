@@ -68,9 +68,13 @@ repos:
         exclude: ^tests/
 
   # Docstring formatting
+  # Settings live in pyproject.toml, the same arrangement flake8 uses with
+  # .flake8. Do not add setting args here: a YAML flow sequence splits on
+  # every comma, so `args: [--convention=google, --add-ignore=D100,D104,D105]`
+  # reached pydocstyle as `--add-ignore=D100` plus two stray positional
+  # arguments, and D104 was reported despite appearing to be ignored.
   - repo: https://github.com/pycqa/pydocstyle
     rev: 6.3.0
     hooks:
       - id: pydocstyle
-        args: [--convention=google, --add-ignore=D100,D104,D105]
         exclude: ^(tests/|docs/)
