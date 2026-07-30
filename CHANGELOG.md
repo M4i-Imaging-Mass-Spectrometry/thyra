@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v1.27.2 (2026-07-30)
+
+### Bug Fixes
+
+- **cli**: Retire the --optimize-chunks pass that never ran
+  ([`1d365c0`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/1d365c04c2f4f02ec7bbbd59b48c33c03e649b4e))
+
+### Documentation
+
+- **handouts**: Add handout F and record the branch sweep
+  ([`c62afc9`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/c62afc9ad1ee18963b8bf651288d1a21e9832b14))
+
+- **handouts**: Record how the optimize-chunks lane resolved
+  ([`a868b41`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a868b41001d3b683f3b53112dc8d02963e5e2270))
+
+### Testing
+
+- **streaming**: Cover the encoding attrs the PCS layout hand-writes
+  ([`9786359`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/978635921bee796b7821dd22af565ebb958612d6))
+
+
 ## v1.27.1 (2026-07-30)
 
 ### Bug Fixes
