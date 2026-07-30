@@ -10,6 +10,7 @@ from typing import Literal, Optional  # noqa: E402
 
 import click  # noqa: E402
 
+from thyra import __version__  # noqa: E402
 from thyra.convert import convert_msi  # noqa: E402
 from thyra.utils.data_processors import optimize_zarr_chunks  # noqa: E402
 from thyra.utils.logging_config import setup_logging  # noqa: E402
@@ -422,6 +423,7 @@ class GroupedCommand(click.Command):
 
 
 @click.command(cls=GroupedCommand)
+@click.version_option(version=__version__, prog_name="thyra")
 @click.argument("input", type=click.Path(exists=True, path_type=Path))
 @click.argument("output", type=click.Path(path_type=Path))
 # -- Conversion --

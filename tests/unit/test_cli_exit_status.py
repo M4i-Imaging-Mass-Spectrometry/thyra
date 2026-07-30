@@ -134,3 +134,22 @@ class TestPartialOutputQuarantine:
         assert not output_path.exists()
         assert not (temp_dir / "out.zarr.failed").exists()
         assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+class TestVersionOption:
+    """``thyra --version`` must report the installed package version."""
+
+    def test_version_flag_reports_package_version(self, runner):
+        from thyra import __version__
+
+        result = runner.invoke(main, ["--version"])
+
+        assert result.exit_code == 0
+        assert __version__ in result.output
+
+    def test_version_flag_does_not_require_arguments(self, runner):
+        """--version must work without INPUT and OUTPUT."""
+        result = runner.invoke(main, ["--version"])
+
+        assert result.exit_code == 0
+        assert "Missing argument" not in result.output
