@@ -53,25 +53,45 @@ registry has a writer for `pandas.core.arrays.string_.StringArray` but not
 for the `*NumpySemantics` subclasses pandas 3 actually produces, and the
 registry matches exact types rather than subclasses.
 
-### Upstream will not fix this in a version we can use
+### Upstream has already fixed this, in a release the ceiling excludes
+
+**Corrected 2026-07-30.** This section previously said anndata #2221 was open
+and milestoned 0.14.0, and concluded that upstream would not fix this in a
+usable timeframe. That was wrong. The fix below was written on that mistaken
+basis, which does not make it wrong — it was and is needed on the pinned
+anndata — but it does change it from a permanent fixture into removable work.
 
 Checked directly:
 
 - **anndata #2377** is our exact error. Closed as a duplicate of #2221.
-- **anndata #2221** ("Pandas 3.0 compatibility") is **open**, milestoned
-  **0.14.0**. The plan is to warn in 0.13 and flip defaults in 0.14.
+- **anndata #2221** ("Pandas 3.0 compatibility") was **closed as completed**
+  on 2025-12-11 by anndata #2133, and shipped in **anndata 0.13.0**
+  (2026-07-07). Its milestone label still reads 0.14.0, which is what caused
+  the original misreading — the label was never updated to match the release
+  the fix actually landed in.
 - **spatialdata-io #364** is the same failure hitting spatialdata's own
-  Xenium writer, so this is an ecosystem gap, not a Thyra bug.
+  Xenium writer, so this is an ecosystem gap, not a Thyra bug. Note the right
+  advice for that issue is now "upgrade to anndata >= 0.13", not the coercion
+  below.
 
-The repo owner is a spatialdata contributor with an open PR there (#1055,
-see [handout E](upstream-lazy-table-pr.md)). The same coercion arguably
-belongs in spatialdata's own table write path, which would make Thyra's
-copy redundant. That is a good thing to raise on #364, but it is not a
-reason to delay this handout: Thyra cannot wait on an upstream release
-cycle for a bug that breaks conversions today.
+Verified by direct test on 2026-07-30, writing an obs table with a string
+index, a string column, and a string-backed categorical:
 
-`pyproject.toml` pins `anndata = ">=0.11.0, <0.13"`, so even 0.13's warnings
-are out of range and 0.14 is far out.
+| pandas | pyarrow | anndata | `write_zarr` |
+|---|---|---|---|
+| 2.3.2 + `infer_string` | yes | 0.12.2 | `IORegistryError` on `ArrowStringArrayNumpySemantics` |
+| 3.0.5 | yes | 0.12.2 | `IORegistryError` on `pandas.arrays.ArrowStringArray` |
+| 3.0.5 | no | 0.12.2 | `RuntimeError` on `allow_write_nullable_strings` |
+| 2.3.2 + `infer_string` | yes | **0.13.2** | **PASS** |
+| 3.0.5 | yes | **0.13.2** | **PASS** |
+
+The concrete failing class varies with pandas version and whether pyarrow is
+installed, which is why a fix keyed to any one class name would be wrong.
+
+`pyproject.toml` pins `anndata = ">=0.11.0, <0.13"`, which excludes the fix.
+spatialdata 0.7.3 requires only `anndata>=0.9.1`, so raising that ceiling is
+**not** blocked by the spatialdata pin, and not blocked by
+[handout E](upstream-lazy-table-pr.md) either.
 
 **anndata's documented escape hatches do not work on our pinned version.**
 Verified against anndata 0.12.2 with `infer_string=True`:
@@ -125,12 +145,13 @@ Worth stating in the commit message, because it is the crux:
 
 ### Required: a removal trigger
 
-This *should* become dead code once anndata 0.14 ships pandas 3 support.
-Leave something that makes that obvious rather than letting it calcify:
+This is dead code the moment the `anndata` ceiling moves to `>= 0.13`, which
+already exists and is not blocked on anything. Leave something that makes that
+obvious rather than letting it calcify:
 
-- A module-level comment naming **anndata #2221** and the 0.14.0 milestone,
-  stating the coercion can be deleted when the `anndata` ceiling moves to
-  `>=0.14` with pandas-3 support.
+- A module-level comment naming **anndata #2221** and the 0.13.0 release that
+  fixed it, stating the coercion can be deleted when the `anndata` ceiling
+  moves to `>=0.13`.
 - Ideally a test that fails loudly when the installed anndata *can* write
   Arrow-backed strings, so the workaround announces its own obsolescence
   instead of silently pessimising. Something like: if
