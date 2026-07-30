@@ -170,7 +170,10 @@ def get_changed_files() -> List[Path]:
     Returns:
         List of Path objects for changed Python files that exist
     """
-    import subprocess
+    # nosec B404: CI tooling that shells out to git with a fixed argument
+    # list and no shell. B603 and B607, which cover the calls themselves,
+    # are already skipped repository-wide in pyproject.toml.
+    import subprocess  # nosec B404
 
     try:
         # Try comparing against origin/main first
