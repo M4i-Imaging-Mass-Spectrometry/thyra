@@ -2,6 +2,50 @@
 
 <!-- version list -->
 
+## v1.27.0 (2026-07-30)
+
+### Bug Fixes
+
+- **cli**: Exit non-zero when conversion fails
+  ([`1584f10`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/1584f106af07875b812102af36ef693bf8815c8c))
+
+- **convert**: Write through an extended-length path when the store is deep
+  ([`f9c0199`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f9c019938fbeab1133efeb0fdcb6722400036caf))
+
+- **converters**: Derive bin count from axis physics for FT-ICR and Orbitrap
+  ([`20e39de`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/20e39defa1b0e87e3278a54d65362a03027544d8))
+
+- **converters**: Reject unknown resampling method and axis type values
+  ([`4840b7d`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/4840b7da5670b7357738858a60eb1eedcfa2979c))
+
+- **converters**: Retry Zarr metadata renames blocked on Windows
+  ([`af19db6`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/af19db6b42a0cc9debf38e82a3f895f3597cb2dc))
+
+- **resampling**: Align the ResamplingConfig reference_mz default with the CLI
+  ([`de33301`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/de33301011d4e54af196e79326a728f33f122f7b))
+
+- **resampling**: Emit Orbitrap and FT-ICR axes in ascending m/z order
+  ([`40a191e`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/40a191e4a1ed14a4ccabb335038b69b30819b0a0))
+
+### Build System
+
+- Make .flake8 the single source of truth for lint settings
+  ([`e144f2d`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/e144f2d3b626342ddd58d7986def874b5fe01dbb))
+
+### Features
+
+- **cli**: Add --version
+  ([`b19f989`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/b19f989ab7419ab1b4416b8c1431e61809fff50b))
+
+### Refactoring
+
+- **resampling**: Drop the dead axis-generator width and bins methods
+  ([`c6bf58d`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/c6bf58d5b2035e4576389bd2f3731d66870aa221))
+
+- **resampling**: Drop the unimplemented LINEAR_INTERPOLATION method
+  ([`23f8f76`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/23f8f7687273db7ad5be1eeb128a3bab90522894))
+
+
 ## v1.26.0 (2026-07-30)
 
 ### Documentation
