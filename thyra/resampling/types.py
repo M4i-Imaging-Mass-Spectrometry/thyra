@@ -17,14 +17,11 @@ class ResamplingMethod(Enum):
         TIC_PRESERVING: Redistribute intensity so the total ion count
             is preserved after rebinning (recommended for quantitative
             work).
-        LINEAR_INTERPOLATION: Linear interpolation between neighbouring
-            bins.
     """
 
     NONE = "none"
     NEAREST_NEIGHBOR = "nearest_neighbor"
     TIC_PRESERVING = "tic_preserving"
-    LINEAR_INTERPOLATION = "linear_interpolation"
 
 
 class AxisType(Enum):
