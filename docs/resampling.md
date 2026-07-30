@@ -179,17 +179,13 @@ produces for FlexImaging data. The count is then derived per axis type:
 |---|---|
 | `reflector_tof` | `ln(max/min) * (ref_mz / width)` |
 | `linear_tof` | `(2/k) * (sqrt(max) - sqrt(min))`, `k = width / sqrt(ref_mz)` |
-| `orbitrap` | `(1/sqrt(min) - 1/sqrt(max)) * (ref_mz^1.5 / width)` |
+| `orbitrap` | `2 * (1/sqrt(min) - 1/sqrt(max)) * (ref_mz^1.5 / width)` |
+| `fticr` | `(1/min - 1/max) * (ref_mz^2 / width)` |
 | `constant` | `(max - min) / width` |
 
+Each is the integral of `1 / width(m)` across the mass range, so the bin width
+the axis actually realizes at your reference m/z is the width you asked for.
 The result is floored at 100 bins.
-
-!!! warning "Specify `--resample-bins` explicitly for FT-ICR"
-    The bin-count calculation has no `fticr` branch, so an FT-ICR axis falls
-    through to the uniform `(max - min) / width` formula while the axis itself
-    is generated with `m/z^2` spacing. The axis is valid, but the effective
-    width at your reference m/z will not be the width you asked for. Set
-    `--resample-bins` directly for FT-ICR data.
 
 A worked example, from the [tutorial](tutorial.md)'s synthetic dataset --
 250-1200 Da, `constant` axis, default 5 mDa width:
@@ -296,7 +292,7 @@ confirming a `constant` axis at the default width.
 - **Leave it alone** unless you have a reason. The detected settings are right for the common Bruker and imzML cases.
 - **Disable it** (`--no-resample`) when you want the untouched vendor axis -- your own peak picking, centroiding, or calibration downstream.
 - **Set `tic_preserving`** if quantitation matters and your data is profile, especially profile data from a high-resolution analyser, which the automatic choice will not pick it for.
-- **Set `--resample-bins`** for FT-ICR data, and any time you need to match another tool's axis exactly.
+- **Set `--resample-bins`** any time you need to match another tool's axis exactly.
 - **Narrow the mass range** (`--resample-min-mz` / `--resample-max-mz`) before increasing bin counts; it is usually the cheaper way to get the resolution you need where you need it.
 
 ---

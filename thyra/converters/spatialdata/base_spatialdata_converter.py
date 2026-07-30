@@ -609,11 +609,27 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             bins = int((2.0 / k) * (np.sqrt(max_mz) - np.sqrt(min_mz)))
 
         elif axis_name == "orbitrap":
-            # ORBITRAP: width ∝ m/z^1.5
-            # For 1/sqrt spacing: bins ≈ (1/sqrt(min_mz) - 1/sqrt(max_mz)) *
-            # (reference_mz^1.5 / width_at_mz)
+            # ORBITRAP: bin_width = k * (m/z)^1.5 with k = width_at_mz /
+            # reference_mz^1.5. Integrating dm / w(m) over the range gives
+            #   bins = 2 * (1/sqrt(min_mz) - 1/sqrt(max_mz)) *
+            #          (reference_mz^1.5 / width_at_mz)
+            # The factor 2 comes from d(m^-0.5)/dm = -1/2 * m^-1.5 and was
+            # missing, which halved the bin count and made every bin twice
+            # the requested width.
             scaling_factor = (reference_mz**1.5) / width_at_mz
-            bins = int((1 / np.sqrt(min_mz) - 1 / np.sqrt(max_mz)) * scaling_factor)
+            bins = int(2 * (1 / np.sqrt(min_mz) - 1 / np.sqrt(max_mz)) * scaling_factor)
+
+        elif axis_name == "fticr":
+            # FTICR: width ∝ m/z^2, i.e. bin_width = k * (m/z)^2 with
+            # k = width_at_mz / reference_mz^2. FTICRAxisGenerator lays the
+            # axis out uniformly in 1/mz, so the bin count is the 1/mz span
+            # divided by the step k:
+            #   bins = (1/min_mz - 1/max_mz) * (reference_mz^2 / width_at_mz)
+            # Without this branch an FT-ICR axis took its bin count from the
+            # uniform formula below, so the realized width at reference_mz was
+            # not the width that was asked for.
+            scaling_factor = (reference_mz**2) / width_at_mz
+            bins = int((1 / min_mz - 1 / max_mz) * scaling_factor)
 
         else:
             # LINEAR/CONSTANT: uniform spacing
