@@ -198,23 +198,33 @@ session, napari, or a Jupyter notebook that loaded it.
 **Fix:** Close any program that has the zarr open, or write to a different output
 path.
 
-### Windows: "No such file or directory" ending in `.partial`
+### Windows: long output paths
 
-A conversion that fails with an error like
+Windows caps a normal path at 260 characters, and the limit applies to every
+file inside the `.zarr` directory rather than to the path you typed. Thyra's
+deepest metadata key sits roughly 95 characters below the output path, so an
+output path over about 165 characters would once fail part-way through the
+write with a confusing error naming a file you never asked for:
 
 ```
 Error saving SpatialData: [Errno 2] No such file or directory:
   '...\output.zarr\tables\msi_dataset_z0\uns\format_specific\imzml_version\zarr.<hash>.partial'
 ```
 
-has hit the Windows 260-character path limit. Thyra stores metadata as nested
-Zarr groups, and Zarr appends a temporary `zarr.<32-hex>.partial` filename while
-writing, which together add roughly 95 characters below your output path.
+Thyra now detects this before writing and opens the store through an
+extended-length (`\\?\`) path, which is exempt from the 260-character limit, so
+long output paths convert normally. A log line records when this happens.
 
-**Fix:** write to a shorter output path -- a short directory near the drive root
-such as `C:\msi\out.zarr` is always safe. Alternatively, enable long path
-support system-wide (`HKLM\SYSTEM\CurrentControlSet\Control\FileSystem`,
-`LongPathsEnabled` = 1, requires administrator rights and a reboot).
+!!! note "Reading a store at a long path"
+    The store is written correctly, but *other* tools still face the same limit
+    when reading it. Either enable long path support system-wide
+    (`HKLM\SYSTEM\CurrentControlSet\Control\FileSystem`, `LongPathsEnabled` = 1;
+    needs administrator rights and a reboot), pass the `\\?\` prefix yourself:
+    ```python
+    import spatialdata as sd
+    sdata = sd.read_zarr(r"\\?\C:\very\long\path\output.zarr")
+    ```
+    or simply choose a shorter output path such as `C:\msi\out.zarr`.
 
 !!! info "Failed conversions exit non-zero and move the partial store aside"
     Any failed conversion exits with status 1, so a script or CI job wrapping
