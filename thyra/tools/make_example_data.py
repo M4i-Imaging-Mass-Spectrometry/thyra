@@ -56,7 +56,11 @@ def _ellipse_mask(
 ) -> np.ndarray:
     """Boolean mask of an axis-aligned ellipse on a (y, x) grid."""
     n_y, n_x = shape
-    yy, xx = np.mgrid[0:n_y, 0:n_x]
+    # np.mgrid is typed as Any, which propagates through the arithmetic below
+    # and makes the returned mask untyped. Broadcasting two typed 1-D ranges
+    # produces the same grid while keeping the return type checkable.
+    yy = np.arange(n_y, dtype=np.float64).reshape(n_y, 1)
+    xx = np.arange(n_x, dtype=np.float64).reshape(1, n_x)
     cy, cx = centre
     ry, rx = radii
     return ((yy - cy) / ry) ** 2 + ((xx - cx) / rx) ** 2 <= 1.0

@@ -7,7 +7,7 @@ files using the MassLynx native library and pre-built imaging grid.
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -15,6 +15,9 @@ from tqdm import tqdm
 
 from ...core.base_extractor import MetadataExtractor
 from ..types import ComprehensiveMetadata, EssentialMetadata
+
+if TYPE_CHECKING:
+    from ...readers.waters.masslynx_lib import MassLynxLib
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +32,7 @@ class WatersMetadataExtractor(MetadataExtractor):
 
     def __init__(
         self,
-        ml,  # MassLynxLib instance
+        ml: "MassLynxLib",
         handle,  # opaque file handle
         data_path: Path,
         imaging_grid,  # ImagingGrid instance
