@@ -23,7 +23,7 @@ paper.
 pip install thyra
 ```
 
-Thyra requires Python 3.11 or 3.12. Check what you have:
+Thyra requires Python 3.12 or 3.13. Check what you have:
 
 ```bash
 thyra --version

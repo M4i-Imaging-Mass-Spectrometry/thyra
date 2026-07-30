@@ -3,28 +3,22 @@
 Under pandas 3.0 -- or pandas 2.x with ``future.infer_string=True``, which is
 what 3.0 makes the default -- the table's obs index (``instance_id``), the
 ``instance_key`` column and the var index (``mz_*``) are inferred as pandas'
-``str`` dtype, backed by ``ArrowStringArrayNumpySemantics``.  anndata's IO
-registry has a writer for ``pandas.core.arrays.string_.StringArray`` but not
-for the ``*NumpySemantics`` subclasses pandas 3 actually produces, and it
-matches exact types rather than subclasses, so ``SpatialData.write()`` raises::
+``str`` dtype rather than ``object``.
 
-    No method registered for writing
-    <class 'pandas.core.arrays.string_arrow.ArrowStringArrayNumpySemantics'>
-    into <class 'zarr.core.group.Group'>
+anndata could not serialize that until 0.13.0 (anndata #2221, fixed by anndata
+#2133), so ``SpatialData.write()`` raised ``IORegistryError`` and Thyra carried
+a write-time coercion to ``object`` in ``_save_output``.  The anndata floor has
+since moved past 0.13, the coercion is gone, and these tests now cover
+anndata's own handling instead of Thyra's workaround.
 
-``BaseSpatialDataConverter._coerce_table_strings_to_object`` is the fix.  Both
-write paths that reach anndata's writer fail without it: the in-memory
-converter (the default for anything under the 10 GB streaming threshold, i.e.
-most conversions) and the streaming COO path.  The streaming PCS path
+They are still worth keeping.  The rest of the suite runs with pandas' default
+inference, so nothing else in CI would notice a regression here; every test in
+this module turns ``future.infer_string`` on for its duration and restores it
+afterwards.  All three write paths are covered: the in-memory converter (the
+default for anything under the 10 GB streaming threshold, i.e. most
+conversions), the streaming COO path, and the streaming PCS path, which
 hand-writes the AnnData layout straight to Zarr and never reaches anndata's
-writer, so it passes either way -- it is covered here to keep it that way.
-
-The rest of the suite runs with pandas' default inference, so nothing else
-would notice if the coercion were dropped; every test in this module turns
-``future.infer_string`` on for its duration and restores it afterwards.
-
-``test_anndata_can_write_arrow_backed_strings`` is the removal trigger: see
-``_coerce_table_strings_to_object`` for the full anndata #2221 story.
+writer at all.
 """
 
 from typing import Callable, Dict
@@ -36,7 +30,6 @@ import pytest
 from tests.fixtures.mock_msi_generator import MockMSIConfig, MockMSIReader
 from thyra.converters.spatialdata.base_spatialdata_converter import (
     SPATIALDATA_AVAILABLE,
-    BaseSpatialDataConverter,
 )
 from thyra.converters.spatialdata.spatialdata_2d_converter import SpatialData2DConverter
 from thyra.converters.spatialdata.streaming_converter import (
@@ -177,96 +170,14 @@ def test_written_store_reads_back_with_pandas_string_index(tmp_path):
     assert table.obs["region"].tolist() == ["mock_z0_pixels"] * _N_PIXELS
 
 
-def test_coercion_changes_only_dtypes():
-    """Same order, same content, only the string dtypes move to ``object``."""
-    df = _string_obs_table()
+def test_anndata_writes_arrow_backed_strings(tmp_path):
+    """anndata serializes pandas' ``str`` dtype directly.
 
-    # Precondition: without these the rest of the test is vacuous.
-    assert isinstance(df.index.dtype, pd.StringDtype)
-    assert isinstance(df["instance_key"].dtype, pd.StringDtype)
-
-    index_before = df.index.tolist()
-    instance_key_before = df["instance_key"].tolist()
-    x_before = df["x"].tolist()
-    spatial_x_before = df["spatial_x"].tolist()
-
-    BaseSpatialDataConverter._coerce_table_strings_to_object(df)
-
-    assert df.index.dtype == object
-    assert df["instance_key"].dtype == object
-    assert df.index.tolist() == index_before
-    assert df.index.name == "instance_id"
-    assert df["instance_key"].tolist() == instance_key_before
-
-    # Non-string columns are untouched, dtype included.
-    assert df["x"].dtype == np.int32
-    assert df["spatial_x"].dtype == np.float64
-    assert df["x"].tolist() == x_before
-    assert df["spatial_x"].tolist() == spatial_x_before
-
-    assert list(df.columns) == ["x", "spatial_x", "region", "instance_key"]
-
-
-def test_coercion_preserves_categorical_codes_and_categories():
-    """A string-backed categorical keeps its codes and its category values."""
-    df = _string_obs_table()
-
-    # Precondition: the categorical must be string-backed to be worth testing.
-    assert isinstance(df["region"].dtype, pd.CategoricalDtype)
-    assert isinstance(df["region"].cat.categories.dtype, pd.StringDtype)
-
-    codes_before = df["region"].cat.codes.tolist()
-    categories_before = df["region"].cat.categories.tolist()
-    values_before = df["region"].tolist()
-    assert len(set(codes_before)) > 1, "need >1 category for codes to mean anything"
-
-    BaseSpatialDataConverter._coerce_table_strings_to_object(df)
-
-    assert isinstance(df["region"].dtype, pd.CategoricalDtype)
-    assert df["region"].cat.categories.dtype == object
-    assert df["region"].cat.codes.tolist() == codes_before
-    assert df["region"].cat.categories.tolist() == categories_before
-    assert df["region"].tolist() == values_before
-
-
-def test_coercion_is_a_noop_on_object_dtypes():
-    """On pandas < 3 the same columns are already ``object`` -- nothing moves.
-
-    Built by coercing once, so this also covers a table that has already been
-    through ``_save_output``.
-    """
-    df = _string_obs_table()
-    BaseSpatialDataConverter._coerce_table_strings_to_object(df)
-
-    # Precondition: this is the pandas < 3 shape.
-    assert df.index.dtype == object
-    assert df["instance_key"].dtype == object
-    assert df["region"].cat.categories.dtype == object
-
-    before = df.copy(deep=True)
-    BaseSpatialDataConverter._coerce_table_strings_to_object(df)
-
-    pd.testing.assert_frame_equal(df, before)
-
-
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "The pinned anndata (< 0.13) cannot serialize pandas' str dtype. "
-        "anndata #2221 ('Pandas 3.0 compatibility') was fixed by anndata "
-        "#2133 and released in 0.13.0, so raising the ceiling is what makes "
-        "this XPASS. An XPASS here means the installed anndata can write "
-        "Arrow-backed strings and _coerce_table_strings_to_object can be "
-        "deleted."
-    ),
-)
-def test_anndata_can_write_arrow_backed_strings(tmp_path):
-    """Removal trigger: XPASSes when the workaround becomes unnecessary.
-
-    Deliberately non-strict, so an anndata that gains pandas 3 support shows up
-    as an XPASS in the run summary rather than as a red build.  The point is
-    that the coercion announces its own obsolescence instead of silently
-    pessimising every write forever.
+    This was the removal trigger for the write-time coercion Thyra used to
+    carry: it was an ``xfail`` that XPASSed once the anndata floor moved to
+    0.13.  Kept as a plain assertion so a regression in anndata's string
+    support is caught here, at the smallest possible scope, rather than as a
+    confusing failure somewhere in the write paths above.
     """
     import anndata as ad
     import zarr
