@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.26.0 (2026-07-30)
+
+### Documentation
+
+- Add tutorial and resampling pages, publish the example notebook
+  ([`45b3680`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/45b3680549d82a37e918bfc35ba5f924239dc04a))
+
+### Features
+
+- **tools**: Add thyra-example-data synthetic dataset generator
+  ([`6566a77`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/6566a7721ce7384dc81b385e9dd06f3587527cdd))
+
+
 ## v1.25.5 (2026-07-09)
 
 ### Bug Fixes
