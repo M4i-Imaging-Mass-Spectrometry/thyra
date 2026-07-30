@@ -7,6 +7,7 @@ from typing import Any, Dict, Literal, Optional, Tuple, Union
 
 from .core.base_converter import PixelSizeSource
 from .core.registry import detect_format, get_converter_class, get_reader_class
+from .utils.windows_paths import prepare_zarr_output_path
 
 logger = logging.getLogger(__name__)
 
@@ -320,6 +321,11 @@ def convert_msi(
 
     if not _validate_paths(input_path, output_path):
         return False
+
+    # A Zarr store's deepest key sits far below the path the caller named,
+    # so a legal-looking output path can still blow the Windows 260
+    # character limit part-way through the write. No-op elsewhere.
+    output_path = prepare_zarr_output_path(output_path, dataset_id)
 
     # Merge region into reader_options if provided
     if region is not None:

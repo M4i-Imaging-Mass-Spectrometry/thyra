@@ -1,9 +1,6 @@
 """Orbitrap mass axis generator with bin size ∝ m/z^1.5 spacing."""
 
-from typing import Any
-
 import numpy as np
-import numpy.typing as npt
 
 from ..types import AxisType, MassAxis
 from .base_generator import BaseAxisGenerator
@@ -23,8 +20,8 @@ class OrbitrapAxisGenerator(BaseAxisGenerator):
         min_mz: float,
         max_mz: float,
         target_bins: int,
-        reference_mz: float = 500.0,
-        reference_width: float = 0.1,
+        reference_mz: float = 1000.0,
+        reference_width: float = 0.005,
     ) -> MassAxis:
         """Generate Orbitrap mass axis with m/z^1.5 spacing.
 
@@ -58,8 +55,12 @@ class OrbitrapAxisGenerator(BaseAxisGenerator):
         inv_sqrt_max = 1.0 / np.sqrt(max_mz)
         # inv_sqrt_range = inv_sqrt_min - inv_sqrt_max  # Note: min > max in 1/sqrt space
 
-        # Create uniform grid in 1/sqrt(mz) space
-        inv_sqrt_values = np.linspace(inv_sqrt_max, inv_sqrt_min, target_bins + 1)
+        # Create uniform grid in 1/sqrt(mz) space. Walk 1/sqrt(mz) downwards,
+        # from 1/sqrt(min_mz) to 1/sqrt(max_mz), so the resulting m/z axis
+        # comes out ascending: it is assigned straight to the converter's
+        # common mass axis, and everything downstream (np.searchsorted
+        # binning, the stored var["mz"] column) requires increasing m/z.
+        inv_sqrt_values = np.linspace(inv_sqrt_min, inv_sqrt_max, target_bins + 1)
         mz_values = 1.0 / (inv_sqrt_values**2)
 
         # Use bin centers
@@ -100,32 +101,3 @@ class OrbitrapAxisGenerator(BaseAxisGenerator):
     def get_axis_type(self) -> AxisType:
         """Return the axis type for Orbitrap."""
         return AxisType.ORBITRAP
-
-    def generate_axis_bins(
-        self, min_mz: float, max_mz: float, num_bins: int
-    ) -> npt.NDArray[np.floating[Any]]:
-        """Generate Orbitrap axis with fixed number of bins."""
-        axis = self.generate_axis(min_mz, max_mz, num_bins)
-        return axis.mz_values
-
-    def generate_axis_width(
-        self,
-        min_mz: float,
-        max_mz: float,
-        width_da: float,
-        reference_mz: float = 500.0,
-    ) -> npt.NDArray[np.floating[Any]]:
-        """Generate Orbitrap axis based on mass width at reference m/z."""
-        # For Orbitrap: bin_width = k * mz^1.5
-        k = width_da / (reference_mz**1.5)
-
-        # Generate axis in 1/sqrt(mz) space for proportional m/z^1.5 spacing
-        inv_sqrt_min = 1.0 / np.sqrt(min_mz)
-        inv_sqrt_max = 1.0 / np.sqrt(max_mz)
-
-        # Calculate number of bins needed for desired resolution
-        inv_sqrt_step = k / (2 * width_da)  # Based on integral derivative
-        num_bins = int((inv_sqrt_min - inv_sqrt_max) / inv_sqrt_step) + 1
-
-        inv_sqrt_values = np.linspace(inv_sqrt_max, inv_sqrt_min, num_bins)
-        return 1.0 / (inv_sqrt_values**2)

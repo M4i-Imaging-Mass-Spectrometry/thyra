@@ -10,7 +10,27 @@ thyra [OPTIONS] INPUT OUTPUT
 
 !!! tip "Grouped help"
     Run `thyra --help` to see all options organised by category (Conversion,
-    Logging, Resampling, Performance, Bruker-Specific, Other).
+    Logging, Resampling, Performance, Bruker-Specific, Other), and
+    `thyra --version` to print the installed version.
+
+---
+
+## Exit status
+
+| Code | Meaning |
+|------|---------|
+| `0` | Conversion completed and the output store was written |
+| `1` | Conversion failed |
+| `2` | Invalid command-line arguments (click usage error) |
+
+A failed conversion renames any partially written store to
+`<output>.zarr.failed`, so the output path stays free for a retry and an
+incomplete store is never left where a finished one is expected. This makes
+`thyra` safe to chain in a shell script or CI job:
+
+```bash
+thyra input.imzML output.zarr && python analyse.py output.zarr
+```
 
 ---
 

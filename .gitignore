@@ -1,5 +1,7 @@
 # MkDocs build output
 site/
+# mkdocs-jupyter's rendered-notebook cache, written by `mkdocs build`
+.cache/
 
 # Python cache and build files
 *.pyc

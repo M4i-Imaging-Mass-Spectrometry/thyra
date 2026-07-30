@@ -1,6 +1,19 @@
 [flake8]
-max-line-length = 88
+# Single source of truth for flake8. The pre-commit hook deliberately passes
+# no arguments so that `poetry run flake8`, `pre-commit run`, and CI all apply
+# exactly these settings. Keep them here, not in hook args.
+max-line-length = 100
 extend-ignore = E203, W503
+per-file-ignores =
+    # Re-exports are the whole point of a package __init__.
+    __init__.py:F401,F403
+# Matches the CI complexity gate (complexity-monitoring.yml, raised 10->15 in
+# d8f1e42).
+max-complexity = 15
+# flake8 always checks a path passed explicitly on the command line, so this
+# list only applies to discovery mode (`poetry run flake8`). pre-commit passes
+# filenames explicitly, so it carries a matching `exclude:` on the flake8 hook
+# -- keep the two in step.
 exclude =
     .git,
     __pycache__,
@@ -15,5 +28,12 @@ exclude =
     ENV,
     env.bak,
     venv.bak,
-    # Ignore auto-generated ontology files
+    # Built documentation
+    site,
+    # Auto-generated ontology files
     thyra/metadata/ontology/_*.py,
+    # Ad-hoc developer diagnostics: not part of the shipped package and not
+    # exercised by CI. black and isort still cover them, so formatting stays
+    # consistent; the stricter lint and complexity gates apply to thyra/ and
+    # tests/ only.
+    scripts,

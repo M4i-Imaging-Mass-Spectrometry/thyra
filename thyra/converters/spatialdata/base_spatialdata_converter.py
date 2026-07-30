@@ -18,6 +18,7 @@ from ...core.base_reader import BaseMSIReader
 from ...metadata.types import ComprehensiveMetadata, EssentialMetadata
 from ...resampling import ResamplingDecisionTree, ResamplingMethod
 from ...resampling.types import ResamplingConfig
+from ...utils.zarr_atomic_write import install_windows_atomic_write_retry
 from ._chunking import image_chunks
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,51 @@ def _suppress_upstream_warnings():
         yield
 
 
+def _resolve_config_enum(raw: Any, by_name: Dict[str, Any], key: str) -> Any:
+    """Resolve one resampling-config value to its enum member.
+
+    ``None``, ``"auto"`` and ``""`` all mean "decide this automatically"
+    and resolve to ``None``.
+
+    The CLI is protected by ``click.Choice``, but the Python API takes
+    whatever the caller passes. Reject anything unrecognised rather than
+    dropping it: silently treating ``"tic_preserving "`` or a typo as
+    "auto-detect" hands back a conversion that ignored the request
+    without saying so.
+
+    Args:
+        raw: The value as supplied by the caller.
+        by_name: Accepted string spellings mapped to enum members.
+        key: The config key, used in error messages.
+
+    Raises:
+        ValueError: If ``raw`` names no accepted value, or is neither a
+            string nor one of the accepted enum members.
+    """
+    if raw is None:
+        return None
+
+    valid = ", ".join(repr(name) for name in ["auto", *by_name])
+
+    if isinstance(raw, str):
+        if raw in ("auto", ""):
+            return None
+        if raw not in by_name:
+            raise ValueError(
+                f"Unknown resampling_config[{key!r}] value {raw!r}. "
+                f"Valid values are: {valid}."
+            )
+        return by_name[raw]
+
+    if raw in by_name.values():
+        return raw
+
+    raise ValueError(
+        f"Unsupported resampling_config[{key!r}] value {raw!r}. "
+        f"Pass one of {valid}, or the matching enum member."
+    )
+
+
 def _normalize_resampling_config(
     config: Union[Dict[str, Any], "ResamplingConfig"],
 ) -> "ResamplingConfig":
@@ -51,44 +97,43 @@ def _normalize_resampling_config(
     Accepts either a plain dict (as produced by _build_resampling_config in
     __main__.py) or an already-constructed ResamplingConfig dataclass and
     returns a ResamplingConfig in both cases.
+
+    Raises:
+        ValueError: If ``method`` or ``axis_type`` is not a recognised
+            value.
     """
     if isinstance(config, ResamplingConfig):
         return config
 
-    from ...resampling.types import AxisType
+    from ...resampling.types import DEFAULT_REFERENCE_MZ, AxisType
 
-    method_raw = config.get("method")
-    axis_type_raw = config.get("axis_type")
+    # Only the methods the resampling pipeline actually implements, and
+    # only the axis types CommonAxisBuilder has a generator for. These
+    # deliberately match the CLI's click.Choice lists.
+    method_by_name = {
+        "nearest_neighbor": ResamplingMethod.NEAREST_NEIGHBOR,
+        "tic_preserving": ResamplingMethod.TIC_PRESERVING,
+    }
+    axis_type_by_name = {
+        "constant": AxisType.CONSTANT,
+        "linear_tof": AxisType.LINEAR_TOF,
+        "reflector_tof": AxisType.REFLECTOR_TOF,
+        "orbitrap": AxisType.ORBITRAP,
+        "fticr": AxisType.FTICR,
+    }
 
-    method = None
-    if isinstance(method_raw, str) and method_raw not in ("auto", ""):
-        method_map = {
-            "nearest_neighbor": ResamplingMethod.NEAREST_NEIGHBOR,
-            "tic_preserving": ResamplingMethod.TIC_PRESERVING,
-        }
-        method = method_map.get(method_raw)
-    elif isinstance(method_raw, ResamplingMethod):
-        method = method_raw
-
-    axis_type = None
-    if isinstance(axis_type_raw, str) and axis_type_raw not in ("auto", ""):
-        axis_type_map = {
-            "constant": AxisType.CONSTANT,
-            "linear_tof": AxisType.LINEAR_TOF,
-            "reflector_tof": AxisType.REFLECTOR_TOF,
-            "orbitrap": AxisType.ORBITRAP,
-            "fticr": AxisType.FTICR,
-        }
-        axis_type = axis_type_map.get(axis_type_raw)
-    elif isinstance(axis_type_raw, AxisType):
-        axis_type = axis_type_raw
+    reference_mz = config.get("reference_mz")
 
     return ResamplingConfig(
-        method=method,
-        axis_type=axis_type,
+        method=_resolve_config_enum(config.get("method"), method_by_name, "method"),
+        axis_type=_resolve_config_enum(
+            config.get("axis_type"), axis_type_by_name, "axis_type"
+        ),
         target_bins=config.get("target_bins"),
         mass_width_da=config.get("width_at_mz"),
-        reference_mz=config.get("reference_mz", 1000.0),
+        reference_mz=(
+            DEFAULT_REFERENCE_MZ if reference_mz is None else float(reference_mz)
+        ),
         min_mz=config.get("min_mz"),
         max_mz=config.get("max_mz"),
     )
@@ -226,6 +271,12 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 f"conflicts."
             )
             raise ImportError(error_msg)
+
+        # Every Zarr write below this point goes through Zarr's atomic
+        # rename, which on Windows intermittently loses a race against
+        # whatever else has the destination open. Idempotent and a no-op
+        # off Windows.
+        install_windows_atomic_write_retry()
 
         # Validate inputs
         if pixel_size_um <= 0:
@@ -609,11 +660,27 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             bins = int((2.0 / k) * (np.sqrt(max_mz) - np.sqrt(min_mz)))
 
         elif axis_name == "orbitrap":
-            # ORBITRAP: width ∝ m/z^1.5
-            # For 1/sqrt spacing: bins ≈ (1/sqrt(min_mz) - 1/sqrt(max_mz)) *
-            # (reference_mz^1.5 / width_at_mz)
+            # ORBITRAP: bin_width = k * (m/z)^1.5 with k = width_at_mz /
+            # reference_mz^1.5. Integrating dm / w(m) over the range gives
+            #   bins = 2 * (1/sqrt(min_mz) - 1/sqrt(max_mz)) *
+            #          (reference_mz^1.5 / width_at_mz)
+            # The factor 2 comes from d(m^-0.5)/dm = -1/2 * m^-1.5 and was
+            # missing, which halved the bin count and made every bin twice
+            # the requested width.
             scaling_factor = (reference_mz**1.5) / width_at_mz
-            bins = int((1 / np.sqrt(min_mz) - 1 / np.sqrt(max_mz)) * scaling_factor)
+            bins = int(2 * (1 / np.sqrt(min_mz) - 1 / np.sqrt(max_mz)) * scaling_factor)
+
+        elif axis_name == "fticr":
+            # FTICR: width ∝ m/z^2, i.e. bin_width = k * (m/z)^2 with
+            # k = width_at_mz / reference_mz^2. FTICRAxisGenerator lays the
+            # axis out uniformly in 1/mz, so the bin count is the 1/mz span
+            # divided by the step k:
+            #   bins = (1/min_mz - 1/max_mz) * (reference_mz^2 / width_at_mz)
+            # Without this branch an FT-ICR axis took its bin count from the
+            # uniform formula below, so the realized width at reference_mz was
+            # not the width that was asked for.
+            scaling_factor = (reference_mz**2) / width_at_mz
+            bins = int((1 / min_mz - 1 / max_mz) * scaling_factor)
 
         else:
             # LINEAR/CONSTANT: uniform spacing

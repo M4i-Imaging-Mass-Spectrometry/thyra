@@ -1,61 +1,60 @@
 """Abstract base class for mass axis generators."""
 
 from abc import ABC, abstractmethod
-from typing import Any
 
-import numpy as np
-import numpy.typing as npt
+from ..types import AxisType, MassAxis
 
 
 class BaseAxisGenerator(ABC):
-    """Abstract base class for mass axis generators."""
+    """Abstract base class for mass axis generators.
+
+    A generator distributes ``target_bins`` bins across a mass range
+    according to one analyser's spacing law. It does not decide *how many*
+    bins to use: that comes from
+    ``BaseSpatialDataConverter._calculate_bins_from_width``, which
+    integrates ``1 / width(m)`` over the range so the width realized at
+    ``reference_mz`` is the width the caller asked for. Generators are
+    reached through :meth:`~thyra.resampling.common_axis.CommonAxisBuilder.build_physics_axis`.
+    """
 
     @abstractmethod
-    def generate_axis_bins(
-        self, min_mz: float, max_mz: float, num_bins: int
-    ) -> npt.NDArray[np.floating[Any]]:
-        """Generate axis with fixed number of bins.
-
-        Parameters
-        ----------
-        min_mz : float
-            Minimum m/z value
-        max_mz : float
-            Maximum m/z value
-        num_bins : int
-            Number of bins to generate
-
-        Returns
-        -------
-        np.ndarray
-            Generated mass axis
-        """
-        pass
-
-    @abstractmethod
-    def generate_axis_width(
+    def generate_axis(
         self,
         min_mz: float,
         max_mz: float,
-        width_da: float,
-        reference_mz: float = 500.0,
-    ) -> npt.NDArray[np.floating[Any]]:
-        """Generate axis based on mass width at reference m/z using analyzer physics.
+        target_bins: int,
+        reference_mz: float = 1000.0,
+        reference_width: float = 0.005,
+    ) -> MassAxis:
+        """Distribute ``target_bins`` bins across the mass range.
+
+        The returned axis must be in ascending m/z order: it is assigned
+        directly to the converter's common mass axis, where downstream
+        binning and the stored ``var["mz"]`` column both require increasing
+        m/z.
 
         Parameters
         ----------
         min_mz : float
-            Minimum m/z value
+            Minimum m/z value.
         max_mz : float
-            Maximum m/z value
-        width_da : float
-            Mass width in Da at reference m/z
+            Maximum m/z value.
+        target_bins : int
+            Number of bins to distribute.
         reference_mz : float
-            Reference m/z for width specification
+            Reference m/z the bin count was anchored to. Implementations
+            that need only the bin count to realize their spacing law may
+            ignore this.
+        reference_width : float
+            Bin width requested at ``reference_mz``. May likewise be
+            ignored when the bin count already determines the spacing.
 
         Returns
         -------
-        np.ndarray
-            Generated mass axis with physics-based spacing
+        MassAxis
+            The generated axis, ascending in m/z.
         """
-        pass
+
+    @abstractmethod
+    def get_axis_type(self) -> AxisType:
+        """Return the axis type this generator produces."""

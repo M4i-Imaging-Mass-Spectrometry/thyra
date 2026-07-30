@@ -26,11 +26,15 @@ pip install thyra
 Thyra requires Python 3.11 or 3.12. Check what you have:
 
 ```bash
-python -c "import thyra, spatialdata; print(thyra.__version__, spatialdata.__version__)"
+thyra --version
 ```
 
 This tutorial was written and verified against `thyra` 1.25.5 and
-`spatialdata` 0.7.3.
+`spatialdata` 0.7.3. To check the `spatialdata` version too:
+
+```bash
+python -c "import spatialdata; print(spatialdata.__version__)"
+```
 
 ---
 

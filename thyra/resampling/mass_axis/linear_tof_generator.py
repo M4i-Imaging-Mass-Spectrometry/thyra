@@ -1,9 +1,6 @@
 """Linear TOF mass axis generator with bin size ∝ √m/z spacing."""
 
-from typing import Any
-
 import numpy as np
-import numpy.typing as npt
 
 from ..types import AxisType, MassAxis
 from .base_generator import BaseAxisGenerator
@@ -22,8 +19,8 @@ class LinearTOFAxisGenerator(BaseAxisGenerator):
         min_mz: float,
         max_mz: float,
         target_bins: int,
-        reference_mz: float = 500.0,
-        reference_width: float = 0.1,
+        reference_mz: float = 1000.0,
+        reference_width: float = 0.005,
     ) -> MassAxis:
         """Generate Linear TOF mass axis with √m/z spacing.
 
@@ -99,35 +96,3 @@ class LinearTOFAxisGenerator(BaseAxisGenerator):
     def get_axis_type(self) -> AxisType:
         """Return the axis type for Linear TOF."""
         return AxisType.LINEAR_TOF
-
-    def generate_axis_bins(
-        self, min_mz: float, max_mz: float, num_bins: int
-    ) -> npt.NDArray[np.floating[Any]]:
-        """Generate Linear TOF axis with fixed number of bins."""
-        axis = self.generate_axis(min_mz, max_mz, num_bins)
-        return axis.mz_values
-
-    def generate_axis_width(
-        self,
-        min_mz: float,
-        max_mz: float,
-        width_da: float,
-        reference_mz: float = 500.0,
-    ) -> npt.NDArray[np.floating[Any]]:
-        """Generate Linear TOF axis based on mass width at reference m/z."""
-        # For Linear TOF: bin_width = k * sqrt(mz)
-        k = width_da / np.sqrt(reference_mz)
-
-        # Generate axis in sqrt(mz) space for proportional √m/z spacing
-        sqrt_min = np.sqrt(min_mz)
-        sqrt_max = np.sqrt(max_mz)
-
-        # Calculate number of bins needed for desired resolution
-        sqrt_step = width_da / (
-            k * np.sqrt(reference_mz)
-        )  # This simplifies to width_da / width_da = 1
-        sqrt_step = k  # Constant step in sqrt space
-        num_bins = int((sqrt_max - sqrt_min) / sqrt_step) + 1
-
-        sqrt_values = np.linspace(sqrt_min, sqrt_max, num_bins)
-        return sqrt_values**2

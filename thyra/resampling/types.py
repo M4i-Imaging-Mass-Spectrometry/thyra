@@ -7,6 +7,11 @@ from typing import Any, Optional
 import numpy as np
 import numpy.typing as npt
 
+#: Reference m/z that ``mass_width_da`` is anchored to when the caller
+#: does not pick one. Matches the ``--resample-reference-mz`` CLI default
+#: so the dataclass default and the CLI default cannot drift apart.
+DEFAULT_REFERENCE_MZ = 1000.0
+
 
 class ResamplingMethod(Enum):
     """Available resampling methods.
@@ -17,14 +22,11 @@ class ResamplingMethod(Enum):
         TIC_PRESERVING: Redistribute intensity so the total ion count
             is preserved after rebinning (recommended for quantitative
             work).
-        LINEAR_INTERPOLATION: Linear interpolation between neighbouring
-            bins.
     """
 
     NONE = "none"
     NEAREST_NEIGHBOR = "nearest_neighbor"
     TIC_PRESERVING = "tic_preserving"
-    LINEAR_INTERPOLATION = "linear_interpolation"
 
 
 class AxisType(Enum):
@@ -94,7 +96,8 @@ class ResamplingConfig:
         mass_width_da: Bin width in Daltons at ``reference_mz``.
             Alternative to ``target_bins`` -- specify one or the other.
         reference_mz: Reference m/z for ``mass_width_da``.  Default
-            500.0 Da.
+            1000.0 Da, matching the ``--resample-reference-mz`` CLI
+            default.
         min_mz: Override the lower bound of the mass range.
         max_mz: Override the upper bound of the mass range.
     """
@@ -103,6 +106,6 @@ class ResamplingConfig:
     axis_type: Optional[AxisType] = None
     target_bins: Optional[int] = None
     mass_width_da: Optional[float] = None
-    reference_mz: float = 500.0
+    reference_mz: float = DEFAULT_REFERENCE_MZ
     min_mz: Optional[float] = None
     max_mz: Optional[float] = None
