@@ -107,7 +107,9 @@ tic = np.asarray(sdata.images["msi_dataset_z0_tic"])[0]
 ## Next Steps
 
 - **[Getting Started](getting-started.md)** -- installation, first conversion, common workflows
+- **[Tutorial](tutorial.md)** -- step-by-step walkthrough, from an example dataset to ion images
 - **[CLI Reference](cli.md)** -- every command-line option explained
+- **[Resampling](resampling.md)** -- how the common mass axis is chosen, and how to control it
 - **[Output Format](output-format.md)** -- what the .zarr contains and how to use it
 - **[API Reference](api.md)** -- Python API documentation
 

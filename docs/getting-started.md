@@ -125,7 +125,8 @@ thyra input.imzML output.zarr \
     -- for example, when doing your own peak picking or centroiding downstream.
     Note that without resampling, each pixel may have a different m/z axis.
 
-See the [CLI Reference](cli.md#resampling-advanced) for all resampling options.
+See [Resampling](resampling.md) for how the method, axis type, and bin count are
+chosen, and the [CLI Reference](cli.md#resampling-advanced) for all options.
 
 ---
 
@@ -191,6 +192,33 @@ Python session, napari, or a Jupyter notebook that loaded it).
 **Fix:** Close any program that has the zarr open, or write to a different output
 path.
 
+### Windows: "No such file or directory" ending in `.partial`
+
+A conversion that fails with an error like
+
+```
+Error saving SpatialData: [Errno 2] No such file or directory:
+  '...\output.zarr\tables\msi_dataset_z0\uns\format_specific\imzml_version\zarr.<hash>.partial'
+```
+
+has hit the Windows 260-character path limit. Thyra stores metadata as nested
+Zarr groups, and Zarr appends a temporary `zarr.<32-hex>.partial` filename while
+writing, which together add roughly 95 characters below your output path.
+
+**Fix:** write to a shorter output path -- a short directory near the drive root
+such as `C:\msi\out.zarr` is always safe. Alternatively, enable long path
+support system-wide (`HKLM\SYSTEM\CurrentControlSet\Control\FileSystem`,
+`LongPathsEnabled` = 1, requires administrator rights and a reboot).
+
+!!! warning "Check the output before relying on it"
+    A conversion that fails this way leaves a partially written `.zarr` behind,
+    and the `thyra` command still exits with status 0. Confirm the output loads
+    before treating a conversion as successful:
+    ```python
+    import spatialdata as sd
+    sd.read_zarr("output.zarr")   # raises if the store is incomplete
+    ```
+
 ### "No module named 'timsdata'" or Bruker SDK errors
 
 The Bruker SDK DLLs are bundled for Windows. On Linux/macOS, Bruker data requires
@@ -229,6 +257,8 @@ thyra input.imzML output.zarr -v DEBUG --log-file conversion.log
 
 ## What Next?
 
+- **[Tutorial](tutorial.md)** -- a full walkthrough on real and example data
 - **[CLI Reference](cli.md)** -- all command-line options
+- **[Resampling](resampling.md)** -- how the mass axis is chosen, and how to control it
 - **[Output Format](output-format.md)** -- understanding the zarr output structure
 - **[API Reference](api.md)** -- Python API documentation

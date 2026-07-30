@@ -40,6 +40,9 @@ Archive/
 # Jupyter notebooks
 .ipynb_checkpoints/
 *.ipynb
+# ...except documentation notebooks, which are published as part of the docs
+# site and must be committed with their outputs.
+!docs/*.ipynb
 
 # Temporary files
 temp_*
