@@ -1,2 +1,21 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Line-ending policy: LF in the repository and in every working tree.
+#
+# `text=auto` normalises text files to LF when they are staged; that half was
+# already here and the index is clean LF throughout. The load-bearing half is
+# the explicit `eol=lf`. Without it, checkout falls back to core.eol, which
+# defaults to "native" and therefore writes CRLF into Windows working trees.
+# That left the tree permanently at odds with the mixed-line-ending hook
+# (args: [--fix=lf]): the hook rewrote every text file to LF, git re-created
+# the CRLF on the next checkout, and `git status` reported all 179 tracked
+# text files as modified even though `git diff` showed no content change.
+#
+# Declaring the policy here rather than relying on each developer's
+# core.autocrlf means it travels with the repository and holds on a fresh
+# clone regardless of the machine's git configuration.
+* text=auto eol=lf
+
+# Vendored native libraries. `text=auto` already detects these as binary, so
+# this is belt and braces: it keeps the guarantee if a future library happens
+# to look like text to the heuristic.
+*.dll binary
+*.so binary
