@@ -281,6 +281,12 @@ def convert_msi(
               to include. Default: None (no filtering).
             - use_recalibrated_state: bool - For Bruker data,
               use active/recalibrated calibration (default True).
+            - max_mass_axis_length: int - For processed-mode imzML
+              converted with --no-resample, give up once the raw
+              mass axis exceeds this many unique m/z values.
+              Default: None (unlimited). Useful when the peak
+              lists share no m/z values, where the raw axis grows
+              to roughly one column per peak in the whole dataset.
         sparse_format: Sparse matrix format ('csc' or 'csr')
         include_optical: Include optical images (default: True)
         apply_optical_alignment: If True (default) and the MSI source

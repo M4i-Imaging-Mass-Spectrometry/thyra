@@ -15,6 +15,308 @@ from ...metadata.extractors.imzml_extractor import ImzMLMetadataExtractor
 
 logger = logging.getLogger(__name__)
 
+# Scratch buffer floor for the processed-mode mass axis build, in ELEMENTS.
+# 1Mi elements is 8 MiB at float64. Measured at a 512 MiB m/z payload on a
+# shared grid (peak extra RSS / wall clock): 2^14 -> 7.14 MiB / 3.04 s,
+# 2^17 -> 6.90 / 3.06, 2^20 -> 15.30 / 2.30, 2^22 -> 40.29 / 2.11,
+# 2^24 -> 148.38 / 2.06. A 1024x sweep of the knob moves wall clock 1.5x with
+# no cliff anywhere, so this is a knee rather than a fragile constant.
+_MASS_AXIS_BATCH_VALUES = 1 << 20
+
+# Block size for the searchsorted probe in ``_filter_absent``, in ELEMENTS.
+# Bounds that function's temporaries to O(block) rather than O(batch).
+_MASS_AXIS_PROBE_BLOCK = 1 << 20
+
+
+def _dedupe_sorted(a: NDArray[Any]) -> NDArray[Any]:
+    """Deduplicate an ALREADY-SORTED array, as ``np.unique`` would.
+
+    Reproduces numpy's ``_unique1d`` mask including its ``equal_nan=True``
+    behaviour, which collapses a trailing run of NaNs to its first element.
+    Unlike ``np.unique`` it does not make the extra full-size ``flatten()``
+    copy, which is one of the three payload-sized allocations the old
+    collect-everything-then-unique build paid for.
+
+    Args:
+        a: A sorted array.
+
+    Returns:
+        The distinct values of ``a``, in order.
+    """
+    n = a.size
+    if n == 0:
+        return a[:0].copy()
+
+    mask = np.empty(n, dtype=bool)
+    mask[0] = True
+
+    if a.dtype.kind == "f" and bool(np.isnan(a[-1])):
+        first_nan = int(np.searchsorted(a, a[-1], side="left"))
+        # The ``first_nan > 0`` guard is load-bearing: an all-NaN input makes
+        # the slices empty and ``np.not_equal`` raises on the shape mismatch.
+        if first_nan > 0:
+            np.not_equal(a[1:first_nan], a[: first_nan - 1], out=mask[1:first_nan])
+        mask[first_nan] = True
+        mask[first_nan + 1 :] = False
+    else:
+        np.not_equal(a[1:], a[:-1], out=mask[1:])
+
+    return a[mask]
+
+
+def _filter_absent(
+    acc: NDArray[Any],
+    s: NDArray[Any],
+    block: int = _MASS_AXIS_PROBE_BLOCK,
+) -> NDArray[Any]:
+    """Return the elements of ``s`` that are not already in ``acc``.
+
+    Both arrays must be sorted and free of duplicates. ``s`` is walked in
+    blocks so the search temporaries stay O(block) rather than O(len(s)).
+    Returns ``s`` itself, uncopied, when none of its values are present --
+    the all-distinct fast path, worth half a payload at peak.
+
+    Args:
+        acc: The running axis, sorted and unique.
+        s: A candidate batch, sorted and unique.
+        block: Probe block size in elements.
+
+    Returns:
+        The subset of ``s`` absent from ``acc``.
+    """
+    n = s.size
+    # ``acc.size == 0`` must be handled here: the ``np.minimum`` below would
+    # otherwise index ``acc[-1]`` on an empty array and raise IndexError.
+    if n == 0 or acc.size == 0:
+        return s
+
+    keep = np.empty(n, dtype=bool)
+    n_keep = 0
+    is_float = acc.dtype.kind == "f"
+    a_len = acc.size
+
+    for lo in range(0, n, block):
+        hi = min(lo + block, n)
+        sb = s[lo:hi]
+        pos = np.searchsorted(acc, sb, side="left")
+        out_of_range = pos >= a_len
+        np.minimum(pos, a_len - 1, out=pos)
+        va = acc[pos]
+        eq = va == sb
+        if is_float:
+            # searchsorted routes a NaN key onto acc's first NaN, but NaN does
+            # not compare equal to itself, so without this the same NaN would
+            # be re-inserted on every fold.
+            np.logical_or(eq, np.isnan(va) & np.isnan(sb), out=eq)
+        np.logical_and(eq, ~out_of_range, out=eq)
+        np.logical_not(eq, out=eq)
+        keep[lo:hi] = eq
+        n_keep += int(np.count_nonzero(eq))
+        del pos, out_of_range, va, eq, sb
+
+    if n_keep == n:
+        return s
+    if n_keep == 0:
+        return s[:0]
+    return s[keep]
+
+
+def _merge_disjoint(box_a: List[Any], box_b: List[Any]) -> NDArray[Any]:
+    """Merge two DISJOINT sorted arrays, releasing each once it is copied.
+
+    The inputs arrive boxed in one-element lists so this function can drop the
+    caller's reference as soon as each side has been copied. Passing them as
+    plain parameters would keep both alive for the whole call and add a full
+    copy of the larger side to the peak.
+
+    The result needs no second deduplication because ``_filter_absent`` has
+    already removed the overlap, which saves another full-size copy.
+
+    Args:
+        box_a: One-element list holding the first sorted array.
+        box_b: One-element list holding the second sorted array.
+
+    Returns:
+        The sorted union of the two inputs.
+    """
+    a, b = box_a[0], box_b[0]
+    out = np.empty(a.size + b.size, dtype=a.dtype)
+
+    n_a = a.size
+    out[:n_a] = a
+    box_a[0] = None
+    del a
+
+    out[n_a:] = b
+    box_b[0] = None
+    del b
+
+    # Exactly two ascending runs, which is the case quicksort handles best.
+    out.sort(kind="quicksort")
+    return out
+
+
+def _read_spectrum_mzs(parser: Any, idx: int) -> Optional[NDArray[Any]]:
+    """Read one spectrum's m/z values, or None if missing or unreadable.
+
+    Args:
+        parser: An initialized ImzML parser.
+        idx: Spectrum index.
+
+    Returns:
+        The m/z array, or None when the spectrum is empty or failed to read.
+    """
+    try:
+        spectrum_data = parser.getspectrum(idx)
+    except Exception as e:
+        logger.warning(f"Error getting spectrum {idx}: {e}")
+        return None
+
+    if spectrum_data is None or len(spectrum_data) < 1:
+        return None
+    mzs = spectrum_data[0]
+    return mzs if mzs.size else None
+
+
+class _MassAxisAccumulator:
+    """Builds a sorted, unique m/z axis without holding every spectrum.
+
+    Values are copied into a scratch buffer; when that buffer fills, it is
+    sorted, deduplicated, and merged into the running axis. The buffer's
+    capacity tracks the axis length, so the number of merges is logarithmic in
+    the input rather than linear -- a fixed batch size would re-copy the
+    accumulator once per batch, which is the quadratic behaviour that makes a
+    naive ``np.union1d`` fold far slower than the code it replaces.
+
+    Peak memory therefore depends on the number of *unique* m/z values rather
+    than on the size of the file.
+    """
+
+    def __init__(self, total_spectra: int, max_length: Optional[int] = None) -> None:
+        """Initialize the accumulator.
+
+        Args:
+            total_spectra: Spectrum count, used only in the error message.
+            max_length: Cap on unique m/z values, or None for unlimited.
+        """
+        self._total_spectra = total_spectra
+        self._max_length = max_length
+        self._acc: Optional[NDArray[Any]] = None
+        self._buf: Optional[NDArray[Any]] = None
+        self._cap = 0
+        self._cap_target = _MASS_AXIS_BATCH_VALUES
+        self._n = 0
+        self.saw_any = False
+
+    def add(self, mzs: NDArray[Any], index: int) -> None:
+        """Buffer one spectrum's m/z values, folding first if the buffer is full.
+
+        Args:
+            mzs: The spectrum's m/z values. Not modified.
+            index: Spectrum index, used only in the error message.
+        """
+        m = mzs.size
+        if not m:
+            return
+        self.saw_any = True
+
+        if self._buf is None:
+            self._allocate(m, mzs.dtype)
+        elif self._n + m > self._cap:
+            self._fold(index)
+            if self._buf is None:
+                self._allocate(m, mzs.dtype)
+            elif m > self._cap:
+                self._buf = None
+                self._allocate(m, mzs.dtype, exact=True)
+
+        assert self._buf is not None
+        self._buf[self._n : self._n + m] = mzs
+        self._n += m
+
+    def finish(self, index: int) -> NDArray[Any]:
+        """Fold whatever is buffered and return the axis.
+
+        Args:
+            index: Last spectrum index, used only in the error message.
+
+        Returns:
+            Sorted, unique m/z values.
+
+        Raises:
+            ValueError: If no spectrum yielded any m/z values.
+        """
+        self._fold(index)
+        self._buf = None
+
+        if not self.saw_any or self._acc is None:
+            raise ValueError("No spectra found to build common mass axis")
+        if self._acc.size == 0:
+            raise ValueError("Failed to extract any m/z values")
+        return self._acc
+
+    def _allocate(self, m: int, dtype: Any, exact: bool = False) -> None:
+        """Allocate the scratch buffer, at least large enough for one spectrum."""
+        self._cap = m if exact else max(self._cap_target, m)
+        self._buf = np.empty(self._cap, dtype=dtype)
+
+    def _fold(self, index: int) -> None:
+        """Sort, deduplicate and merge the buffered batch into the axis."""
+        if self._n == 0 or self._buf is None:
+            return
+
+        view = self._buf[: self._n]
+        view.sort(kind="quicksort")
+        run = _dedupe_sorted(view)
+        self._n = 0
+
+        if self._cap > _MASS_AXIS_BATCH_VALUES:
+            # The scratch has grown to axis size, so release it before the
+            # merge allocates. Gating on the batch floor keeps this from firing
+            # on every one of the thousands of folds a shared-grid dataset
+            # performs, where re-faulting the buffer each time costs more than
+            # the memory it frees.
+            view = None
+            self._buf = None
+            self._cap = 0
+
+        if self._acc is None:
+            self._acc = run
+        else:
+            new = _filter_absent(self._acc, run)
+            run = None  # drop the batch before the merge allocates
+            if new.size:
+                box_a, box_b = [self._acc], [new]
+                self._acc = None
+                new = None
+                self._acc = _merge_disjoint(box_a, box_b)
+
+        self._check_limit(index)
+
+        # Record the next capacity but do NOT allocate it here. On the final
+        # fold the stream is already exhausted, so allocating would commit a
+        # whole axis-sized buffer that is never written.
+        self._cap_target = max(_MASS_AXIS_BATCH_VALUES, self._acc.size)
+        if self._cap and self._cap != self._cap_target:
+            self._buf = None
+            self._cap = 0
+
+    def _check_limit(self, index: int) -> None:
+        """Stop if the axis has outgrown ``max_length``."""
+        if self._max_length is None or self._acc is None:
+            return
+        if self._acc.size <= self._max_length:
+            return
+        raise ValueError(
+            f"Common mass axis exceeded {self._max_length:,} unique m/z values "
+            f"after {index + 1:,} of {self._total_spectra:,} spectra "
+            f"({self._acc.size:,} so far). The peak lists in this dataset do "
+            "not share m/z values, so a raw axis grows to roughly one column "
+            "per peak, which is not usable downstream. Convert with resampling "
+            "instead (it is the default; --no-resample disables it), or raise "
+            "max_mass_axis_length."
+        )
+
 
 @register_reader("imzml")
 class ImzMLReader(BaseMSIReader):
@@ -33,12 +335,16 @@ class ImzMLReader(BaseMSIReader):
             data_path: Path to the imzML file
             batch_size: Default batch size for spectrum iteration
             cache_coordinates: Whether to cache coordinates upfront
-            **kwargs: Additional arguments
+            **kwargs: Additional arguments. ``max_mass_axis_length`` caps the
+                number of unique m/z values the processed-mode raw axis may
+                reach before the build gives up; None (the default) is
+                unlimited. See ``_extract_continuous_mass_axis``.
         """
         super().__init__(data_path, **kwargs)
         self.filepath: Optional[Union[str, Path]] = data_path
         self.batch_size: int = batch_size
         self.cache_coordinates: bool = cache_coordinates
+        self.max_mass_axis_length: Optional[int] = kwargs.get("max_mass_axis_length")
         self.parser: Optional[ImzMLParser] = None
         self.ibd_file: Optional[Any] = None
         self.imzml_path: Optional[Path] = None
@@ -207,25 +513,46 @@ class ImzMLReader(BaseMSIReader):
         return self._common_mass_axis
 
     def _extract_continuous_mass_axis(self, parser: ImzMLParser) -> NDArray[np.float64]:
-        """Extract continuous mass axis from processed data."""
-        # For processed data, collect unique m/z values across spectra
+        """Build the common mass axis for processed-mode data.
+
+        Returns exactly what ``np.unique(np.concatenate(all_mzs))`` returned:
+        sorted, deduplicated, with the dtype following the file's mzPrecision.
+
+        This streams the file rather than collecting it. The previous
+        implementation held every spectrum's m/z array in a list, concatenated
+        that into one array, and handed the result to ``np.unique`` -- three
+        live copies of the whole m/z payload P, plus the output. Measured peak
+        was 3.40-3.51x P on data whose spectra share m/z values and 4.32-4.39x
+        P when every value is distinct, which put a hard ceiling around a
+        40 GB input on a 128 GB machine.
+
+        Here each spectrum is copied into a scratch buffer, and when that
+        buffer fills it is sorted, deduplicated, and merged into the running
+        axis. Peak memory becomes a function of the number of *unique* values
+        rather than the payload: measured 15.2-15.5 MiB, flat, for payloads
+        from 32 MiB to 16 GiB of shared-grid data, and 2.00x P in the
+        all-distinct case, which is the structural floor for an out-of-place
+        merge.
+
+        Args:
+            parser: An initialized ImzML parser.
+
+        Returns:
+            Sorted, unique m/z values across all spectra.
+
+        Raises:
+            ValueError: If no spectrum yielded any m/z values, or if
+                ``max_mass_axis_length`` is set and the axis outgrows it.
+        """
         logger.info(
             "Building common mass axis from all unique m/z values " "(processed mode)"
         )
 
         total_spectra = len(parser.coordinates)
-        all_mzs = self._collect_processed_mzs(parser, total_spectra)
-
-        if not all_mzs:
-            raise ValueError("No spectra found to build common mass axis")
-
-        return self._finalize_mass_axis(all_mzs)
-
-    def _collect_processed_mzs(
-        self, parser: ImzMLParser, total_spectra: int
-    ) -> List[NDArray[np.float64]]:
-        """Collect m/z values from all processed spectra."""
-        all_mzs: List[NDArray[np.float64]] = []
+        accumulator = _MassAxisAccumulator(
+            total_spectra, getattr(self, "max_mass_axis_length", None)
+        )
+        idx = -1
 
         with tqdm(
             total=total_spectra,
@@ -233,38 +560,18 @@ class ImzMLReader(BaseMSIReader):
             unit="spectrum",
         ) as pbar:
             for idx in range(total_spectra):
-                try:
-                    spectrum_data = parser.getspectrum(idx)
-                    if spectrum_data is None or len(spectrum_data) < 1:
-                        continue
-
-                    mzs = spectrum_data[0]
-                    if mzs.size > 0:
-                        all_mzs.append(mzs)
-                except Exception as e:
-                    logger.warning(f"Error getting spectrum {idx}: {e}")
+                mzs = _read_spectrum_mzs(parser, idx)
+                if mzs is not None:
+                    # Deliberately outside the read's try/except: a
+                    # max_mass_axis_length failure must not be swallowed and
+                    # logged as a per-spectrum warning.
+                    accumulator.add(mzs, idx)
+                mzs = None
                 pbar.update(1)
 
-        return all_mzs
-
-    def _finalize_mass_axis(
-        self, all_mzs: List[NDArray[np.float64]]
-    ) -> NDArray[np.float64]:
-        """Finalize the mass axis from collected m/z values."""
-        try:
-            combined_mzs = np.concatenate(all_mzs)
-            unique_mzs = np.unique(combined_mzs)
-
-            if unique_mzs.size == 0:
-                raise ValueError("Failed to extract any m/z values")
-
-            logger.info(
-                f"Created common mass axis with {len(unique_mzs)} unique " f"m/z values"
-            )
-            return unique_mzs
-        except Exception as e:
-            # Re-raise with more context
-            raise ValueError(f"Error creating common mass axis: {e}") from e
+        axis = accumulator.finish(idx)
+        logger.info(f"Created common mass axis with {axis.size} unique m/z values")
+        return axis
 
     def _get_spectrum_coordinates(
         self, parser: ImzMLParser, idx: int
