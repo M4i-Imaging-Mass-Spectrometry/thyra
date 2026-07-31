@@ -17,6 +17,7 @@ from ...core.base_converter import BaseMSIConverter, PixelSizeSource
 from ...core.base_reader import BaseMSIReader
 from ...metadata.types import ComprehensiveMetadata, EssentialMetadata
 from ...resampling import ResamplingDecisionTree, ResamplingMethod
+from ...resampling.tic import preserved_tic, rescale_to_preserved_tic
 from ...resampling.types import ResamplingConfig
 from ...utils.zarr_atomic_write import install_windows_atomic_write_retry
 from ._chunking import image_chunks
@@ -1091,11 +1092,38 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
     def _tic_preserving_resample(
         self, mzs: NDArray[np.float64], intensities: NDArray[np.float64]
     ) -> NDArray[np.float64]:
-        """Resample using TIC-preserving linear interpolation - optimized."""
+        """Resample onto the common axis, preserving total ion current.
+
+        Linear interpolation onto the target axis, followed by rescaling so
+        the resampled spectrum carries the same total ion current as the
+        input -- the behaviour ``ResamplingMethod.TIC_PRESERVING`` and
+        docs/resampling.md both describe.
+
+        The rescaling is not cosmetic. Interpolation samples the spectrum at
+        every target point, so the raw interpolated sum scales with the
+        density of the target axis rather than staying fixed. Onto the
+        default 190,000-bin axis, 4,000 source points came back with 47x the
+        input TIC, and a 150-peak centroid spectrum with over 1000x.
+
+        The TIC preserved is the share of the spectrum lying inside the
+        target axis range -- see ``thyra.resampling.tic``, which holds the
+        rule and the reasoning, and which ``TICPreservingStrategy`` uses too.
+        When the axis spans the spectrum, which is the default, that share
+        is the whole input TIC.
+
+        Args:
+            mzs: Original m/z values from the spectrum.
+            intensities: Corresponding intensity values.
+
+        Returns:
+            Intensities on the common mass axis, of the axis's length.
+        """
         if self._common_mass_axis is None:
             raise RuntimeError("Common mass axis is not initialized")
+
+        axis = self._common_mass_axis
         if mzs.size == 0:
-            return np.zeros(len(self._common_mass_axis))
+            return np.zeros(len(axis))
 
         # OPTIMIZED: Check if already sorted to avoid unnecessary sorting
         if np.all(mzs[:-1] <= mzs[1:]):
@@ -1108,18 +1136,31 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             mzs_sorted = mzs[sort_indices]
             intensities_sorted = intensities[sort_indices]
 
+        if mzs_sorted.size == 1:
+            # np.interp cannot interpolate a lone point onto a grid that
+            # does not contain it -- it would return all zeros and lose the
+            # peak. Place it in its nearest bin, as the nearest_neighbor
+            # path and TICPreservingStrategy both do.
+            resampled = np.zeros(len(axis))
+            target_tic = preserved_tic(
+                mzs_sorted, intensities_sorted, float(axis[0]), float(axis[-1])
+            )
+            if target_tic > 0.0:
+                resampled[int(np.argmin(np.abs(axis - mzs_sorted[0])))] = target_tic
+            return resampled
+
         # Interpolate onto the common mass axis (np.interp is highly optimized)
-        if self._common_mass_axis is None:
-            raise RuntimeError("Common mass axis is not initialized")
         resampled = np.interp(
-            self._common_mass_axis,
+            axis,
             mzs_sorted,
             intensities_sorted,
             left=0,
             right=0,
         )
 
-        return resampled
+        # Rescale to the required TIC. This is the step that makes the
+        # method live up to its name.
+        return rescale_to_preserved_tic(resampled, axis, mzs_sorted, intensities_sorted)
 
     def _process_resampled_spectrum(
         self,

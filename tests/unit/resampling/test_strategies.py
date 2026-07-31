@@ -3,6 +3,7 @@ Tests for resampling strategies - Phase 2.
 """
 
 import numpy as np
+import pytest
 
 from thyra.resampling.strategies import NearestNeighborStrategy, TICPreservingStrategy
 from thyra.resampling.strategies.base import Spectrum
@@ -117,8 +118,11 @@ class TestTICPreservingStrategy:
 
         original_tic = np.sum(original_intensity)  # 7000.0
 
-        # Target axis with different spacing
-        target_axis = np.array([120.0, 160.0, 220.0, 280.0])
+        # Target axis with different spacing. It spans the spectrum: this
+        # test is about resampling onto a different grid, and the whole TIC
+        # is preserved only when nothing is cropped away. Cropping is
+        # covered separately by test_cropped_axis_drops_the_cropped_share.
+        target_axis = np.array([100.0, 160.0, 220.0, 300.0])
 
         result = self.strategy.resample(spectrum, target_axis)
 
@@ -224,6 +228,46 @@ class TestTICPreservingStrategy:
             "acquisition_mode": "profile",
         }
 
+    def test_cropped_axis_drops_the_cropped_share(self):
+        """An axis narrower than the spectrum must not keep the whole TIC.
+
+        Rescaling to the full input TIC would push the intensity that
+        interpolation dropped back into the bins that survive, so a cropped
+        window would claim ions from the parts that were cut away.
+        """
+        # Flat spectrum over [400, 600]; keep the middle 50 Da.
+        original_mz = np.arange(400.0, 601.0, 1.0)
+        original_intensity = np.full_like(original_mz, 10.0)
+        spectrum = Spectrum(original_mz, original_intensity, (0, 0, 0))
+
+        target_axis = np.linspace(475.0, 525.0, 51)
+        result = self.strategy.resample(spectrum, target_axis)
+
+        kept = np.sum(result.intensity)
+        assert kept < np.sum(original_intensity)
+        # 50 Da of a 200 Da span, on a flat spectrum.
+        assert kept == pytest.approx(
+            np.sum(original_intensity) * 50.0 / 200.0, rel=1e-6
+        )
+
+    def test_axis_spanning_spectrum_preserves_tic_exactly(self):
+        """The uncropped case is exact, not merely close."""
+        original_mz = np.linspace(100.0, 300.0, 51)
+        original_intensity = np.linspace(500.0, 1500.0, 51)
+        spectrum = Spectrum(original_mz, original_intensity, (0, 0, 0))
+
+        result = self.strategy.resample(spectrum, np.linspace(100.0, 300.0, 977))
+
+        assert np.sum(result.intensity) == pytest.approx(
+            np.sum(original_intensity), rel=1e-12
+        )
+
+    def test_single_point_outside_axis_is_dropped(self):
+        """A lone peak outside the axis is cropped like any other."""
+        spectrum = Spectrum(np.array([50.0]), np.array([999.0]), (0, 0, 0))
+        result = self.strategy.resample(spectrum, np.array([200.0, 250.0, 300.0]))
+        assert not result.intensity.any()
+
     def test_no_negative_intensities(self):
         """Test that no negative intensities are produced."""
         # Create a case that might produce negative values with interpolation
@@ -261,8 +305,9 @@ class TestStrategyComparison:
         )
         profile_spectrum = Spectrum(profile_mz, profile_intensity, (0, 0, 0))
 
-        # Common target axis
-        target_axis = np.linspace(120, 280, 9)
+        # Common target axis. Spans the profile spectrum so its whole TIC
+        # is preserved; a narrower axis would legitimately preserve less.
+        target_axis = np.linspace(100, 300, 9)
 
         # Apply both strategies
         nn_strategy = NearestNeighborStrategy()
