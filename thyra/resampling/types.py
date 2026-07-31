@@ -70,7 +70,13 @@ class MassAxis:
         return np.diff(self.mz_values)
 
     def resolution_at(self, mz: float) -> float:
-        """Calculate resolution at given m/z."""
+        """Return ``mz`` divided by the local bin width.
+
+        This is a property of the AXIS, not of the data on it. A finely
+        spaced axis reports a large number here whether or not the spectra
+        stored on it resolve anything at that scale, so it must not be
+        reported to users as the acquisition's resolving power.
+        """
         idx = int(np.searchsorted(self.mz_values, mz))
         if idx > 0 and idx < len(self.mz_values):
             delta_mz = float(self.mz_values[idx] - self.mz_values[idx - 1])
@@ -91,8 +97,11 @@ class ResamplingConfig:
         axis_type: Mass axis spacing model.  ``None`` auto-detects from
             the instrument metadata.
         target_bins: Number of bins in the resampled axis.  ``None``
-            lets the resampler choose a bin count that preserves the
-            native resolution.
+            derives the count from ``mass_width_da`` at ``reference_mz``
+            across the mass range.  Note that this is a fixed target
+            width, not a measurement: the source spectra's own point
+            spacing is never consulted, so the resulting axis can be
+            finer or coarser than the data it will hold.
         mass_width_da: Bin width in Daltons at ``reference_mz``.
             Alternative to ``target_bins`` -- specify one or the other.
         reference_mz: Reference m/z for ``mass_width_da``.  Default

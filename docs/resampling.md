@@ -85,11 +85,21 @@ default. This table is the actual observed behaviour of that chain:
 | timsTOF, profile high-density | timsTOF | `nearest_neighbor` | `reflector_tof` |
 | Rapiflex, profile | Rapiflex MALDI-TOF | `tic_preserving` | `constant` |
 | Bruker MALDI-TOF | Rapiflex MALDI-TOF | `tic_preserving` | `constant` |
-| Orbitrap, centroid | Orbitrap | `nearest_neighbor` | `orbitrap` |
-| FT-ICR, centroid | FT-ICR | `nearest_neighbor` | `fticr` |
 | unknown vendor, profile high-density | Rapiflex MALDI-TOF | `tic_preserving` | `constant` |
 | unknown, centroid | ImzML Centroid | `nearest_neighbor` | `reflector_tof` |
 | no usable metadata | Unknown (default) | `nearest_neighbor` | `constant` |
+
+!!! warning "The Orbitrap and FT-ICR detectors cannot currently fire"
+    Both match on an `instrument_type` of `"Orbitrap"` or `"FT-ICR"`, but no
+    reader populates that key: the only place it is set is the Rapiflex reader,
+    which hardcodes `"MALDI-TOF"`. Neither the imzML nor the Bruker `.d`
+    metadata extractor emits it at all.
+
+    So Orbitrap and FT-ICR data does **not** get the `orbitrap` or `fticr`
+    axis automatically -- it falls through to the generic centroid or default
+    row above and gets `reflector_tof` or `constant`. Set
+    `--mass-axis-type orbitrap` or `--mass-axis-type fticr` explicitly if you
+    want the matching physics.
 
 !!! note "`tic_preserving` is selected for profile MALDI-TOF, not for high resolution"
     It is easy to assume the high-resolution analysers get the more elaborate
@@ -99,6 +109,23 @@ default. This table is the actual observed behaviour of that chain:
     `nearest_neighbor`, which is the correct choice for discrete peaks. If you
     have *profile* Orbitrap or FT-ICR data, set
     `--resample-method tic_preserving` yourself.
+
+!!! danger "Do not combine `tic_preserving` with a non-uniform axis type"
+    `tic_preserving` interpolates onto the target axis and then applies a
+    single scaling factor to the whole spectrum. A single factor cannot
+    account for bin widths that vary across the mass range, so pairing it with
+    `linear_tof`, `reflector_tof`, `orbitrap` or `fticr` suppresses high-m/z
+    ions relative to low-m/z ones. Measured across 300-1100 m/z, two ions of
+    equal abundance come back with their ratio distorted by 1.9x on
+    `linear_tof`, 3.7x on `reflector_tof`, 7.0x on `orbitrap` and 13.4x on
+    `fticr`.
+
+    Auto-selection never produces these pairings -- `tic_preserving` is only
+    ever chosen alongside `constant`, which is uniform and therefore exact.
+    You have to ask for the combination with two explicit flags.
+
+    If you want a non-uniform axis, use `nearest_neighbor`, which moves each
+    peak into a single bin and is unaffected by bin width.
 
 The chosen detector, method, and axis type are all logged:
 
@@ -227,9 +254,10 @@ automatic.
 === "CLI"
 
     ```bash
-    # Method and axis type
+    # Method and axis type. nearest_neighbor is the pairing to use with a
+    # non-uniform axis -- see the warning under "Selection" above.
     thyra input.imzML output.zarr \
-        --resample-method tic_preserving \
+        --resample-method nearest_neighbor \
         --mass-axis-type orbitrap
 
     # Fixed bin count
