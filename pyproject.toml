@@ -34,7 +34,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
@@ -54,59 +53,51 @@ packages = [{include = "thyra"}]
 "Contributing" = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/blob/main/CONTRIBUTING.md"
 
 [tool.poetry.dependencies]
-python = ">=3.11, <3.14"
+python = ">=3.12, <3.14"
 
 # The spatialdata / ome-zarr / zarr / dask cluster is tightly coupled and
 # all four release frequently with breaking cross-version interactions.
 # Floors alone are NOT enough for `pip install thyra`: without upper
-# bounds pip resolves a mismatched set (e.g. spatialdata 0.7.0 pulled in
-# alongside ome-zarr 0.18.0 + dask 2026.7.0), which fails to save/read
-# back a SpatialData object. The upper bounds below pin this cluster to
+# bounds pip resolves a mismatched set (a stale spatialdata alongside a
+# much newer ome-zarr and dask), which fails to save/read back a
+# SpatialData object. The upper bounds below pin this cluster to
 # the tested, lockfile-consistent set so a plain pip install lands on a
 # working combination. The clean-venv CI job in .github/workflows/tests.yml
 # exercises exactly this pip-resolved path so these bounds stay honest.
 # Bump the ceilings deliberately after re-testing against newer releases.
-dask = ">=2025.12.0, <2026.2"       # tested 2026.1.1 (spatialdata 0.7.3 needs <2026.1.2)
+dask = ">=2026.3.0, <2026.8"        # tested 2026.7.1 (spatialdata 0.8.0 needs >=2026.3.0)
 defusedxml = ">=0.7.1"  # Secure XML parsing for the Bruker Rapiflex reader
 geopandas = ">=0.9.0"
 lxml = ">=4.6.0"
 numpy = ">=2.0.0, <3"
 # pandas 3.0 makes `future.infer_string` the default, which gives the table
-# indices and string columns a dtype the pinned anndata cannot serialize.
-# `BaseSpatialDataConverter._coerce_table_strings_to_object` handles that, so
-# the ceiling is NOT `<3`: capping there would strand users whose other
-# packages want pandas 3, for a defect we already fix. `<4` records the newest
-# major actually exercised -- the unit suite passes on 2.3.2 (the lockfile)
-# and on 3.0.5 with this dependency set.
+# indices and string columns pandas' `str` dtype. anndata >= 0.13 serializes
+# that natively (anndata #2133); older anndata could not, which is why this
+# project carried a write-time coercion until the anndata floor moved. The
+# ceiling is NOT `<3`: capping there would strand users whose other packages
+# want pandas 3. `<4` records the newest major actually exercised -- the unit
+# suite passes on 2.3.2 (the lockfile) and on 3.0.5 with this set.
 pandas = ">=2.0.0, <4"              # tested 2.3.2 and 3.0.5
 pyimzML = ">=1.4.0"
 scipy = ">=1.7.0"
 Shapely = ">=2.0.0"
-spatialdata = ">=0.7.3, <0.8"       # tested 0.7.3
+spatialdata = ">=0.8.0, <0.9"       # tested 0.8.0
 # Floor pulls the fix for the zarr_format/Group.create_array() bug that
-# bit ome_zarr 0.12.x with newer dask; the ceiling keeps pip off the
-# 0.16+ releases that the resolver otherwise pairs with a stale spatialdata.
-ome-zarr = ">=0.14.0, <0.16"        # tested 0.15.0
+# bit ome_zarr 0.12.x with newer dask, and spatialdata 0.8 requires >= 0.16.
+ome-zarr = ">=0.16.0, <0.19"        # tested 0.18.0
 tqdm = ">=4.50.0"
 zarr = ">=3.0.0, <3.2"              # tested 3.1.3
 imagecodecs = ">=2024.1.1"  # For reading compressed TIFF optical images
-# Moving this ceiling is the removal trigger for the pandas 3 string-dtype
-# coercion in base_spatialdata_converter.py: anndata 0.12.19 carries its own
-# `pandas<3` cap, so bumping to a release with pandas 3 support both opens the
-# pandas 3 door and makes that coercion dead code.
+# Floor is 0.13.2, not 0.13.0. anndata 0.13.0 imports
+# `typing_extensions.sentinel` (needs typing-extensions >= 4.16) but declares
+# no floor for it, so a resolver prefers 0.13.0, pairs it with an older
+# typing-extensions, and produces an environment that installs cleanly and
+# then dies at import. 0.13.2 declares the floor correctly.
 #
-# That release is anndata 0.13.0 (anndata #2221, fixed by anndata #2133). Do
-# not trust #2221's milestone label, which still reads 0.14.0 even though the
-# fix shipped in 0.13.0.
-#
-# The bump is NOT mechanical -- see issue #117, where it was measured:
-#   - anndata 0.13.x requires Python >= 3.12, which this project does not.
-#   - anndata 0.13 moved `X` into `layers` under a None key, which spatialdata
-#     0.7.3's validate_table_attr_keys chokes on, breaking every write path.
-#     Fixed by spatialdata #1122, which is in v0.8.0 -- so this ceiling cannot
-#     move until the spatialdata ceiling does, despite 0.7.3 declaring only
-#     `anndata>=0.9.1`.
-anndata = ">=0.11.0, <0.13"         # tested 0.12.2; 0.13.2 fails, see #117
+# 0.13 is also the release that made the pandas 3 string-dtype coercion in
+# base_spatialdata_converter.py unnecessary (anndata #2221, fixed by #2133);
+# that coercion was deleted when this floor moved. See issue #117.
+anndata = ">=0.13.2, <0.14"         # tested 0.13.2
 psutil = ">=5.0.0"
 
 [tool.poetry.group.test.dependencies]
@@ -199,7 +190,7 @@ exclude_dirs = ["tests", "docs"]
 skips = ["B101", "B601", "B603", "B607"]  # Allow assert statements, shell usage, and subprocess calls with controlled input
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false  # Set to true once types are added

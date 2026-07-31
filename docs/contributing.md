@@ -15,7 +15,7 @@ Thank you for your interest in contributing to Thyra! This document provides gui
 
 ### Prerequisites
 
-- Python 3.11 or 3.12
+- Python 3.12 or 3.13
 - Poetry for dependency management
 - Git
 

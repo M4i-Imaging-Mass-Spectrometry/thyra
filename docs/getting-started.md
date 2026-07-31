@@ -17,7 +17,7 @@
     ```
 
 !!! note "Requirements"
-    Python 3.11 or 3.12. Windows, macOS, and Linux are all supported.
+    Python 3.12 or 3.13. Windows, macOS, and Linux are all supported.
     Bruker readers require the vendor SDK DLLs (bundled for Windows).
 
 ---
