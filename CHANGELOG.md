@@ -2,6 +2,32 @@
 
 <!-- version list -->
 
+## v2.0.1 (2026-07-31)
+
+### Bug Fixes
+
+- **resampling**: Make tic_preserving actually preserve TIC
+  ([`106f15e`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/106f15e62c80d1ca107b48103178750c7b75cfb6))
+
+### Documentation
+
+- **handouts**: Mark the TIC finding as fixed
+  ([`4c88657`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/4c88657af0caf481c0c0cafba4900474d121b052))
+
+- **handouts**: Report findings for the write-amplification investigation
+  ([`6fd1798`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/6fd1798f940a140e7e356c8f07682bc20922e4cc))
+
+### Performance Improvements
+
+- **imzml**: Stream the processed-mode raw mass axis build
+  ([`b8562b4`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/b8562b43c38d8bc250c026c5353f8c31e51b5277))
+
+### Refactoring
+
+- **resampling**: Share one TIC-preservation rule between both paths
+  ([`e2a2b58`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/e2a2b580445fc739360fe0029c3b04fe33ef7207))
+
+
 ## v2.0.0 (2026-07-31)
 
 ### Build System
