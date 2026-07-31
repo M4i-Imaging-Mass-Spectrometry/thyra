@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v2.0.2 (2026-07-31)
+
+### Bug Fixes
+
+- **streaming**: Widen CSR column indices and build the string indexes lazily
+  ([`edf447a`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/edf447a6a70868640238a9c6a2737f9ebb6c0b4c))
+
+
 ## v2.0.1 (2026-07-31)
 
 ### Bug Fixes
