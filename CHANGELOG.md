@@ -2,6 +2,38 @@
 
 <!-- version list -->
 
+## v2.0.0 (2026-07-31)
+
+### Build System
+
+- Drop Python 3.11 and upgrade the spatialdata cluster
+  ([`0ef2263`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/0ef2263e981cd91427bb284563c596ce0f572f75))
+
+### Documentation
+
+- Correct the anndata pandas-3 fix status
+  ([`d33460e`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/d33460e7d8d05d5facff3a9c5cfbdba86959de28))
+
+- Note that the anndata escape hatches work in combination on pandas 3
+  ([`54c0393`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/54c0393556fa39547e7ceaa0cf919bcd4b173e88))
+
+- Record the real anndata 0.13 prerequisites in the pin comment
+  ([`951319f`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/951319fa349441334c6de0690346a47c06594f47))
+
+- **handouts**: Refresh handout E after the #1055 rebase
+  ([`87209aa`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/87209aaef1bc6021e59807df3199e2244bbbc598))
+
+### Testing
+
+- Make tests a regular package so site-packages cannot shadow it
+  ([`f68efee`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f68efee18780b266ed7e2b424c0cff3ea7af3c65))
+
+### Breaking Changes
+
+- Python 3.11 is no longer supported. The minimum is now 3.12, required by spatialdata 0.8.0 and
+  anndata 0.13.
+
+
 ## v1.27.3 (2026-07-30)
 
 ### Bug Fixes
