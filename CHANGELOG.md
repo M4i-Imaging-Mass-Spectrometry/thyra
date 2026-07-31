@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v2.0.3 (2026-07-31)
+
+### Bug Fixes
+
+- **streaming**: Route on the real bin count, not a guessed one
+  ([`3ad7c0a`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/3ad7c0abe21d286c7e49ef488e0a0f419fa3ee62))
+
+
 ## v2.0.2 (2026-07-31)
 
 ### Bug Fixes
