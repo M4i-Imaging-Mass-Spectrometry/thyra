@@ -123,10 +123,21 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         n_x, n_y, n_z = metadata.dimensions
         n_pixels = n_x * n_y * n_z
 
-        # Estimate number of m/z bins after resampling using the same
-        # resolution path the axis builder will use, so the gate against
-        # PCS_SIZE_THRESHOLD_GB sees the real bin count.
-        if self._resampling_config:
+        # Prefer the axis that was actually built. ``convert()`` runs
+        # ``_initialize_conversion()`` -- and so ``_setup_mass_axis()`` --
+        # before it asks which method to use, so by the time this gate is
+        # evaluated the real bin count is known and there is nothing to
+        # estimate. That matters most on the raw-axis path, where the
+        # fallback below assumes a 10 mDa spacing that the data need not
+        # have: a continuous file carrying 4,000 points over 250-1200 m/z
+        # was scored as though it had 95,000, and a processed file whose
+        # spectra share no m/z values was scored far too low, which routed
+        # the largest datasets to the method that holds the most in memory.
+        if self._common_mass_axis is not None:
+            n_mz_bins = len(self._common_mass_axis)
+        elif self._resampling_config:
+            # Same resolution path the axis builder will use, so the gate
+            # against PCS_SIZE_THRESHOLD_GB sees the real bin count.
             _, _, _, n_mz_bins = self._resolve_resampling_plan()
         else:
             min_mass, max_mass = metadata.mass_range
