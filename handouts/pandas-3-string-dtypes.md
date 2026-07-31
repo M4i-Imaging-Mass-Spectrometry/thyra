@@ -101,9 +101,27 @@ Verified against anndata 0.12.2 with `infer_string=True`:
 | default | `IORegistryError` on `ArrowStringArrayNumpySemantics` |
 | `ad.settings.allow_write_nullable_strings = True` | still `IORegistryError` |
 | `pd.set_option("mode.string_storage", "python")` | still fails, now on `StringArrayNumpySemantics` |
+| both of the above together | still fails, on `StringArrayNumpySemantics` |
 
-So a Thyra-side fix is the only option short of raising the anndata ceiling
-past a release that does not exist yet.
+That last row is worth stating explicitly, because **on pandas 3 proper the
+combination does work.** Measured on pandas 3.0.5 + pyarrow 25.0.0 + anndata
+0.12.2: `mode.string_storage="python"` together with
+`allow_write_nullable_strings = True` writes cleanly, with values, index and
+categorical dtype all intact. Neither setting alone is enough there either --
+anndata 0.12.x has a `StringArray` writer gated behind that setting and no
+`ArrowStringArray` writer at all, so you have to leave Arrow storage *and*
+unlock nullable strings.
+
+It does not help under `infer_string` on pandas 2, which is what CI runs,
+because there the arrays are the `*NumpySemantics` subclasses that no writer
+matches.
+
+Either way it is the wrong tool for a library: both are global process state,
+and Thyra should not flip pandas and anndata settings on its users' behalf. A
+local coercion at the write chokepoint stays the right layer.
+
+So a Thyra-side fix is the right option until the `anndata` ceiling moves to
+`>= 0.13`.
 
 ### It is reachable today
 
