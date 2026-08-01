@@ -2,10 +2,40 @@
 Tests for the imzML reader.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
+from pyimzml.ImzMLWriter import ImzMLWriter
 
+from thyra.readers.imzml import imzml_reader as imzml_reader_module
 from thyra.readers.imzml.imzml_reader import ImzMLReader
+
+
+def write_crlf_unindented_imzml(directory: Path, n_spectra: int) -> Path:
+    """Write an imzML laid out the way IONTOF SurfaceLab writes it.
+
+    pyimzml's writer indents its output and terminates lines with LF. IONTOF
+    emits neither, so the only text between a spectrum's close tag and the
+    next one's open tag is a bare carriage-return/newline pair. That exact
+    layout is what trips libxml2 (see ``_initialize_parser``), so a fixture
+    only guards the bug if it reproduces the formatting.
+
+    Rewriting the whitespace is semantically a no-op -- imzML carries no mixed
+    content -- and the .ibd is left untouched, so every offset stays valid.
+    """
+    imzml_path = directory / f"crlf_{n_spectra}.imzML"
+    mzs = np.linspace(100.0, 500.0, 5)
+    intensities = np.arange(1.0, 6.0)
+
+    with ImzMLWriter(str(imzml_path), mode="processed") as writer:
+        for i in range(n_spectra):
+            writer.addSpectrum(mzs, intensities, (i % 8 + 1, i // 8 + 1, 1))
+
+    normalised = imzml_path.read_bytes().replace(b"\r\n", b"\n")
+    lines = [line.lstrip(b" \t") for line in normalised.split(b"\n")]
+    imzml_path.write_bytes(b"\r\n".join(lines))
+    return imzml_path
 
 
 class TestImzMLReader:
@@ -222,3 +252,80 @@ class TestImzMLReader:
 
         assert count == 4, f"Expected 4 spectra, got {count}"
         reader.close()
+
+
+class TestCrlfUnindentedImzML:
+    """Unindented CRLF imzML (IONTOF SurfaceLab) must parse.
+
+    pyimzml removes each <spectrum> from the tree while iterparse is still
+    streaming. Under lxml that leaves libxml2's text-node accelerator pointing
+    at a freed node, and on this one layout the parser eventually dies with
+    ``XMLSyntaxError: xmlSAX2Characters`` -- an out-of-memory error dressed up
+    as a syntax error, on a file that is perfectly well-formed.
+    """
+
+    def test_parser_is_not_constructed_with_lxml(
+        self, create_minimal_imzml, monkeypatch
+    ):
+        """Pin the parser choice: lxml is unsafe for pyimzml's pruning loop.
+
+        This asserts on the constructor argument rather than on behaviour
+        because reproducing the corruption needs a ~16k-spectrum file, and the
+        exact threshold shifts with heap layout. The behavioural test below
+        covers it where it reproduces; this one holds the line everywhere else.
+        """
+        imzml_path, _, _, _ = create_minimal_imzml
+        recorded = {}
+        real_parser = imzml_reader_module.ImzMLParser
+
+        def recording_parser(*args, **kwargs):
+            recorded.update(kwargs)
+            return real_parser(*args, **kwargs)
+
+        monkeypatch.setattr(imzml_reader_module, "ImzMLParser", recording_parser)
+
+        reader = ImzMLReader(imzml_path)
+        reader.get_essential_metadata()
+        reader.close()
+
+        assert recorded.get("parse_lib") != "lxml"
+
+    def test_reads_crlf_unindented_file(self, temp_dir):
+        """The IONTOF layout round-trips through the reader."""
+        imzml_path = write_crlf_unindented_imzml(temp_dir, 16)
+
+        # Guard the fixture itself: if the writer or the reformatting changes
+        # so the file is no longer unindented CRLF, this stops testing the
+        # thing it claims to test.
+        raw = imzml_path.read_bytes()
+        assert b"\r\n<spectrum" in raw, "fixture is not unindented CRLF"
+
+        reader = ImzMLReader(imzml_path)
+        coordinates = [coords for coords, _, _ in reader.iter_spectra()]
+        reader.close()
+
+        assert len(coordinates) == 16
+        # 16 spectra written across an 8-wide grid, 1-based in the file and
+        # 0-based once the reader has converted them.
+        assert coordinates[0] == (0, 0, 0)
+        assert coordinates[-1] == (7, 1, 0)
+
+    def test_reads_crlf_file_large_enough_to_corrupt_lxml(self, temp_dir):
+        """The size that actually reproduces the libxml2 failure.
+
+        Below roughly 16k spectra the stale-offset writes stay inside the
+        buffer libxml2 already had, so the parse survives and proves nothing.
+        The exact threshold moves with heap layout, so this may not reproduce
+        on every platform -- but it can only ever under-report, never fail on
+        correct code, since ElementTree does not go near libxml2. Deliberately
+        NOT marked integration: CI runs -m "not integration", and this is the
+        only test that exercises the actual defect. Costs ~2s and a ~33 MB
+        temporary file.
+        """
+        imzml_path = write_crlf_unindented_imzml(temp_dir, 16000)
+
+        reader = ImzMLReader(imzml_path)
+        essential = reader.get_essential_metadata()
+        reader.close()
+
+        assert essential.n_spectra == 16000
