@@ -1,14 +1,17 @@
 # Pre-commit hooks configuration
 #
-# `HAND_AUTHORED_CORPUS` below is tests/data/fixtures/, whose imzML files are
-# byte-exact fixtures rather than source. The three whitespace hooks would
-# each rewrite them: mixed-line-ending --fix=lf strips the 174 CRLFs that
-# iontof_sparse.imzML exists to prove a real IONTOF export carries (measured:
-# 11,593 bytes -> 11,419), and trailing-whitespace and end-of-file-fixer are
-# free to change any byte count the .ibd offsets are not expected to track.
-# None of that shows up as a test failure, because the tests read the file the
-# hook just rewrote. The .gitattributes `-text` exemption covers the staging
-# side of the same hazard; this covers the worktree side.
+# The three whitespace hooks skip the imzML and .ibd files under
+# tests/data/fixtures/, which are byte-exact fixtures rather than source.
+# mixed-line-ending --fix=lf strips the 174 CRLFs that iontof_sparse.imzML
+# exists to prove a real IONTOF export carries -- measured, 11,593 bytes become
+# 11,419 -- and trailing-whitespace and end-of-file-fixer are equally free to
+# move bytes the .ibd offsets are not expected to track. None of it shows up as
+# a test failure, because the tests read the file the hook just rewrote.
+#
+# The exclude is scoped to those two extensions, so the README and the build
+# script in the same directory stay covered. The .gitattributes `-text`
+# exemption guards the staging side of the same hazard; this guards the
+# worktree side.
 repos:
   # Basic file formatting and checks
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -16,9 +19,9 @@ repos:
     hooks:
       - id: trailing-whitespace
         args: [--markdown-linebreak-ext=md]
-        exclude: ^tests/data/fixtures/
+        exclude: ^tests/data/fixtures/[^/]+\.(imzML|ibd)$
       - id: end-of-file-fixer
-        exclude: ^tests/data/fixtures/
+        exclude: ^tests/data/fixtures/[^/]+\.(imzML|ibd)$
       - id: check-yaml
       - id: check-toml
       - id: check-json
@@ -35,7 +38,7 @@ repos:
       - id: check-case-conflict
       - id: mixed-line-ending
         args: [--fix=lf]
-        exclude: ^tests/data/fixtures/
+        exclude: ^tests/data/fixtures/[^/]+\.(imzML|ibd)$
 
   # Python code formatting
   - repo: https://github.com/psf/black
