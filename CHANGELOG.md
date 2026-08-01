@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v2.2.2 (2026-08-01)
+
+### Bug Fixes
+
+- **resampling**: Stop handing unknown modalities MALDI-TOF resampling
+  ([`f98bc3e`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f98bc3e56407b0554e3e1df0842530a7e8db1164))
+
+
 ## v2.2.1 (2026-08-01)
 
 ### Bug Fixes
