@@ -301,3 +301,59 @@ class TestWatersMetadataExtractorEdgeCases:
         # Should still have data from the first spectrum
         assert essential.n_spectra == 1
         assert essential.total_peaks == 3
+
+
+class TestNoFabricatedMassRange:
+    """A dataset with no readable spectra must not acquire an invented range.
+
+    ``_scan_all_ms_spectra`` used to substitute ``(0.0, 1000.0)`` behind one
+    warning that never mentioned a mass range. That value reached disk as
+    ``uns/essential_metadata/mass_range`` and, with resampling on, sized the
+    whole common axis -- so a file whose real range is 100-200 came out with
+    a 0-1000 axis and no indication that the number was made up.
+
+    ``test_mass_range`` above asserts ``approx(100.0)``, which is the real
+    range of its fixture; it never exercised the fallback and so could not
+    have caught its removal.
+    """
+
+    def _extractor(self, mock_ml, handle, grid, ft, ms):
+        return WatersMetadataExtractor(
+            mock_ml, handle, Path("/test/data.raw"), grid, ft, ms
+        )
+
+    def test_no_readable_scan_raises(self):
+        """Every read fails: there is nothing to derive a range from."""
+        mock_ml, handle, grid, ft, ms = _make_grid_and_ml(n_x=2, n_y=2)
+        mock_ml.read_spectrum.side_effect = RuntimeError("DLL crash")
+
+        with pytest.raises(ValueError, match="Could not determine the mass range"):
+            self._extractor(mock_ml, handle, grid, ft, ms).get_essential()
+
+    def test_every_scan_empty_raises(self):
+        """Reads succeed but return no peaks -- the truncated-data shape."""
+        mock_ml, handle, grid, ft, ms = _make_grid_and_ml(n_x=2, n_y=2)
+        mock_ml.read_spectrum.return_value = (np.array([]), np.array([]))
+
+        with pytest.raises(ValueError, match="Could not determine the mass range"):
+            self._extractor(mock_ml, handle, grid, ft, ms).get_essential()
+
+    def test_the_error_names_the_dataset(self):
+        """So the message identifies which acquisition failed."""
+        mock_ml, handle, grid, ft, ms = _make_grid_and_ml(n_x=2, n_y=2)
+        mock_ml.read_spectrum.return_value = (np.array([]), np.array([]))
+
+        with pytest.raises(ValueError, match=r"data\.raw"):
+            self._extractor(mock_ml, handle, grid, ft, ms).get_essential()
+
+    def test_one_readable_scan_is_enough(self):
+        """The guard must not fire while any real measurement survives."""
+        mock_ml, handle, grid, ft, ms = _make_grid_and_ml(n_x=2, n_y=1)
+        mock_ml.read_spectrum.side_effect = [
+            (np.array([300.0, 400.0]), np.array([1.0, 2.0])),
+            (np.array([]), np.array([])),
+        ]
+
+        essential = self._extractor(mock_ml, handle, grid, ft, ms).get_essential()
+
+        assert essential.mass_range == pytest.approx((300.0, 400.0))
