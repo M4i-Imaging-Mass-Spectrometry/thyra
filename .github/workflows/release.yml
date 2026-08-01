@@ -54,22 +54,38 @@ jobs:
       - name: Create Release
         id: release
         run: |
-          # Check if a new version is pending
+          # `--print` reports the version semantic-release WOULD release. When
+          # nothing on main is releasable -- a ci:/chore:/docs:/test: commit --
+          # it prints the CURRENT version, not an empty string. So an emptiness
+          # test can never fire, and what actually stopped the no-op release was
+          # the already-tagged guard below, reporting a concurrent run that
+          # never happened. Compare against the last released version instead,
+          # which is the thing "is there a release to cut?" really asks.
           NEXT=$(semantic-release version --print 2>/dev/null || true)
+          LAST=$(semantic-release version --print-last-released 2>/dev/null || true)
+          echo "next=${NEXT:-<none>} last-released=${LAST:-<none>}"
+
           if [ -z "$NEXT" ]; then
-            echo "No release needed"
+            echo "No release: semantic-release could not determine a version."
             echo "released=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          # Guard: skip if this version is already tagged (race condition)
-          if git tag -l "v$NEXT" | grep -q "v$NEXT"; then
-            echo "Tag v$NEXT already exists -- skipping (concurrent run)"
+          if [ "$NEXT" = "$LAST" ]; then
+            echo "No release: nothing releasable since v$LAST (no feat/fix/perf commits)."
             echo "released=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          echo "Creating release: $NEXT"
+          # Past this point $NEXT is a genuine bump, so an existing tag really
+          # does mean another run got there first.
+          if git rev-parse -q --verify "refs/tags/v$NEXT" >/dev/null; then
+            echo "No release: v$NEXT is a new version but is already tagged -- a concurrent run created it."
+            echo "released=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "Creating release: v${LAST:-<none>} -> v$NEXT"
 
           # Run semantic-release (creates commit, tag, and GitHub release)
           semantic-release version
