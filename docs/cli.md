@@ -111,11 +111,14 @@ chooses an appropriate method and bin count.
     - **`nearest_neighbor`** -- Each target bin takes the nearest original m/z
       value. Correct for **centroid** data, where peaks are discrete masses.
     - **`tic_preserving`** -- Linear interpolation, rescaled so the total ion
-      current is unchanged. Correct for **profile** data, and whenever
-      quantitation must survive rebinning.
-    - **`auto`** -- Picks `tic_preserving` for profile MALDI-TOF data and
-      `nearest_neighbor` for everything else, including Orbitrap and FT-ICR
-      (which are normally centroided). See
+      current is unchanged. Correct for **profile** data on a target axis
+      whose bin widths scale the same way the source points are spaced --
+      pair it only with `constant` unless you know otherwise.
+    - **`auto`** -- Picks `tic_preserving` only for Bruker flexImaging /
+      Rapiflex data, whose source grid is uniform in m/z, and
+      `nearest_neighbor` for everything else -- including profile data from
+      an instrument Thyra cannot identify, because the interpolating method
+      is only exact when the two axis laws match. See
       [Resampling](resampling.md#which-detector-wins) for the full decision
       table.
 

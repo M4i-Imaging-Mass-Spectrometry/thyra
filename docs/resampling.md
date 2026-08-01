@@ -66,8 +66,14 @@ axis), the **axis type** (how bin widths scale with m/z), and the **bin count**.
 - whether there is a shared mass axis (continuous) or not (processed)
 - spectrum type -- `centroid spectrum` (`MS:1000127`) or `profile spectrum` (`MS:1000128`)
 - instrument name, instrument type, and manufacturer
-- average peaks per spectrum; above **5000** the data is treated as high-density profile
+- average peaks per spectrum; above **5000** the data is recorded as high-density profile
 - format flags for Rapiflex and timsTOF
+
+Peak density is reported but does **not** select a method or an axis type. It
+describes how finely the spectra were sampled, not what acquired them, and a
+dense profile spectrum can come from a MALDI-TOF, a TOF-SIMS, or an Orbitrap
+run in profile mode. SCiLS Lab does not guess modality either -- its importer
+takes it as an argument (`--project TIMSTOF|TOF|FT`).
 
 The timsTOF flag is a case-insensitive substring match on the instrument name,
 because Bruker names the family many ways (`timsTOF fleX MALDI-2`,
@@ -85,9 +91,23 @@ default. This table is the actual observed behaviour of that chain:
 | timsTOF, profile high-density | timsTOF | `nearest_neighbor` | `reflector_tof` |
 | Rapiflex, profile | Rapiflex MALDI-TOF | `tic_preserving` | `constant` |
 | Bruker MALDI-TOF | Rapiflex MALDI-TOF | `tic_preserving` | `constant` |
-| unknown vendor, profile high-density | Rapiflex MALDI-TOF | `tic_preserving` | `constant` |
+| unknown vendor, profile (any density) | Unknown (default) | `nearest_neighbor` | `constant` |
 | unknown, centroid | ImzML Centroid | `nearest_neighbor` | `reflector_tof` |
 | no usable metadata | Unknown (default) | `nearest_neighbor` | `constant` |
+
+!!! info "`tic_preserving` is gated on the source and target axis laws matching"
+    A detector may only ask for `tic_preserving` if it knows the spacing law
+    of the grid the spectra *arrive* on, and that law is the one it is asking
+    the target axis to use. Only the Rapiflex route qualifies:
+    `RapiflexReader` lays every spectrum out with `np.linspace`, so the source
+    is uniform in m/z, and the axis it requests is `constant` -- the same law.
+
+    Anything else is refused and gets `nearest_neighbor` instead, with a log
+    line saying so. This is the rule SCiLS Lab applies: TIC-preserving
+    resampling "if all axis types are identical", otherwise interpolation
+    (2026b User Guide, p.80). It is also exactly when Thyra's
+    interpolate-then-rescale operator is exact -- see the `!!! danger` box
+    below for what it costs off the diagonal.
 
 !!! warning "The Orbitrap and FT-ICR detectors cannot currently fire"
     Both match on an `instrument_type` of `"Orbitrap"` or `"FT-ICR"`, but no
@@ -120,9 +140,11 @@ default. This table is the actual observed behaviour of that chain:
     `linear_tof`, 3.7x on `reflector_tof`, 7.0x on `orbitrap` and 13.4x on
     `fticr`.
 
-    Auto-selection never produces these pairings -- `tic_preserving` is only
-    ever chosen alongside `constant`, which is uniform and therefore exact.
-    You have to ask for the combination with two explicit flags.
+    Auto-selection cannot produce these pairings. `tic_preserving` is only
+    ever chosen alongside `constant`, and only on a source grid that is
+    itself uniform in m/z, which is what makes it exact; the detector chain
+    enforces that. You have to ask for the combination with two explicit
+    flags, and Thyra takes you at your word.
 
     If you want a non-uniform axis, use `nearest_neighbor`, which moves each
     peak into a single bin and is unaffected by bin width.
