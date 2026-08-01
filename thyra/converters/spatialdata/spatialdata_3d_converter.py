@@ -221,6 +221,11 @@ class SpatialData3DConverter(BaseSpatialDataConverter):
                     per_region[str(r)] = total / max(count, 1)
                 adata.uns["average_spectrum_per_region"] = per_region
 
+            # Add MSI metadata to .uns. The 2D and streaming paths have
+            # always done this; the 3D one never did, so a volume came
+            # out with no record of where it came from at all.
+            self._add_metadata_to_uns(adata)
+
             # Make sure region column exists and is correct
             region_key = f"{self.dataset_id}_pixels"
             if "region" not in adata.obs.columns:
