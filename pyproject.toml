@@ -86,7 +86,16 @@ spatialdata = ">=0.8.0, <0.9"       # tested 0.8.0
 # bit ome_zarr 0.12.x with newer dask, and spatialdata 0.8 requires >= 0.16.
 ome-zarr = ">=0.16.0, <0.19"        # tested 0.18.0
 tqdm = ">=4.50.0"
-zarr = ">=3.0.0, <3.2"              # tested 3.1.3
+# Floor is 3.1.4, and it is load-bearing. anndata >= 0.13 writes every zarr v3
+# array with `shards="auto"`. zarr < 3.1.4 sized the auto chunk with
+# `max_bytes=1024` where its own comment says "aim for a 1MiB chunk" (compare
+# `_auto_partition` in 3.1.3 vs 3.1.4), so one shard -- one FILE -- came out at
+# ~1 KB. Measured on test_data/pea.imzML: 393,310 files for a single table and
+# 434 s of a 445 s conversion spent in the write, against 12 files and 2.7 s on
+# 3.1.6. Nothing in Thyra changed; the anndata 0.13 bump alone did this.
+# 3.1.4 is also where `array.target_shard_size_bytes` arrives, which is the
+# knob _chunking.table_write_config sets to claim the budget from anndata.
+zarr = ">=3.1.4, <3.2"              # tested 3.1.6
 imagecodecs = ">=2024.1.1"  # For reading compressed TIFF optical images
 # Floor is 0.13.2, not 0.13.0. anndata 0.13.0 imports
 # `typing_extensions.sentinel` (needs typing-extensions >= 4.16) but declares
