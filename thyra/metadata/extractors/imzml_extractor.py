@@ -430,34 +430,60 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         return estimated_bytes / (1024**3)  # Convert to GB
 
     def _extract_imzml_specific(self) -> Dict[str, Any]:
-        """Extract ImzML format-specific metadata."""
+        """Extract ImzML format-specific metadata.
+
+        ``file_mode`` goes through :meth:`_is_continuous_mode`, which reads
+        ``IMS:1000030``/``IMS:1000031`` off the file description. It used to
+        read ``getattr(self.parser, "continuous", False)`` -- an attribute
+        ``ImzMLParser`` does not define, so the default always won and every
+        store Thyra has ever written says ``"processed"`` regardless of what
+        the file declares.
+        """
         format_specific: Dict[str, Any] = {
             "imzml_version": "1.1.0",  # Default version
             "file_mode": (
-                "continuous"
-                if getattr(self.parser, "continuous", False)
-                else "processed"
+                BinaryDataType.CONTINUOUS
+                if self._is_continuous_mode()
+                else BinaryDataType.PROCESSED
             ),
             "ibd_file": str(self.imzml_path.with_suffix(".ibd")),
-            "uuid": None,
+            "uuid": self._extract_uuid(),
             "spectrum_count": len(self.parser.coordinates),
             "scan_settings": {},
         }
 
-        # Extract UUID if available
+        return format_specific
+
+    def _extract_uuid(self) -> Optional[str]:
+        """Read the ``IMS:1000080`` binary-file UUID from the file description.
+
+        Keyed by name rather than by position. The previous form was
+        ``cv_params[0][2]`` -- the value of whichever cvParam the vendor
+        happened to write first -- which on a real IONTOF file is
+        ``MS:1000128 profile spectrum`` and so stored the boolean ``True``
+        as the dataset's UUID. SCiLS puts the UUID first, so the same
+        expression was correct there by luck.
+
+        Vendors differ on whether the value carries the registry-format
+        braces (IONTOF writes ``{...}``, SCiLS does not); they are stripped
+        so the stored field is one shape whatever wrote the file.
+
+        Returns:
+            The UUID string, or ``None`` if the file declares none.
+        """
         try:
-            if hasattr(self.parser, "metadata") and hasattr(
-                self.parser.metadata, "file_description"
-            ):
-                cv_params = getattr(
-                    self.parser.metadata.file_description, "cv_params", []
-                )
-                if cv_params and len(cv_params) > 0:
-                    format_specific["uuid"] = cv_params[0][2]
+            metadata = getattr(self.parser, "metadata", None)
+            file_desc = getattr(metadata, "file_description", None)
+            param_by_name = getattr(file_desc, "param_by_name", None)
+            if not isinstance(param_by_name, dict):
+                return None
+            value = param_by_name.get(ImzMLAccessions.UUID_NAME)
+            if not isinstance(value, str):
+                return None
+            return value.strip().strip("{}")
         except Exception as e:
             logger.debug(f"Could not extract UUID: {e}")
-
-        return format_specific
+            return None
 
     def _extract_acquisition_params(self) -> Dict[str, Any]:
         """Extract acquisition parameters from XML metadata."""

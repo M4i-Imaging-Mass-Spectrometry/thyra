@@ -81,12 +81,15 @@ class TestImzMLReader:
         assert essential.dimensions == (2, 2, 1)
         assert essential.n_spectra == 4
 
-        # Test comprehensive metadata
+        # Test comprehensive metadata. ``file_mode`` is asserted against the
+        # mode the fixture was written in, not against the set of legal
+        # values: the extractor used to answer "processed" unconditionally
+        # (it read an attribute pyimzml does not define), and a membership
+        # test is satisfied by that bug. The discriminating case -- a
+        # continuous file -- lives in
+        # tests/unit/metadata/extractors/test_imzml_extractor.py.
         comprehensive = reader.get_comprehensive_metadata()
-        assert comprehensive.format_specific.get("file_mode") in [
-            "continuous",
-            "processed",
-        ]
+        assert comprehensive.format_specific.get("file_mode") == "processed"
         assert str(imzml_path) in comprehensive.essential.source_path
 
         reader.close()
