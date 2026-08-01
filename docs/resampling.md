@@ -69,6 +69,14 @@ axis), the **axis type** (how bin widths scale with m/z), and the **bin count**.
 - average peaks per spectrum; above **5000** the data is recorded as high-density profile
 - format flags for Rapiflex and timsTOF
 
+Spectrum type is whatever the file **declares** -- `MS:1000127` or
+`MS:1000128` -- read from the file description first and then from the rest of
+the document. Only when a file declares neither does Thyra fall back to
+guessing centroid from processed storage mode, and it says so in a warning
+when it does. Processed and centroid are independent: processed means each
+spectrum carries its own m/z array, which says nothing about whether its peaks
+are centroided.
+
 Peak density is reported but does **not** select a method or an axis type. It
 describes how finely the spectra were sampled, not what acquired them, and a
 dense profile spectrum can come from a MALDI-TOF, a TOF-SIMS, or an Orbitrap

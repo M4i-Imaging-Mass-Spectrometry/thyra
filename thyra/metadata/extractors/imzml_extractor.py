@@ -9,7 +9,7 @@ from numpy.typing import NDArray
 from pyimzml.ImzMLParser import ImzMLParser
 
 from ...core.base_extractor import MetadataExtractor
-from ...resampling.constants import ImzMLAccessions, SpectrumType
+from ...resampling.constants import BinaryDataType, ImzMLAccessions, SpectrumType
 from ..types import ComprehensiveMetadata, EssentialMetadata
 
 logger = logging.getLogger(__name__)
@@ -131,7 +131,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             if param_by_name is None or not isinstance(param_by_name, dict):
                 return False
 
-            return "continuous" in param_by_name
+            return BinaryDataType.CONTINUOUS in param_by_name
         except Exception:
             return False
 
@@ -522,19 +522,27 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             return None
 
     def _detect_centroid_spectrum(self) -> Optional[str]:
-        """Detect spectrum type by looking for MS:1000127 (centroid) or MS:1000128 (profile)."""
+        """Detect spectrum type by looking for MS:1000127 (centroid) or MS:1000128 (profile).
+
+        What the file *declares* wins, wherever it is written. Only when the
+        file declares nothing does Thyra guess -- see
+        :meth:`_guess_spectrum_type_from_storage_mode` for what that guess is
+        worth.
+        """
         try:
-            # Method 1: Check parser metadata first (no XML parsing needed)
-            result = self._check_parser_metadata_for_centroid()
+            # 1. The declaration, from metadata the parser already holds.
+            result = self._check_parser_metadata_for_spectrum_type()
             if result:
                 return result
 
-            # Method 2: Stream-parse XML for spectrum type markers (memory efficient)
+            # 2. The same declaration, wherever else in the document it sits.
+            #    Streams the XML, so it is tried only if step 1 came up empty.
             result = self._check_xml_for_spectrum_type()
             if result:
                 return result
 
-            return None
+            # 3. Nothing declared. Only now is a guess appropriate.
+            return self._guess_spectrum_type_from_storage_mode()
         except Exception as e:
             logger.debug(f"Could not detect spectrum type: {e}")
             return None
@@ -607,8 +615,13 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             logger.warning("defusedxml not available, using xml.etree.ElementTree")
             return ET
 
-    def _check_parser_metadata_for_centroid(self) -> Optional[str]:
-        """Check parser metadata for processed flag indicating centroid data."""
+    def _file_description_params(self) -> Optional[Dict[str, Any]]:
+        """Return the fileDescription cvParams the parser already parsed.
+
+        ``param_by_name`` maps a term's CV *name* to its parsed value, and a
+        valueless cvParam -- which is what a flag like ``profile spectrum``
+        is -- parses to ``True``.
+        """
         if not (hasattr(self.parser, "metadata") and self.parser.metadata):
             return None
 
@@ -616,13 +629,70 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             return None
 
         file_desc = self.parser.metadata.file_description
-        if not hasattr(file_desc, "param_by_name"):
+        params = getattr(file_desc, "param_by_name", None)
+        if not isinstance(params, dict):
             return None
 
-        params = file_desc.param_by_name
-        # If it's processed data, it's likely centroided
-        if params.get("processed", False):
-            logger.info("Assuming centroid spectrum for processed ImzML data")
+        return params
+
+    def _check_parser_metadata_for_spectrum_type(self) -> Optional[str]:
+        """Read the declared spectrum representation out of the fileDescription.
+
+        Cheap: the parser has already read this, so no XML pass is needed.
+        ``SpectrumType.CENTROID`` and ``SpectrumType.PROFILE`` are the CV
+        names of ``MS:1000127`` and ``MS:1000128``, which is what
+        ``param_by_name`` is keyed on.
+        """
+        params = self._file_description_params()
+        if params is None:
+            return None
+
+        if params.get(SpectrumType.CENTROID, False):
+            logger.info(
+                f"Detected centroid spectrum from declared "
+                f"{ImzMLAccessions.CENTROID_SPECTRUM} in fileDescription"
+            )
+            return SpectrumType.CENTROID
+
+        if params.get(SpectrumType.PROFILE, False):
+            logger.info(
+                f"Detected profile spectrum from declared "
+                f"{ImzMLAccessions.PROFILE_SPECTRUM} in fileDescription"
+            )
+            return SpectrumType.PROFILE
+
+        return None
+
+    def _guess_spectrum_type_from_storage_mode(self) -> Optional[str]:
+        """Last-resort guess: assume a processed-mode file is centroided.
+
+        Processed and centroid are orthogonal. ``IMS:1000031`` says each
+        spectrum carries its own m/z array; it says nothing about whether
+        the peaks in it are centroided or profile. Plenty of instruments
+        export profile spectra in processed mode -- ``bellini.imzML`` is
+        processed *and* declares ``MS:1000128 profile spectrum``.
+
+        This used to run before the declared accession was ever read, so
+        every processed file was reported as centroid whatever it said about
+        itself. It now runs only when the file declares neither
+        ``MS:1000127`` nor ``MS:1000128`` anywhere, where a guess is all
+        there is. Peak lists are the common case for processed exports, so
+        centroid is the better guess -- but it is still a guess, hence the
+        warning.
+        """
+        params = self._file_description_params()
+        if params is None:
+            return None
+
+        if params.get(BinaryDataType.PROCESSED, False):
+            logger.warning(
+                "This imzML declares neither %s (centroid) nor %s (profile). "
+                "Assuming centroid, because it is stored in processed mode -- "
+                "but the two are independent, so check the result if the "
+                "spectra are actually profile.",
+                ImzMLAccessions.CENTROID_SPECTRUM,
+                ImzMLAccessions.PROFILE_SPECTRUM,
+            )
             return SpectrumType.CENTROID
 
         return None
