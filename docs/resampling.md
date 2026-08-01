@@ -175,6 +175,40 @@ proportionate amount instead of collapsing to zero.
 With the default axis, which spans the dataset's own mass range, nothing is
 dropped and the total is preserved exactly.
 
+#### Gaps in the source m/z values
+
+Interpolation has no notion of a gap. Between the last source point before an
+empty stretch and the first one after it, `np.interp` draws a straight line,
+and every target bin in between gets an intensity that was never measured. On
+sparse or thresholded m/z arrays that is most of the axis: forcing
+`tic_preserving` onto `bellini.imzML` -- 2,222 points per spectrum, median
+source spacing 0.0072 Da, largest gap 1,269 Da -- puts **80.6%** of the output
+total ion current more than 0.5 Da from any measured point.
+
+`--resample-gap-tolerance` sets how far a target bin may sit from the nearest
+source m/z before its interpolated value is discarded instead of trusted. It is
+the same parameter Cardinal calls `tolerance` and matter calls `tol`.
+
+```bash
+thyra convert data.imzML out.zarr \
+  --resample-method tic_preserving \
+  --resample-gap-tolerance 0.1
+```
+
+Masking happens **before** the TIC rescale, so the intensity returns to the
+bins that do have measurements behind them rather than being deleted; the
+per-pixel total is still preserved.
+
+Sizing it: on a source grid of uniform step `s`, no target bin is ever more
+than `s/2` from a source point, so **any tolerance above half the widest gap in
+your source m/z values changes nothing**. Continuous profile data is dense and
+evenly sampled, which is why the default is *no* limit -- there is nothing to
+refuse. Set it when your m/z arrays are sparse or peak-picked and you are
+asking for `tic_preserving` anyway.
+
+`nearest_neighbor` needs no such parameter: it only ever fills a bin some peak
+was snapped into.
+
 ---
 
 ## Axis types

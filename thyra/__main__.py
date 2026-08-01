@@ -243,6 +243,7 @@ def _build_resampling_config(
     resample_max_mz: Optional[float],
     resample_width_at_mz: Optional[float],
     resample_reference_mz: float,
+    resample_gap_tolerance: Optional[float] = None,
 ) -> dict:
     """Build resampling configuration dictionary."""
     return {
@@ -253,6 +254,7 @@ def _build_resampling_config(
         "max_mz": resample_max_mz,
         "width_at_mz": resample_width_at_mz,
         "reference_mz": resample_reference_mz,
+        "gap_tolerance_da": resample_gap_tolerance,
     }
 
 
@@ -536,6 +538,16 @@ class GroupedCommand(click.Command):
     default=1000.0,
     help="Reference m/z for width specification (default: 1000.0)",
 )
+@click.option(
+    "--resample-gap-tolerance",
+    type=float,
+    default=None,
+    help=(
+        "For tic_preserving only: discard target bins farther than this many "
+        "Da from any measured m/z, instead of interpolating across the gap "
+        "(default: no limit)"
+    ),
+)
 # -- Bruker-specific --
 @click.option(
     "--use-recalibrated/--no-recalibrated",
@@ -583,6 +595,7 @@ def main(
     resample_max_mz: Optional[float],
     resample_width_at_mz: Optional[float],
     resample_reference_mz: float,
+    resample_gap_tolerance: Optional[float],
     mass_axis_type: str,
     sparse_format: str,
     include_optical: bool,
@@ -603,6 +616,9 @@ def main(
         resample_max_mz,
         resample_width_at_mz,
         resample_reference_mz,
+    )
+    _validate_positive_float(
+        resample_gap_tolerance, "resample_gap_tolerance", "Gap tolerance"
     )
     _validate_positive_float(
         intensity_threshold, "intensity_threshold", "Intensity threshold"
@@ -641,6 +657,7 @@ def main(
             resample_max_mz,
             resample_width_at_mz,
             resample_reference_mz,
+            resample_gap_tolerance,
         )
         if resample
         else None

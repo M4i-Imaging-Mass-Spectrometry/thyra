@@ -13,17 +13,30 @@ cropped intensity rather than redistributing it over the bins that remain.
 When the axis spans the spectrum, the whole TIC is preserved exactly.
 """
 
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 import numpy.typing as npt
 
+from ..gaps import zero_across_gaps
 from ..tic import preserved_tic, rescale_to_preserved_tic
 from .base import ResamplingStrategy, Spectrum
 
 
 class TICPreservingStrategy(ResamplingStrategy):
     """TIC-preserving linear interpolation strategy for profile data."""
+
+    def __init__(self, gap_tolerance_da: Optional[float] = None) -> None:
+        """Initialize the strategy.
+
+        Args:
+            gap_tolerance_da: How far, in Daltons, a target bin may sit from
+                the nearest source m/z before its interpolated value is
+                discarded. ``None`` (the default) keeps ``np.interp``'s own
+                behaviour of drawing straight lines across unmeasured
+                regions. See :mod:`thyra.resampling.gaps`.
+        """
+        self.gap_tolerance_da = gap_tolerance_da
 
     def resample(
         self, spectrum: Spectrum, target_axis: npt.NDArray[np.floating[Any]]
@@ -108,6 +121,15 @@ class TICPreservingStrategy(ResamplingStrategy):
 
         # Ensure no negative values (can happen with extrapolation)
         interpolated_intensity = np.maximum(interpolated_intensity, 0.0)
+
+        # Discard bins no source point vouches for, before the rescale so the
+        # intensity returns to the measured bins rather than being deleted.
+        zero_across_gaps(
+            interpolated_intensity,
+            np.asarray(target_axis, dtype=np.float64),
+            mzs_sorted,
+            self.gap_tolerance_da,
+        )
 
         # Scale onto the TIC the target axis is entitled to carry. Shared
         # with the converters' hot path so the two cannot drift apart again.
