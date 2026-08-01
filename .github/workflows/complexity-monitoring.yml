@@ -24,6 +24,18 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        # The monitor's --files-changed mode diffs this checkout against the
+        # PR's base branch, so that ref has to be here. The default
+        # fetch-depth: 1 leaves a shallow clone that has no base branch at all,
+        # which is what made fast mode dead on every PR: the diff exited 128
+        # and the script quietly scanned the whole repository instead.
+        # `git fetch --depth=1 origin $GITHUB_BASE_REF` would be cheaper, but a
+        # three-dot diff needs a common ancestor and two depth-1 tips have none.
+        # The cost is small enough not to be worth that risk: a full clone of
+        # this repo packs to 26 MiB against 12 MiB shallow, next to a
+        # `poetry install` that dominates the job either way.
+        fetch-depth: 0
 
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -84,6 +96,9 @@ jobs:
 
         if [ $COMPLEXITY_EXIT_CODE -eq 0 ]; then
           echo "SUCCESS: No complexity violations found"
+        elif [ $COMPLEXITY_EXIT_CODE -eq 2 ]; then
+          echo "BROKEN: The monitor could not work out which files changed (see the error above)."
+          echo "BROKEN: This is a CI configuration problem, not a complexity violation."
         else
           echo "FAILURE: Complexity violations found (exit code: $COMPLEXITY_EXIT_CODE)"
         fi
