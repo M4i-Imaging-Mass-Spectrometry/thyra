@@ -49,6 +49,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         # Normalised at construction so a typo fails here rather than silently
         # falling through to auto-detection during extraction.
         self.spectrum_type_override = normalize_spectrum_type(spectrum_type)
+        self._z_base_value: Optional[int] = None  # See _z_base()
 
     def _extract_essential_impl(self) -> EssentialMetadata:
         """Extract essential metadata optimized for speed."""
@@ -97,18 +98,23 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         )
 
     def _calculate_dimensions(self, coords: NDArray[np.int_]) -> Tuple[int, int, int]:
-        """Calculate dataset dimensions from coordinates."""
+        """Calculate dataset dimensions from coordinates.
+
+        x and y are 1-based by the imzML specification. z is rebased on the
+        smallest value present (see :meth:`_z_base`), because pyimzml
+        reports either base depending on whether ``IMS:1000052`` is
+        declared. Assuming 1 there under-counted a 0-based two-plane file
+        as ``n_z = 1``, which is the same collision as the coordinate
+        clamp, one layer up.
+        """
         if len(coords) == 0:
             return (0, 0, 0)
 
-        # Coordinates are 1-based in ImzML, convert to 0-based for calculation
-        coords_0based = coords - 1
-
-        max_coords = np.max(coords_0based, axis=0)
+        max_coords = np.max(coords, axis=0)
         return (
-            int(max_coords[0]) + 1,
-            int(max_coords[1]) + 1,
-            int(max_coords[2]) + 1,
+            int(max_coords[0]),
+            int(max_coords[1]),
+            int(max_coords[2]) - self._z_base(coords) + 1,
         )
 
     def _calculate_bounds(
@@ -400,6 +406,30 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             logger.debug(f"Failed to read spectrum {idx}: {e}")
             return None
 
+    def _z_base(self, coords: List) -> int:
+        """The z value in this file that maps onto plane 0.
+
+        The same rebasing :meth:`ImzMLReader._z_base` does, and for the
+        same reason: pyimzml synthesises ``z = 1`` when ``IMS:1000052`` is
+        absent but passes an explicit ``z = 0`` through, so a constant base
+        is wrong for one of the two conventions. ``max(z - 1, 0)`` folded
+        plane 1 onto plane 0, and these counts become the CSR ``indptr``
+        -- landing a pixel's peak count on another pixel's row.
+
+        Memoised; the scan is one pass over the coordinate list.
+
+        Args:
+            coords: The parser's coordinate list.
+
+        Returns:
+            The smallest z present, or 0 for an empty list.
+        """
+        if self._z_base_value is None:
+            self._z_base_value = (
+                int(min(coord[2] for coord in coords)) if len(coords) else 0
+            )
+        return self._z_base_value
+
     def _store_pixel_peak_count(
         self,
         idx: int,
@@ -417,9 +447,9 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             peak_counts: Array to store counts.
             n_peaks: Number of peaks in this spectrum.
         """
-        # ImzML coordinates are 1-based
+        # ImzML x/y are 1-based; z is rebased on the file -- see _z_base().
         x, y, z = coords[idx]
-        x, y, z = x - 1, y - 1, max(z - 1, 0)
+        x, y, z = x - 1, y - 1, z - self._z_base(coords)
         n_x, n_y, n_z = dimensions
         pixel_idx = z * (n_x * n_y) + y * n_x + x
         if 0 <= pixel_idx < len(peak_counts):
