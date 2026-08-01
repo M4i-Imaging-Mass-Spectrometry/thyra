@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v2.1.0 (2026-08-01)
+
+### Documentation
+
+- **handouts**: Record the SCiLS baseline for resampling
+  ([`35fc7e7`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/35fc7e72aecd8c57494d9eaffae208f486739982))
+
+### Features
+
+- **readers**: Default the raw mass axis cap to SCiLS's 10 million bins
+  ([`93eb229`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/93eb229371bd07ba5d43647fc3ea236c59ae3265))
+
+
 ## v2.0.4 (2026-08-01)
 
 ### Bug Fixes
