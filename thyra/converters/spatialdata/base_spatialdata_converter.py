@@ -21,7 +21,7 @@ from ...resampling.gaps import zero_across_gaps
 from ...resampling.tic import preserved_tic, rescale_to_preserved_tic
 from ...resampling.types import ResamplingConfig
 from ...utils.zarr_atomic_write import install_windows_atomic_write_retry
-from ._chunking import image_chunks
+from ._chunking import image_chunks, table_write_config
 
 logger = logging.getLogger(__name__)
 
@@ -1921,8 +1921,12 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             # Add metadata
             self.add_metadata(sdata)
 
-            # Write to disk
-            with _suppress_upstream_warnings():
+            # Write to disk. table_write_config() must wrap the write itself,
+            # not just the SpatialData construction: anndata creates the table's
+            # zarr arrays lazily inside sdata.write, and that is where the shard
+            # budget is read. Without it the table lands in ~1 KB shards -- one
+            # file per KB -- and the write dominates conversion wall-clock.
+            with _suppress_upstream_warnings(), table_write_config():
                 sdata.write(str(self.output_path))
                 zarr.consolidate_metadata(str(self.output_path))
             logger.info(f"Successfully saved SpatialData to {self.output_path}")
