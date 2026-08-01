@@ -318,6 +318,39 @@ Instrument info, acquisition parameters, and resampling config are in
 print("uns keys:", list(msi_table.uns.keys()))
 ```
 
+### Provenance
+
+`uns["essential_metadata"]` records what the store was made from, and how
+the source was interpreted. It is the only place a converted dataset says
+where it came from, so it is written the same way by every converter path:
+
+```python
+provenance = msi_table.uns["essential_metadata"]
+
+print(provenance["source_path"])     # the file this was converted from
+print(provenance["dimensions"])      # source grid, [x, y, z]
+print(provenance["mass_range"])      # SOURCE m/z range, not the target axis
+print(provenance["spectrum_type"])   # "centroid spectrum" / "profile spectrum"
+print(provenance["thyra_version"])   # the Thyra that wrote the store
+```
+
+`mass_range` describes the source, not the resampled axis -- for the axis
+the data actually sits on, read `msi_table.var["mz"]`.
+
+Beside it, when the source format provides them:
+
+| Key | Contents |
+|-----|----------|
+| `format_specific` | Vendor metadata (imzML file mode and UUID, FlexImaging areas, teaching points) |
+| `acquisition_params` | Polarity, scan range, laser settings |
+| `instrument_info` | Instrument model, serial, software version |
+| `raw_metadata` | Source metadata as read, for round-trip fidelity |
+| `regions` | Acquisition region summary, as a JSON string (see [Regions](#regions)) |
+
+A section the source format has nothing for is omitted rather than written
+empty, so `"instrument_info" not in uns` means "this format does not carry
+it" rather than "it was carried and lost".
+
 ---
 
 ## Recipes

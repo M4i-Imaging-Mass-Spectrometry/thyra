@@ -494,56 +494,72 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         except Exception as e:
             logger.debug(f"Could not extract spectrum metadata: {e}")
 
-    def _add_metadata_to_uns(self, adata) -> None:
-        """Add MSI metadata to AnnData .uns for preservation in SpatialData.
+    def build_uns_metadata(self) -> Dict[str, Any]:
+        """The provenance block every write path must persist, identically.
 
-        This stores comprehensive metadata including:
-        - Essential metadata (dimensions, mass range, source)
-        - Format-specific metadata (FlexImaging areas, teaching points, etc.)
-        - Acquisition parameters
-        - Instrument information
-        - Raw metadata (complete original metadata for future use)
+        Single source of truth for what lands in the table's ``uns``:
+
+        - ``essential_metadata`` -- dimensions, mass range, source path,
+          spectrum type and the Thyra version that wrote the store.
+        - ``format_specific`` -- vendor metadata (FlexImaging areas,
+          teaching points, imzML file mode, ...).
+        - ``acquisition_params`` / ``instrument_info`` -- when the reader
+          has them.
+        - ``raw_metadata`` -- the source metadata as read.
+        - ``regions`` -- the acquisition region summary, as JSON.
+
+        This exists because the converters have two write paths and they
+        drifted. The in-memory and streaming-COO paths hand the table to
+        ``anndata``'s writer, which serialises whatever is in
+        ``adata.uns``; the streaming-PCS path hand-writes the Zarr layout
+        and used to compose its own, much smaller block -- with
+        ``spectrum_type`` hardcoded to ``"processed"``, which is not even
+        a value the extractors produce. A dataset that crossed
+        ``StreamingSpatialDataConverter.PCS_SIZE_THRESHOLD_GB`` therefore
+        came out claiming a spectrum representation it did not have, and
+        without any of the other sections, while a slightly smaller one
+        from the same instrument came out complete. Both paths now render
+        this mapping, so a section added here reaches every store.
+
+        Sections the reader has nothing for are omitted rather than
+        written empty, so consumers can tell "not available from this
+        format" from "available and empty".
+
+        Returns:
+            Mapping of ``uns`` key to the value to store. Empty if the
+            reader cannot produce comprehensive metadata at all.
         """
         try:
             comp_meta = self.reader.get_comprehensive_metadata()
-
-            self._store_format_specific(adata, comp_meta)
-            self._store_acquisition_params(adata, comp_meta)
-            self._store_instrument_info(adata, comp_meta)
-            self._store_essential_metadata(adata, comp_meta)
-            self._store_raw_metadata(adata, comp_meta)
-            self._store_region_info(adata)
-
-            logger.debug("Added MSI metadata to AnnData .uns")
         except Exception as e:
-            logger.debug(f"Could not add metadata to .uns: {e}")
+            # Non-fatal: a store without provenance still holds the
+            # spectra. But it is not a debug-level event -- the whole
+            # point of the block is that a consumer can say where the
+            # data came from, so losing it has to be visible in the log.
+            logger.warning("Could not read metadata for uns provenance: %s", e)
+            return {}
 
-    def _store_format_specific(self, adata, comp_meta) -> None:
-        """Store format-specific metadata (FlexImaging areas, teaching points)."""
-        if hasattr(comp_meta, "format_specific") and comp_meta.format_specific:
-            adata.uns["format_specific"] = comp_meta.format_specific
+        uns: Dict[str, Any] = {}
+        try:
+            self._collect_essential_metadata(uns, comp_meta)
+            self._collect_optional_sections(uns, comp_meta)
+            self._collect_region_info(uns)
+        except Exception as e:
+            logger.warning("Could not build the full uns provenance block: %s", e)
 
-    def _store_acquisition_params(self, adata, comp_meta) -> None:
-        """Store acquisition parameters."""
-        if hasattr(comp_meta, "acquisition_params") and comp_meta.acquisition_params:
-            adata.uns["acquisition_params"] = comp_meta.acquisition_params
+        return uns
 
-    def _store_instrument_info(self, adata, comp_meta) -> None:
-        """Store instrument information."""
-        if hasattr(comp_meta, "instrument_info") and comp_meta.instrument_info:
-            adata.uns["instrument_info"] = comp_meta.instrument_info
-
-    def _store_essential_metadata(self, adata, comp_meta) -> None:
-        """Store essential metadata (convert tuples to lists for Zarr)."""
-        if not hasattr(comp_meta, "essential"):
+    def _collect_essential_metadata(self, uns: Dict[str, Any], comp_meta: Any) -> None:
+        """Add ``essential_metadata`` (tuples become lists for Zarr)."""
+        essential = getattr(comp_meta, "essential", None)
+        if essential is None:
             return
 
-        essential = comp_meta.essential
         dims = essential.dimensions
         mrange = essential.mass_range
         from thyra import __version__
 
-        adata.uns["essential_metadata"] = {
+        uns["essential_metadata"] = {
             "source_path": str(essential.source_path),
             "dimensions": list(dims) if dims else None,
             "mass_range": list(mrange) if mrange else None,
@@ -551,13 +567,19 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             "thyra_version": __version__,
         }
 
-    def _store_raw_metadata(self, adata, comp_meta) -> None:
-        """Store raw metadata (complete original data for future use)."""
-        if hasattr(comp_meta, "raw_metadata") and comp_meta.raw_metadata:
-            adata.uns["raw_metadata"] = self._serialize_for_zarr(comp_meta.raw_metadata)
+    def _collect_optional_sections(self, uns: Dict[str, Any], comp_meta: Any) -> None:
+        """Add the vendor sections the reader actually populated."""
+        for key in ("format_specific", "acquisition_params", "instrument_info"):
+            value = getattr(comp_meta, key, None)
+            if value:
+                uns[key] = self._serialize_for_zarr(value)
 
-    def _store_region_info(self, adata) -> None:
-        """Store acquisition region summary in uns as JSON.
+        raw_metadata = getattr(comp_meta, "raw_metadata", None)
+        if raw_metadata:
+            uns["raw_metadata"] = self._serialize_for_zarr(raw_metadata)
+
+    def _collect_region_info(self, uns: Dict[str, Any]) -> None:
+        """Add the acquisition region summary as JSON.
 
         Stored as a JSON string because AnnData/zarr cannot round-trip
         a list of dicts (they get stringified individually). JSON
@@ -568,7 +590,13 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         """
         region_info = getattr(self, "_region_info", None)
         if region_info:
-            adata.uns["regions"] = json.dumps(self._serialize_for_zarr(region_info))
+            uns["regions"] = json.dumps(self._serialize_for_zarr(region_info))
+
+    def _add_metadata_to_uns(self, adata) -> None:
+        """Apply :meth:`build_uns_metadata` to an AnnData about to be written."""
+        uns = self.build_uns_metadata()
+        adata.uns.update(uns)
+        logger.debug("Added MSI metadata to AnnData .uns: %s", sorted(uns))
 
     def _serialize_for_zarr(self, obj):
         """Recursively convert tuples to lists for Zarr serialization."""

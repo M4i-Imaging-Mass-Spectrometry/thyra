@@ -1296,6 +1296,27 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
         return mm_indices, mm_data
 
+    def _write_uns_provenance(self, uns_group: "zarr.Group") -> None:
+        """Write the shared provenance block into a hand-written ``uns`` group.
+
+        This path composes the Zarr layout itself, so it cannot reach
+        ``adata.uns`` the way ``_save_output`` does. It renders the same
+        mapping through anndata's own element writer instead, which is
+        what produces the ``encoding-type`` / ``encoding-version`` pairs
+        ``read_lazy`` needs -- getting those right by hand is exactly
+        what this path used to have to do, and exactly where it drifted
+        from the other one.
+
+        Only ``uns`` goes through anndata here. ``obs``/``var`` stay
+        hand-written: they carry the pandas string dtypes this path
+        exists to sidestep, whereas the provenance block is plain dicts,
+        strings, lists and numbers.
+        """
+        from anndata.io import write_elem
+
+        for key, value in self.build_uns_metadata().items():
+            write_elem(uns_group, key, value)
+
     def _write_csc_arrays_to_zarr(
         self,
         mm_indices: np.memmap,
@@ -1540,40 +1561,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         a.attrs["encoding-type"] = "string"
         a.attrs["encoding-version"] = "0.2.0"
 
-        em_group = uns_group.create_group("essential_metadata")
-        em_group.attrs["encoding-type"] = "dict"
-        em_group.attrs["encoding-version"] = "0.1.0"
-        a = em_group.create_array(
-            "dimensions", data=np.asarray(np.array(self._dimensions))
-        )
-        a.attrs["encoding-type"] = "array"
-        a.attrs["encoding-version"] = "0.2.0"
-        a = em_group.create_array(
-            "mass_range",
-            data=np.array([mz_values.min(), mz_values.max()]),
-        )
-        a.attrs["encoding-type"] = "array"
-        a.attrs["encoding-version"] = "0.2.0"
-        a = em_group.create_array(
-            "source_path",
-            data=np.array(str(self.reader.data_path), dtype=str_dtype),
-        )
-        a.attrs["encoding-type"] = "string"
-        a.attrs["encoding-version"] = "0.2.0"
-        a = em_group.create_array(
-            "spectrum_type",
-            data=np.array("processed", dtype=str_dtype),
-        )
-        a.attrs["encoding-type"] = "string"
-        a.attrs["encoding-version"] = "0.2.0"
-        from thyra import __version__
-
-        a = em_group.create_array(
-            "thyra_version",
-            data=np.array(__version__, dtype=str_dtype),
-        )
-        a.attrs["encoding-type"] = "string"
-        a.attrs["encoding-version"] = "0.2.0"
+        self._write_uns_provenance(uns_group)
 
         a = uns_group.create_array("average_spectrum", data=avg_spectrum)
         a.attrs["encoding-type"] = "array"

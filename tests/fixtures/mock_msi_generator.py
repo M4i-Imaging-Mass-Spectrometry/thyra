@@ -89,7 +89,14 @@ class _MockMetadataExtractor(MetadataExtractor):
             total_peaks=self._n_spectra * avg_peaks,
             estimated_memory_gb=n_pixels * 150 * 8 / (1024**3),
             source_path="mock_msi_data",
-            spectrum_type="processed",
+            # Deliberately a value from the vocabulary the real extractors
+            # produce ("centroid spectrum" / "profile spectrum"), and
+            # deliberately NOT "processed".  The streaming-PCS writer used
+            # to hardcode "processed" into the stored provenance, and this
+            # fixture used to say "processed" too -- so every test agreed
+            # with the bug and none of them could see it.  Keep these two
+            # different.
+            spectrum_type="centroid spectrum",
         )
 
     def _extract_comprehensive_impl(self) -> ComprehensiveMetadata:
