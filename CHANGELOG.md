@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v2.3.0 (2026-08-01)
+
+### Bug Fixes
+
+- **converters**: Stop the streaming-PCS path inventing its own provenance
+  ([`09a2db7`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/09a2db767bc0ee52fb099499b6098572472f4adb))
+
+### Features
+
+- **imzml**: Take spectrum representation explicitly, as SCiLS does
+  ([`5c7aa29`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/5c7aa294c0d64e1cab31d7828b24a379bf01cf04))
+
+
 ## v2.2.4 (2026-08-01)
 
 ### Documentation
