@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v2.2.1 (2026-08-01)
+
+### Bug Fixes
+
+- **imzml**: Parse with ElementTree so unindented CRLF files load
+  ([`b9fe017`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/b9fe01726efbcf5270bebe49af10b6dbfdeb5da6))
+
+
 ## v2.2.0 (2026-08-01)
 
 ### Features
