@@ -105,6 +105,7 @@ chooses an appropriate method and bin count.
 | `--resample-max-mz FLOAT` | auto | Maximum m/z value |
 | `--resample-width-at-mz FLOAT` | auto | Mass width in Da at reference m/z for physics-based binning |
 | `--resample-reference-mz FLOAT` | `1000.0` | Reference m/z for width specification |
+| `--resample-gap-tolerance FLOAT` | none | `tic_preserving` only: discard target bins farther than this many Da from any measured m/z, instead of interpolating across the gap |
 
 !!! info "Choosing a resampling method"
     - **`nearest_neighbor`** -- Each target bin takes the nearest original m/z

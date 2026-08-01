@@ -17,6 +17,7 @@ from ...core.base_converter import BaseMSIConverter, PixelSizeSource
 from ...core.base_reader import BaseMSIReader
 from ...metadata.types import ComprehensiveMetadata, EssentialMetadata
 from ...resampling import ResamplingDecisionTree, ResamplingMethod
+from ...resampling.gaps import zero_across_gaps
 from ...resampling.tic import preserved_tic, rescale_to_preserved_tic
 from ...resampling.types import ResamplingConfig
 from ...utils.zarr_atomic_write import install_windows_atomic_write_retry
@@ -137,6 +138,7 @@ def _normalize_resampling_config(
         ),
         min_mz=config.get("min_mz"),
         max_mz=config.get("max_mz"),
+        gap_tolerance_da=config.get("gap_tolerance_da"),
     )
 
 
@@ -378,6 +380,12 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         self._max_mz = config.max_mz
         self._width_at_mz = config.mass_width_da
         self._reference_mz = config.reference_mz
+        self._gap_tolerance_da = config.gap_tolerance_da
+        if self._gap_tolerance_da is not None:
+            logger.info(
+                f"Interpolation gap tolerance: {self._gap_tolerance_da} Da "
+                "(target bins farther than this from any source m/z are zeroed)"
+            )
 
     def _get_cached_metadata_for_resampling(self) -> Dict[str, Any]:
         """Get cached metadata for resampling decision tree to avoid multiple reader calls."""
@@ -1116,6 +1124,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         When the axis spans the spectrum, which is the default, that share
         is the whole input TIC.
 
+        When ``ResamplingConfig.gap_tolerance_da`` is set, bins farther than
+        that from any source m/z are zeroed before the rescale, so
+        interpolation cannot claim regions nothing was measured in. See
+        ``thyra.resampling.gaps``.
+
         Args:
             mzs: Original m/z values from the spectrum.
             intensities: Corresponding intensity values.
@@ -1161,6 +1174,16 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             intensities_sorted,
             left=0,
             right=0,
+        )
+
+        # Discard bins no source point vouches for, before the rescale so the
+        # intensity returns to the bins that were measured rather than being
+        # deleted. No-op when no tolerance was configured.
+        zero_across_gaps(
+            resampled,
+            axis,
+            mzs_sorted,
+            getattr(self, "_gap_tolerance_da", None),
         )
 
         # Rescale to the required TIC. This is the step that makes the

@@ -109,6 +109,13 @@ class ResamplingConfig:
             default.
         min_mz: Override the lower bound of the mass range.
         max_mz: Override the upper bound of the mass range.
+        gap_tolerance_da: How far, in Daltons, a target bin may sit from the
+            nearest source m/z before ``tic_preserving`` discards its
+            interpolated value instead of trusting it.  ``None`` -- the
+            default -- means no check, which is how ``np.interp`` behaves:
+            straight lines are drawn across regions where nothing was
+            measured.  Only affects ``tic_preserving``; ``nearest_neighbor``
+            never invents a bin.  See :mod:`thyra.resampling.gaps`.
     """
 
     method: Optional[ResamplingMethod] = None
@@ -118,3 +125,4 @@ class ResamplingConfig:
     reference_mz: float = DEFAULT_REFERENCE_MZ
     min_mz: Optional[float] = None
     max_mz: Optional[float] = None
+    gap_tolerance_da: Optional[float] = None
