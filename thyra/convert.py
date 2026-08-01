@@ -283,10 +283,13 @@ def convert_msi(
               use active/recalibrated calibration (default True).
             - max_mass_axis_length: int - For processed-mode imzML
               converted with --no-resample, give up once the raw
-              mass axis exceeds this many unique m/z values.
-              Default: None (unlimited). Useful when the peak
-              lists share no m/z values, where the raw axis grows
-              to roughly one column per peak in the whole dataset.
+              mass axis exceeds this many unique m/z values. This
+              matters when the peak lists share no m/z values,
+              where the raw axis grows to roughly one column per
+              peak in the whole dataset. Default: 10,000,000,
+              which is the limit SCiLS Lab places on the same
+              quantity (2026b User Guide, p.76). Pass None for
+              no limit.
         sparse_format: Sparse matrix format ('csc' or 'csr')
         include_optical: Include optical images (default: True)
         apply_optical_alignment: If True (default) and the MSI source
