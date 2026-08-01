@@ -24,6 +24,7 @@ all-NaN batch, one on an empty accumulator.
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -250,9 +251,42 @@ class TestMaxMassAxisLength:
         runs = [[float(i)] for i in range(50)]
         assert _build(runs, max_len=10_000).size == 50
 
-    def test_absent_limit_is_unlimited(self, batch):
+    def test_explicit_none_is_unlimited(self, batch):
         runs = [[float(i)] for i in range(50)]
         assert _build(runs, max_len=None).size == 50
+
+
+class TestDefaultMaxMassAxisLength:
+    """The reader's default cap, and how a caller overrides it.
+
+    SCiLS Lab limits its own common mass axis to 10 million bins (2026b User
+    Guide, p.76). Thyra adopts that number: it is the tool the resampling was
+    designed against, and previously the cap defaulted to None only because
+    no defensible figure was available.
+    """
+
+    def _reader(self, **options):
+        """Construct a reader without touching the filesystem.
+
+        ``ImzMLReader.__init__`` is lazy -- it stores paths and defers the
+        parser -- so it is safe to build one for a path that does not exist.
+        """
+        return ImzMLReader(Path("does-not-exist.imzML"), **options)
+
+    def test_default_is_ten_million(self):
+        assert mod.DEFAULT_MAX_MASS_AXIS_LENGTH == 10_000_000
+        assert self._reader().max_mass_axis_length == 10_000_000
+
+    def test_caller_can_lower_it(self):
+        assert self._reader(max_mass_axis_length=5_000).max_mass_axis_length == 5_000
+
+    def test_caller_can_raise_it(self):
+        reader = self._reader(max_mass_axis_length=50_000_000)
+        assert reader.max_mass_axis_length == 50_000_000
+
+    def test_explicit_none_restores_unlimited(self):
+        """Absent means "use the default"; None means "no cap at all"."""
+        assert self._reader(max_mass_axis_length=None).max_mass_axis_length is None
 
 
 class TestPerSpectrumErrors:

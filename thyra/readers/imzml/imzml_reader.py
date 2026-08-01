@@ -27,6 +27,16 @@ _MASS_AXIS_BATCH_VALUES = 1 << 20
 # Bounds that function's temporaries to O(block) rather than O(batch).
 _MASS_AXIS_PROBE_BLOCK = 1 << 20
 
+# Default cap on the number of unique m/z values the processed-mode raw mass
+# axis may reach, in ELEMENTS. Taken from SCiLS Lab, which applies the same
+# limit to the same quantity: "Data sets in SCiLS Lab are limited to a maximum
+# of 10 million bins on the common mass axis" (SCiLS Lab 2026b User Guide,
+# p.76). The cap previously defaulted to None because no defensible number was
+# available; this is one, from the tool Thyra's resampling was designed
+# against. Override with ``reader_options={"max_mass_axis_length": N}``, or
+# pass None for the old unlimited behaviour.
+DEFAULT_MAX_MASS_AXIS_LENGTH = 10_000_000
+
 
 def _dedupe_sorted(a: NDArray[Any]) -> NDArray[Any]:
     """Deduplicate an ALREADY-SORTED array, as ``np.unique`` would.
@@ -337,14 +347,20 @@ class ImzMLReader(BaseMSIReader):
             cache_coordinates: Whether to cache coordinates upfront
             **kwargs: Additional arguments. ``max_mass_axis_length`` caps the
                 number of unique m/z values the processed-mode raw axis may
-                reach before the build gives up; None (the default) is
-                unlimited. See ``_extract_continuous_mass_axis``.
+                reach before the build gives up. Defaults to
+                ``DEFAULT_MAX_MASS_AXIS_LENGTH`` (10 million, SCiLS Lab's own
+                limit); pass ``None`` explicitly for unlimited. See
+                ``_extract_continuous_mass_axis``.
         """
         super().__init__(data_path, **kwargs)
         self.filepath: Optional[Union[str, Path]] = data_path
         self.batch_size: int = batch_size
         self.cache_coordinates: bool = cache_coordinates
-        self.max_mass_axis_length: Optional[int] = kwargs.get("max_mass_axis_length")
+        # Absent means "use the default"; an explicit None means "unlimited",
+        # so this cannot be a bare ``.get(...)`` with a None fallback.
+        self.max_mass_axis_length: Optional[int] = kwargs.get(
+            "max_mass_axis_length", DEFAULT_MAX_MASS_AXIS_LENGTH
+        )
         self.parser: Optional[ImzMLParser] = None
         self.ibd_file: Optional[Any] = None
         self.imzml_path: Optional[Path] = None

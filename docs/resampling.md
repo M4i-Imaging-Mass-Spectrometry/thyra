@@ -244,6 +244,46 @@ INFO - Building resampled mass axis: 250.00 - 1200.00 m/z, 190000 bins
 stored sparsely, so the store stays small -- roughly 29 MB here. Pass
 `--resample-bins` or `--no-resample` if you would rather not upsample.
 
+### The 10 million bin cap
+
+`--no-resample` on a processed-mode imzML does not build a physics axis at all.
+It builds the **raw** axis: every distinct m/z value in the whole dataset, one
+column each. When the peak lists genuinely share m/z values that is small. When
+they do not -- which is the normal case for centroided peak picking, where two
+pixels almost never report a peak at the same double -- it grows to roughly one
+column per peak in the entire dataset, and there is no natural stopping point.
+
+Thyra gives up once that axis passes **10 million** unique m/z values, and says
+what to do instead:
+
+```
+ValueError: Common mass axis exceeded 10,000,000 unique m/z values after
+12,400 of 918,855 spectra (10,004,112 so far). The peak lists in this dataset
+do not share m/z values, so a raw axis grows to roughly one column per peak,
+which is not usable downstream. Convert with resampling instead (it is the
+default; --no-resample disables it), or raise max_mass_axis_length.
+```
+
+10 million is SCiLS Lab's own limit on the same quantity: "Data sets in SCiLS
+Lab are limited to a maximum of 10 million bins on the common mass axis" (2026b
+User Guide, p.76).
+
+The cap is Python-API only, through `reader_options`, and applies to the imzML
+reader:
+
+```python
+from thyra import convert_msi
+
+convert_msi(
+    "data.imzML",
+    "out.zarr",
+    reader_options={"max_mass_axis_length": 50_000_000},  # or None for no cap
+)
+```
+
+It has no effect when resampling is on, which is the default: a resampled axis
+has the bin count you asked for.
+
 ---
 
 ## Overriding the automatic choice
