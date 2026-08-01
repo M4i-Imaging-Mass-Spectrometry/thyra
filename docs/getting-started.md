@@ -116,9 +116,15 @@ For advanced control you can specify the method and instrument type:
 ```bash
 # Physics-based resampling for Orbitrap data
 thyra input.imzML output.zarr \
-    --resample-method tic_preserving \
+    --resample-method nearest_neighbor \
     --mass-axis-type orbitrap
 ```
+
+`nearest_neighbor` is the right pairing for a non-uniform axis:
+`tic_preserving` applies one scaling factor to the whole spectrum, which
+cannot account for bin widths that vary across the mass range. See
+[Resampling](resampling.md#methods) for the measured cost of getting that
+combination wrong.
 
 !!! info "When to disable resampling"
     Disable resampling (`--no-resample`) if you need the raw, unmodified spectra
