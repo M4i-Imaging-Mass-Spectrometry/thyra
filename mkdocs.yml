@@ -75,6 +75,7 @@ nav:
   - Resampling: resampling.md
   - Output Format: output-format.md
   - Coordinate Systems: coordinate-systems.md
+  - imzML Parser Notes: imzml-parser-notes.md
   - API Reference: api.md
   - Contributing: contributing.md
   - Code of Conduct: code-of-conduct.md
