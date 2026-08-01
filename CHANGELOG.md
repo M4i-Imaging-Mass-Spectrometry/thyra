@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v2.0.4 (2026-08-01)
+
+### Bug Fixes
+
+- **resampling**: Stop dropping negative bins, and correct the docs
+  ([`96938e3`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/96938e3c60b3331106ff14e06f027c6f2fcdc430))
+
+
 ## v2.0.3 (2026-07-31)
 
 ### Bug Fixes
