@@ -3,8 +3,11 @@ name: Complexity Monitoring
 on:
   push:
     branches: [ main, develop ]
+  # Deliberately unfiltered, as in tests.yml: `branches:` here would match the
+  # PR's BASE branch, which silently excludes stacked PRs. The `push:` filter
+  # above is left narrow on purpose -- this should not start running on every
+  # push to every feature branch, only on the PRs those branches open.
   pull_request:
-    branches: [ main, develop ]
   schedule:
     # Run weekly on Sundays at 2 AM UTC
     - cron: '0 2 * * 0'

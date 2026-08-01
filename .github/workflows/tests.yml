@@ -1,8 +1,13 @@
 name: Tests
 
 on:
+  # Deliberately unfiltered. `branches:` on a pull_request trigger matches the
+  # BASE branch, not the head, so `branches: [ main ]` skipped every stacked PR
+  # (one feature branch based on another) until its parent merged and GitHub
+  # retargeted it onto main -- i.e. the tests only ran after review, never
+  # before. There is no `push:` trigger in this workflow, so accepting every
+  # base branch cannot double up with anything.
   pull_request:
-    branches: [ main ]
   workflow_dispatch:
 
 jobs:
