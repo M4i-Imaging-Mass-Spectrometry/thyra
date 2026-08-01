@@ -69,6 +69,14 @@ axis), the **axis type** (how bin widths scale with m/z), and the **bin count**.
 - average peaks per spectrum; above **5000** the data is recorded as high-density profile
 - format flags for Rapiflex and timsTOF
 
+Spectrum type is whatever the file **declares** -- `MS:1000127` or
+`MS:1000128` -- read from the file description first and then from the rest of
+the document. Only when a file declares neither does Thyra fall back to
+guessing centroid from processed storage mode, and it says so in a warning
+when it does. Processed and centroid are independent: processed means each
+spectrum carries its own m/z array, which says nothing about whether its peaks
+are centroided.
+
 Peak density is reported but does **not** select a method or an axis type. It
 describes how finely the spectra were sampled, not what acquired them, and a
 dense profile spectrum can come from a MALDI-TOF, a TOF-SIMS, or an Orbitrap
@@ -114,6 +122,14 @@ default. This table is the actual observed behaviour of that chain:
     reader populates that key: the only place it is set is the Rapiflex reader,
     which hardcodes `"MALDI-TOF"`. Neither the imzML nor the Bruker `.d`
     metadata extractor emits it at all.
+
+    Still true: reading the declared `MS:1000127`/`MS:1000128` accession fixed
+    how *spectrum representation* is detected, not how `instrument_type` is
+    populated. Nothing writes `"Orbitrap"` or `"FT-ICR"` into it, so these two
+    detectors remain unreachable. What did change is which row such data lands
+    on: a profile-mode Orbitrap file now correctly reports profile, so it falls
+    to the default row (`constant`) rather than being misread as centroid and
+    given `reflector_tof`.
 
     So Orbitrap and FT-ICR data does **not** get the `orbitrap` or `fticr`
     axis automatically -- it falls through to the generic centroid or default
@@ -239,13 +255,19 @@ The axis type sets how bin width grows with m/z. Each corresponds to the
 physics of a mass analyser, so that bins track the instrument's real resolving
 power instead of over-sampling the low end and under-sampling the high end.
 
-| Axis type | Bin width scales as | Rationale |
-|---|---|---|
-| `constant` | constant Da | Equidistant bins; the SCiLS Lab convention for MALDI-TOF profile data |
-| `linear_tof` | `sqrt(m/z)` | Linear TOF: flight time `t ∝ sqrt(m/z)`, so equal time bins give `sqrt(m/z)` mass bins |
-| `reflector_tof` | `m/z` | Constant *relative* resolution `R = m/Δm`; bins are uniform in `ln(m/z)` |
-| `orbitrap` | `m/z^1.5` | Orbitrap frequency `f ∝ 1/sqrt(m/z)`, so equal frequency bins give `m/z^1.5` mass bins |
-| `fticr` | `m/z^2` | Cyclotron frequency `f ∝ 1/(m/z)`, so equal frequency bins give `m/z^2` mass bins |
+| Axis type | In SCiLS Lab | Bin width scales as | Rationale |
+|---|---|---|---|
+| `constant` | Constant (equidistant) | constant Da | Equidistant bins |
+| `linear_tof` | **Axial TOF** | `sqrt(m/z)` | Linear TOF: flight time `t ∝ sqrt(m/z)`, so equal time bins give `sqrt(m/z)` mass bins |
+| `reflector_tof` | **Orthogonal TOF** | `m/z` | Constant *relative* resolution `R = m/Δm`; bins are uniform in `ln(m/z)` |
+| `orbitrap` | Orbitrap | `m/z^1.5` | Orbitrap frequency `f ∝ 1/sqrt(m/z)`, so equal frequency bins give `m/z^1.5` mass bins |
+| `fticr` | **MRMS** (Fourier-transform) | `m/z^2` | Cyclotron frequency `f ∝ 1/(m/z)`, so equal frequency bins give `m/z^2` mass bins |
+
+The five types, and their scaling laws, are the ones SCiLS Lab offers for the
+common mass axis (2026b User Guide, p.75). **Thyra's names are SCiLS's older
+ones**: `linear_tof` and `reflector_tof` were "Linear TOF" and "Reflector TOF"
+in earlier SCiLS versions and are now Axial TOF and Orthogonal TOF, and the
+FT-ICR type is now called MRMS. The laws are unchanged; only the labels moved.
 
 `reflector_tof` is the most broadly useful of these: constant relative
 resolution means constant relative mass accuracy across the whole range, which
@@ -266,8 +288,16 @@ When you specify neither, these defaults apply:
 | `linear_tof` | 17 mDa | 300 |
 | everything else | 5 mDa | 1000 |
 
-The 17 mDa / m/z 300 pairing for `linear_tof` reproduces the axis SCiLS Lab
-produces for FlexImaging data. The count is then derived per axis type:
+The 17 mDa / m/z 300 pairing for `linear_tof` was chosen to be close to the
+axis SCiLS Lab produces for FlexImaging data. Treat it as a working default
+rather than a reproduction: **the figure does not appear in the SCiLS Lab
+2026b User Guide**, and no version that states it has been identified, so
+nothing here is a claim of exact equivalence. The code comment implementing it
+says "SCiLS-like ~17 mDa", which is the accurate description. If you need to
+match a particular SCiLS project, set `--resample-width-at-mz` and
+`--resample-reference-mz` from that project's own axis.
+
+The count is then derived per axis type:
 
 | Axis type | Bin count |
 |---|---|
@@ -381,7 +411,7 @@ automatic.
         "input.imzML",
         "output.zarr",
         resampling_config={
-            "method": "tic_preserving",
+            "method": "nearest_neighbor",
             "axis_type": "orbitrap",
             "width_at_mz": 0.01,
             "reference_mz": 500.0,

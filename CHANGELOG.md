@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v2.2.3 (2026-08-01)
+
+### Bug Fixes
+
+- **metadata**: Read the declared spectrum representation, don't infer it
+  ([`d6c080e`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/d6c080e2b8caf1b7cfbbb402fe6809c7e6b83c9d))
+
+
 ## v2.2.2 (2026-08-01)
 
 ### Bug Fixes

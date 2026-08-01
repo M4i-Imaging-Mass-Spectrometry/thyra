@@ -4,10 +4,29 @@
 import argparse
 import ast
 import json
+import os
+
+# nosec B404: CI tooling that shells out to git with a fixed argument list and
+# no shell. B603 and B607, which cover the calls themselves, are already
+# skipped repository-wide in pyproject.toml.
+import subprocess  # nosec B404
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, NamedTuple
+
+# Generous enough that a cold pack on a CI runner cannot make the timeout the
+# thing that fails the build: since --files-changed now refuses to guess, a
+# timeout here is a hard error rather than a quiet fallback.
+GIT_TIMEOUT_SECONDS = 30
+
+# Distinct from 1 ("complexity violations found") so that a broken --files-changed
+# mode cannot be mistaken for a code-quality failure.
+EXIT_CHANGED_FILES_UNKNOWN = 2
+
+# The console listing is a pointer, not the record: every violation is in the
+# saved JSON report, which the workflow uploads as an artifact.
+TOP_VIOLATIONS_SHOWN = 5
 
 
 class ComplexityResult(NamedTuple):
@@ -160,60 +179,133 @@ def find_python_files(root_dir: Path) -> List[Path]:
     return python_files
 
 
-def get_changed_files() -> List[Path]:
-    """Get list of changed Python files from git diff.
+class ChangedFiles(NamedTuple):
+    """The changed Python files, and the git ref they were compared against."""
 
-    Compares current branch against origin/main to find modified files.
-    Falls back to comparing against HEAD~1 if origin/main doesn't exist.
-    Returns empty list if git operations fail.
+    base_ref: str
+    files: List[Path]
+
+
+class ChangedFilesError(RuntimeError):
+    """Raised when the set of changed files cannot be determined.
+
+    This is deliberately not representable as an empty file list: "nothing
+    changed" and "we have no idea what changed" call for opposite responses,
+    and conflating them is what let --files-changed scan the whole repository
+    while announcing itself as fast mode.
+    """
+
+
+def _run_git(args: List[str]) -> "subprocess.CompletedProcess[str]":
+    """Run a git command and return it without raising on a non-zero status.
+
+    Args:
+        args: Arguments after ``git`` itself.
 
     Returns:
-        List of Path objects for changed Python files that exist
-    """
-    # nosec B404: CI tooling that shells out to git with a fixed argument
-    # list and no shell. B603 and B607, which cover the calls themselves,
-    # are already skipped repository-wide in pyproject.toml.
-    import subprocess  # nosec B404
+        The completed process, whatever its exit status. Callers decide what a
+        failure means; nothing here falls through to a silent default.
 
+    Raises:
+        ChangedFilesError: if git could not be run at all.
+    """
     try:
-        # Try comparing against origin/main first
-        result = subprocess.run(
-            ["git", "diff", "--name-only", "origin/main...HEAD"],
+        return subprocess.run(
+            ["git", *args],
             capture_output=True,
             text=True,
-            check=True,
-            timeout=5,
+            check=False,
+            timeout=GIT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ChangedFilesError(f"could not run `git {' '.join(args)}`: {exc}") from exc
+
+
+def _base_ref_candidates() -> List[str]:
+    """Return the refs to compare against, most authoritative first.
+
+    On a GitHub ``pull_request`` run, GITHUB_BASE_REF holds the branch the PR
+    targets, which is not necessarily ``main``: this workflow also runs on
+    stacked PRs, whose base is another feature branch. A stacked PR diffed
+    against ``main`` reports the union of its own changes and its parent's, so
+    when the real base is known it is the only acceptable answer -- there is no
+    fallback to ``main`` from here.
+    """
+    base_branch = os.environ.get("GITHUB_BASE_REF", "").strip()
+    if base_branch:
+        return [f"origin/{base_branch}", base_branch]
+
+    # Not a pull_request run: a developer invoking this by hand, or a push or
+    # schedule run that passed --files-changed anyway.
+    return ["origin/main", "main", "HEAD~1"]
+
+
+def _resolve_base_ref() -> str:
+    """Return the first candidate base ref that exists in this checkout.
+
+    Returns:
+        A ref name that ``git diff`` can resolve.
+
+    Raises:
+        ChangedFilesError: if none of the candidates exist, which on CI almost
+            always means the checkout is too shallow to contain the base branch.
+    """
+    candidates = _base_ref_candidates()
+    for ref in candidates:
+        # --verify --quiet exits non-zero rather than printing when the ref is
+        # missing, which is what separates "no such ref" from "diff failed".
+        probe = _run_git(["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"])
+        if probe.returncode == 0:
+            return ref
+
+    base_branch = os.environ.get("GITHUB_BASE_REF", "").strip()
+    if base_branch:
+        hint = (
+            f"GITHUB_BASE_REF is {base_branch!r}, so this is a pull_request run "
+            "whose checkout does not contain its own base branch. Give "
+            "actions/checkout `fetch-depth: 0`."
+        )
+    else:
+        hint = (
+            "GITHUB_BASE_REF is unset. Set it to the branch to compare against, "
+            "or run this from a checkout that has an origin/main ref."
+        )
+    raise ChangedFilesError(
+        f"no base ref found (tried: {', '.join(candidates)}). {hint}"
+    )
+
+
+def get_changed_files() -> ChangedFiles:
+    """Get the Python files changed relative to this branch's base.
+
+    Returns:
+        The base ref that was used, and the changed Python files that still
+        exist on disk. An empty file list means exactly that: the diff was
+        computed and touched no Python file.
+
+    Raises:
+        ChangedFilesError: if the base ref cannot be resolved or the diff fails.
+    """
+    base_ref = _resolve_base_ref()
+
+    result = _run_git(["diff", "--name-only", f"{base_ref}...HEAD"])
+    if result.returncode != 0:
+        raise ChangedFilesError(
+            f"`git diff --name-only {base_ref}...HEAD` exited "
+            f"{result.returncode}: {result.stderr.strip()}"
         )
 
-        if result.returncode != 0 or not result.stdout.strip():
-            # Fallback: compare against HEAD~1
-            result = subprocess.run(
-                ["git", "diff", "--name-only", "HEAD~1", "HEAD"],
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=5,
-            )
+    changed = []
+    for line in result.stdout.splitlines():
+        name = line.strip()
+        if not name.endswith(".py"):
+            continue
+        path = Path(name)
+        # Deleted files are in the diff but cannot be analysed.
+        if path.exists():
+            changed.append(path)
 
-        files = result.stdout.strip().split("\n")
-        python_files = []
-
-        for f in files:
-            if f and f.endswith(".py"):
-                file_path = Path(f)
-                if file_path.exists():
-                    python_files.append(file_path)
-
-        return python_files
-
-    except (
-        subprocess.CalledProcessError,
-        subprocess.TimeoutExpired,
-        FileNotFoundError,
-    ) as e:
-        print(f"Warning: Could not detect changed files via git: {e}")
-        print("Falling back to analyzing all files")
-        return []
+    return ChangedFiles(base_ref=base_ref, files=changed)
 
 
 def generate_report(results: List[ComplexityResult], threshold: int) -> Dict:
@@ -273,6 +365,23 @@ def generate_report(results: List[ComplexityResult], threshold: int) -> Dict:
     }
 
 
+def print_violations(report: Dict) -> None:
+    """Print the worst offenders in a report.
+
+    Lives outside the ``--quiet`` guard in :func:`main` on purpose. The flag
+    advertises "suppress output except violations", so this listing is the one
+    thing it must not silence.
+    """
+    print("Top violations:")
+    for i, func in enumerate(
+        report["high_complexity_functions"][:TOP_VIOLATIONS_SHOWN], 1
+    ):
+        print(
+            f"  {i}. {func['file']}:{func['line']} - "
+            f"{func['function']} ({func['complexity']})"
+        )
+
+
 def main():
     """Main function."""
     parser = argparse.ArgumentParser(description="Monitor cyclomatic complexity")
@@ -294,7 +403,12 @@ def main():
     parser.add_argument(
         "--files-changed",
         action="store_true",
-        help="Only analyze files changed compared to main branch (speeds up PR checks)",
+        help=(
+            "Only analyze files changed against this branch's base -- "
+            "$GITHUB_BASE_REF on a pull_request run, otherwise origin/main "
+            f"(speeds up PR checks; exits {EXIT_CHANGED_FILES_UNKNOWN} if the "
+            "base cannot be resolved)"
+        ),
     )
 
     args = parser.parse_args()
@@ -309,18 +423,24 @@ def main():
 
     # Filter to only changed files if requested
     if args.files_changed:
-        changed_files = get_changed_files()
-        if changed_files:
-            # Filter python_files to only include changed files
-            changed_files_set = set(changed_files)
-            python_files = [f for f in python_files if f in changed_files_set]
-            if not args.quiet:
-                print(
-                    f"Analyzing {len(python_files)} changed files (--files-changed mode)"
-                )
-        else:
-            if not args.quiet:
-                print("Warning: Could not detect changed files, analyzing all files")
+        try:
+            changed = get_changed_files()
+        except ChangedFilesError as e:
+            print(
+                f"ERROR: --files-changed cannot tell which files changed: {e}",
+                file=sys.stderr,
+            )
+            print(
+                "ERROR: refusing to scan the whole repository and call it fast mode.",
+                file=sys.stderr,
+            )
+            return EXIT_CHANGED_FILES_UNKNOWN
+
+        changed_files_set = set(changed.files)
+        python_files = [f for f in python_files if f in changed_files_set]
+        if not args.quiet:
+            print(f"Comparing against base ref: {changed.base_ref}")
+            print(f"Analyzing {len(python_files)} changed files (--files-changed mode)")
 
     if not python_files:
         if not args.quiet:
@@ -336,25 +456,27 @@ def main():
     # Generate report
     report = generate_report(all_results, args.threshold)
 
+    violations = report["total_violations"]
+
     # Print summary
     if not args.quiet:
         print(
             f"Analyzed {len(python_files)} files, {report['total_functions']} functions"
         )
         print(f"Complexity threshold: {args.threshold}")
-        print(f"Violations found: {report['total_violations']}")
+        print(f"Violations found: {violations}")
 
-        if report["total_violations"] > 0:
+        if violations > 0:
             print(f"Average complexity: {report['average_complexity']}")
             print(f"Maximum complexity: {report['max_complexity']}")
 
-            print("\nTop violations:")
-            for i, func in enumerate(report["high_complexity_functions"][:5], 1):
-                func_info = func["function"]
-                print(
-                    f"  {i}. {func['file']}:{func['line']} - "
-                    f"{func_info} ({func['complexity']})"
-                )
+    # Not guarded by --quiet: the flag reads "Suppress output except
+    # violations", and until now it suppressed these too, which left a
+    # --quiet run with no way to say anything at all.
+    if violations > 0:
+        if not args.quiet:
+            print()  # separate the listing from the statistics above it
+        print_violations(report)
 
     # Save report if requested
     if args.save and not args.no_save:

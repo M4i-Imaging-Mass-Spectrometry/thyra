@@ -36,7 +36,7 @@ success = convert_msi(
     "input.imzML",
     "output.zarr",
     resampling_config={
-        "method": "tic_preserving",
+        "method": "nearest_neighbor",
         "axis_type": "orbitrap",
         "target_bins": 50000,
     },
