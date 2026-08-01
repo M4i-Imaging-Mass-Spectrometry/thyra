@@ -205,7 +205,12 @@ jobs:
         echo ""
         echo "DIRECT COMPLEXITY CHECK (for debugging):"
         echo "================================="
-        poetry run python .github/scripts/complexity_monitor.py --threshold 15 --no-save --quiet || true
+        # No --quiet: that flag prints the violations and nothing else, so on a
+        # repository with none -- the steady state, and the state today -- this
+        # banner would introduce an empty stretch of log. What is wanted here is
+        # the whole-repo summary, which is also the part `--files-changed` runs
+        # above deliberately do not compute.
+        poetry run python .github/scripts/complexity_monitor.py --threshold 15 --no-save || true
 
     - name: Set complexity check status
       run: |
