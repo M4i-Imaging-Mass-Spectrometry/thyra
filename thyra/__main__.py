@@ -261,11 +261,21 @@ def _build_resampling_config(
 def _build_reader_options(
     use_recalibrated: bool,
     intensity_threshold: Optional[float],
-) -> dict[str, bool | float]:
-    """Build reader options dictionary from CLI parameters."""
-    options: dict[str, bool | float] = {"use_recalibrated_state": use_recalibrated}
+    spectrum_type: str = "auto",
+) -> dict[str, bool | float | str]:
+    """Build reader options dictionary from CLI parameters.
+
+    ``spectrum_type="auto"`` is the CLI's way of saying "no override", so it is
+    omitted entirely rather than forwarded -- readers take ``None``/absent to
+    mean detect, and ``"auto"`` is not a representation.
+    """
+    options: dict[str, bool | float | str] = {
+        "use_recalibrated_state": use_recalibrated
+    }
     if intensity_threshold is not None:
         options["intensity_threshold"] = intensity_threshold
+    if spectrum_type != "auto":
+        options["spectrum_type"] = spectrum_type
     return options
 
 
@@ -548,6 +558,17 @@ class GroupedCommand(click.Command):
         "(default: no limit)"
     ),
 )
+@click.option(
+    "--spectrum-type",
+    type=click.Choice(["auto", "profile", "centroid"]),
+    default="auto",
+    help=(
+        "Spectrum representation (default: auto-detect from the file). "
+        "Overrides what the imzML declares via MS:1000127/MS:1000128; "
+        "contradicting a declaration is logged as a warning. SCiLS Lab spells "
+        "this --rep_type. imzML only."
+    ),
+)
 # -- Bruker-specific --
 @click.option(
     "--use-recalibrated/--no-recalibrated",
@@ -597,6 +618,7 @@ def main(
     resample_reference_mz: float,
     resample_gap_tolerance: Optional[float],
     mass_axis_type: str,
+    spectrum_type: str,
     sparse_format: str,
     include_optical: bool,
     intensity_threshold: Optional[float],
@@ -664,7 +686,9 @@ def main(
     )
 
     # Build reader options for format-specific settings
-    reader_options = _build_reader_options(use_recalibrated, intensity_threshold)
+    reader_options = _build_reader_options(
+        use_recalibrated, intensity_threshold, spectrum_type
+    )
 
     # Perform conversion
     success = convert_msi(

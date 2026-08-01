@@ -329,3 +329,64 @@ class TestCrlfUnindentedImzML:
         reader.close()
 
         assert essential.n_spectra == 16000
+
+
+def _write_two_pixel_imzml(directory: Path, name: str, spec_type: str) -> Path:
+    """A minimal processed imzML declaring the given representation."""
+    path = directory / f"{name}.imzML"
+    mzs = np.linspace(100.0, 1000.0, 50)
+    intensities = np.zeros_like(mzs)
+    intensities[10] = 100.0
+    with ImzMLWriter(str(path), mode="processed", spec_type=spec_type) as writer:
+        writer.addSpectrum(mzs, intensities, (1, 1, 1))
+        writer.addSpectrum(mzs, intensities, (2, 1, 1))
+    return path
+
+
+class TestSpectrumTypeReaderOption:
+    """``reader_options={"spectrum_type": ...}`` has to reach the extractor.
+
+    The extractor is where the decision is made, but it is constructed by the
+    reader, so the value has to be threaded. This is the join that a unit test
+    on the extractor alone would not catch.
+    """
+
+    def test_absent_means_detect(self, tmp_path):
+        path = _write_two_pixel_imzml(tmp_path, "detect", "profile")
+        reader = ImzMLReader(path)
+        try:
+            assert reader.spectrum_type is None
+            assert reader.get_essential_metadata().spectrum_type == "profile spectrum"
+        finally:
+            reader.close()
+
+    @pytest.mark.parametrize(
+        "declared,override,expected",
+        [
+            ("profile", "centroid", "centroid spectrum"),
+            ("centroid", "profile", "profile spectrum"),
+        ],
+    )
+    def test_override_reaches_the_stored_metadata(
+        self, tmp_path, declared, override, expected
+    ):
+        path = _write_two_pixel_imzml(tmp_path, f"ovr_{declared}", declared)
+        reader = ImzMLReader(path, spectrum_type=override)
+        try:
+            assert reader.get_essential_metadata().spectrum_type == expected
+        finally:
+            reader.close()
+
+    def test_reader_normalises_before_storing(self, tmp_path):
+        path = _write_two_pixel_imzml(tmp_path, "norm", "profile")
+        reader = ImzMLReader(path, spectrum_type="CENTROID")
+        try:
+            assert reader.spectrum_type == "centroid spectrum"
+        finally:
+            reader.close()
+
+    def test_a_bad_value_fails_at_construction(self, tmp_path):
+        """Fail while the caller is still looking at its own arguments."""
+        path = _write_two_pixel_imzml(tmp_path, "bad", "profile")
+        with pytest.raises(ValueError, match="Unknown spectrum_type"):
+            ImzMLReader(path, spectrum_type="profil")
