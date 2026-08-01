@@ -16,6 +16,14 @@ spatialdata 0.7.3 / zarr 3.1.3.
 | D | [toolchain-hygiene.md](toolchain-hygiene.md) | `chore/toolchain-hygiene` | `../Thyra-toolchain` | independent |
 | E | [upstream-lazy-table-pr.md](upstream-lazy-table-pr.md) | *upstream* | *scverse/spatialdata* | independent |
 | F | [interpolation-resampling.md](interpolation-resampling.md) | *not created* | `../Thyra-interp` | backlog |
+| G | [resampling-scils-alignment.md](resampling-scils-alignment.md) | `fix/resampling-scils-alignment` | `../Thyra-resampling` | **modality leak is real** |
+
+Handout G is the one to read before touching resampling. It records what the
+SCiLS Lab manual actually specifies -- SCiLS is the baseline Thyra's
+resampling was designed against -- and settles two questions that earlier
+material left open: intensity is a count rather than a density, and the
+default paths measure exact. It also corrects F's description of
+`tic_preserving`.
 
 Handout E is work in `scverse/spatialdata`, not here. It is listed because
 it is the critical path for Ousia reading Thyra output lazily, and because
