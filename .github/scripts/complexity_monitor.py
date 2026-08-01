@@ -24,6 +24,10 @@ GIT_TIMEOUT_SECONDS = 30
 # mode cannot be mistaken for a code-quality failure.
 EXIT_CHANGED_FILES_UNKNOWN = 2
 
+# The console listing is a pointer, not the record: every violation is in the
+# saved JSON report, which the workflow uploads as an artifact.
+TOP_VIOLATIONS_SHOWN = 5
+
 
 class ComplexityResult(NamedTuple):
     """Result of complexity analysis for a function."""
@@ -361,6 +365,23 @@ def generate_report(results: List[ComplexityResult], threshold: int) -> Dict:
     }
 
 
+def print_violations(report: Dict) -> None:
+    """Print the worst offenders in a report.
+
+    Lives outside the ``--quiet`` guard in :func:`main` on purpose. The flag
+    advertises "suppress output except violations", so this listing is the one
+    thing it must not silence.
+    """
+    print("Top violations:")
+    for i, func in enumerate(
+        report["high_complexity_functions"][:TOP_VIOLATIONS_SHOWN], 1
+    ):
+        print(
+            f"  {i}. {func['file']}:{func['line']} - "
+            f"{func['function']} ({func['complexity']})"
+        )
+
+
 def main():
     """Main function."""
     parser = argparse.ArgumentParser(description="Monitor cyclomatic complexity")
@@ -435,25 +456,27 @@ def main():
     # Generate report
     report = generate_report(all_results, args.threshold)
 
+    violations = report["total_violations"]
+
     # Print summary
     if not args.quiet:
         print(
             f"Analyzed {len(python_files)} files, {report['total_functions']} functions"
         )
         print(f"Complexity threshold: {args.threshold}")
-        print(f"Violations found: {report['total_violations']}")
+        print(f"Violations found: {violations}")
 
-        if report["total_violations"] > 0:
+        if violations > 0:
             print(f"Average complexity: {report['average_complexity']}")
             print(f"Maximum complexity: {report['max_complexity']}")
 
-            print("\nTop violations:")
-            for i, func in enumerate(report["high_complexity_functions"][:5], 1):
-                func_info = func["function"]
-                print(
-                    f"  {i}. {func['file']}:{func['line']} - "
-                    f"{func_info} ({func['complexity']})"
-                )
+    # Not guarded by --quiet: the flag reads "Suppress output except
+    # violations", and until now it suppressed these too, which left a
+    # --quiet run with no way to say anything at all.
+    if violations > 0:
+        if not args.quiet:
+            print()  # separate the listing from the statistics above it
+        print_violations(report)
 
     # Save report if requested
     if args.save and not args.no_save:

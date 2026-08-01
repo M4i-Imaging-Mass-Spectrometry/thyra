@@ -1,5 +1,5 @@
 # tests/unit/tools/test_complexity_monitor.py
-"""Tests for the CI complexity monitor's ``--files-changed`` fast mode.
+"""Tests for the CI complexity monitor's ``--files-changed`` mode and output.
 
 Fast mode was dead for the whole of its life: it hardcoded a diff against
 ``origin/main``, which a shallow ``actions/checkout`` does not provide, and the
@@ -10,6 +10,10 @@ scan while the log announced fast mode.
 These tests therefore drive the real thing against real throwaway git
 repositories -- a mocked ``subprocess`` would have happily agreed with the
 broken version.
+
+The second group covers what the script prints. ``--quiet`` documented itself
+as "Suppress output except violations" while suppressing the violations too,
+which made it a flag with no output at any verbosity.
 """
 
 from __future__ import annotations
@@ -274,6 +278,120 @@ def test_main_reports_the_base_ref_it_used(stacked_repo, monkeypatch, capsys) ->
     out = capsys.readouterr().out
     assert "Comparing against base ref: origin/parent" in out
     assert "Analyzing 1 changed files" in out
+
+
+@pytest.fixture
+def tree_with_one_tangled_function(tmp_path):
+    """A working directory whose ``thyra`` package holds one function of complexity 4.
+
+    ``main`` analyzes ``./thyra`` when it exists, so the package name matters;
+    the threshold each test passes decides whether that function counts as a
+    violation.
+    """
+    package = tmp_path / "thyra"
+    package.mkdir()
+    (package / "tangled.py").write_text(
+        "def tangled(a, b, c):\n"
+        "    if a:\n"
+        "        return 1\n"
+        "    if b:\n"
+        "        return 2\n"
+        "    if c:\n"
+        "        return 3\n"
+        "    return 4\n",
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+@pytest.mark.unit
+def test_quiet_still_lists_the_violations(
+    tree_with_one_tangled_function, monkeypatch, capsys
+) -> None:
+    """The whole point of the flag: everything suppressed *except* violations.
+
+    It used to suppress those as well, so ``--quiet`` was silent whatever the
+    state of the code -- and the workflow step that used it printed a heading
+    over nothing on every run.
+    """
+    monkeypatch.chdir(tree_with_one_tangled_function)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["complexity_monitor.py", "--threshold", "3", "--no-save", "--quiet"],
+    )
+
+    exit_code = monitor.main()
+
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert "tangled" in out, "the violation itself must survive --quiet"
+    assert "Analyzed" not in out, "the summary is what --quiet is for"
+    assert "Complexity threshold" not in out
+
+
+@pytest.mark.unit
+def test_quiet_prints_nothing_when_there_are_no_violations(
+    tree_with_one_tangled_function, monkeypatch, capsys
+) -> None:
+    """The other half of the contract: nothing to report means no output."""
+    monkeypatch.chdir(tree_with_one_tangled_function)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["complexity_monitor.py", "--threshold", "15", "--no-save", "--quiet"],
+    )
+
+    exit_code = monitor.main()
+
+    assert exit_code == 0
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.unit
+def test_the_summary_and_the_listing_both_print_without_quiet(
+    tree_with_one_tangled_function, monkeypatch, capsys
+) -> None:
+    """Moving the listing out of the guard must not thin out the default output."""
+    monkeypatch.chdir(tree_with_one_tangled_function)
+    monkeypatch.setattr(
+        sys, "argv", ["complexity_monitor.py", "--threshold", "3", "--no-save"]
+    )
+
+    exit_code = monitor.main()
+
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert "Analyzed 1 files, 1 functions" in out
+    assert "Complexity threshold: 3" in out
+    assert "Violations found: 1" in out
+    assert "Maximum complexity: 4" in out
+    assert "Top violations:" in out
+    assert "tangled (4)" in out
+
+
+@pytest.mark.unit
+def test_the_workflow_debug_invocation_says_something_on_a_clean_tree(
+    tree_with_one_tangled_function, monkeypatch, capsys
+) -> None:
+    """The flags of complexity-monitoring.yml's "DIRECT COMPLEXITY CHECK" step.
+
+    That step exists to show a human the whole-repo numbers, so on a repository
+    with no violations -- the state this one is in -- it still has to report
+    them. This is why the step does not pass ``--quiet``, even now that
+    ``--quiet`` behaves.
+    """
+    monkeypatch.chdir(tree_with_one_tangled_function)
+    monkeypatch.setattr(
+        sys, "argv", ["complexity_monitor.py", "--threshold", "15", "--no-save"]
+    )
+
+    exit_code = monitor.main()
+
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "Violations found: 0" in out
+    assert "Analyzed 1 files" in out
 
 
 @pytest.mark.unit
