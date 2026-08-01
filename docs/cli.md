@@ -196,6 +196,42 @@ thyra input.imzML output.zarr --sparse-format csr
 
 ---
 
+## imzML-Specific
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--spectrum-type TYPE` | `auto` | `auto`, `profile`, or `centroid` -- declare the spectrum representation instead of detecting it |
+
+By default Thyra reads the representation the file declares (`MS:1000127`
+centroid / `MS:1000128` profile), wherever in the document it is written, and
+only guesses when the file declares neither. `--spectrum-type` overrides all of
+that.
+
+SCiLS Lab exposes the same control as `--rep_type PROFILE|CENTROID` (2026b User
+Guide, p.81).
+
+!!! warning "This changes stored values"
+    The representation is not just a label: it feeds instrument detection,
+    which picks the mass-axis type, which decides the bin spacing. Overriding
+    it changes the axis a dataset is resampled onto, and therefore the numbers
+    written to the store. It changes nothing for anyone who does not pass it.
+
+    Use it when a file declares the wrong thing -- that does happen. When the
+    override contradicts an explicit declaration Thyra logs a warning naming
+    both values; run with `-v INFO` to see it, and check the result.
+
+### Examples
+
+```bash
+# The file says centroid but it is really profile data
+thyra input.imzML output.zarr --spectrum-type profile
+
+# See what detection would have concluded before overriding it
+thyra input.imzML output.zarr -v INFO
+```
+
+---
+
 ## Bruker-Specific
 
 These options only apply when converting Bruker `.d` directories.

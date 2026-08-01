@@ -12,6 +12,7 @@ from ...core.base_extractor import MetadataExtractor
 from ...core.base_reader import BaseMSIReader
 from ...core.registry import register_reader
 from ...metadata.extractors.imzml_extractor import ImzMLMetadataExtractor
+from ...resampling.constants import normalize_spectrum_type
 
 logger = logging.getLogger(__name__)
 
@@ -351,6 +352,14 @@ class ImzMLReader(BaseMSIReader):
                 ``DEFAULT_MAX_MASS_AXIS_LENGTH`` (10 million, SCiLS Lab's own
                 limit); pass ``None`` explicitly for unlimited. See
                 ``_extract_continuous_mass_axis``.
+
+                ``spectrum_type`` declares the spectrum representation
+                explicitly -- ``"profile"`` or ``"centroid"`` -- instead of
+                letting Thyra read or guess it. SCiLS Lab spells the same thing
+                ``--rep_type``. Use it when a file declares the wrong
+                representation; it outranks the file's own ``MS:1000127`` /
+                ``MS:1000128``, and contradicting a declaration is logged as a
+                warning. Defaults to ``None`` (detect).
         """
         super().__init__(data_path, **kwargs)
         self.filepath: Optional[Union[str, Path]] = data_path
@@ -360,6 +369,11 @@ class ImzMLReader(BaseMSIReader):
         # so this cannot be a bare ``.get(...)`` with a None fallback.
         self.max_mass_axis_length: Optional[int] = kwargs.get(
             "max_mass_axis_length", DEFAULT_MAX_MASS_AXIS_LENGTH
+        )
+        # Validated here rather than at extraction time, so a bad value fails
+        # while the caller is still looking at its own arguments.
+        self.spectrum_type: Optional[str] = normalize_spectrum_type(
+            kwargs.get("spectrum_type")
         )
         self.parser: Optional[ImzMLParser] = None
         self.ibd_file: Optional[Any] = None
@@ -499,7 +513,9 @@ class ImzMLReader(BaseMSIReader):
         if not self.imzml_path:
             raise ValueError("ImzML path not available")
 
-        return ImzMLMetadataExtractor(self.parser, self.imzml_path)
+        return ImzMLMetadataExtractor(
+            self.parser, self.imzml_path, spectrum_type=self.spectrum_type
+        )
 
     @property
     def has_shared_mass_axis(self) -> bool:

@@ -9,7 +9,12 @@ from numpy.typing import NDArray
 from pyimzml.ImzMLParser import ImzMLParser
 
 from ...core.base_extractor import MetadataExtractor
-from ...resampling.constants import BinaryDataType, ImzMLAccessions, SpectrumType
+from ...resampling.constants import (
+    BinaryDataType,
+    ImzMLAccessions,
+    SpectrumType,
+    normalize_spectrum_type,
+)
 from ..types import ComprehensiveMetadata, EssentialMetadata
 
 logger = logging.getLogger(__name__)
@@ -18,16 +23,32 @@ logger = logging.getLogger(__name__)
 class ImzMLMetadataExtractor(MetadataExtractor):
     """ImzML-specific metadata extractor with optimized two-phase extraction."""
 
-    def __init__(self, parser: ImzMLParser, imzml_path: Path):
+    def __init__(
+        self,
+        parser: ImzMLParser,
+        imzml_path: Path,
+        spectrum_type: Optional[str] = None,
+    ):
         """Initialize ImzML metadata extractor.
 
         Args:
             parser: Initialized ImzML parser
             imzml_path: Path to the ImzML file
+            spectrum_type: Optional override for the spectrum representation,
+                ``"profile"`` or ``"centroid"`` (SCiLS Lab spells this
+                ``--rep_type``). When given, it wins over anything the file
+                says. ``None`` -- the default -- leaves detection alone.
+
+        Raises:
+            ValueError: If ``spectrum_type`` is not a recognised
+                representation.
         """
         super().__init__(parser)
         self.parser = parser
         self.imzml_path = imzml_path
+        # Normalised at construction so a typo fails here rather than silently
+        # falling through to auto-detection during extraction.
+        self.spectrum_type_override = normalize_spectrum_type(spectrum_type)
 
     def _extract_essential_impl(self) -> EssentialMetadata:
         """Extract essential metadata optimized for speed."""
@@ -524,12 +545,19 @@ class ImzMLMetadataExtractor(MetadataExtractor):
     def _detect_centroid_spectrum(self) -> Optional[str]:
         """Detect spectrum type by looking for MS:1000127 (centroid) or MS:1000128 (profile).
 
-        What the file *declares* wins, wherever it is written. Only when the
-        file declares nothing does Thyra guess -- see
+        An explicit ``spectrum_type`` override wins over everything, so a user
+        can correct a file that declares the wrong thing. Otherwise what the
+        file *declares* wins, wherever it is written, and only when the file
+        declares nothing does Thyra guess -- see
         :meth:`_guess_spectrum_type_from_storage_mode` for what that guess is
         worth.
         """
         try:
+            # 0. An explicit override outranks the file.
+            if self.spectrum_type_override is not None:
+                self._report_spectrum_type_override()
+                return self.spectrum_type_override
+
             # 1. The declaration, from metadata the parser already holds.
             result = self._check_parser_metadata_for_spectrum_type()
             if result:
@@ -546,6 +574,49 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         except Exception as e:
             logger.debug(f"Could not detect spectrum type: {e}")
             return None
+
+    def _report_spectrum_type_override(self) -> None:
+        """Log an override, loudly when it contradicts the file's declaration.
+
+        Overriding a declared ``MS:1000127``/``MS:1000128`` is a legitimate
+        thing to want -- files do declare the wrong representation -- and it is
+        also a good way to corrupt a conversion silently. So the two cases are
+        not logged alike: agreeing with the file, or overriding a file that
+        declares nothing, is INFO; contradicting an explicit declaration is
+        WARNING and names both values.
+
+        This still reads the file's *declarations* (steps 1 and 2) in order to
+        compare, but never its guess -- there is nothing informative about
+        contradicting a guess. That costs at most the same bounded XML scan
+        detection would have done, and only on the opt-in path.
+        """
+        override = self.spectrum_type_override
+        declared = self._check_parser_metadata_for_spectrum_type()
+        if declared is None:
+            declared = self._check_xml_for_spectrum_type()
+
+        if declared is None:
+            logger.info(
+                "Using spectrum_type override %r; the file declares neither %s "
+                "(centroid) nor %s (profile).",
+                override,
+                ImzMLAccessions.CENTROID_SPECTRUM,
+                ImzMLAccessions.PROFILE_SPECTRUM,
+            )
+        elif declared == override:
+            logger.info(
+                "Using spectrum_type override %r, which agrees with the file.",
+                override,
+            )
+        else:
+            logger.warning(
+                "spectrum_type override %r CONTRADICTS the file, which declares "
+                "%r. Proceeding with the override -- the stored spectrum type, "
+                "and any decision Thyra makes from it, will not match what the "
+                "file says about itself. Remove the override to trust the file.",
+                override,
+                declared,
+            )
 
     def _check_xml_for_spectrum_type(self) -> Optional[str]:
         """Check XML for spectrum type markers using streaming parser.

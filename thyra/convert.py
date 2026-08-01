@@ -290,6 +290,17 @@ def convert_msi(
               which is the limit SCiLS Lab places on the same
               quantity (2026b User Guide, p.76). Pass None for
               no limit.
+            - spectrum_type: str - For imzML, declare the spectrum
+              representation explicitly: 'profile' or 'centroid'
+              (the full CV names are accepted too). Outranks the
+              file's own MS:1000127/MS:1000128, so it can correct a
+              file that declares the wrong thing; contradicting a
+              declaration is logged as a warning. SCiLS Lab spells
+              this --rep_type (2026b User Guide, p.81). Default:
+              None, meaning detect. **Changes stored values** for
+              files where it disagrees with what detection would
+              have chosen, because the representation feeds
+              instrument and axis-type selection.
         sparse_format: Sparse matrix format ('csc' or 'csr')
         include_optical: Include optical images (default: True)
         apply_optical_alignment: If True (default) and the MSI source

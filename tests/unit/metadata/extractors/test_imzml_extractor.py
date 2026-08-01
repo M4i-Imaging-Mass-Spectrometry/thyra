@@ -426,3 +426,171 @@ class TestSpectrumTypeDetection:
             assert tree.select_strategy(metadata) == ResamplingMethod.NEAREST_NEIGHBOR
         finally:
             parser.m.close()
+
+
+def _capture(level, logger_name="thyra.metadata.extractors.imzml_extractor"):
+    """Collect (levelno, message) from a named logger.
+
+    ``caplog`` is unusable across this suite: ``setup_logging`` sets
+    ``propagate = False`` on the ``thyra`` logger and other tests leave that
+    state behind, so records never reach pytest's root handler.
+    """
+    records = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record):
+            records.append((record.levelno, record.getMessage()))
+
+    module_logger = logging.getLogger(logger_name)
+    handler = _Capture(level=level)
+    previous_level = module_logger.level
+    module_logger.addHandler(handler)
+    module_logger.setLevel(level)
+
+    class _Ctx:
+        def __enter__(self):
+            return records
+
+        def __exit__(self, *exc):
+            module_logger.removeHandler(handler)
+            module_logger.setLevel(previous_level)
+            return False
+
+    return _Ctx()
+
+
+class TestSpectrumTypeOverride:
+    """An explicit representation outranks the file, as SCiLS's --rep_type does.
+
+    Files do declare the wrong representation, so a user has to be able to say
+    what a file really is. That is also a good way to corrupt a conversion
+    silently, which is why contradicting a declaration is a warning and not a
+    debug line.
+    """
+
+    def _extractor(self, params, spectrum_type=None):
+        parser = Mock()
+        parser.metadata.file_description.param_by_name = params
+        return ImzMLMetadataExtractor(
+            parser, Path("/does/not/exist.imzML"), spectrum_type=spectrum_type
+        )
+
+    def test_override_beats_a_contradicting_declaration(self):
+        """The point of the feature: correct a file that declares wrongly."""
+        extractor = self._extractor(
+            {"profile spectrum": True, "processed": True}, spectrum_type="centroid"
+        )
+        assert extractor._detect_centroid_spectrum() == "centroid spectrum"
+
+    def test_override_beats_a_declaration_the_other_way(self):
+        extractor = self._extractor(
+            {"centroid spectrum": True, "processed": True}, spectrum_type="profile"
+        )
+        assert extractor._detect_centroid_spectrum() == "profile spectrum"
+
+    def test_override_replaces_the_storage_mode_guess(self):
+        """With nothing declared, the override stands in for the guess."""
+        extractor = self._extractor({"processed": True}, spectrum_type="profile")
+        assert extractor._detect_centroid_spectrum() == "profile spectrum"
+
+    def test_override_answers_where_detection_gives_up(self):
+        """Undeclared + continuous detects as None; the override still answers."""
+        assert self._extractor({"continuous": True})._detect_centroid_spectrum() is None
+        extractor = self._extractor({"continuous": True}, spectrum_type="centroid")
+        assert extractor._detect_centroid_spectrum() == "centroid spectrum"
+
+    def test_no_override_leaves_detection_untouched(self):
+        """The default must change nothing for anyone who does not opt in."""
+        extractor = self._extractor({"profile spectrum": True, "processed": True})
+        assert extractor.spectrum_type_override is None
+        assert extractor._detect_centroid_spectrum() == "profile spectrum"
+
+    def test_contradicting_the_file_warns_and_names_both(self):
+        with _capture(logging.WARNING) as records:
+            extractor = self._extractor(
+                {"profile spectrum": True, "processed": True},
+                spectrum_type="centroid",
+            )
+            extractor._detect_centroid_spectrum()
+        warnings = [m for level, m in records if level >= logging.WARNING]
+        assert warnings, "contradicting a declaration must warn"
+        assert any("CONTRADICTS" in m for m in warnings)
+        assert any(
+            "centroid spectrum" in m and "profile spectrum" in m for m in warnings
+        )
+
+    def test_agreeing_with_the_file_does_not_warn(self):
+        with _capture(logging.INFO) as records:
+            extractor = self._extractor(
+                {"profile spectrum": True, "processed": True},
+                spectrum_type="profile",
+            )
+            extractor._detect_centroid_spectrum()
+        assert not [m for level, m in records if level >= logging.WARNING]
+        assert any("agrees with the file" in m for _, m in records)
+
+    def test_overriding_an_undeclared_file_does_not_warn(self):
+        """There is nothing to contradict, so this is not the dangerous case."""
+        with _capture(logging.INFO) as records:
+            extractor = self._extractor({"processed": True}, spectrum_type="centroid")
+            extractor._detect_centroid_spectrum()
+        assert not [m for level, m in records if level >= logging.WARNING]
+        assert any("declares neither" in m for _, m in records)
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            ("profile", "profile spectrum"),
+            ("PROFILE", "profile spectrum"),
+            ("  Profile  ", "profile spectrum"),
+            ("profile spectrum", "profile spectrum"),
+            ("centroid", "centroid spectrum"),
+            ("CENTROID", "centroid spectrum"),
+            ("centroided", "centroid spectrum"),
+            ("centroid spectrum", "centroid spectrum"),
+        ],
+    )
+    def test_accepted_spellings(self, value, expected):
+        """SCiLS writes PROFILE/CENTROID; the CV names round-trip out of a store."""
+        extractor = self._extractor({"processed": True}, spectrum_type=value)
+        assert extractor.spectrum_type_override == expected
+
+    @pytest.mark.parametrize("value", ["profil", "prófile", "MS:1000128", "", "true"])
+    def test_a_typo_fails_loudly_at_construction(self, value):
+        """Silently ignoring a typo would hand the file back to auto-detection."""
+        with pytest.raises(ValueError, match="Unknown spectrum_type"):
+            self._extractor({"processed": True}, spectrum_type=value)
+
+    def test_a_non_string_is_rejected(self):
+        with pytest.raises(ValueError, match="must be a string or None"):
+            self._extractor({"processed": True}, spectrum_type=True)
+
+    @pytest.mark.parametrize(
+        "declared,override,expected",
+        [
+            ("profile", "centroid", "centroid spectrum"),
+            ("centroid", "profile", "profile spectrum"),
+        ],
+    )
+    def test_real_file_end_to_end(self, tmp_path, declared, override, expected):
+        """On a real imzML, the override is what gets stored."""
+        path = _write_imzml(tmp_path, f"ovr_{declared}", declared)
+        parser = ImzMLParser(str(path), parse_lib="ElementTree")
+        try:
+            extractor = ImzMLMetadataExtractor(parser, path, spectrum_type=override)
+            assert extractor._detect_centroid_spectrum() == expected
+            assert extractor.get_essential().spectrum_type == expected
+        finally:
+            parser.m.close()
+
+    def test_real_file_without_override_is_unchanged(self, tmp_path):
+        """The regression guard: opting out must behave exactly as before."""
+        path = _write_imzml(tmp_path, "no_ovr", "profile")
+        parser = ImzMLParser(str(path), parse_lib="ElementTree")
+        try:
+            assert (
+                ImzMLMetadataExtractor(parser, path).get_essential().spectrum_type
+                == "profile spectrum"
+            )
+        finally:
+            parser.m.close()
