@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v2.2.4 (2026-08-01)
+
+### Documentation
+
+- **resampling**: Source the SCiLS claims, and stop recommending a forbidden pairing
+  ([`90df8cc`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/90df8cc837ed10e0df569a501d9e7550a038ad6f))
+
+
 ## v2.2.3 (2026-08-01)
 
 ### Bug Fixes
