@@ -415,9 +415,26 @@ class ImzMLReader(BaseMSIReader):
         # Initialize the parser
         logger.info(f"Initializing ImzML parser for {imzml_path}")
         try:
+            # ElementTree, NOT lxml. pyimzml prunes each <spectrum> out of the
+            # tree (`slist.remove(elem)`) while iterparse is still streaming the
+            # document, which invalidates libxml2's text-node coalescing
+            # accelerator: ctxt->nodelen/nodemem go on describing a text node
+            # inside the subtree that was just removed, so later character data
+            # is appended at a stale offset and the buffer is doubled on every
+            # miss until xmlRealloc fails. lxml surfaces libxml2's
+            # XML_ERR_NO_MEMORY as a *syntax* error, so it reads as a corrupt
+            # file when nothing is wrong with it:
+            #     XMLSyntaxError: xmlSAX2Characters, line 212575, column 1
+            # It only bites when the text between </spectrum> and <spectrum> is
+            # exactly "\r\n" -- CRLF with no indentation, how IONTOF SurfaceLab
+            # writes imzML. Indented or LF-only files coalesce differently and
+            # survive, which is why most files never hit it. ElementTree builds
+            # the tree in Python, so there is no C parser state to invalidate;
+            # it is also pyimzml's own default, parses byte-identically, and is
+            # faster here -- 67s vs 118s on a 2.1 GB imzML at the same peak RSS.
             self.parser = ImzMLParser(
                 filename=str(imzml_path),
-                parse_lib="lxml",
+                parse_lib="ElementTree",
                 ibd_file=self.ibd_file,
             )
         except Exception as e:
