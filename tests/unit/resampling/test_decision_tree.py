@@ -11,6 +11,7 @@ from thyra.resampling.instrument_detectors import (
     CentroidImzMLDetector,
     DefaultDetector,
     FTICRDetector,
+    InstrumentDetector,
     InstrumentDetectorChain,
     OrbitrapDetector,
     RapiflexDetector,
@@ -94,8 +95,14 @@ class TestResamplingDecisionTree:
         method = self.tree.select_strategy(metadata)
         assert method == ResamplingMethod.NEAREST_NEIGHBOR
 
-    def test_profile_spectrum_with_high_density_uses_tic_preserving(self):
-        """Test that profile spectrum with high peak density uses TIC preserving."""
+    def test_profile_spectrum_with_high_density_uses_nearest_neighbor(self):
+        """High-density profile data of unknown provenance must not get MALDI-TOF logic.
+
+        Peak density is not a modality. This metadata says only "profile, and
+        densely sampled" -- it could be MALDI-TOF, TOF-SIMS, or a profile
+        Orbitrap acquisition. ``nearest_neighbor`` bins counts and assumes
+        nothing about the axis law, so it is the safe answer for all of them.
+        """
         metadata = {
             "essential_metadata": {
                 "spectrum_type": SpectrumType.PROFILE,
@@ -104,7 +111,36 @@ class TestResamplingDecisionTree:
             }
         }
         method = self.tree.select_strategy(metadata)
-        assert method == ResamplingMethod.TIC_PRESERVING
+        assert method == ResamplingMethod.NEAREST_NEIGHBOR
+
+        # And it must not pick up the MALDI-shaped axis either.
+        assert self.tree.select_axis_type(metadata) == AxisType.CONSTANT
+
+    def test_low_density_profile_uses_nearest_neighbor(self):
+        """The same holds below the density threshold -- there is no profile route."""
+        metadata = {
+            "essential_metadata": {
+                "spectrum_type": SpectrumType.PROFILE,
+                "total_peaks": 1000,
+                "n_spectra": 1000,  # 1 peak per spectrum
+            }
+        }
+        assert self.tree.select_strategy(metadata) == ResamplingMethod.NEAREST_NEIGHBOR
+
+    def test_named_non_bruker_profile_instrument_uses_nearest_neighbor(self):
+        """A named vendor that is not Bruker MALDI-TOF gets no TIC-preserving either."""
+        metadata = {
+            "essential_metadata": {
+                "spectrum_type": SpectrumType.PROFILE,
+                "total_peaks": 10000000,
+                "n_spectra": 1000,
+            },
+            "instrument_info": {
+                "instrument_type": "TOF-SIMS",
+                "manufacturer": "IONTOF",
+            },
+        }
+        assert self.tree.select_strategy(metadata) == ResamplingMethod.NEAREST_NEIGHBOR
 
     def test_rapiflex_format_detection(self):
         """Test Rapiflex format detection."""
@@ -173,6 +209,96 @@ class TestInstrumentDetectorChain:
         assert isinstance(detector, DefaultDetector)
 
 
+class _TICPreservingDetector(InstrumentDetector):
+    """Detector that asks for TIC_PRESERVING, for exercising the chain's gate.
+
+    ``source_law`` is what it claims about the grid its data arrives on;
+    ``axis`` is the target axis it asks for.
+    """
+
+    def __init__(self, source_law, axis=AxisType.CONSTANT):
+        self._source_law = source_law
+        self._axis = axis
+
+    @property
+    def name(self) -> str:
+        return "Test TIC-preserving"
+
+    def matches(self, characteristics: DataCharacteristics) -> bool:
+        return True
+
+    def get_resampling_method(self) -> ResamplingMethod:
+        return ResamplingMethod.TIC_PRESERVING
+
+    def get_axis_type(self) -> AxisType:
+        return self._axis
+
+    @property
+    def source_grid_law(self):
+        return self._source_law
+
+
+class TestTICPreservingGate:
+    """The SCiLS "identical axis types" gate on TIC-preserving resampling.
+
+    SCiLS Lab applies TIC-preserving resampling only when the axis types
+    being combined are identical, and interpolates otherwise (2026b User
+    Guide, p.80). That is also the condition under which Thyra's
+    interpolate-then-rescale operator is exact, so the chain enforces it.
+    """
+
+    def _method_for(self, detector):
+        chain = InstrumentDetectorChain([detector])
+        return chain.get_resampling_method(DataCharacteristics())
+
+    def test_matching_laws_keep_tic_preserving(self):
+        detector = _TICPreservingDetector(AxisType.CONSTANT, AxisType.CONSTANT)
+        assert self._method_for(detector) == ResamplingMethod.TIC_PRESERVING
+
+    @pytest.mark.parametrize(
+        "source_law",
+        [
+            AxisType.LINEAR_TOF,
+            AxisType.REFLECTOR_TOF,
+            AxisType.ORBITRAP,
+            AxisType.FTICR,
+        ],
+    )
+    def test_mismatched_laws_fall_back_to_nearest_neighbor(self, source_law):
+        """Off the diagonal the operator distorts peak ratios, so it is refused."""
+        detector = _TICPreservingDetector(source_law, AxisType.CONSTANT)
+        assert self._method_for(detector) == ResamplingMethod.NEAREST_NEIGHBOR
+
+    def test_unknown_source_law_falls_back_to_nearest_neighbor(self):
+        """Not knowing the acquisition is not a licence to assume it matches."""
+        detector = _TICPreservingDetector(None, AxisType.CONSTANT)
+        assert self._method_for(detector) == ResamplingMethod.NEAREST_NEIGHBOR
+
+    def test_gate_leaves_the_axis_type_alone(self):
+        """The gate changes the method only; the axis type is a separate answer."""
+        detector = _TICPreservingDetector(None, AxisType.CONSTANT)
+        chain = InstrumentDetectorChain([detector])
+        assert chain.get_axis_type(DataCharacteristics()) == AxisType.CONSTANT
+
+    def test_gate_does_not_touch_nearest_neighbor_detectors(self):
+        """A detector that never asks for TIC_PRESERVING is unaffected."""
+        chain = InstrumentDetectorChain([DefaultDetector()])
+        assert (
+            chain.get_resampling_method(DataCharacteristics())
+            == ResamplingMethod.NEAREST_NEIGHBOR
+        )
+
+    def test_every_shipped_detector_clears_the_gate(self):
+        """No detector in the default chain may ask for an unbacked TIC_PRESERVING."""
+        for detector in InstrumentDetectorChain().detectors:
+            if detector.get_resampling_method() is not ResamplingMethod.TIC_PRESERVING:
+                continue
+            assert detector.source_grid_law == detector.get_axis_type(), (
+                f"{detector.name} asks for TIC_PRESERVING but its source grid "
+                "law does not match the axis it requests"
+            )
+
+
 class TestInstrumentDetectors:
     """Test individual instrument detectors."""
 
@@ -208,16 +334,23 @@ class TestInstrumentDetectors:
         )
         assert detector.matches(chars)
 
-        # Should match high-density profile data
+        # Must NOT match on peak density alone -- that is not a modality.
         chars = DataCharacteristics(
             spectrum_type=SpectrumType.PROFILE,
             total_peaks=10000000,
             n_spectra=1000,
         )
-        assert detector.matches(chars)
+        assert chars.is_high_density_profile
+        assert not detector.matches(chars)
 
         assert detector.get_resampling_method() == ResamplingMethod.TIC_PRESERVING
         assert detector.get_axis_type() == AxisType.CONSTANT
+
+        # The source grid law it declares is what lets TIC_PRESERVING through
+        # the chain's gate: RapiflexReader lays spectra out with np.linspace,
+        # so source law == target law == CONSTANT.
+        assert detector.source_grid_law == AxisType.CONSTANT
+        assert detector.source_grid_law == detector.get_axis_type()
 
     def test_centroid_imzml_detector(self):
         """Test CentroidImzML detector matching."""

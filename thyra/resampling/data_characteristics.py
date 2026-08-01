@@ -66,6 +66,14 @@ class DataCharacteristics:
 
         Profile data typically has >5000 points per spectrum,
         indicating continuous signal rather than centroid peaks.
+
+        This says how densely the spectra are sampled. It says nothing about
+        which instrument produced them, so it **must not be used to pick a
+        resampling strategy or an axis type**: those encode assumptions about
+        the acquisition's physics. ``RapiflexDetector`` used to match on this
+        alone, which handed MALDI-TOF treatment to any dense profile data --
+        TOF-SIMS, Orbitrap, anything -- with no check that the data was
+        MALDI-TOF at all.
         """
         avg = self.avg_peaks_per_spectrum
         return (
@@ -76,7 +84,12 @@ class DataCharacteristics:
 
     @property
     def is_maldi_tof(self) -> bool:
-        """Check if this is MALDI-TOF data."""
+        """Check if this is MALDI-TOF data.
+
+        Carries the same caveat as :attr:`is_high_density_profile`, which its
+        last clause consults: density plus a vendor name is not a modality.
+        No detector calls this.
+        """
         return (
             self.is_rapiflex_format
             or self.instrument_type == "MALDI-TOF"
