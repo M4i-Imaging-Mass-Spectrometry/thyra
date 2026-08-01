@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v2.2.0 (2026-08-01)
+
+### Features
+
+- **resampling**: Give tic_preserving a gap tolerance, as Cardinal and matter have
+  ([`954c95d`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/954c95d7f2955adeea03a65d048010a8e25b8e94))
+
+
 ## v2.1.0 (2026-08-01)
 
 ### Documentation
