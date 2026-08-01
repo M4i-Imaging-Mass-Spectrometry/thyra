@@ -2,6 +2,23 @@
 
 This strategy is optimal for centroid data (e.g., from timsTOF
 instruments) where each peak represents a discrete mass value.
+
+Not to be confused with the converters' ``_nearest_neighbor_resample``
+(``thyra/converters/spatialdata/base_spatialdata_converter.py``), which is
+what ``ResamplingMethod.NEAREST_NEIGHBOR`` actually selects during a
+conversion. The two share a name and do opposite things with intensity:
+
+- This class INTERPOLATES. Each target point takes the intensity of the
+  nearest source point, so one source peak is replicated across every
+  target point closer to it than to any other. Summed intensity therefore
+  scales with how densely the target axis is laid out, and is not
+  preserved. That is the defining behaviour of nearest-neighbour
+  interpolation, not a defect -- but it means this class is the wrong tool
+  if you care about total ion current.
+- The converter's version BINS. Each source peak is accumulated into
+  exactly one target bin, so summed intensity is preserved exactly.
+
+If you want the conversion pipeline's behaviour, use the converter.
 """
 
 from typing import Any
@@ -23,6 +40,10 @@ class NearestNeighborStrategy(ResamplingStrategy):
         For each target m/z value, finds the nearest original m/z value
         and assigns its intensity. This preserves the discrete nature
         of centroid data.
+
+        Does NOT preserve total ion current -- a source peak is repeated
+        at every target point nearest to it, so the sum grows with the
+        target axis density. See the module docstring.
 
         Parameters
         ----------

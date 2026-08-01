@@ -1082,8 +1082,13 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # bincount without minlength is fastest
         accumulated = np.bincount(indices_clipped, weights=intensities)
 
-        # Extract non-zero bins for sparse representation
-        nonzero_mask = accumulated > 0
+        # Extract non-zero bins for sparse representation. The test is
+        # ``!= 0`` rather than ``> 0`` because a bin whose accumulated value is
+        # negative is still a measurement: dropping it silently raises the
+        # stored TIC above the input's. Baseline-subtracted data can carry
+        # negative intensities, though every export seen so far filters them
+        # out upstream.
+        nonzero_mask = accumulated != 0
         nonzero_indices = np.where(nonzero_mask)[0].astype(np.int_)
         nonzero_values = accumulated[nonzero_mask]
 
