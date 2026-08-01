@@ -11,7 +11,8 @@ nine structural points, every one of which is unreachable from a generated
 fixture. These four files close some of that gap.
 
 They are small on purpose: 41,208 bytes of imzML and `.ibd` checked out, and
-rather less than that in the pack — the XML compresses hard.
+6,051 bytes zlib-compressed — the XML is highly repetitive, so what the
+repository actually carries is under 6 KB.
 
 ## The files
 
