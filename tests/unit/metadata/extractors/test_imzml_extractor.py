@@ -1,10 +1,16 @@
 # tests/unit/metadata/extractors/test_imzml_extractor.py
+import logging
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import numpy as np
 import pytest
+from pyimzml.ImzMLParser import ImzMLParser
+from pyimzml.ImzMLWriter import ImzMLWriter
 
 from thyra.metadata.extractors.imzml_extractor import ImzMLMetadataExtractor
+from thyra.resampling.decision_tree import ResamplingDecisionTree
+from thyra.resampling.types import ResamplingMethod
 
 
 class TestImzMLMetadataExtractor:
@@ -298,3 +304,125 @@ class TestImzMLMetadataExtractor:
         assert essential.dimensions == (1, 1, 1)
         assert essential.n_spectra == 1
         assert essential.coordinate_bounds == (1, 1, 1, 1)
+
+
+def _write_imzml(directory, name, spec_type, mode="processed"):
+    """Write a two-pixel imzML declaring the given spectrum representation."""
+    path = directory / f"{name}.imzML"
+    mzs = np.linspace(100.0, 1000.0, 50)
+    intensities = np.zeros_like(mzs)
+    intensities[10] = 100.0
+    with ImzMLWriter(str(path), mode=mode, spec_type=spec_type) as writer:
+        writer.addSpectrum(mzs, intensities, (1, 1, 1))
+        writer.addSpectrum(mzs, intensities, (2, 1, 1))
+    return path
+
+
+class TestSpectrumTypeDetection:
+    """Spectrum representation comes from what the file declares.
+
+    Processed and centroid are orthogonal: ``IMS:1000031`` says each spectrum
+    carries its own m/z array, not that its peaks are centroided. The
+    detection used to assume otherwise and check storage mode *first*, so a
+    processed file declaring ``MS:1000128 profile spectrum`` was reported as
+    centroid.
+    """
+
+    def _extractor(self, params):
+        """An extractor whose parser declares exactly ``params``.
+
+        The path does not exist, so the XML accession scan can contribute
+        nothing and these tests isolate the fileDescription path.
+        """
+        parser = Mock()
+        parser.metadata.file_description.param_by_name = params
+        return ImzMLMetadataExtractor(parser, Path("/does/not/exist.imzML"))
+
+    def test_declared_profile_beats_processed_storage_mode(self):
+        """The regression: a processed file that says profile is profile."""
+        extractor = self._extractor({"profile spectrum": True, "processed": True})
+        assert extractor._detect_centroid_spectrum() == "profile spectrum"
+
+    def test_declared_centroid_is_reported(self):
+        extractor = self._extractor({"centroid spectrum": True, "processed": True})
+        assert extractor._detect_centroid_spectrum() == "centroid spectrum"
+
+    def test_declared_profile_in_continuous_mode(self):
+        extractor = self._extractor({"profile spectrum": True, "continuous": True})
+        assert extractor._detect_centroid_spectrum() == "profile spectrum"
+
+    def test_undeclared_processed_falls_back_to_the_guess(self):
+        """With nothing declared, the storage-mode guess is all there is.
+
+        It has to say so. ``caplog`` is unusable here because
+        ``setup_logging`` disables propagation on the ``thyra`` logger and
+        other tests in the session leave that state behind, so the handler is
+        attached to the module logger directly.
+        """
+        records = []
+
+        class _Capture(logging.Handler):
+            def emit(self, record):
+                records.append(record.getMessage())
+
+        module_logger = logging.getLogger("thyra.metadata.extractors.imzml_extractor")
+        handler = _Capture(level=logging.WARNING)
+        previous_level = module_logger.level
+        module_logger.addHandler(handler)
+        module_logger.setLevel(logging.WARNING)
+        try:
+            extractor = self._extractor({"processed": True})
+            assert extractor._detect_centroid_spectrum() == "centroid spectrum"
+        finally:
+            module_logger.removeHandler(handler)
+            module_logger.setLevel(previous_level)
+
+        assert any("Assuming centroid" in message for message in records)
+
+    def test_undeclared_continuous_is_unknown(self):
+        """The guess is only defensible for processed mode; otherwise say nothing."""
+        extractor = self._extractor({"continuous": True})
+        assert extractor._detect_centroid_spectrum() is None
+
+    def test_non_dict_params_declare_nothing(self):
+        """A Mock's attribute is not a declaration -- it used to read as one."""
+        extractor = self._extractor(Mock())
+        assert extractor._detect_centroid_spectrum() is None
+
+    @pytest.mark.parametrize(
+        "spec_type,expected",
+        [("profile", "profile spectrum"), ("centroid", "centroid spectrum")],
+    )
+    def test_real_processed_file_round_trip(self, tmp_path, spec_type, expected):
+        """End to end on a real file: what was written is what is read back."""
+        path = _write_imzml(tmp_path, spec_type, spec_type)
+        parser = ImzMLParser(str(path), parse_lib="ElementTree")
+        try:
+            extractor = ImzMLMetadataExtractor(parser, path)
+            assert extractor._detect_centroid_spectrum() == expected
+            assert extractor.get_essential().spectrum_type == expected
+        finally:
+            parser.m.close()
+
+    def test_profile_file_routes_to_nearest_neighbor_not_tic_preserving(self, tmp_path):
+        """A correctly-detected profile file must not reach the interpolating path.
+
+        Reporting profile honestly is only safe because unknown-provenance
+        profile data no longer reaches ``tic_preserving``.
+        """
+        path = _write_imzml(tmp_path, "profile", "profile")
+        parser = ImzMLParser(str(path), parse_lib="ElementTree")
+        try:
+            extractor = ImzMLMetadataExtractor(parser, path)
+            essential = extractor.get_essential()
+            metadata = {
+                "essential_metadata": {
+                    "spectrum_type": essential.spectrum_type,
+                    "total_peaks": essential.total_peaks,
+                    "n_spectra": essential.n_spectra,
+                }
+            }
+            tree = ResamplingDecisionTree()
+            assert tree.select_strategy(metadata) == ResamplingMethod.NEAREST_NEIGHBOR
+        finally:
+            parser.m.close()
