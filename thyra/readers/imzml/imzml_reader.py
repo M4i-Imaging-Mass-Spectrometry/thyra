@@ -522,6 +522,11 @@ class ImzMLReader(BaseMSIReader):
 
         # Parser initialization flag for lazy loading
         self._parser_initialized: bool = False
+        # And the failure, if it failed. Initialization is expensive -- 63
+        # seconds of XML on a 2.1 GB imzML -- and every public entry point
+        # calls _ensure_parser_initialized, so a refused file would otherwise
+        # be parsed again for each of them before failing the same way.
+        self._parser_init_error: Optional[Exception] = None
 
         # Cached properties
         self._common_mass_axis: Optional[NDArray[np.float64]] = None
@@ -534,12 +539,33 @@ class ImzMLReader(BaseMSIReader):
             self.filepath = data_path
 
     def _ensure_parser_initialized(self) -> None:
-        """Guarantee parser is initialized exactly once."""
-        if not self._parser_initialized:
-            if self.filepath is None:
-                raise ValueError("No file path provided for parser initialization")
+        """Guarantee parser is initialized exactly once, success or failure.
+
+        Raises:
+            ValueError: If no file path was given.
+            Exception: Whatever the first initialization attempt raised. A file
+                that has been refused once is refused from the memo rather than
+                parsed again.
+        """
+        if self._parser_initialized:
+            return
+        # The stored exception is re-raised as itself rather than rebuilt as
+        # ``type(e)(str(e))``, which would lose both the type and the message
+        # for any exception whose constructor takes something other than a
+        # single string, and would drop the traceback of the attempt that
+        # actually failed.
+        if self._parser_init_error is not None:
+            raise self._parser_init_error
+        if self.filepath is None:
+            # Not memoized: nothing was parsed, and the caller can still fix it
+            # by setting a path.
+            raise ValueError("No file path provided for parser initialization")
+        try:
             self._initialize_parser(self.filepath)
-            self._parser_initialized = True
+        except Exception as e:
+            self._parser_init_error = e
+            raise
+        self._parser_initialized = True
 
     def _initialize_parser(self, imzml_path: Union[str, Path]) -> None:
         """Initialize the ImzML parser with the given path.

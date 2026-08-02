@@ -26,6 +26,7 @@ from pyimzml.ImzMLParser import ImzMLParser
 
 from thyra.convert import _should_use_streaming
 from thyra.preview import preview_msi
+from thyra.readers.imzml import imzml_reader as imzml_reader_module
 from thyra.readers.imzml.imzml_reader import ImzMLReader
 
 _MODULE_LOGGER_NAME = "thyra.readers.imzml.imzml_reader"
@@ -409,6 +410,85 @@ class TestRefusalCleansUp:
             reader._ensure_parser_initialized()
         assert reader.ibd_file is None
         path.with_suffix(".ibd").unlink()
+
+
+class TestARefusedFileIsNotParsedTwice:
+    """Initialization is expensive, and every public entry point triggers it.
+
+    ``n_spectra``, ``get_essential_metadata`` and four more all call
+    ``_ensure_parser_initialized``, so without a memo a refused file is
+    re-parsed once per attempt -- 63 s of XML each time on a 2.1 GB imzML --
+    only to fail identically.
+    """
+
+    def test_the_second_attempt_re_raises_without_re_parsing(
+        self, temp_dir, monkeypatch
+    ):
+        path = write_imzml(temp_dir, n_spectra=6)
+        poison_cv_param(path, 0, "mzArray", "IMS:1000102", "-16")
+
+        constructions: List[str] = []
+        real_parser = imzml_reader_module.ImzMLParser
+
+        def _counting_parser(*args, **kwargs):
+            constructions.append(kwargs.get("filename", ""))
+            return real_parser(*args, **kwargs)
+
+        monkeypatch.setattr(imzml_reader_module, "ImzMLParser", _counting_parser)
+
+        reader = ImzMLReader(path)
+        with pytest.raises(ValueError) as first:
+            reader._ensure_parser_initialized()
+        with pytest.raises(ValueError) as second:
+            reader._ensure_parser_initialized()
+
+        assert len(constructions) == 1
+        assert second.value is first.value
+
+    def test_the_memo_keeps_the_original_type_and_message(self, temp_dir, monkeypatch):
+        """Rebuilding the error as ``type(e)(str(e))`` would lose both.
+
+        Not every failure here is a ValueError Thyra raised: pyimzml itself
+        raises whatever its XML and its own dependencies raise, and those
+        constructors do not all take a single message.
+        """
+
+        class _TwoArgError(Exception):
+            def __init__(self, code: int, detail: str) -> None:
+                super().__init__(f"{code}: {detail}")
+                self.code = code
+
+        def _refusing_parser(*args, **kwargs):
+            raise _TwoArgError(7, "the vendor library said no")
+
+        monkeypatch.setattr(imzml_reader_module, "ImzMLParser", _refusing_parser)
+
+        reader = ImzMLReader(write_imzml(temp_dir))
+        for _ in range(2):
+            with pytest.raises(_TwoArgError) as excinfo:
+                reader._ensure_parser_initialized()
+            assert excinfo.value.code == 7
+            assert str(excinfo.value) == "7: the vendor library said no"
+
+    def test_a_clean_file_is_still_parsed_exactly_once(self, temp_dir, monkeypatch):
+        path = write_imzml(temp_dir, n_spectra=6)
+
+        constructions: List[str] = []
+        real_parser = imzml_reader_module.ImzMLParser
+
+        def _counting_parser(*args, **kwargs):
+            constructions.append(kwargs.get("filename", ""))
+            return real_parser(*args, **kwargs)
+
+        monkeypatch.setattr(imzml_reader_module, "ImzMLParser", _counting_parser)
+
+        reader = ImzMLReader(path)
+        try:
+            assert reader.n_spectra == 6
+            reader._ensure_parser_initialized()
+        finally:
+            reader.close()
+        assert len(constructions) == 1
 
 
 class TestStreamingDecisionDoesNotSwallowRefusals:
