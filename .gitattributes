@@ -19,3 +19,17 @@
 # to look like text to the heuristic.
 *.dll binary
 *.so binary
+
+# The hand-authored imzML corpus. These are byte-exact fixtures, not source:
+# `iontof_sparse.imzML` is CRLF-terminated on purpose because that layout is a
+# trait of real IONTOF exports and the thing that trips lxml. Under the
+# `eol=lf` rule above, staging it would rewrite all 174 line terminators to LF
+# -- measured: 11,593 bytes become 11,419 -- destroying the property the
+# fixture exists to prove while the worktree file still looks correct, because
+# pytest reads the worktree file. `-text` opts the whole corpus out of any
+# normalisation, so what is committed is what was authored. The only tests that
+# can see this are the ones reading the blob,
+# test_hand_authored_fixtures.py::TestCommittedBytes; remove them and removing
+# this exemption goes unnoticed.
+tests/data/fixtures/*.imzML -text
+tests/data/fixtures/*.ibd binary

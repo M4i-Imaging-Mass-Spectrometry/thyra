@@ -1,4 +1,21 @@
 # Pre-commit hooks configuration
+#
+# The three whitespace hooks skip the imzML and .ibd files under
+# tests/data/fixtures/, which are byte-exact fixtures rather than source.
+# mixed-line-ending --fix=lf strips the 174 CRLFs that iontof_sparse.imzML
+# exists to prove a real IONTOF export carries -- measured, 11,593 bytes become
+# 11,419 -- and trailing-whitespace and end-of-file-fixer are equally free to
+# move bytes the .ibd offsets are not expected to track. Without the exclude a
+# hook run rewrites the fixture in place, and the tests then read the file the
+# hook just rewrote -- measured, that costs
+# TestIontofSparse::test_every_line_break_is_crlf and
+# TestCommittedBytes::test_blob_is_byte_identical_to_the_worktree, which is a
+# confusing failure a long way from its cause rather than a useful one.
+#
+# The exclude is scoped to those two extensions, so the README and the build
+# script in the same directory stay covered. The .gitattributes `-text`
+# exemption guards the staging side of the same hazard; this guards the
+# worktree side.
 repos:
   # Basic file formatting and checks
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -6,7 +23,9 @@ repos:
     hooks:
       - id: trailing-whitespace
         args: [--markdown-linebreak-ext=md]
+        exclude: ^tests/data/fixtures/[^/]+\.(imzML|ibd)$
       - id: end-of-file-fixer
+        exclude: ^tests/data/fixtures/[^/]+\.(imzML|ibd)$
       - id: check-yaml
       - id: check-toml
       - id: check-json
@@ -23,6 +42,7 @@ repos:
       - id: check-case-conflict
       - id: mixed-line-ending
         args: [--fix=lf]
+        exclude: ^tests/data/fixtures/[^/]+\.(imzML|ibd)$
 
   # Python code formatting
   - repo: https://github.com/psf/black
