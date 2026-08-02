@@ -147,27 +147,51 @@ def _determine_pixel_size(
 
 
 def _should_use_streaming(streaming: Union[bool, Literal["auto"]], reader: Any) -> bool:
-    """Determine if streaming converter should be used."""
+    """Determine if streaming converter should be used.
+
+    Args:
+        streaming: True to force streaming, False to force the standard
+            converter, ``"auto"`` to pick on estimated size.
+        reader: The reader for the input.
+
+    Returns:
+        True if the streaming converter should be used.
+
+    Raises:
+        Exception: Whatever ``reader.get_essential_metadata()`` raises. A
+            reader that refuses its input must not be silenced here.
+    """
     if streaming is True:
         return True
     if streaming != "auto":
         return False
 
-    # Auto-detect based on estimated dataset size (>10GB)
+    # Deliberately outside the try below. This is often the first call that
+    # builds the reader's parser, so it is the call a refused file fails on --
+    # and swallowing it here logged the reason at DEBUG, returned False, and
+    # let the converter parse the whole file a second time before failing the
+    # same way. On a 2.1 GB imzML that is about two minutes of apparent
+    # progress with the real reason invisible.
+    essential_meta = reader.get_essential_metadata()
+
+    # Auto-detect based on estimated dataset size (>10GB). Only the estimate
+    # itself is best-effort: a reader whose dimensions are missing or oddly
+    # shaped simply does not get the automatic upgrade.
     try:
-        essential_meta = reader.get_essential_metadata()
         dims = essential_meta.dimensions
         n_pixels = dims[0] * dims[1] * dims[2]
         # Rough estimate: assume average 10k peaks per spectrum, 8 bytes each
         estimated_gb = (n_pixels * 10000 * 8) / (1024**3)
-        if estimated_gb > 10:
-            logger.info(
-                f"Auto-detected large dataset (~{estimated_gb:.1f} GB), "
-                "using streaming converter"
-            )
-            return True
     except Exception as e:
         logger.debug(f"Could not estimate dataset size for auto-streaming: {e}")
+        return False
+
+    if estimated_gb > 10:
+        logger.info(
+            f"Auto-detected large dataset (~{estimated_gb:.1f} GB), "
+            "using streaming converter"
+        )
+        return True
     return False
 
 
