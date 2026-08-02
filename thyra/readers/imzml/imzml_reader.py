@@ -1,7 +1,13 @@
 # thyra/readers/imzml/imzml_reader.py
 import logging
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, Generator, List, NamedTuple, Optional, Tuple, Union, cast
+
+# The stdlib XML parser, used to re-read one element of a document pyimzml has
+# already parsed with the same stdlib parser -- see
+# _first_spectrum_array_lengths. Thyra has no defusedxml dependency, and
+# adding one here would not change what has already been read.
+from xml.etree import ElementTree  # nosec B405
 
 import numpy as np
 from numpy.typing import NDArray
@@ -37,6 +43,138 @@ _MASS_AXIS_PROBE_BLOCK = 1 << 20
 # against. Override with ``reader_options={"max_mass_axis_length": N}``, or
 # pass None for the old unlimited behaviour.
 DEFAULT_MAX_MASS_AXIS_LENGTH = 10_000_000
+
+# mzML's XML namespace, spelled the way pyimzml spells it.
+_MZML_NS = "{http://psi.hupo.org/ms/mzml}"
+
+# Number of values in a binary array, and the number of bytes those values
+# occupy once encoded. pyimzml keeps the former and discards the latter.
+_ARRAY_LENGTH_ACCESSION = "IMS:1000103"
+_ENCODED_LENGTH_ACCESSION = "IMS:1000104"
+
+# zlib-compressed binary arrays. The strings "zlib", "decompress", "1000574"
+# and "1000104" appear nowhere in pyimzml 1.5.5's parser, so a compressed array
+# is read as ``IMS:1000103 * itemsize`` raw deflate bytes and handed to
+# ``np.frombuffer``, which returns numbers of the correct count.
+_ZLIB_ACCESSION = "MS:1000574"
+_ZLIB_NAME = "zlib compression"
+
+# Precision characters whose numpy itemsize is not the itemsize pyimzml seeks
+# with. ``SIZE_DICT['l']`` is 8 on every platform, but ``np.dtype('l').itemsize``
+# is 4 on Windows and 8 on Linux, so pyimzml reads N*8 bytes and decodes 2N
+# int32 values here where it decodes N int64 values there -- one file, two
+# answers. '32-bit integer' ('i') is deliberately NOT in this set: MS:1000519 is
+# spec-legal, pyimzml's own writer emits it for ``intensity_dtype=np.int32``,
+# and it converts correctly today.
+_PLATFORM_DEPENDENT_PRECISIONS = frozenset({"l"})
+
+
+class _OffsetArrays(NamedTuple):
+    """The four per-spectrum offset and length arrays, as int64."""
+
+    mz_offsets: NDArray[np.int64]
+    mz_lengths: NDArray[np.int64]
+    int_offsets: NDArray[np.int64]
+    int_lengths: NDArray[np.int64]
+
+
+def _offset_arrays(parser: ImzMLParser) -> _OffsetArrays:
+    """Materialise pyimzml's four offset/length lists as int64 arrays.
+
+    ``np.fromiter(..., count=n)`` rather than ``np.asarray(..., dtype=...)``:
+    measured 54.6 ms against 73.5 ms over xenium's 918,855 spectra, and these
+    four conversions are most of what validation costs.
+
+    Args:
+        parser: An initialized ImzML parser.
+
+    Returns:
+        The parser's m/z and intensity offsets and lengths.
+    """
+    n = len(parser.mzOffsets)
+    return _OffsetArrays(
+        np.fromiter(parser.mzOffsets, dtype=np.int64, count=n),
+        np.fromiter(parser.mzLengths, dtype=np.int64, count=n),
+        np.fromiter(parser.intensityOffsets, dtype=np.int64, count=n),
+        np.fromiter(parser.intensityLengths, dtype=np.int64, count=n),
+    )
+
+
+def _binary_array_specs(
+    parser: ImzMLParser,
+) -> Tuple[Tuple[str, Any, Optional[str]], ...]:
+    """Return ``(label, param group id, precision char)`` for both arrays.
+
+    Args:
+        parser: An initialized ImzML parser.
+
+    Returns:
+        One tuple for the m/z array and one for the intensity array.
+    """
+    return (
+        ("m/z", parser.mzGroupId, parser.mzPrecision),
+        ("intensity", parser.intGroupId, parser.intensityPrecision),
+    )
+
+
+def _cv_param_int(elem: Any, accession: str) -> Optional[int]:
+    """Read one cvParam's value off an element as an int.
+
+    Args:
+        elem: The XML element to search directly beneath.
+        accession: The cvParam accession to look for.
+
+    Returns:
+        The integer value, or None if the param is absent or not an integer.
+    """
+    node = elem.find(f'{_MZML_NS}cvParam[@accession="{accession}"]')
+    if node is None:
+        return None
+    try:
+        return int(node.attrib["value"])
+    except (KeyError, ValueError):
+        return None
+
+
+def _first_spectrum_array_lengths(
+    imzml_path: Path,
+) -> Dict[Any, Tuple[Optional[int], Optional[int]]]:
+    """Read spectrum 0's declared array and encoded lengths, per param group.
+
+    ``ImzMLParser`` prunes every ``<spectrum>`` out of the tree as it streams
+    and keeps only ``IMS:1000102`` and ``IMS:1000103``, so ``IMS:1000104`` --
+    the *encoded* byte length, and the only independent witness to the decode
+    width -- is gone by the time the parser returns. Re-reading it for the
+    first spectrum costs the header plus one spectrum element however large the
+    file is.
+
+    Args:
+        imzml_path: Path to the imzML file.
+
+    Returns:
+        A mapping of ``referenceableParamGroupRef`` to
+        ``(array_length, encoded_length)``, either of which is None when the
+        file does not declare it. Empty if the file declares no spectra.
+    """
+    # Same document, same stdlib parser pyimzml itself used a moment ago; see
+    # the note on the import.
+    events = ElementTree.iterparse(str(imzml_path), events=("end",))  # nosec B314
+    for _event, elem in events:
+        if elem.tag != _MZML_NS + "spectrum":
+            continue
+        arrays: Dict[Any, Tuple[Optional[int], Optional[int]]] = {}
+        for node in elem.findall(
+            f"{_MZML_NS}binaryDataArrayList/{_MZML_NS}binaryDataArray"
+        ):
+            ref_node = node.find(f"{_MZML_NS}referenceableParamGroupRef")
+            if ref_node is None:
+                continue
+            arrays[ref_node.attrib.get("ref")] = (
+                _cv_param_int(node, _ARRAY_LENGTH_ACCESSION),
+                _cv_param_int(node, _ENCODED_LENGTH_ACCESSION),
+            )
+        return arrays
+    return {}
 
 
 def _dedupe_sorted(a: NDArray[Any]) -> NDArray[Any]:
@@ -384,6 +522,11 @@ class ImzMLReader(BaseMSIReader):
 
         # Parser initialization flag for lazy loading
         self._parser_initialized: bool = False
+        # And the failure, if it failed. Initialization is expensive -- 63
+        # seconds of XML on a 2.1 GB imzML -- and every public entry point
+        # calls _ensure_parser_initialized, so a refused file would otherwise
+        # be parsed again for each of them before failing the same way.
+        self._parser_init_error: Optional[Exception] = None
 
         # Cached properties
         self._common_mass_axis: Optional[NDArray[np.float64]] = None
@@ -396,12 +539,33 @@ class ImzMLReader(BaseMSIReader):
             self.filepath = data_path
 
     def _ensure_parser_initialized(self) -> None:
-        """Guarantee parser is initialized exactly once."""
-        if not self._parser_initialized:
-            if self.filepath is None:
-                raise ValueError("No file path provided for parser initialization")
+        """Guarantee parser is initialized exactly once, success or failure.
+
+        Raises:
+            ValueError: If no file path was given.
+            Exception: Whatever the first initialization attempt raised. A file
+                that has been refused once is refused from the memo rather than
+                parsed again.
+        """
+        if self._parser_initialized:
+            return
+        # The stored exception is re-raised as itself rather than rebuilt as
+        # ``type(e)(str(e))``, which would lose both the type and the message
+        # for any exception whose constructor takes something other than a
+        # single string, and would drop the traceback of the attempt that
+        # actually failed.
+        if self._parser_init_error is not None:
+            raise self._parser_init_error
+        if self.filepath is None:
+            # Not memoized: nothing was parsed, and the caller can still fix it
+            # by setting a path.
+            raise ValueError("No file path provided for parser initialization")
+        try:
             self._initialize_parser(self.filepath)
-            self._parser_initialized = True
+        except Exception as e:
+            self._parser_init_error = e
+            raise
+        self._parser_initialized = True
 
     def _initialize_parser(self, imzml_path: Union[str, Path]) -> None:
         """Initialize the ImzML parser with the given path.
@@ -490,6 +654,310 @@ class ImzMLReader(BaseMSIReader):
         # Cache coordinates if requested
         if self.cache_coordinates:
             self._cache_all_coordinates()
+
+        try:
+            self._validate_parser_state()
+        except Exception:
+            self.close()
+            raise
+
+    def _validate_parser_state(self) -> None:
+        """Check pyimzml's parser state against the .ibd before anything reads.
+
+        pyimzml seeks and reads unconditionally, and ``np.frombuffer`` objects
+        only when the byte count is not a whole multiple of the item size -- so
+        an offset pointing past the end of the ``.ibd`` yields an *empty* array
+        rather than an error, and the affected pixels leave the store without a
+        word. Nothing else in Thyra reads ``mzOffsets``, ``intensityOffsets``,
+        ``mzLengths`` or ``intensityLengths``, and nothing else stats the
+        ``.ibd``; the only check that exists today is that the file is there.
+
+        What is refused, in order:
+
+        1. ``MS:1000574 zlib compression`` on either binary array. pyimzml
+           1.5.5 has no decompression path at all, so it would hand raw deflate
+           bytes to ``np.frombuffer`` and get numbers of the declared length.
+        2. A param group declaring no precision term, more than one, or one
+           that disagrees with the precision pyimzml resolved -- pyimzml breaks
+           ties by dictionary order rather than by the document. Also
+           ``64-bit integer``, whose width is platform-dependent.
+        3. Spectrum 0's ``IMS:1000104`` encoded byte length disagreeing with
+           ``IMS:1000103 x itemsize``. This is the only check that catches a
+           correct accession carrying a wrong *name*, which makes pyimzml
+           decode float64 bytes as float32 at exactly the right length.
+        4. A negative offset or length, or a spectrum whose m/z and intensity
+           arrays declare different numbers of values.
+        5. A spectrum whose array ends past the end of the ``.ibd``.
+
+        Warned about but allowed: non-monotonic offsets, a maximum end byte
+        short of the file size, and more than one ``<scanSettings>`` block.
+        All three are legal; the last is mishandled downstream (pyimzml
+        resolves each scan-settings accession by first match anywhere in the
+        list, so a two-block file yields a per-accession chimera), but refusing
+        it belongs with the pixel-size unit work rather than here.
+
+        Limitation: this runs *after* ``ImzMLParser.__fix_offsets``, which
+        silently adds 2**32 to every offset from the first positive-to-negative
+        transition onward. Seeing the raw offsets would need an override of the
+        name-mangled ``_ImzMLParser__fix_offsets``; that buys exactly one case
+        these checks miss -- a spurious negative on the very last spectrum,
+        where the repair leaves no later read to push past the end of the file
+        -- and roughly doubles what validation costs. The repair is dormant on
+        every file measured (0 negatives and 0 inversions in 1,896,000 offsets
+        across bellini, pea and xenium), so it is left alone.
+
+        Raises:
+            ValueError: If the parser's state cannot produce correct reads.
+        """
+        parser = cast(ImzMLParser, self.parser)
+
+        for label, group_id, precision in _binary_array_specs(parser):
+            self._validate_binary_group(parser, label, group_id, precision)
+
+        self._validate_encoded_lengths(parser)
+
+        arrays = _offset_arrays(parser)
+        self._validate_offset_arrays(arrays)
+        self._validate_ibd_extent(parser, arrays)
+
+        n_scan_settings = len(parser.metadata.scan_settings)
+        if n_scan_settings != 1:
+            logger.warning(
+                f"imzML declares {n_scan_settings} <scanSettings> blocks. "
+                "pyimzml resolves each scan-settings accession by first match "
+                "anywhere in the list, so the pixel size and pixel counts "
+                "Thyra reads may come from different blocks and describe no "
+                "single region."
+            )
+
+    def _validate_binary_group(
+        self,
+        parser: ImzMLParser,
+        label: str,
+        group_id: Any,
+        precision: Optional[str],
+    ) -> None:
+        """Check the referenceable param group behind one binary array.
+
+        Args:
+            parser: An initialized ImzML parser.
+            label: ``"m/z"`` or ``"intensity"``, for the messages.
+            group_id: The param group id pyimzml resolved for this array.
+            precision: The precision character pyimzml resolved for it.
+
+        Raises:
+            ValueError: If the group is missing, declares zlib compression,
+                declares no precision term or more than one, disagrees with the
+                precision pyimzml resolved, or names a type whose width is
+                platform-dependent.
+        """
+        groups = parser.metadata.referenceable_param_groups
+        group = groups.get(group_id)
+        if group is None or precision is None:
+            raise ValueError(
+                f"imzML declares no usable referenceable param group for the "
+                f"{label} array, so pyimzml cannot know how to decode it "
+                f"(looked for {group_id!r} among {sorted(map(str, groups))})."
+            )
+
+        if _ZLIB_ACCESSION in group or _ZLIB_NAME in group:
+            raise ValueError(
+                f"imzML declares zlib compression ({_ZLIB_ACCESSION}) on its "
+                f"{label} array. pyimzml 1.5.5 has no decompression path: it "
+                f"reads IMS:1000103 x itemsize raw deflate bytes and decodes "
+                f"them as numbers, which succeeds silently at the declared "
+                f"length. Re-export with MS:1000576 no compression."
+            )
+
+        # param_by_name, not the group's own cv_params: declaring the precision
+        # in a param group this one *references* is legal, and reading
+        # cv_params would refuse that file.
+        declared = [
+            name for name in parser.precisionDict if name in group.param_by_name
+        ]
+        if len(declared) != 1:
+            raise ValueError(
+                f"imzML param group {group_id!r} declares {len(declared)} "
+                f"precision terms for the {label} array "
+                f"({', '.join(declared) if declared else 'none'}); exactly one "
+                f"is required. pyimzml breaks ties by dictionary order rather "
+                f"than by the document, so the decode width would be arbitrary."
+            )
+
+        resolved = parser.precisionDict[declared[0]]
+        if resolved != precision:
+            raise ValueError(
+                f"imzML param group {group_id!r} declares {declared[0]!r} for "
+                f"the {label} array, which is {resolved!r}, but pyimzml "
+                f"resolved {precision!r} and will decode at that width."
+            )
+
+        if precision in _PLATFORM_DEPENDENT_PRECISIONS:
+            raise ValueError(
+                f"imzML declares {declared[0]!r} for its {label} array. "
+                f"pyimzml reads {parser.sizeDict[precision]} bytes per value "
+                f"but decodes them as numpy's 'l', whose itemsize is "
+                f"{np.dtype(precision).itemsize} on this platform, so the same "
+                f"file reads differently on Windows and on Linux. Re-export "
+                f"the array as 32-bit or 64-bit float."
+            )
+
+    def _validate_encoded_lengths(self, parser: ImzMLParser) -> None:
+        """Cross-check spectrum 0's IMS:1000104 against IMS:1000103 x itemsize.
+
+        pyimzml's ``ACCESSION_FIX_MAPPING`` rewrites the *accession* of a
+        mis-declared 32/64-bit float term and keeps the raw *name*, and the
+        precision is then derived from the name -- so a correct ``MS:1000523``
+        carrying the name ``64-bit float`` makes every m/z value in the file
+        decode at the wrong width, at exactly the declared length, announced
+        only by a ``UserWarning`` worded as a successful repair. ``IMS:1000104``
+        is the independent witness: it equalled ``IMS:1000103 x itemsize`` for
+        all ~1.9M arrays across bellini, pea and xenium, 0 violations.
+
+        Checked on spectrum 0 only. Every spectrum would mean re-reading the
+        whole document.
+
+        Args:
+            parser: An initialized ImzML parser.
+
+        Raises:
+            ValueError: If a declared encoded length contradicts the precision
+                pyimzml resolved.
+        """
+        if self.imzml_path is None:
+            return
+        try:
+            arrays = _first_spectrum_array_lengths(self.imzml_path)
+        except ElementTree.ParseError as e:
+            # pyimzml has already parsed this document successfully, so a
+            # failure here is this function's problem and must not condemn the
+            # file.
+            logger.debug(
+                f"Could not re-read spectrum 0 for the "
+                f"{_ENCODED_LENGTH_ACCESSION} cross-check: {e}"
+            )
+            return
+
+        for label, group_id, precision in _binary_array_specs(parser):
+            declared = arrays.get(group_id)
+            if declared is None:
+                continue
+            array_length, encoded_length = declared
+            if array_length is None or encoded_length is None:
+                continue
+            itemsize = parser.sizeDict[precision]
+            expected = array_length * itemsize
+            if encoded_length != expected:
+                raise ValueError(
+                    f"imzML spectrum 0 declares {encoded_length:,} encoded "
+                    f"bytes ({_ENCODED_LENGTH_ACCESSION}) for its {label} "
+                    f"array, but its {array_length:,} values at the resolved "
+                    f"precision {precision!r} occupy {expected:,} bytes "
+                    f"({_ARRAY_LENGTH_ACCESSION} x {itemsize}). pyimzml reads "
+                    f"{expected:,} bytes, so the array decodes at the wrong "
+                    f"width or the wrong length."
+                )
+
+    def _validate_offset_arrays(self, arrays: _OffsetArrays) -> None:
+        """Check the offset and length arrays for internally impossible values.
+
+        Note that ``mz_len == int_len`` is not a corruption guard: the lengths
+        come from ``IMS:1000103`` while pyimzml's offset repair touches only
+        ``IMS:1000102``, so a re-pointed read agrees with itself. It is here
+        because it is nearly free and it does catch truncation faults.
+
+        Args:
+            arrays: The parser's offsets and lengths, as int64.
+
+        Raises:
+            ValueError: If any value is negative, or if a spectrum's m/z and
+                intensity arrays declare different numbers of values.
+        """
+        for label, values in (
+            ("m/z offset", arrays.mz_offsets),
+            ("m/z length", arrays.mz_lengths),
+            ("intensity offset", arrays.int_offsets),
+            ("intensity length", arrays.int_lengths),
+        ):
+            negative = np.flatnonzero(values < 0)
+            if negative.size:
+                idx = int(negative[0])
+                raise ValueError(
+                    f"imzML spectrum {idx} declares a negative {label} of "
+                    f"{int(values[idx]):,} ({negative.size:,} spectra "
+                    f"affected). Offsets and lengths are byte and element "
+                    f"counts and cannot be negative; pyimzml's signed-32-bit "
+                    f"offset repair did not remove this one."
+                )
+
+        mismatch = np.flatnonzero(arrays.mz_lengths != arrays.int_lengths)
+        if mismatch.size:
+            idx = int(mismatch[0])
+            raise ValueError(
+                f"imzML spectrum {idx} declares {int(arrays.mz_lengths[idx]):,} "
+                f"m/z values but {int(arrays.int_lengths[idx]):,} intensity "
+                f"values ({mismatch.size:,} spectra disagree). A spectrum's two "
+                f"arrays describe the same peaks and must be the same length."
+            )
+
+    def _validate_ibd_extent(self, parser: ImzMLParser, arrays: _OffsetArrays) -> None:
+        """Check that every declared array lies inside the .ibd.
+
+        Args:
+            parser: An initialized ImzML parser.
+            arrays: The parser's offsets and lengths, as int64.
+
+        Raises:
+            ValueError: If any spectrum's array ends past the end of the
+                ``.ibd``.
+        """
+        if self.ibd_path is None or arrays.mz_offsets.size == 0:
+            return
+        ibd_size = self.ibd_path.stat().st_size
+
+        max_end = 0
+        for label, offsets, lengths, precision in (
+            ("m/z", arrays.mz_offsets, arrays.mz_lengths, parser.mzPrecision),
+            (
+                "intensity",
+                arrays.int_offsets,
+                arrays.int_lengths,
+                parser.intensityPrecision,
+            ),
+        ):
+            end = offsets + lengths * parser.sizeDict[precision]
+            max_end = max(max_end, int(end.max()))
+            past = np.flatnonzero(end > ibd_size)
+            if past.size:
+                idx = int(past[0])
+                raise ValueError(
+                    f"imzML spectrum {idx} declares a {label} array ending at "
+                    f"byte {int(end[idx]):,}, but {self.ibd_path.name} is "
+                    f"{ibd_size:,} bytes ({past.size:,} spectra are affected; "
+                    f"the furthest ends at {int(end.max()):,}). The .ibd is "
+                    f"truncated or its offsets are wrong -- pyimzml would "
+                    f"return empty arrays for these spectra without raising, "
+                    f"and they would simply be missing from the output."
+                )
+
+        if max_end != ibd_size:
+            logger.warning(
+                f"{self.ibd_path.name} is {ibd_size:,} bytes but the last byte "
+                f"any spectrum declares is {max_end:,}, leaving "
+                f"{ibd_size - max_end:,} unaccounted for. Trailing bytes are "
+                f"legal, but this is also what a partially-copied .ibd looks "
+                f"like."
+            )
+
+        if np.any(np.diff(arrays.mz_offsets) < 0) or np.any(
+            np.diff(arrays.int_offsets) < 0
+        ):
+            logger.warning(
+                "imzML offsets are not monotonically non-decreasing. This is "
+                "legal, but pyimzml's signed-32-bit offset repair assumes "
+                "document order matches byte order and silently rewrites every "
+                "offset after a sign flip when it does not."
+            )
 
     def _cache_all_coordinates(self) -> None:
         """Cache all coordinates for faster access.
