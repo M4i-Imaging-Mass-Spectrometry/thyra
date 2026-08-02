@@ -38,19 +38,23 @@ Reproducible byte for byte, so a clean run leaves `git status` clean. No test
 invokes it; the committed bytes are the fixture. The script is provenance —
 read it to find out why a given cvParam is worded the way it is.
 
-## Two ways these files get silently destroyed
+## Two ways these files get destroyed
 
-Both rewrite the fixture without failing a single test, because pytest reads
-the worktree file and never the committed blob.
+Neither leaves a mark on the worktree file that a reader would notice, and
+before `TestCommittedBytes` existed neither failed a single test.
 
 1. **Staging.** `.gitattributes:15` is `* text=auto eol=lf`. Without the
    `tests/data/fixtures/*.imzML -text` exemption, staging `iontof_sparse.imzML`
    rewrites all 174 CRLFs to LF — 11,593 bytes become 11,419 — and the CRLF
    property the fixture exists to prove is gone from the repository while the
-   worktree still looks right.
+   worktree still looks right. Only the blob-reading tests can see this;
+   measured, removing the exemption fails ten of them and no other test in the
+   suite.
 2. **Pre-commit.** `mixed-line-ending --fix=lf` does the same thing to the
    worktree file, and `trailing-whitespace` and `end-of-file-fixer` are free to
-   move any byte. All three carry `exclude: ^tests/data/fixtures/`.
+   move any byte. All three carry
+   `exclude: ^tests/data/fixtures/[^/]+\.(imzML|ibd)$`, scoped to the two
+   byte-exact extensions so this README and `build_fixtures.py` stay covered.
 
 `.gitignore` also needs the negations: `*imzML` and `*ibd` are unanchored, so
 without `!tests/data/fixtures/*.imzML` these files cannot be added at all.

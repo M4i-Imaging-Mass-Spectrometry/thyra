@@ -491,6 +491,29 @@ def _blob(repo_path: str) -> bytes:
     return result.stdout
 
 
+def _is_ignored(repo_path: str) -> bool:
+    """Report whether .gitignore would exclude a path.
+
+    ``--no-index`` is load-bearing. Without it ``check-ignore`` declines to
+    answer for anything already in the index, which is every file in the
+    corpus -- so the question that matters, *would ``git add`` still take this
+    file*, silently becomes unaskable and every answer comes back "no".
+    """
+    if shutil.which("git") is None:
+        pytest.skip("git is not on PATH")
+
+    result = subprocess.run(
+        ["git", "check-ignore", "--no-index", "--", repo_path],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode not in (0, 1):
+        pytest.skip(f"git check-ignore failed: {result.stderr.decode().strip()}")
+
+    return result.returncode == 0
+
+
 class TestCommittedBytes:
     """The corpus is only useful if what is committed is what was authored.
 
@@ -536,7 +559,7 @@ class TestCommittedBytes:
         assert attributes.strip().endswith("binary: set")
 
     def test_the_corpus_is_actually_tracked(self):
-        """``*imzML`` and ``*ibd`` in .gitignore are unanchored and match these."""
+        """All eight files are in the index, not merely present in the checkout."""
         tracked = _git("ls-files", "tests/data/fixtures").split()
         expected: List[str] = [
             f"tests/data/fixtures/{stem}.{suffix}"
@@ -545,6 +568,28 @@ class TestCommittedBytes:
         ]
 
         assert set(expected) <= set(tracked)
+
+    @pytest.mark.parametrize("stem", STEMS)
+    @pytest.mark.parametrize("suffix", ["imzML", "ibd"])
+    def test_gitignore_still_admits_the_corpus(self, stem, suffix):
+        """``*imzML`` and ``*ibd`` are unanchored; the negations are what allow these.
+
+        ``test_the_corpus_is_actually_tracked`` cannot see this. Once a file is
+        in the index .gitignore no longer applies to it, so deleting the
+        negations leaves that assertion green and breaks only the next person
+        to regenerate a fixture and try to add it.
+        """
+        assert not _is_ignored(f"tests/data/fixtures/{stem}.{suffix}")
+
+    def test_the_unanchored_ignore_rules_are_still_live(self):
+        """The control: the same names one directory up are still ignored.
+
+        Without it the test above would pass just as happily if somebody had
+        deleted ``*imzML`` and ``*ibd`` from .gitignore outright, which is a
+        different repository from the one it means to describe.
+        """
+        assert _is_ignored("tests/data/scratch.imzML")
+        assert _is_ignored("tests/data/scratch.ibd")
 
 
 class TestProductionResolvesTheIbdExplicitly:

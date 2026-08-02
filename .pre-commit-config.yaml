@@ -5,8 +5,12 @@
 # mixed-line-ending --fix=lf strips the 174 CRLFs that iontof_sparse.imzML
 # exists to prove a real IONTOF export carries -- measured, 11,593 bytes become
 # 11,419 -- and trailing-whitespace and end-of-file-fixer are equally free to
-# move bytes the .ibd offsets are not expected to track. None of it shows up as
-# a test failure, because the tests read the file the hook just rewrote.
+# move bytes the .ibd offsets are not expected to track. Without the exclude a
+# hook run rewrites the fixture in place, and the tests then read the file the
+# hook just rewrote -- measured, that costs
+# TestIontofSparse::test_every_line_break_is_crlf and
+# TestCommittedBytes::test_blob_is_byte_identical_to_the_worktree, which is a
+# confusing failure a long way from its cause rather than a useful one.
 #
 # The exclude is scoped to those two extensions, so the README and the build
 # script in the same directory stay covered. The .gitattributes `-text`
