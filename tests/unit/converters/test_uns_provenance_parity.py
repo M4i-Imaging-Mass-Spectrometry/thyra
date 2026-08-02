@@ -343,6 +343,14 @@ def _read_obs(table_path):
     return ad.io.read_elem(zarr.open_group(str(table_path), mode="r")["obs"])
 
 
+def _read_x(table_path):
+    """Read ``X`` back eagerly, as a scipy sparse matrix."""
+    import anndata as ad
+    import zarr
+
+    return ad.io.read_elem(zarr.open_group(str(table_path), mode="r")["X"])
+
+
 def test_slice_paths_write_the_same_obs_columns(stores):
     """``obs`` schema parity across the three paths that write a slice table.
 
@@ -373,6 +381,73 @@ def test_volume_obs_adds_only_the_z_columns(stores):
 
     assert volume_columns - slice_columns == {"z", "spatial_z"}
     assert not slice_columns - volume_columns
+
+
+@pytest.mark.parametrize("path_name", list(WRITE_PATHS))
+def test_every_path_writes_one_row_per_spectrum(stores, path_name):
+    """Row count parity: one row per acquired spectrum, on every path.
+
+    Three of the four dropped the grid positions that carry no spectrum
+    (#88); the PCS path emitted the whole bounding box, so a quarter of
+    this fixture's rows were all-zero phantoms. On real ``pea.imzML``
+    that was 17,423 rows against 12,737 spectra.
+
+    Also asserts that no surviving row is empty, which is the property
+    the count is a proxy for: a path could reach the right *number* of
+    rows while keeping the wrong ones.
+    """
+    obs = _read_obs(_table_path(stores, path_name))
+    assert len(obs) == _N_SPECTRA, (
+        f"{path_name} wrote {len(obs)} rows for {_N_SPECTRA} spectra "
+        f"({_N_X * _N_Y} grid positions)"
+    )
+
+    x = _read_x(_table_path(stores, path_name))
+    assert int(np.asarray(x.getnnz(axis=1)).min()) > 0, f"{path_name} kept empty rows"
+
+
+@pytest.mark.parametrize("path_name", list(WRITE_PATHS))
+def test_shapes_annotate_exactly_the_rows(stores, path_name):
+    """One pixel polygon per obs row, under the same identity.
+
+    Green before the phantom rows were dropped as well as after -- the
+    PCS shapes tracked the phantom rows, so they were consistently wrong
+    together. It is here as the guard on the fix: obs and shapes are
+    built from two different places, and compacting one without the
+    other is the obvious way to break a store while every count still
+    looks plausible. Compares the labels rather than the count for the
+    same reason: the index is the *grid* index and keeps its gaps, since
+    what compacts is the row offset, not the identity.
+    """
+    import spatialdata
+
+    sdata = spatialdata.read_zarr(str(stores[path_name]))
+    obs = _read_obs(_table_path(stores, path_name))
+    region_key = f"{WRITE_PATHS[path_name][1]}_pixels"
+
+    assert list(sdata.shapes[region_key].index) == list(obs.index)
+
+
+@pytest.mark.parametrize("path_name", list(WRITE_PATHS))
+def test_tic_image_totals_the_matrix(stores, path_name):
+    """``sum(TIC image) == sum(X)``, which dropping rows must not disturb.
+
+    Also green on every route before the drop, and also here as a guard
+    rather than a reproduction. The TIC image stays full-grid while the
+    table drops empty positions, which is only sound because a dropped
+    position contributes zero; if a route ever dropped a row that
+    carried signal, or scattered one row's peaks onto another, these two
+    totals would part company. It is the cheapest end-to-end check that
+    the compaction moved rows rather than data.
+    """
+    import spatialdata
+
+    sdata = spatialdata.read_zarr(str(stores[path_name]))
+    tic_name = f"{WRITE_PATHS[path_name][1]}_tic"
+    tic_total = float(np.asarray(sdata.images[tic_name].data).sum())
+    x_total = float(_read_x(_table_path(stores, path_name)).sum())
+
+    assert tic_total == pytest.approx(x_total, rel=1e-9)
 
 
 @pytest.mark.parametrize("path_name", list(WRITE_PATHS))
