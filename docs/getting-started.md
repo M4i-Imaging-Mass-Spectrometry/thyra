@@ -238,6 +238,48 @@ long output paths convert normally. A log line records when this happens.
     `<output>.zarr.failed` rather than left at the destination, which keeps it
     available for diagnosis and leaves the output path free for a retry.
 
+### An imzML is refused before conversion starts
+
+Thyra checks what the imzML declares against the `.ibd` on disk before it reads
+a single spectrum, and refuses rather than converting something it cannot decode
+correctly. A truncated `.ibd` is reported with the spectrum index and both byte
+figures:
+
+```
+imzML spectrum 3 declares a m/z array ending at byte 236, but sample.ibd is 196
+bytes (3 spectra are affected; the furthest ends at 356). The .ibd is truncated
+or its offsets are wrong -- pyimzml would return empty arrays for these spectra
+without raising, and they would simply be missing from the output.
+```
+
+The usual cause is an **incomplete copy of the `.ibd`** -- copy it again and
+compare the byte count.
+
+The other refusals are declarations Thyra cannot honour:
+
+- `MS:1000574 zlib compression` on either binary array. The underlying parser
+  has no decompression path, so it would read the compressed bytes and decode
+  them as numbers.
+- A param group declaring no precision term, two at once, or one that disagrees
+  with the precision the parser resolved. The decode width would be arbitrary.
+- `64-bit integer` arrays, whose width differs between Windows and Linux.
+  `32-bit integer` is spec-legal and is *not* refused.
+- A first spectrum whose `IMS:1000104` encoded byte length contradicts its value
+  count at the declared precision -- the signature of an array that decodes at
+  the wrong width but exactly the right length.
+- A negative offset or length, or a spectrum whose m/z and intensity arrays
+  declare different numbers of values.
+
+Re-export the file from the vendor software with 64-bit float m/z and no
+compression.
+
+Not everything unusual is refused. Trailing bytes in the `.ibd`, offsets that do
+not follow document order, and more than one `<scanSettings>` block are legal
+and are logged as warnings.
+
+Before this check these files converted "successfully": a truncated `.ibd`
+produced a store containing only the pixels before the cut, with no error.
+
 ### "No module named 'timsdata'" or Bruker SDK errors
 
 The Bruker SDK DLLs are bundled for Windows. On Linux/macOS, Bruker data requires
