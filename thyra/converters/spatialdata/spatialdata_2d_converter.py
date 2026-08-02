@@ -158,16 +158,7 @@ class SpatialData2DConverter(BaseSpatialDataConverter):
         # Always add per-pixel region numbers for a consistent schema.
         # Multi-region datasets use the reader's region map; single-region
         # or unknown-region datasets default to region 1.
-        region_map = getattr(self, "_region_map", None)
-        if region_map is not None:
-            region_numbers = np.full(pixel_count, -1, dtype=np.int32)
-            for i in range(pixel_count):
-                key = (int(x_values[i]), int(y_values[i]))
-                if key in region_map:
-                    region_numbers[i] = region_map[key]
-            coords_df["region_number"] = region_numbers
-        else:
-            coords_df["region_number"] = np.ones(pixel_count, dtype=np.int32)
+        coords_df["region_number"] = self.build_region_numbers(x_values, y_values)
 
         return coords_df
 

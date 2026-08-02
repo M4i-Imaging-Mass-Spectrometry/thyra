@@ -49,6 +49,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         # Normalised at construction so a typo fails here rather than silently
         # falling through to auto-detection during extraction.
         self.spectrum_type_override = normalize_spectrum_type(spectrum_type)
+        self._z_base_value: Optional[int] = None  # See _z_base()
 
     def _extract_essential_impl(self) -> EssentialMetadata:
         """Extract essential metadata optimized for speed."""
@@ -97,18 +98,23 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         )
 
     def _calculate_dimensions(self, coords: NDArray[np.int_]) -> Tuple[int, int, int]:
-        """Calculate dataset dimensions from coordinates."""
+        """Calculate dataset dimensions from coordinates.
+
+        x and y are 1-based by the imzML specification. z is rebased on the
+        smallest value present (see :meth:`_z_base`), because pyimzml
+        reports either base depending on whether ``IMS:1000052`` is
+        declared. Assuming 1 there under-counted a 0-based two-plane file
+        as ``n_z = 1``, which is the same collision as the coordinate
+        clamp, one layer up.
+        """
         if len(coords) == 0:
             return (0, 0, 0)
 
-        # Coordinates are 1-based in ImzML, convert to 0-based for calculation
-        coords_0based = coords - 1
-
-        max_coords = np.max(coords_0based, axis=0)
+        max_coords = np.max(coords, axis=0)
         return (
-            int(max_coords[0]) + 1,
-            int(max_coords[1]) + 1,
-            int(max_coords[2]) + 1,
+            int(max_coords[0]),
+            int(max_coords[1]),
+            int(max_coords[2]) - self._z_base(coords) + 1,
         )
 
     def _calculate_bounds(
@@ -175,6 +181,16 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         Returns:
             Tuple of ((min_mass, max_mass), total_peaks, peak_counts_per_pixel)
             peak_counts_per_pixel is None if dimensions not provided.
+
+        Raises:
+            ValueError: If no spectrum yields a mass range. There is no
+                defensible fallback range for a mass spectrometry dataset:
+                the invented ``(0.0, 1000.0)`` this used to return reached
+                disk as ``uns/essential_metadata/mass_range`` and, with
+                resampling on, sized the whole common axis. The same file
+                with resampling off was refused loudly, so a flag decided
+                whether a dataset with no readable spectra failed or was
+                silently described wrongly.
         """
         try:
             coords = self.parser.coordinates
@@ -189,9 +205,16 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             else:
                 return self._get_mass_range_processed(coords, n_spectra, dimensions)
 
+        except ValueError:
+            # The two branches above raise this when they find no mass range.
+            # Re-wrapping it here would double the message, since both of
+            # them already name the file.
+            raise
         except Exception as e:
             logger.error(f"Mass range extraction failed: {e}")
-            return ((0.0, 1000.0), 0, None)
+            raise ValueError(
+                f"Could not determine the mass range of {self.imzml_path}: {e}"
+            ) from e
 
     def _get_mass_range_continuous(
         self,
@@ -202,6 +225,11 @@ class ImzMLMetadataExtractor(MetadataExtractor):
 
         In continuous mode, all spectra share the same m/z axis, so we only
         need to read one spectrum to get the mass range and peak count.
+
+        Raises:
+            ValueError: If spectrum 0 is empty. In continuous mode it is the
+                only spectrum read, so an empty one leaves nothing to derive
+                a range from.
         """
         logger.info(
             "Continuous mode detected - reading m/z axis from first spectrum only"
@@ -212,8 +240,11 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         n_peaks_per_spectrum = len(mzs)
 
         if n_peaks_per_spectrum == 0:
-            logger.warning("First spectrum has no peaks")
-            return ((0.0, 1000.0), 0, None)
+            raise ValueError(
+                f"Could not determine the mass range of {self.imzml_path}: "
+                "the file declares continuous mode, so every spectrum shares "
+                "the m/z axis of spectrum 0 -- and spectrum 0 has no peaks."
+            )
 
         min_mass = float(np.min(mzs))
         max_mass = float(np.max(mzs))
@@ -245,6 +276,9 @@ class ImzMLMetadataExtractor(MetadataExtractor):
 
         In processed mode, each spectrum can have different m/z values,
         so we must scan all spectra to find the complete mass range.
+
+        Raises:
+            ValueError: If not one of the scanned spectra yielded a peak.
         """
         logger.info("Processed mode - scanning ALL spectra for complete mass range...")
 
@@ -255,8 +289,11 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         )
 
         if min_mass == float("inf"):
-            logger.warning("No valid spectra found")
-            return ((0.0, 1000.0), 0, None)
+            raise ValueError(
+                f"Could not determine the mass range of {self.imzml_path}: "
+                f"none of the {n_spectra:,} spectra scanned yielded a peak. "
+                "The .ibd may be truncated or unreadable."
+            )
 
         logger.info(f"Complete mass range: {min_mass:.2f} - {max_mass:.2f} m/z")
         logger.info(f"Total peaks: {total_peaks:,}")
@@ -369,6 +406,30 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             logger.debug(f"Failed to read spectrum {idx}: {e}")
             return None
 
+    def _z_base(self, coords: List) -> int:
+        """The z value in this file that maps onto plane 0.
+
+        The same rebasing :meth:`ImzMLReader._z_base` does, and for the
+        same reason: pyimzml synthesises ``z = 1`` when ``IMS:1000052`` is
+        absent but passes an explicit ``z = 0`` through, so a constant base
+        is wrong for one of the two conventions. ``max(z - 1, 0)`` folded
+        plane 1 onto plane 0, and these counts become the CSR ``indptr``
+        -- landing a pixel's peak count on another pixel's row.
+
+        Memoised; the scan is one pass over the coordinate list.
+
+        Args:
+            coords: The parser's coordinate list.
+
+        Returns:
+            The smallest z present, or 0 for an empty list.
+        """
+        if self._z_base_value is None:
+            self._z_base_value = (
+                int(min(coord[2] for coord in coords)) if len(coords) else 0
+            )
+        return self._z_base_value
+
     def _store_pixel_peak_count(
         self,
         idx: int,
@@ -386,9 +447,9 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             peak_counts: Array to store counts.
             n_peaks: Number of peaks in this spectrum.
         """
-        # ImzML coordinates are 1-based
+        # ImzML x/y are 1-based; z is rebased on the file -- see _z_base().
         x, y, z = coords[idx]
-        x, y, z = x - 1, y - 1, max(z - 1, 0)
+        x, y, z = x - 1, y - 1, z - self._z_base(coords)
         n_x, n_y, n_z = dimensions
         pixel_idx = z * (n_x * n_y) + y * n_x + x
         if 0 <= pixel_idx < len(peak_counts):
@@ -399,6 +460,11 @@ class ImzMLMetadataExtractor(MetadataExtractor):
 
         This performs a complete scan of all spectra to ensure no m/z
         values are missed when building the resampled axis.
+
+        Raises:
+            ValueError: If the file yields no mass range at all. Propagated
+                deliberately: resampling is precisely the path that used to
+                turn the invented ``(0.0, 1000.0)`` into a real axis on disk.
         """
         mass_range, _, _ = self._get_mass_range_complete()
         return mass_range
@@ -430,34 +496,60 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         return estimated_bytes / (1024**3)  # Convert to GB
 
     def _extract_imzml_specific(self) -> Dict[str, Any]:
-        """Extract ImzML format-specific metadata."""
+        """Extract ImzML format-specific metadata.
+
+        ``file_mode`` goes through :meth:`_is_continuous_mode`, which reads
+        ``IMS:1000030``/``IMS:1000031`` off the file description. It used to
+        read ``getattr(self.parser, "continuous", False)`` -- an attribute
+        ``ImzMLParser`` does not define, so the default always won and every
+        store Thyra has ever written says ``"processed"`` regardless of what
+        the file declares.
+        """
         format_specific: Dict[str, Any] = {
             "imzml_version": "1.1.0",  # Default version
             "file_mode": (
-                "continuous"
-                if getattr(self.parser, "continuous", False)
-                else "processed"
+                BinaryDataType.CONTINUOUS
+                if self._is_continuous_mode()
+                else BinaryDataType.PROCESSED
             ),
             "ibd_file": str(self.imzml_path.with_suffix(".ibd")),
-            "uuid": None,
+            "uuid": self._extract_uuid(),
             "spectrum_count": len(self.parser.coordinates),
             "scan_settings": {},
         }
 
-        # Extract UUID if available
+        return format_specific
+
+    def _extract_uuid(self) -> Optional[str]:
+        """Read the ``IMS:1000080`` binary-file UUID from the file description.
+
+        Keyed by name rather than by position. The previous form was
+        ``cv_params[0][2]`` -- the value of whichever cvParam the vendor
+        happened to write first -- which on a real IONTOF file is
+        ``MS:1000128 profile spectrum`` and so stored the boolean ``True``
+        as the dataset's UUID. SCiLS puts the UUID first, so the same
+        expression was correct there by luck.
+
+        Vendors differ on whether the value carries the registry-format
+        braces (IONTOF writes ``{...}``, SCiLS does not); they are stripped
+        so the stored field is one shape whatever wrote the file.
+
+        Returns:
+            The UUID string, or ``None`` if the file declares none.
+        """
         try:
-            if hasattr(self.parser, "metadata") and hasattr(
-                self.parser.metadata, "file_description"
-            ):
-                cv_params = getattr(
-                    self.parser.metadata.file_description, "cv_params", []
-                )
-                if cv_params and len(cv_params) > 0:
-                    format_specific["uuid"] = cv_params[0][2]
+            metadata = getattr(self.parser, "metadata", None)
+            file_desc = getattr(metadata, "file_description", None)
+            param_by_name = getattr(file_desc, "param_by_name", None)
+            if not isinstance(param_by_name, dict):
+                return None
+            value = param_by_name.get(ImzMLAccessions.UUID_NAME)
+            if not isinstance(value, str):
+                return None
+            return value.strip().strip("{}")
         except Exception as e:
             logger.debug(f"Could not extract UUID: {e}")
-
-        return format_specific
+            return None
 
     def _extract_acquisition_params(self) -> Dict[str, Any]:
         """Extract acquisition parameters from XML metadata."""

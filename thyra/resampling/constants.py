@@ -17,6 +17,12 @@ class ImzMLAccessions:
     # Software identifiers
     SCILS_LAB = "MS:1002384"
 
+    # Binary-file UUID (imzML ontology). pyimzml keys ``param_by_name`` by
+    # resolved CV *name*, not by accession, so the name is what a lookup
+    # needs; the accession is kept beside it for error messages and docs.
+    UUID = "IMS:1000080"
+    UUID_NAME = "universally unique identifier"
+
 
 class Thresholds:
     """Threshold values for data classification."""

@@ -1,5 +1,6 @@
 # tests/unit/metadata/extractors/test_imzml_extractor.py
 import logging
+import re
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -582,3 +583,170 @@ class TestSpectrumTypeOverride:
                 ImzMLMetadataExtractor(parser, path).get_essential().spectrum_type
                 == "profile spectrum"
             )
+
+
+class TestFormatSpecificProvenance:
+    """``file_mode`` and ``uuid`` must come from the file, not from luck.
+
+    Both fields used to be effectively constants:
+
+    * ``file_mode`` read ``getattr(parser, "continuous", False)`` on an
+      attribute ``ImzMLParser`` does not define, so the ``False`` default
+      always won and every store said ``"processed"``. The only assertion
+      guarding it was ``file_mode in {"continuous", "processed"}``, which
+      the bug satisfies -- so a continuous file is the discriminator, and
+      is what these tests use.
+    * ``uuid`` read ``cv_params[0][2]`` -- the value of whichever cvParam
+      the vendor wrote first. pyimzml's own writer puts ``MS:1000579 MS1
+      spectrum`` first and the UUID fourth, so the stored "UUID" was the
+      boolean ``True``. Real IONTOF files have the same shape; SCiLS puts
+      the UUID first and was correct by accident.
+    """
+
+    def _format_specific(self, path):
+        with production_parser(path) as parser:
+            return (
+                ImzMLMetadataExtractor(parser, path).get_comprehensive().format_specific
+            )
+
+    @pytest.mark.parametrize("mode", ["continuous", "processed"])
+    def test_file_mode_tracks_the_declared_mode(self, tmp_path, mode):
+        """The assertion the bug cannot satisfy: it answered ``processed`` always."""
+        path = _write_imzml(tmp_path, f"mode_{mode}", "centroid", mode=mode)
+        assert self._format_specific(path)["file_mode"] == mode
+
+    def test_uuid_is_the_uuid_and_not_the_first_cvparam(self, tmp_path):
+        """``IMS:1000080``'s value, looked up by name.
+
+        pyimzml's writer emits the UUID fourth, so ``cv_params[0][2]``
+        returned ``True`` here exactly as it does on real bellini.
+        """
+        path = _write_imzml(tmp_path, "uuid", "centroid")
+        uuid = self._format_specific(path)["uuid"]
+
+        assert uuid is not True, "stored the value of a different cvParam"
+        assert isinstance(uuid, str)
+        # The writer's own UUID, read back out of the file it wrote, with
+        # the registry braces stripped so the field is one shape whatever
+        # vendor wrote it.
+        assert re.fullmatch(r"[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}", uuid)
+
+    def test_uuid_matches_the_value_in_the_file(self, tmp_path):
+        """Not just UUID-shaped -- the one this file actually declares."""
+        path = _write_imzml(tmp_path, "uuid_exact", "centroid")
+        declared = re.search(
+            r'accession="IMS:1000080"[^>]*value="\{?([^"}]+)\}?"',
+            path.read_text(encoding="utf-8"),
+        )
+        assert declared, "fixture does not declare IMS:1000080"
+        assert self._format_specific(path)["uuid"] == declared.group(1)
+
+    def test_a_file_declaring_no_uuid_stores_none(self, tmp_path):
+        """Absence must read as absence, not as some other param's value."""
+        path = _write_imzml(tmp_path, "uuid_none", "centroid")
+        text = path.read_text(encoding="utf-8")
+        stripped = re.sub(r"\s*<cvParam[^>]*IMS:1000080[^>]*/>", "", text)
+        assert stripped != text
+        path.write_text(stripped, encoding="utf-8")
+
+        assert self._format_specific(path)["uuid"] is None
+
+
+class TestNoFabricatedMassRange:
+    """An imzML with no readable peaks must not acquire an invented range.
+
+    Three sites returned the literal ``(0.0, 1000.0)``: the continuous
+    branch when spectrum 0 is empty, the processed branch when no spectrum
+    yields a peak, and the blanket ``except Exception`` wrapping both. With
+    resampling on, that value sized the common axis and landed in
+    ``uns/essential_metadata/mass_range``; with resampling off the same file
+    was refused loudly. A flag decided whether the failure was visible.
+
+    The blanket handler still wraps genuine failures, but lets the
+    ``ValueError`` the two branches raise through -- otherwise the message
+    reads "Could not determine the mass range of X: Could not determine the
+    mass range of X".
+    """
+
+    def _extractor(self, parser, path=Path("/does/not/exist.imzML")):
+        return ImzMLMetadataExtractor(parser, path)
+
+    def _parser(self, *, continuous, spectra):
+        parser = Mock()
+        mode = "continuous" if continuous else "processed"
+        parser.metadata.file_description.param_by_name = {mode: True}
+        parser.coordinates = [(i + 1, 1, 1) for i in range(len(spectra))]
+        parser.getspectrum.side_effect = lambda i: spectra[i]
+        parser.imzmldict = {}
+        return parser
+
+    def test_continuous_with_an_empty_spectrum_zero_raises(self):
+        """Continuous mode reads only spectrum 0, so an empty one is fatal."""
+        parser = self._parser(
+            continuous=True, spectra=[(np.array([]), np.array([]))] * 2
+        )
+
+        with pytest.raises(ValueError, match="Could not determine the mass range"):
+            self._extractor(parser).get_mass_range_for_resampling()
+
+    def test_processed_with_no_peaks_anywhere_raises(self):
+        parser = self._parser(
+            continuous=False, spectra=[(np.array([]), np.array([]))] * 4
+        )
+
+        with pytest.raises(ValueError, match="Could not determine the mass range"):
+            self._extractor(parser).get_mass_range_for_resampling()
+
+    def test_the_error_is_not_double_wrapped(self):
+        """`:194`'s blanket handler must let the inner ValueError through."""
+        parser = self._parser(
+            continuous=False, spectra=[(np.array([]), np.array([]))] * 2
+        )
+
+        with pytest.raises(ValueError) as excinfo:
+            self._extractor(parser).get_mass_range_for_resampling()
+
+        assert str(excinfo.value).count("Could not determine the mass range") == 1
+
+    def test_an_unexpected_failure_is_still_wrapped(self):
+        """The handler keeps its job for everything that is not the guard."""
+        parser = self._parser(continuous=False, spectra=[])
+        parser.coordinates = property(lambda _: (_ for _ in ()).throw(OSError("boom")))
+        type(parser).coordinates = property(
+            lambda _: (_ for _ in ()).throw(OSError("boom"))
+        )
+
+        with pytest.raises(ValueError, match="Could not determine the mass range"):
+            self._extractor(parser).get_mass_range_for_resampling()
+
+    def test_a_single_readable_spectrum_is_enough(self):
+        """The guard must not fire while any real measurement survives."""
+        parser = self._parser(
+            continuous=False,
+            spectra=[
+                (np.array([]), np.array([])),
+                (np.array([300.0, 400.0]), np.array([1.0, 2.0])),
+            ],
+        )
+
+        assert self._extractor(parser).get_mass_range_for_resampling() == (300.0, 400.0)
+
+    def test_resampling_no_longer_invents_an_axis(self, tmp_path):
+        """End to end on a real file, which is where the value reached disk.
+
+        A processed imzML whose every spectrum reads back empty used to be
+        described as spanning 0-1000 m/z, and the resampled axis was built
+        from that invented range.
+
+        The file is real and its header is untouched; the ``.ibd`` is cut
+        back to its 16-byte UUID header, which is the truncated-copy shape
+        from the audit. pyimzml seeks past EOF, reads nothing and returns
+        empty arrays without raising, so this reaches the guard the way a
+        half-copied dataset does rather than by construction.
+        """
+        path = _write_imzml(tmp_path, "truncated", "centroid")
+        path.with_suffix(".ibd").open("r+b").truncate(16)
+
+        with production_parser(path) as parser:
+            with pytest.raises(ValueError, match="Could not determine the mass range"):
+                ImzMLMetadataExtractor(parser, path).get_mass_range_for_resampling()

@@ -306,6 +306,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         )
 
         self._non_empty_pixel_count: int = 0
+        # Peaks discarded for falling outside the target mass axis, and
+        # whether the one-line summary has been emitted yet. See
+        # _count_out_of_range().
+        self._out_of_range_peaks: int = 0
+        self._out_of_range_warned: bool = False
         self._pixel_size_detection_info = pixel_size_detection_info
         self._resampling_config = (
             _normalize_resampling_config(resampling_config)
@@ -1071,6 +1076,43 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # This method is only called for TIC-preserving resampling (dense path)
         return self._tic_preserving_resample(mzs, intensities)
 
+    def _count_out_of_range(self, n_dropped: int, n_total: int) -> None:
+        """Record peaks discarded for lying outside the target mass axis.
+
+        Narrowing the mass range is deliberate, so dropping the peaks
+        outside it is the correct answer and not an error -- but it is not
+        something a user should have to infer either, since the previous
+        behaviour conserved the total exactly and so left no trace a TIC
+        check could find.
+
+        Warns once per conversion rather than once per spectrum: a
+        narrowed range typically excludes peaks in every spectrum, and on
+        xenium that is 918,855 identical lines. ``_out_of_range_peaks``
+        keeps the running total; note it counts resample *calls*, and the
+        PCS route resamples every spectrum twice, so it is a lower bound
+        on nothing and an upper bound on nothing -- read the warning, not
+        the counter, if you want a per-spectrum figure.
+
+        Args:
+            n_dropped: Peaks outside the axis in this spectrum.
+            n_total: Peaks in this spectrum before filtering.
+        """
+        self._out_of_range_peaks += n_dropped
+
+        if self._out_of_range_warned or self._common_mass_axis is None:
+            return
+        self._out_of_range_warned = True
+        logger.warning(
+            "Dropping peaks that fall outside the target mass axis "
+            "[%.4f, %.4f] m/z -- %d of %d in the first spectrum affected. "
+            "They are discarded, not folded into the edge bins. Widen the "
+            "resampling range to keep them.",
+            float(self._common_mass_axis[0]),
+            float(self._common_mass_axis[-1]),
+            n_dropped,
+            n_total,
+        )
+
     def _nearest_neighbor_resample(
         self, mzs: NDArray[np.float64], intensities: NDArray[np.float64]
     ) -> Tuple[NDArray[np.int_], NDArray[np.float64]]:
@@ -1078,6 +1120,23 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         Maps each m/z value to its nearest bin in the common mass axis and
         accumulates intensities. Returns only non-zero bins for efficiency.
+
+        Peaks outside the axis are **dropped**, not folded into the edge
+        bins. They used to be clipped to bin 0 or the last bin and then
+        accumulated there, so narrowing the mass range -- the most ordinary
+        thing ``--resample-min-mz`` / ``--resample-max-mz`` are for --
+        piled everything below the floor onto the first bin and everything
+        above the ceiling onto the last. On real ``pea.imzML`` resampled to
+        400-800 m/z, bin 0 held 654,158 counts where a real peak there is
+        around 80. The total was conserved exactly, so a TIC check could
+        not see it; the peak was simply in the wrong place, 1,634x the
+        median interior bin.
+
+        "In range" is the strict axis span, ``[axis[0], axis[-1]]``: a peak
+        is kept when the axis covers it, not when it is within half a bin of
+        the end. That is the same rule ``_tic_preserving_resample`` already
+        follows -- ``np.interp(..., left=0, right=0)`` and
+        ``thyra.resampling.tic.preserved_tic`` both cut at the endpoints.
 
         Args:
             mzs: Original m/z values from spectrum
@@ -1092,20 +1151,32 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # Ensure common mass axis is initialized
         if self._common_mass_axis is None:
             raise ValueError("Common mass axis is not initialized")
+
+        axis = self._common_mass_axis
+        in_range = (mzs >= axis[0]) & (mzs <= axis[-1])
+        if not in_range.all():
+            self._count_out_of_range(int(mzs.size - in_range.sum()), int(mzs.size))
+            mzs = mzs[in_range]
+            intensities = intensities[in_range]
+            if mzs.size == 0:
+                return np.array([], dtype=np.int_), np.array([], dtype=np.float64)
+
         # Find insertion points using vectorized binary search
-        indices = np.searchsorted(self._common_mass_axis, mzs)
+        indices = np.searchsorted(axis, mzs)
 
         # OPTIMIZED: Handle boundary and nearest neighbor in one pass
-        # Clip to valid range
-        indices_clipped = np.clip(indices, 0, len(self._common_mass_axis) - 1)
+        # Clip to valid range. Everything reaching here is inside the axis,
+        # so this only pins searchsorted's one-past-the-end result for a
+        # value equal to axis[-1]; it can no longer pull an outside peak in.
+        indices_clipped = np.clip(indices, 0, len(axis) - 1)
 
         # For non-boundary points, check if left is closer
         # Only check where we're not at the left edge
         check_left = indices > 0
         if np.any(check_left):
             # Get distances only for points that need checking
-            mz_values = self._common_mass_axis[indices_clipped[check_left]]
-            mz_values_left = self._common_mass_axis[indices_clipped[check_left] - 1]
+            mz_values = axis[indices_clipped[check_left]]
+            mz_values_left = axis[indices_clipped[check_left] - 1]
             mz_query = mzs[check_left]
 
             # Use left if it's closer
@@ -1299,17 +1370,41 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         )
         coords_df.set_index("instance_id", inplace=True)
 
-        region_map = getattr(self, "_region_map", None)
-        if region_map is not None:
-            keys = list(zip(x_idx.tolist(), y_idx.tolist()))
-            region_numbers = np.array(
-                [region_map.get(k, -1) for k in keys], dtype=np.int32
-            )
-            coords_df["region_number"] = region_numbers
-        else:
-            coords_df["region_number"] = np.ones(n_pixels, dtype=np.int32)
+        coords_df["region_number"] = self.build_region_numbers(x_idx, y_idx)
 
         return coords_df
+
+    def build_region_numbers(self, x_values, y_values) -> NDArray[np.int32]:
+        """``obs["region_number"]`` for the given pixel positions, in row order.
+
+        Written on every dataset for a consistent schema, so a consumer
+        does not have to branch on whether the acquisition had regions:
+        without a region map every pixel is region 1, which is also what
+        ``uns["regions"]`` reports for that case. Only the Bruker timsTOF
+        reader produces a map today; a position missing from it gets -1.
+
+        Shared because there are four places that build an obs table --
+        the in-memory 2D and 3D converters, the streaming-COO slice
+        builder and the hand-written PCS layout -- and each had its own
+        copy of this rule. The PCS one had no copy at all and simply
+        omitted the column.
+
+        Args:
+            x_values: Pixel x index per obs row.
+            y_values: Pixel y index per obs row.
+
+        Returns:
+            Region number per obs row.
+        """
+        n = len(x_values)
+        region_map = getattr(self, "_region_map", None)
+        if region_map is None:
+            return np.ones(n, dtype=np.int32)
+
+        keys = zip(x_values.tolist(), y_values.tolist())
+        return np.fromiter(
+            (region_map.get(key, -1) for key in keys), dtype=np.int32, count=n
+        )
 
     def _create_mass_dataframe(self) -> pd.DataFrame:
         """Create m/z dataframe for variable metadata.
@@ -1987,6 +2082,41 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # Add comprehensive dataset metadata if supported
         self._add_comprehensive_metadata(metadata)
 
+    def build_root_attrs(
+        self, comprehensive_metadata_obj: Any = None
+    ) -> Dict[str, Any]:
+        """The root-level attributes every write path must persist, identically.
+
+        The store's own attrs, as opposed to the table's ``uns`` block
+        :meth:`build_uns_metadata` owns. Sibling of that method and here for
+        the same reason: the streaming-PCS path hand-writes its Zarr layout
+        and composed its own, shorter set -- 7 attributes against 10 on real
+        ``pea.imzML``, missing ``coordinate_systems``,
+        ``format_specific_metadata`` and ``msi_dataset_info``.
+
+        ``coordinate_systems`` is the one that matters most in practice: it
+        is the structured contract saying what unit ``"global"`` is in, and
+        Ousia and the registration tooling read it rather than guessing.
+        A PCS store simply did not have it, and the route is chosen by size,
+        so the datasets that lost it are the largest ones.
+
+        Sections the reader has nothing for are omitted rather than written
+        empty, matching :meth:`build_uns_metadata`.
+
+        Args:
+            comprehensive_metadata_obj: Already-read comprehensive metadata,
+                when the caller has it. ``None`` reads it from the reader.
+
+        Returns:
+            Mapping of root attribute name to value.
+        """
+        if comprehensive_metadata_obj is None:
+            comprehensive_metadata_obj = self.reader.get_comprehensive_metadata()
+
+        attrs = self._create_pixel_size_attrs()
+        self._add_comprehensive_sections(attrs, comprehensive_metadata_obj)
+        return attrs
+
     def _setup_spatialdata_attrs(
         self, metadata: "SpatialData", comprehensive_metadata_obj
     ) -> None:
@@ -1996,14 +2126,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         logger.info("Adding comprehensive metadata to SpatialData.attrs")
 
-        # Create pixel size attributes
-        pixel_size_attrs = self._create_pixel_size_attrs()
-
-        # Add comprehensive metadata sections
-        self._add_comprehensive_sections(pixel_size_attrs, comprehensive_metadata_obj)
-
-        # Update SpatialData attributes
-        metadata.attrs.update(pixel_size_attrs)
+        metadata.attrs.update(self.build_root_attrs(comprehensive_metadata_obj))
 
     def _create_pixel_size_attrs(self) -> Dict[str, Any]:
         """Create pixel size and conversion metadata attributes."""

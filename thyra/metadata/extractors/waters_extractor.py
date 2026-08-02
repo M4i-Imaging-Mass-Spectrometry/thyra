@@ -163,6 +163,13 @@ class WatersMetadataExtractor(MetadataExtractor):
 
         Returns:
             (mass_range, n_spectra, total_peaks, peak_counts_per_pixel)
+
+        Raises:
+            ValueError: If no scan yielded a mass range. This used to
+                substitute a fabricated ``(0.0, 1000.0)``, which reached
+                disk as the dataset's declared mass range and, with
+                resampling on, sized the whole common axis. There is no
+                defensible fallback range for a mass spectrometry dataset.
         """
         n_x, n_y, n_z = dimensions
         n_pixels = n_x * n_y * n_z
@@ -197,8 +204,10 @@ class WatersMetadataExtractor(MetadataExtractor):
                         self._update_scan_stats(func, scan, mzs, stats)
 
         if stats["min_mass"] == float("inf"):
-            logger.warning("No valid spectra found in Waters data")
-            stats["min_mass"], stats["max_mass"] = 0.0, 1000.0
+            raise ValueError(
+                f"Could not determine the mass range of {self._data_path}: "
+                f"none of the {total_scans:,} MS scans yielded a peak."
+            )
 
         logger.info(
             f"Waters metadata scan complete: {stats['n_spectra']} spectra, "

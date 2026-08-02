@@ -207,6 +207,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         try:
             # Initialize (loads metadata, mass axis, etc.)
             self._initialize_conversion()
+            self._refuse_multiple_z_planes()
 
             # Decide which method to use based on settings and dataset size
             if self._should_use_pcs():
@@ -247,6 +248,46 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             # storage was never created is a no-op.
             self._cleanup_temp_storage()
             self.reader.close()
+
+    def _refuse_multiple_z_planes(self) -> None:
+        """Refuse a multi-plane acquisition, which this route cannot write.
+
+        ``__init__`` forces ``handle_3d = False`` and both write paths
+        below are single-slice throughout: the table is named ``_z0``, the
+        TIC image is ``(n_y, n_x)``, the shapes are one polygon per (x, y),
+        and the COO path builds its obs from
+        ``_create_coordinates_dataframe_for_slice(0)``. Only the matrix was
+        ever sized ``n_x * n_y * n_z``, so ``n_z > 1`` has always ended in
+        an obs-length mismatch -- "obs must have as many rows as X has rows
+        (18), but has 9 rows" on the COO path, "Length of values (9) does
+        not match length of index (18)" on PCS. Nothing has ever converted.
+
+        Raising here is not a new restriction, then; it names the
+        restriction instead of letting it surface as an arithmetic
+        complaint from anndata three passes later.
+
+        It is also load-bearing rather than cosmetic. The PCS scatter
+        indexes rows by ``y * n_x + x`` with no ``z`` term, where the COO
+        path uses ``z * (n_x * n_y) + y * n_x + x``. The obs-length
+        mismatch is the *only* thing that stops that: now that the empty
+        rows are dropped the lengths would line up, and a two-plane file
+        would convert cleanly with both planes summed onto one. A loud
+        failure would have become a silent wrong answer. Use the 2D or 3D
+        converter, both of which handle depth properly.
+
+        Raises:
+            ValueError: If the dataset declares more than one z plane.
+        """
+        if self._dimensions is None:
+            raise ValueError("Dimensions are not initialized")
+
+        n_z = self._dimensions[2]
+        if n_z > 1:
+            raise ValueError(
+                f"The streaming converter writes a single z plane, but this "
+                f"dataset declares {n_z}. Use SpatialData2DConverter (one "
+                f"table per plane) or SpatialData3DConverter (one volume)."
+            )
 
     def _setup_temp_storage(self) -> None:
         """Set up temporary Zarr storage for COO components."""
@@ -849,16 +890,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         coords_df["spatial_y"] = coords_df["y"] * self.pixel_size_um
 
         # Always add per-pixel region numbers for a consistent schema.
-        region_map = getattr(self, "_region_map", None)
-        if region_map is not None:
-            region_numbers = np.full(pixel_count, -1, dtype=np.int32)
-            for i in range(pixel_count):
-                key = (int(x_values[i]), int(y_values[i]))
-                if key in region_map:
-                    region_numbers[i] = region_map[key]
-            coords_df["region_number"] = region_numbers
-        else:
-            coords_df["region_number"] = np.ones(pixel_count, dtype=np.int32)
+        coords_df["region_number"] = self.build_region_numbers(x_values, y_values)
 
         return coords_df
 
@@ -1017,11 +1049,12 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             raise ValueError("Common mass axis not initialized")
 
         n_x, n_y, n_z = self._dimensions
-        n_rows = n_x * n_y * n_z
+        n_grid = n_x * n_y * n_z
         n_cols = len(self._common_mass_axis)
 
         logger.info(
-            f"Streaming CSC (no-cache): {n_rows:,} pixels x {n_cols:,} m/z bins"
+            f"Streaming CSC (no-cache): {n_grid:,} grid positions x "
+            f"{n_cols:,} m/z bins"
         )
 
         # Create temp directory for memmap files only (no cache file)
@@ -1031,7 +1064,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         try:
             # Step 1: Pre-scan - count entries per column (no caching)
             logger.info("Step 1/3: Pre-scan (counting entries per column)...")
-            prescan_result = self._prescan_count_columns(n_rows, n_cols, n_x, n_y)
+            prescan_result = self._prescan_count_columns(n_grid, n_cols, n_x, n_y)
 
             col_counts = prescan_result["col_counts"]
             total_nnz = prescan_result["total_nnz"]
@@ -1043,6 +1076,16 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             if total_nnz == 0:
                 logger.warning("No non-zero entries found!")
 
+            kept_grid, row_of_grid = self._plan_row_layout(
+                prescan_result["occupancy"], n_grid
+            )
+            n_rows = int(kept_grid.size)
+
+            # The other paths set this in _finalize_data; the root attrs
+            # builder reads it for msi_dataset_info["non_empty_pixels"],
+            # which would otherwise report the initial 0 on this route.
+            self._non_empty_pixel_count = pixel_count
+
             # Build indptr from col_counts
             indptr = np.zeros(n_cols + 1, dtype=np.int64)
             indptr[1:] = np.cumsum(col_counts)
@@ -1053,7 +1096,9 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
             # Step 3: Main pass - process and scatter directly to CSC
             logger.info("Step 3/3: Processing spectra and scattering to CSC...")
-            self._scatter_spectra_direct(mm_indices, mm_data, indptr, n_x, pixel_count)
+            self._scatter_spectra_direct(
+                mm_indices, mm_data, indptr, n_x, n_y, row_of_grid, pixel_count
+            )
 
             # Write CSC arrays to Zarr
             logger.info("Writing CSC arrays to Zarr...")
@@ -1061,12 +1106,11 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 mm_indices,
                 mm_data,
                 indptr,
-                n_rows,
+                kept_grid,
                 n_cols,
                 total_nnz,
                 tic_values,
                 avg_spectrum,
-                pixel_count,
                 avg_per_region,
             )
 
@@ -1088,8 +1132,49 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             if temp_dir.exists():
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
+    def _plan_row_layout(
+        self, occupancy: NDArray[np.bool_], n_grid: int
+    ) -> Tuple[NDArray[np.int64], NDArray[np.int64]]:
+        """Decide which grid positions become table rows, and in what order.
+
+        The PCS path used to emit one row per grid position, where the
+        other three emit one per acquired spectrum -- acquisitions are
+        polygon-shaped but the grid is their bounding box, so the corners
+        came out as all-zero rows (#88). On real ``pea.imzML`` that is
+        17,423 rows against 12,737 spectra, 4,686 of them empty, with
+        ``shapes/`` carrying a polygon for each phantom.
+
+        Kept rows stay in grid order and keep their **grid index** as
+        ``instance_id``, which is what ``_drop_empty_pixels`` leaves
+        behind on the other paths: the index has gaps, and a consumer can
+        still recover the position from it. Only the row *offsets* are
+        compacted, because the matrix has to be dense in its rows.
+
+        Args:
+            occupancy: True per grid position carrying a spectrum.
+            n_grid: Number of grid positions.
+
+        Returns:
+            ``(kept_grid, row_of_grid)`` -- the grid index of each table
+            row, and the table row of each grid position (-1 if dropped).
+        """
+        kept_grid = np.flatnonzero(occupancy).astype(np.int64)
+        row_of_grid = np.full(n_grid, -1, dtype=np.int64)
+        row_of_grid[kept_grid] = np.arange(kept_grid.size, dtype=np.int64)
+
+        n_dropped = n_grid - int(kept_grid.size)
+        if n_dropped:
+            logger.info(
+                "Dropping %d empty pixel rows from obs (%d non-empty pixels "
+                "remain). These positions are inside the bounding box but "
+                "outside the acquisition polygon.",
+                n_dropped,
+                kept_grid.size,
+            )
+        return kept_grid, row_of_grid
+
     def _prescan_count_columns(
-        self, n_rows: int, n_cols: int, n_x: int, n_y: int
+        self, n_grid: int, n_cols: int, n_x: int, n_y: int
     ) -> Dict[str, Any]:
         """Pre-scan spectra to count entries per column without caching.
 
@@ -1097,24 +1182,30 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         1. Counts how many entries each m/z column will have (for CSC indptr)
         2. Computes TIC values per pixel
         3. Accumulates total intensity for average spectrum
+        4. Records which grid positions carry a spectrum at all
 
         No data is cached to disk - we'll reprocess spectra in the main pass.
 
         Args:
-            n_rows: Total number of pixels
+            n_grid: Number of grid positions
             n_cols: Number of m/z bins
             n_x, n_y: Spatial dimensions
 
         Returns:
-            Dictionary with col_counts, total_nnz, tic_values, avg_spectrum, pixel_count
+            Dictionary with col_counts, total_nnz, tic_values, avg_spectrum,
+            pixel_count and occupancy
         """
         # Allocate counting arrays (very small memory footprint)
         col_counts = np.zeros(n_cols, dtype=np.int64)
         total_intensity = np.zeros(n_cols, dtype=np.float64)
         tic_values = np.zeros((n_y, n_x), dtype=np.float64)
+        # Which grid positions carry a spectrum, in row-major order. The
+        # table keeps only these; see the drop in _convert_to_csc_no_cache.
+        occupancy = np.zeros(n_grid, dtype=bool)
 
         total_nnz = 0
         pixel_count = 0
+        n_out_of_bounds = 0
 
         region_map, region_total, region_count = self._init_region_accumulators(n_cols)
 
@@ -1143,9 +1234,15 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                     # Accumulate for average spectrum (vectorized)
                     np.add.at(total_intensity, mz_indices, resampled_ints)
 
-                    # TIC
+                    # TIC and occupancy. Both are indexed by grid position,
+                    # so both need the bounds check: a reader yielding a
+                    # coordinate outside the declared dimensions would
+                    # otherwise wrap round and land on an unrelated pixel.
                     if 0 <= y < n_y and 0 <= x < n_x:
                         tic_values[y, x] = resampled_ints.sum()
+                        occupancy[y * n_x + x] = True
+                    else:
+                        n_out_of_bounds += 1
 
                     if region_map is not None:
                         self._accumulate_region(
@@ -1167,6 +1264,15 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         logger.info(
             f"  Pre-scan complete: {total_nnz:,} entries across {n_cols:,} columns"
         )
+        if n_out_of_bounds:
+            logger.warning(
+                "%d spectra sat outside the declared %dx%d grid and were "
+                "skipped. Previously they were written to a wrapped-round "
+                "row index, silently overwriting an unrelated pixel.",
+                n_out_of_bounds,
+                n_x,
+                n_y,
+            )
 
         return {
             "col_counts": col_counts,
@@ -1174,6 +1280,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             "tic_values": tic_values,
             "avg_spectrum": avg_spectrum,
             "pixel_count": pixel_count,
+            "occupancy": occupancy,
             "avg_spectrum_per_region": self._compute_region_averages(
                 region_total, region_count
             ),
@@ -1185,6 +1292,8 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         mm_data: np.memmap,
         indptr: NDArray[np.int64],
         n_x: int,
+        n_y: int,
+        row_of_grid: NDArray[np.int64],
         pixel_count: int,
     ) -> None:
         """Process spectra and scatter directly to CSC arrays.
@@ -1197,6 +1306,9 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             mm_data: Memory-mapped array for values
             indptr: Column pointers array (from pre-scan)
             n_x: Number of columns in spatial grid
+            n_y: Number of rows in spatial grid
+            row_of_grid: Table row for each grid position, -1 for the
+                positions dropped as empty (from the pre-scan occupancy).
             pixel_count: Number of spectra to process
         """
         # Current write position for each column
@@ -1228,10 +1340,17 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 # Process spectrum (deterministic - same result as pre-scan)
                 mz_indices, resampled_ints = self._process_spectrum(mzs, intensities)
 
-                if len(mz_indices) > 0:
-                    # Compute row index (row-major order)
-                    row_idx = y * n_x + x
+                # Table row for this grid position -- not the grid index
+                # itself, because the empty positions are dropped and the
+                # rows compacted. row_of_grid comes from the same pre-scan
+                # that sized the columns, so the two agree by construction;
+                # a position with no row (empty, or a coordinate outside
+                # the grid, both skipped there) comes back as -1.
+                row_idx = -1
+                if len(mz_indices) > 0 and 0 <= y < n_y and 0 <= x < n_x:
+                    row_idx = int(row_of_grid[y * n_x + x])
 
+                if row_idx >= 0:
                     # Vectorized scatter
                     destinations = write_pos[mz_indices]
                     mm_indices[destinations] = row_idx
@@ -1322,12 +1441,11 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         mm_indices: np.memmap,
         mm_data: np.memmap,
         indptr: NDArray[np.int64],
-        n_rows: int,
+        kept_grid: NDArray[np.int64],
         n_cols: int,
         total_nnz: int,
         tic_values: NDArray[np.float64],
         avg_spectrum: NDArray[np.float64],
-        pixel_count: int,
         avg_spectrum_per_region: dict[str, NDArray[np.float64]] | None = None,
     ) -> None:
         """Write CSC arrays to Zarr store with SpatialData-compatible structure.
@@ -1344,23 +1462,22 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             mm_indices: Memory-mapped CSC indices array.
             mm_data: Memory-mapped CSC data array.
             indptr: Column pointers for CSC format.
-            n_rows: Number of rows in the matrix.
+            kept_grid: Grid index of each table row, in row order (see
+                :meth:`_plan_row_layout`). Its length is the row count.
             n_cols: Number of columns in the matrix.
             total_nnz: Total non-zero count.
-            tic_values: TIC image array.
+            tic_values: TIC image array. Full-grid, and deliberately not
+                subset with the rows: it is a dense 2D image, not a
+                per-pixel table.
             avg_spectrum: Average spectrum.
-            pixel_count: Number of non-empty pixels.
             avg_spectrum_per_region: Per-region mean spectra, or None.
         """
-        from datetime import datetime
-
-        from ... import __version__
-
         slice_id = f"{self.dataset_id}_z0"
         region_key = f"{slice_id}_pixels"
         if self._dimensions is None:
             raise ValueError("Dimensions not initialized")
-        n_x, n_y, n_z = self._dimensions
+        n_x, n_y, _ = self._dimensions
+        n_rows = int(kept_grid.size)
 
         # Clean output directory
         if self.output_path.exists():
@@ -1369,17 +1486,17 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # Create Zarr store
         store = zarr.open_group(str(self.output_path), mode="w")
 
-        # Root attributes
+        # Root attributes. Everything but ``spatialdata_attrs`` -- which
+        # describes the on-disk layout this method hand-writes, not the
+        # dataset -- comes from the shared builder, so a root attr added
+        # for the other paths reaches a PCS store too. This used to be six
+        # literals composed here and was short by ``coordinate_systems``,
+        # ``format_specific_metadata`` and ``msi_dataset_info``.
         store.attrs["spatialdata_attrs"] = {
             "version": "0.2",
             "spatialdata_software_version": "0.6.1",
         }
-        store.attrs["pixel_size_x_um"] = float(self.pixel_size_um)
-        store.attrs["pixel_size_y_um"] = float(self.pixel_size_um)
-        store.attrs["pixel_size_units"] = "micrometers"
-        store.attrs["coordinate_system"] = "physical_micrometers"
-        store.attrs["msi_converter_version"] = __version__
-        store.attrs["conversion_timestamp"] = datetime.now().isoformat()
+        store.attrs.update(self.build_root_attrs())
 
         # Create table structure
         tables_group = store.create_group("tables")
@@ -1466,21 +1583,30 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             "region",
             "spatial_x",
             "spatial_y",
+            "region_number",
             "instance_key",
         ]
 
-        y_values = np.repeat(np.arange(n_y, dtype=np.int32), n_x)
-        x_values = np.tile(np.arange(n_x, dtype=np.int32), n_y)
+        # Positions of the kept rows only, recovered from their grid
+        # indices. The index stays the GRID index, gaps included, which is
+        # what _drop_empty_pixels leaves behind on the other paths -- the
+        # row offsets compact, the identities do not.
+        y_values = (kept_grid // n_x).astype(np.int32)
+        x_values = (kept_grid % n_x).astype(np.int32)
         # Same reasoning as the var index below, but n_rows is the pixel count
         # and stays far smaller than n_cols, so one shot needs no chunking.
-        instance_ids = np.arange(n_rows, dtype=np.int64).astype(str_dtype)
+        instance_ids = kept_grid.astype(str_dtype)
         spatial_x = x_values.astype(np.float64) * self.pixel_size_um
         spatial_y = y_values.astype(np.float64) * self.pixel_size_um
+        region_numbers = self.build_region_numbers(x_values, y_values)
 
         a = obs_group.create_array("y", data=y_values)
         a.attrs["encoding-type"] = "array"
         a.attrs["encoding-version"] = "0.2.0"
         a = obs_group.create_array("x", data=x_values)
+        a.attrs["encoding-type"] = "array"
+        a.attrs["encoding-version"] = "0.2.0"
+        a = obs_group.create_array("region_number", data=region_numbers)
         a.attrs["encoding-type"] = "array"
         a.attrs["encoding-version"] = "0.2.0"
         a = obs_group.create_array("spatial_x", data=spatial_x)
@@ -1584,7 +1710,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # Add TIC image and pixel shapes using SpatialData
         logger.info("  Adding TIC image and pixel shapes...")
         self._add_tic_image_and_shapes_to_store(
-            tic_values, n_rows, n_x, n_y, slice_id, region_key
+            tic_values, kept_grid, n_x, n_y, slice_id, region_key
         )
 
         # Consolidate metadata after all elements are written
@@ -1595,7 +1721,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
     def _add_tic_image_and_shapes_to_store(
         self,
         tic_values: NDArray[np.float64],
-        n_rows: int,
+        kept_grid: NDArray[np.int64],
         n_x: int,
         n_y: int,
         slice_id: str,
@@ -1607,9 +1733,14 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         It uses SpatialData's models to create properly formatted images and
         shapes, then writes them to the existing store.
 
+        The TIC image stays full-grid while the shapes follow the table:
+        the image is a dense raster of the bounding box, the shapes are the
+        polygons the obs rows annotate, and those are different things.
+
         Args:
             tic_values: 2D array of TIC values (n_y, n_x).
-            n_rows: Total number of pixels.
+            kept_grid: Grid index of each table row (see
+                :meth:`_plan_row_layout`); one shape is emitted per entry.
             n_x: Number of pixels in x dimension.
             n_y: Number of pixels in y dimension.
             slice_id: Identifier for this slice (e.g., "msi_dataset_z0").
@@ -1661,7 +1792,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         )
 
         # === Create Pixel Shapes ===
-        gdf = self._create_streaming_pixel_shapes(n_rows, n_x, n_y)
+        gdf = self._create_streaming_pixel_shapes(kept_grid, n_x, n_y)
 
         shape_transform = Identity()
         shapes = ShapesModel.parse(
@@ -1726,24 +1857,30 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         n_optical = len(data_structures["images"]) - 1
         logger.info(
             f"  Wrote TIC image '{tic_name}' ({x_size}x{y_size}), "
-            f"{n_rows:,} pixel shapes, and {n_optical} optical image(s)"
+            f"{kept_grid.size:,} pixel shapes, and {n_optical} optical image(s)"
         )
 
     def _create_streaming_pixel_shapes(
-        self, n_rows: int, n_x: int, n_y: int
+        self, kept_grid: NDArray[np.int64], n_x: int, n_y: int
     ) -> "gpd.GeoDataFrame":
         """Create pixel shape geometries for the streaming converter.
 
+        One polygon per table row, indexed by the same grid index obs uses,
+        so the shapes and the table stay in step. This used to walk the
+        whole bounding box, which is what put a polygon on each of real
+        ``pea``'s 4,686 phantom rows.
+
         Args:
-            n_rows: Total number of pixels.
+            kept_grid: Grid index of each table row, in row order.
             n_x: Number of pixels in x dimension.
             n_y: Number of pixels in y dimension.
 
         Returns:
             GeoDataFrame with pixel box geometries.
         """
-        y_indices = np.repeat(np.arange(n_y), n_x)
-        x_indices = np.tile(np.arange(n_x), n_y)
+        n_rows = int(kept_grid.size)
+        y_indices = kept_grid // n_x
+        x_indices = kept_grid % n_x
 
         from shapely import box as shapely_box_vectorized
         from shapely.geometry import box as shapely_box_single
@@ -1781,13 +1918,14 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                             ix - half_x, iy - half_y, ix + half_x, iy + half_y
                         )
                     )
-                    valid_indices.append(i)
+                    valid_indices.append(int(kept_grid[i]))
 
             n_skipped = n_rows - len(valid_indices)
             if n_skipped > 0:
                 logger.info(
                     f"Created {len(valid_geometries)} shapes using optical "
-                    f"alignment (skipped {n_skipped} empty grid positions)"
+                    f"alignment (skipped {n_skipped} positions the alignment "
+                    f"could not transform)"
                 )
 
             geometries = valid_geometries
@@ -1808,5 +1946,5 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         if valid_indices is not None:
             instance_ids = [str(i) for i in valid_indices]
         else:
-            instance_ids = [str(i) for i in range(n_rows)]
+            instance_ids = [str(i) for i in kept_grid.tolist()]
         return gpd.GeoDataFrame(geometry=geometries, index=instance_ids)
