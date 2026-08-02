@@ -16,7 +16,14 @@ spatialdata 0.7.3 / zarr 3.1.3.
 | D | [toolchain-hygiene.md](toolchain-hygiene.md) | `chore/toolchain-hygiene` | `../Thyra-toolchain` | independent |
 | E | [upstream-lazy-table-pr.md](upstream-lazy-table-pr.md) | *upstream* | *scverse/spatialdata* | independent |
 | F | [interpolation-resampling.md](interpolation-resampling.md) | *not created* | `../Thyra-interp` | backlog |
-| G | [resampling-scils-alignment.md](resampling-scils-alignment.md) | `fix/resampling-scils-alignment` | `../Thyra-resampling` | **modality leak is real** |
+| G | [resampling-scils-alignment.md](resampling-scils-alignment.md) | `fix/resampling-scils-alignment` | `../Thyra-resampling` | **DONE** -- v2.1.0-v2.2.3, item 5 left |
+| H | [loose-ends-after-scils-alignment.md](loose-ends-after-scils-alignment.md) | one per item | `../Thyra-loose` | **item 1 is not a chore** |
+
+Handout H is what was found *around* G and deliberately not folded into it.
+Its item 1 -- Ousia importing Thyra 2.2.3 against a spatialdata/anndata/zarr
+cluster that violates three of Thyra's four declared pins, silently, because
+the dependency is a bare editable path dep with no version constraint -- is
+the only one of the four that is not a chore. Read that before the others.
 
 Handout G is the one to read before touching resampling. It records what the
 SCiLS Lab manual actually specifies -- SCiLS is the baseline Thyra's
@@ -109,7 +116,8 @@ Two things to know about working in a worktree here:
 
 - Conventional commits (`feat`, `fix`, `docs`, `refactor`, `chore`, `perf`,
   `build`, `style`, `test`).
-- Never mention Claude or AI authorship in commit messages.
+- Commit messages describe the change, never the tooling used to make it. No
+  authorship or co-authorship trailers for anything but a person.
 - No emojis anywhere: code, comments, docstrings, commits, docs.
 - Before every commit:
   ```bash
