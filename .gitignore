@@ -33,6 +33,14 @@ htmlcov/
 Archive/
 *imzML
 *ibd
+# ...except the hand-authored corpus, which is the one place imzML/.ibd bytes
+# are deliberately tracked. They are tiny (a few KB each) and they are the only
+# imzML in the tree that pyimzml's own writer did not produce, so they are the
+# only fixtures that can catch a parser bug the writer shares. See
+# tests/data/fixtures/README.md, and .gitattributes -- the CRLF fixture needs an
+# explicit -text or staging silently strips the line endings it exists to test.
+!tests/data/fixtures/*.imzML
+!tests/data/fixtures/*.ibd
 *.d
 *.mis
 *.slx

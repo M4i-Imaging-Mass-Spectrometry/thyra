@@ -610,6 +610,18 @@ class ImzMLReader(BaseMSIReader):
             # the tree in Python, so there is no C parser state to invalidate;
             # it is also pyimzml's own default, parses byte-identically, and is
             # faster here -- 67s vs 118s on a 2.1 GB imzML at the same peak RSS.
+            #
+            # Two more pyimzml constraints live on this call and neither is
+            # visible from it. The parser holds one unsynchronised file handle:
+            # get_spectrum_as_string does two seek-then-read pairs on self.m, so
+            # sharing a parser across threads returns another pixel's masses at
+            # the correct declared length -- 5.4% of reads over 8 threads on
+            # real pea, 84 of 108 undetectable. Harmless today because these
+            # reads are strictly serial; a trap directly under the obvious
+            # parallelisation. And ibd_file= below is not a convenience: without
+            # it pyimzml resolves the .ibd itself, by a rule that is worse than
+            # this one on case, on directories and on partial downloads.
+            # docs/imzml-parser-notes.md has both, with the measurements.
             self.parser = ImzMLParser(
                 filename=str(imzml_path),
                 parse_lib="ElementTree",

@@ -5,9 +5,9 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 import pytest
-from pyimzml.ImzMLParser import ImzMLParser
 from pyimzml.ImzMLWriter import ImzMLWriter
 
+from tests.fixtures.imzml_parser import production_parser
 from thyra.metadata.extractors.imzml_extractor import ImzMLMetadataExtractor
 from thyra.resampling.decision_tree import ResamplingDecisionTree
 from thyra.resampling.types import ResamplingMethod
@@ -396,13 +396,10 @@ class TestSpectrumTypeDetection:
     def test_real_processed_file_round_trip(self, tmp_path, spec_type, expected):
         """End to end on a real file: what was written is what is read back."""
         path = _write_imzml(tmp_path, spec_type, spec_type)
-        parser = ImzMLParser(str(path), parse_lib="ElementTree")
-        try:
+        with production_parser(path) as parser:
             extractor = ImzMLMetadataExtractor(parser, path)
             assert extractor._detect_centroid_spectrum() == expected
             assert extractor.get_essential().spectrum_type == expected
-        finally:
-            parser.m.close()
 
     def test_profile_file_routes_to_nearest_neighbor_not_tic_preserving(self, tmp_path):
         """A correctly-detected profile file must not reach the interpolating path.
@@ -411,8 +408,7 @@ class TestSpectrumTypeDetection:
         profile data no longer reaches ``tic_preserving``.
         """
         path = _write_imzml(tmp_path, "profile", "profile")
-        parser = ImzMLParser(str(path), parse_lib="ElementTree")
-        try:
+        with production_parser(path) as parser:
             extractor = ImzMLMetadataExtractor(parser, path)
             essential = extractor.get_essential()
             metadata = {
@@ -424,8 +420,6 @@ class TestSpectrumTypeDetection:
             }
             tree = ResamplingDecisionTree()
             assert tree.select_strategy(metadata) == ResamplingMethod.NEAREST_NEIGHBOR
-        finally:
-            parser.m.close()
 
 
 def _capture(level, logger_name="thyra.metadata.extractors.imzml_extractor"):
@@ -575,22 +569,16 @@ class TestSpectrumTypeOverride:
     def test_real_file_end_to_end(self, tmp_path, declared, override, expected):
         """On a real imzML, the override is what gets stored."""
         path = _write_imzml(tmp_path, f"ovr_{declared}", declared)
-        parser = ImzMLParser(str(path), parse_lib="ElementTree")
-        try:
+        with production_parser(path) as parser:
             extractor = ImzMLMetadataExtractor(parser, path, spectrum_type=override)
             assert extractor._detect_centroid_spectrum() == expected
             assert extractor.get_essential().spectrum_type == expected
-        finally:
-            parser.m.close()
 
     def test_real_file_without_override_is_unchanged(self, tmp_path):
         """The regression guard: opting out must behave exactly as before."""
         path = _write_imzml(tmp_path, "no_ovr", "profile")
-        parser = ImzMLParser(str(path), parse_lib="ElementTree")
-        try:
+        with production_parser(path) as parser:
             assert (
                 ImzMLMetadataExtractor(parser, path).get_essential().spectrum_type
                 == "profile spectrum"
             )
-        finally:
-            parser.m.close()
