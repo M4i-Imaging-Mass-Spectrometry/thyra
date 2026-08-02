@@ -2,6 +2,48 @@
 
 <!-- version list -->
 
+## v2.3.1 (2026-08-02)
+
+### Bug Fixes
+
+- **convert**: Let a reader's refusal out of the streaming size estimate
+  ([`27ad37c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/27ad37c95e2b5e19850cb90d4d94be9118e6f46d))
+
+- **imzml**: Remember a refused imzML instead of parsing it again
+  ([`8ec81c7`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/8ec81c76585d021f8b0cc774813eb41af914d97a))
+
+- **imzml**: Validate pyimzml's parser state against the .ibd
+  ([`f8e7009`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f8e7009d57f0893c935619a131b29e043dc46ea3))
+
+### Documentation
+
+- **fixtures**: State the corpus's measured compressed size
+  ([`a3cb821`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a3cb821053d42ea8ef5dd436147a71a40278194c))
+
+- **imzml**: Describe what the .ibd validator refuses
+  ([`0995a12`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/0995a12e285d77c4ae0201f8a86a0fc3bcf5a865))
+
+- **imzml**: Write down the pyimzml hazards that correctly get no code
+  ([`21ab15a`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/21ab15a95513c0864be6103198cfd9e85dd98879))
+
+### Testing
+
+- **fixtures**: Add a hand-authored imzML corpus that pyimzml did not write
+  ([`540efd1`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/540efd18c6065bfcd222c366cb82079affdb28bc))
+
+- **fixtures**: Assert the structural property each hand-authored pair exists for
+  ([`362c604`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/362c60480784413323eb2530c29f664eb08bd090))
+
+- **fixtures**: Guard the .gitignore negations and correct three stale notes
+  ([`15d07da`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/15d07dae798397f6d171495ff38b7a97bf2e948b))
+
+- **imzml**: Invert the two-precision characterisation onto the refusal
+  ([`a48ff88`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a48ff880297d5c51c23417eae472b405b6995cfa))
+
+- **imzml**: Resolve the .ibd in tests the way production resolves it
+  ([`00a7de9`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/00a7de928184b1fd93184dcc561ae4ce666601a9))
+
+
 ## v2.3.0 (2026-08-01)
 
 ### Bug Fixes
