@@ -22,6 +22,7 @@ import numpy as np
 import pytest
 from pyimzml.ImzMLParser import ImzMLParser
 
+from tests.fixtures.imzml_parser import production_parser
 from thyra.convert import convert_msi
 from thyra.readers.imzml.imzml_reader import ImzMLReader
 
@@ -34,6 +35,12 @@ STEMS = [
     "two_scansettings",
     "two_precision_terms",
 ]
+
+# two_precision_terms declares its precision twice, which _validate_parser_state
+# refuses -- so it cannot be opened through the production reader. The corpus-wide
+# tests below use this list; the refusal itself is asserted in
+# TestTwoPrecisionTerms.
+READABLE_STEMS = [stem for stem in STEMS if stem != "two_precision_terms"]
 
 # Measured on the committed bytes. iontof_sparse.imzML is the only fixture
 # terminated with CRLF, and every one of its line breaks is one.
@@ -63,7 +70,7 @@ def raw_bytes(stem: str) -> bytes:
 class TestCorpusParsesThroughTheReader:
     """Every pair must survive the path production actually uses."""
 
-    @pytest.mark.parametrize("stem", STEMS)
+    @pytest.mark.parametrize("stem", READABLE_STEMS)
     def test_reader_opens_the_file(self, stem):
         """The fixture parses and reports coherent essential metadata."""
         reader = open_reader(stem)
@@ -78,7 +85,7 @@ class TestCorpusParsesThroughTheReader:
         finally:
             reader.close()
 
-    @pytest.mark.parametrize("stem", STEMS)
+    @pytest.mark.parametrize("stem", READABLE_STEMS)
     def test_spectra_round_trip_out_of_the_ibd(self, stem):
         """The hand-packed .ibd decodes to the values it was packed from.
 
@@ -399,11 +406,8 @@ class TestTwoPrecisionTerms:
         because a legal file may declare its precision in a *referenced* group
         -- so this fixture puts both terms where either form would see them.
         """
-        reader = open_reader("two_precision_terms")
-        try:
-            group = reader.parser.metadata.referenceable_param_groups[
-                reader.parser.mzGroupId
-            ]
+        with production_parser(fixture_path("two_precision_terms")) as parser:
+            group = parser.metadata.referenceable_param_groups[parser.mzGroupId]
             declared = {
                 name
                 for name in ("32-bit float", "64-bit float")
@@ -411,8 +415,6 @@ class TestTwoPrecisionTerms:
             }
 
             assert declared == {"32-bit float", "64-bit float"}
-        finally:
-            reader.close()
 
     def test_pyimzml_resolves_it_by_dict_insertion_order(self):
         """CHARACTERISATION of audit #7 -- lane I refuses this file.
@@ -425,14 +427,11 @@ class TestTwoPrecisionTerms:
         Lane I's ``_validate_parser_state()`` turns this into a raise; this
         assertion becomes ``pytest.raises`` in that diff.
         """
-        reader = open_reader("two_precision_terms")
-        try:
-            assert reader.parser.mzPrecision == "d"
-        finally:
-            reader.close()
+        with production_parser(fixture_path("two_precision_terms")) as parser:
+            assert parser.mzPrecision == "d"
 
-    def test_the_ambiguous_file_is_accepted_today(self):
-        """CHARACTERISATION of audit #7 -- lane I refuses this file.
+    def test_the_ambiguous_file_is_refused(self):
+        """The ambiguous declaration is refused. Inverted from characterisation.
 
         The .ibd here really is float64, so pyimzml's guess happens to be
         right and the file reads correctly. That is deliberate: the fixture
@@ -441,15 +440,18 @@ class TestTwoPrecisionTerms:
         declaration wrong on a genuinely float32 file and it decodes as float64
         garbage at the correct length, with ``convert_msi`` returning ``True``.
         """
-        reader = open_reader("two_precision_terms")
-        try:
-            mzs, _ = reader.parser.getspectrum(0)
+        with pytest.raises(ValueError, match="declares 2 precision terms"):
+            open_reader("two_precision_terms")
+
+        # The bytes really are float64, so what is refused is the ambiguous
+        # declaration and not unreadable data: read the same file through
+        # pyimzml directly and the values are exactly what was packed.
+        with production_parser(fixture_path("two_precision_terms")) as parser:
+            mzs, _ = parser.getspectrum(0)
 
             assert mzs.dtype == np.float64
             assert mzs[0] == pytest.approx(100.0)
             assert mzs[-1] == pytest.approx(500.0)
-        finally:
-            reader.close()
 
 
 def _git(*args: str) -> str:
