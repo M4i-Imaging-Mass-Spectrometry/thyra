@@ -849,16 +849,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         coords_df["spatial_y"] = coords_df["y"] * self.pixel_size_um
 
         # Always add per-pixel region numbers for a consistent schema.
-        region_map = getattr(self, "_region_map", None)
-        if region_map is not None:
-            region_numbers = np.full(pixel_count, -1, dtype=np.int32)
-            for i in range(pixel_count):
-                key = (int(x_values[i]), int(y_values[i]))
-                if key in region_map:
-                    region_numbers[i] = region_map[key]
-            coords_df["region_number"] = region_numbers
-        else:
-            coords_df["region_number"] = np.ones(pixel_count, dtype=np.int32)
+        coords_df["region_number"] = self.build_region_numbers(x_values, y_values)
 
         return coords_df
 
@@ -1042,6 +1033,11 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
             if total_nnz == 0:
                 logger.warning("No non-zero entries found!")
+
+            # The other paths set this in _finalize_data; the root attrs
+            # builder reads it for msi_dataset_info["non_empty_pixels"],
+            # which would otherwise report the initial 0 on this route.
+            self._non_empty_pixel_count = pixel_count
 
             # Build indptr from col_counts
             indptr = np.zeros(n_cols + 1, dtype=np.int64)
@@ -1352,10 +1348,6 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             pixel_count: Number of non-empty pixels.
             avg_spectrum_per_region: Per-region mean spectra, or None.
         """
-        from datetime import datetime
-
-        from ... import __version__
-
         slice_id = f"{self.dataset_id}_z0"
         region_key = f"{slice_id}_pixels"
         if self._dimensions is None:
@@ -1369,17 +1361,17 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # Create Zarr store
         store = zarr.open_group(str(self.output_path), mode="w")
 
-        # Root attributes
+        # Root attributes. Everything but ``spatialdata_attrs`` -- which
+        # describes the on-disk layout this method hand-writes, not the
+        # dataset -- comes from the shared builder, so a root attr added
+        # for the other paths reaches a PCS store too. This used to be six
+        # literals composed here and was short by ``coordinate_systems``,
+        # ``format_specific_metadata`` and ``msi_dataset_info``.
         store.attrs["spatialdata_attrs"] = {
             "version": "0.2",
             "spatialdata_software_version": "0.6.1",
         }
-        store.attrs["pixel_size_x_um"] = float(self.pixel_size_um)
-        store.attrs["pixel_size_y_um"] = float(self.pixel_size_um)
-        store.attrs["pixel_size_units"] = "micrometers"
-        store.attrs["coordinate_system"] = "physical_micrometers"
-        store.attrs["msi_converter_version"] = __version__
-        store.attrs["conversion_timestamp"] = datetime.now().isoformat()
+        store.attrs.update(self.build_root_attrs())
 
         # Create table structure
         tables_group = store.create_group("tables")
@@ -1466,6 +1458,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             "region",
             "spatial_x",
             "spatial_y",
+            "region_number",
             "instance_key",
         ]
 
@@ -1476,11 +1469,15 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         instance_ids = np.arange(n_rows, dtype=np.int64).astype(str_dtype)
         spatial_x = x_values.astype(np.float64) * self.pixel_size_um
         spatial_y = y_values.astype(np.float64) * self.pixel_size_um
+        region_numbers = self.build_region_numbers(x_values, y_values)
 
         a = obs_group.create_array("y", data=y_values)
         a.attrs["encoding-type"] = "array"
         a.attrs["encoding-version"] = "0.2.0"
         a = obs_group.create_array("x", data=x_values)
+        a.attrs["encoding-type"] = "array"
+        a.attrs["encoding-version"] = "0.2.0"
+        a = obs_group.create_array("region_number", data=region_numbers)
         a.attrs["encoding-type"] = "array"
         a.attrs["encoding-version"] = "0.2.0"
         a = obs_group.create_array("spatial_x", data=spatial_x)

@@ -1,4 +1,4 @@
-"""The provenance block in ``uns`` must survive, and agree, on every path.
+"""What a store records about itself must agree on every write path.
 
 A converted store is supposed to be able to say where it came from and how
 it was interpreted: ``uns["essential_metadata"]`` carries ``source_path``,
@@ -6,9 +6,9 @@ it was interpreted: ``uns["essential_metadata"]`` carries ``source_path``,
 that wrote it, and the sections beside it carry the vendor metadata.  Ousia
 reads those back out of the store; nothing else records them.
 
-There are three write paths and they had drifted:
+There are four write paths and they had drifted:
 
-* the in-memory converter and the streaming-COO path hand the table to
+* the in-memory converters and the streaming-COO path hand the table to
   anndata's writer, which serialises ``adata.uns`` as-is, and
 * the streaming-PCS path hand-writes the Zarr layout, and used to compose
   its own, much smaller block -- ``spectrum_type`` hardcoded to
@@ -31,11 +31,32 @@ literal, so a test could compare them and pass.  The fixture now reports a
 value from the vocabulary the real extractors produce; see the comment on
 it.
 
-These tests convert the same mock dataset down all three paths and compare
-what each one stored.
+``uns`` is not the only thing that drifted, and the same size gate decides
+all of it, so this file compares everything a store says about itself:
+
+* the ``uns`` provenance block,
+* the **root attributes** -- ``coordinate_systems``,
+  ``format_specific_metadata`` and ``msi_dataset_info`` were missing from a
+  PCS store, 7 attributes against 10 on real ``pea.imzML``.  The first of
+  those is the structured contract naming the unit ``"global"`` is in,
+  which Ousia and the registration tooling read rather than guess,
+* the **obs columns** -- PCS never wrote ``region_number``, and
+* the **row count** -- PCS wrote one row per grid position where the other
+  paths write one per acquired spectrum, so a polygon-shaped acquisition
+  came out with all-zero phantom rows (real ``pea``: 17,423 against
+  12,737, and ``shapes/`` tracked the phantoms).
+
+There is a fourth path, ``SpatialData3DConverter``, which the original
+version of this file did not cover.
+
+These tests convert the same mock dataset down all four paths and compare
+what each one stored.  The mock is deliberately **sparse** (``sparsity``
+below): on a fully populated grid "one row per grid position" and "one row
+per spectrum" are the same number, which is exactly why the phantom rows
+survived a green suite.
 """
 
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Tuple
 
 import numpy as np
 import pytest
@@ -45,6 +66,7 @@ from thyra.converters.spatialdata.base_spatialdata_converter import (
     SPATIALDATA_AVAILABLE,
 )
 from thyra.converters.spatialdata.spatialdata_2d_converter import SpatialData2DConverter
+from thyra.converters.spatialdata.spatialdata_3d_converter import SpatialData3DConverter
 from thyra.converters.spatialdata.streaming_converter import (
     StreamingSpatialDataConverter,
 )
@@ -59,6 +81,10 @@ _TABLE_NAME = f"{_DATASET_ID}_z0"
 _N_X = 6
 _N_Y = 6
 _N_MZ_BINS = 500
+# A quarter of the grid carries no spectrum, so the routes that write one
+# row per acquired spectrum and one that writes the whole grid disagree.
+_SPARSITY = 0.25
+_N_SPECTRA = _N_X * _N_Y - int(_N_X * _N_Y * _SPARSITY)
 
 # What the mock reader reports, and therefore what must come back out of
 # every store. Kept as literals rather than read off the fixture: the point
@@ -77,61 +103,75 @@ _EXPECTED_ESSENTIAL_KEYS = {
 
 def _config() -> MockMSIConfig:
     return MockMSIConfig(
-        n_x=_N_X, n_y=_N_Y, n_mz_bins=_N_MZ_BINS, peaks_per_spectrum=(20, 40)
+        n_x=_N_X,
+        n_y=_N_Y,
+        n_mz_bins=_N_MZ_BINS,
+        peaks_per_spectrum=(20, 40),
+        sparsity=_SPARSITY,
     )
+
+
+def _common(output_path) -> Dict[str, Any]:
+    return {
+        "reader": MockMSIReader(_config()),
+        "output_path": output_path,
+        "dataset_id": _DATASET_ID,
+        "pixel_size_um": 10.0,
+    }
 
 
 def _in_memory(output_path):
     """The default converter -- anything under the streaming threshold."""
-    return SpatialData2DConverter(
-        reader=MockMSIReader(_config()),
-        output_path=output_path,
-        dataset_id=_DATASET_ID,
-        pixel_size_um=10.0,
-    )
+    return SpatialData2DConverter(**_common(output_path))
 
 
 def _streaming_coo(output_path):
     """``streaming=True, use_csc=False`` -- writes via ``SpatialData.write()``."""
-    return StreamingSpatialDataConverter(
-        reader=MockMSIReader(_config()),
-        output_path=output_path,
-        dataset_id=_DATASET_ID,
-        pixel_size_um=10.0,
-        use_csc=False,
-    )
+    return StreamingSpatialDataConverter(**_common(output_path), use_csc=False)
 
 
 def _streaming_pcs(output_path):
     """``streaming=True, use_csc=True`` -- the hand-written Zarr layout."""
-    return StreamingSpatialDataConverter(
-        reader=MockMSIReader(_config()),
-        output_path=output_path,
-        dataset_id=_DATASET_ID,
-        pixel_size_um=10.0,
-        use_csc=True,
-    )
+    return StreamingSpatialDataConverter(**_common(output_path), use_csc=True)
 
 
-WRITE_PATHS: Dict[str, Callable] = {
-    "in_memory": _in_memory,
-    "streaming_coo": _streaming_coo,
-    "streaming_pcs": _streaming_pcs,
+def _volume_3d(output_path):
+    """``handle_3d=True`` -- one table for the whole volume, not per z-slice."""
+    return SpatialData3DConverter(**_common(output_path))
+
+
+# Name -> (factory, the table this path writes). The 3D converter emits a
+# single volume table named after the dataset; the others emit one per
+# z-slice and there is only ever a z0 here.
+WRITE_PATHS: Dict[str, Tuple[Callable, str]] = {
+    "in_memory": (_in_memory, _TABLE_NAME),
+    "streaming_coo": (_streaming_coo, _TABLE_NAME),
+    "streaming_pcs": (_streaming_pcs, _TABLE_NAME),
+    "volume_3d": (_volume_3d, _DATASET_ID),
 }
+
+# The three paths that write a 2D slice table. Their obs schemas must match
+# each other exactly; the volume table legitimately carries z as well.
+_SLICE_PATHS = ("in_memory", "streaming_coo", "streaming_pcs")
 
 
 def _convert(tmp_path_factory, path_name: str):
-    """Convert once through one write path; hand back the table group path."""
+    """Convert once through one write path; hand back the store root."""
+    factory, _ = WRITE_PATHS[path_name]
     output_path = tmp_path_factory.mktemp(f"prov_{path_name}") / "out.zarr"
-    converter = WRITE_PATHS[path_name](output_path)
-    assert converter.convert() is True, f"{path_name} conversion failed"
-    return output_path / "tables" / _TABLE_NAME
+    assert factory(output_path).convert() is True, f"{path_name} conversion failed"
+    return output_path
 
 
 @pytest.fixture(scope="module")
 def stores(tmp_path_factory) -> Dict[str, Any]:
     """One conversion per write path. Module-scoped: converting is the slow part."""
     return {name: _convert(tmp_path_factory, name) for name in WRITE_PATHS}
+
+
+def _table_path(stores, path_name: str):
+    """The table group inside a converted store."""
+    return stores[path_name] / "tables" / WRITE_PATHS[path_name][1]
 
 
 def _read_uns(table_path) -> Dict[str, Any]:
@@ -168,7 +208,7 @@ def test_essential_metadata_is_not_empty(stores, path_name):
     a store whose provenance is empty cannot say what it came from at
     all, which is worse than one that says something inaccurate.
     """
-    uns = _read_uns(stores[path_name])
+    uns = _read_uns(_table_path(stores, path_name))
 
     assert "essential_metadata" in uns, f"{path_name} wrote no essential_metadata"
     essential = uns["essential_metadata"]
@@ -185,7 +225,7 @@ def test_stored_spectrum_type_is_the_readers(stores, path_name):
     nor tell it apart from a real reading -- which is the whole failure:
     losing provenance *silently*.
     """
-    essential = _read_uns(stores[path_name])["essential_metadata"]
+    essential = _read_uns(_table_path(stores, path_name))["essential_metadata"]
 
     assert essential["spectrum_type"] == _EXPECTED_SPECTRUM_TYPE, (
         f"{path_name} stored spectrum_type={essential['spectrum_type']!r}; "
@@ -197,7 +237,7 @@ def test_stored_spectrum_type_is_the_readers(stores, path_name):
 @pytest.mark.parametrize("path_name", list(WRITE_PATHS))
 def test_essential_metadata_values_track_the_source(stores, path_name):
     """The rest of the block must describe the source, not the output."""
-    essential = _read_uns(stores[path_name])["essential_metadata"]
+    essential = _read_uns(_table_path(stores, path_name))["essential_metadata"]
     cfg = _config()
 
     assert essential["source_path"] == _EXPECTED_SOURCE_PATH
@@ -217,7 +257,7 @@ def test_vendor_sections_are_stored(stores, path_name):
     it empty and empty sections are omitted, so that a consumer can tell
     "this format has none" from "this one has none recorded".
     """
-    uns = _read_uns(stores[path_name])
+    uns = _read_uns(_table_path(stores, path_name))
 
     assert uns.get("format_specific") == {"format": "mock"}
     assert uns.get("instrument_info") == {"instrument": "mock"}
@@ -242,8 +282,12 @@ def test_every_path_stores_the_same_provenance(stores):
         "regions",
     )
     blocks = {
-        name: {k: _plain(v) for k, v in _read_uns(path).items() if k in provenance_keys}
-        for name, path in stores.items()
+        name: {
+            k: _plain(v)
+            for k, v in _read_uns(_table_path(stores, name)).items()
+            if k in provenance_keys
+        }
+        for name in WRITE_PATHS
     }
 
     reference_name = "in_memory"
@@ -254,6 +298,81 @@ def test_every_path_stores_the_same_provenance(stores):
         assert (
             block == reference
         ), f"{name} stored different provenance from {reference_name}"
+
+
+def _root_attrs(store_path) -> Dict[str, Any]:
+    """The store's own root attributes, as a plain dict."""
+    import zarr
+
+    return dict(zarr.open_group(str(store_path), mode="r").attrs)
+
+
+def test_every_path_writes_the_same_root_attrs(stores):
+    """The store's own attrs, the second half of what a store says about itself.
+
+    Same shape of invariant as the provenance comparison above and same
+    reason for existing: the PCS path composed its root attrs by hand and
+    was short by ``coordinate_systems``, ``format_specific_metadata`` and
+    ``msi_dataset_info``.  Compares the key *set*, since three of these
+    are timestamps, counts and versions that legitimately differ.
+    """
+    reference_name = "in_memory"
+    reference = set(_root_attrs(stores[reference_name]))
+
+    # Guard the guard: an empty or near-empty reference would make this
+    # pass for every path while checking nothing.
+    assert {
+        "coordinate_systems",
+        "format_specific_metadata",
+        "msi_dataset_info",
+    } <= reference
+
+    for name in WRITE_PATHS:
+        assert set(_root_attrs(stores[name])) == reference, (
+            f"{name} root attrs differ from {reference_name}: "
+            f"missing {sorted(reference - set(_root_attrs(stores[name])))}, "
+            f"extra {sorted(set(_root_attrs(stores[name])) - reference)}"
+        )
+
+
+def _read_obs(table_path):
+    """Read ``obs`` back eagerly, as a DataFrame."""
+    import anndata as ad
+    import zarr
+
+    return ad.io.read_elem(zarr.open_group(str(table_path), mode="r")["obs"])
+
+
+def test_slice_paths_write_the_same_obs_columns(stores):
+    """``obs`` schema parity across the three paths that write a slice table.
+
+    PCS hand-writes its ``obs`` group and simply had no ``region_number``
+    column, so a consumer that branches on it saw a different schema
+    depending on which side of ``PCS_SIZE_THRESHOLD_GB`` the dataset fell.
+    """
+    reference_name = "in_memory"
+    reference = set(_read_obs(_table_path(stores, reference_name)).columns)
+
+    assert "region_number" in reference
+
+    for name in _SLICE_PATHS:
+        assert (
+            set(_read_obs(_table_path(stores, name)).columns) == reference
+        ), f"{name} obs columns differ from {reference_name}"
+
+
+def test_volume_obs_adds_only_the_z_columns(stores):
+    """The volume table's schema is the slice schema plus depth, nothing else.
+
+    Asserted rather than skipped: "3D is different" is true only for the
+    two columns a volume needs, and anything else appearing or vanishing
+    there is the same class of drift this file exists to catch.
+    """
+    slice_columns = set(_read_obs(_table_path(stores, "in_memory")).columns)
+    volume_columns = set(_read_obs(_table_path(stores, "volume_3d")).columns)
+
+    assert volume_columns - slice_columns == {"z", "spatial_z"}
+    assert not slice_columns - volume_columns
 
 
 @pytest.mark.parametrize("path_name", list(WRITE_PATHS))
@@ -267,7 +386,7 @@ def test_read_lazy_sees_the_block(stores, path_name):
     """
     anndata = pytest.importorskip("anndata")
 
-    lazy = anndata.experimental.read_lazy(str(stores[path_name]))
+    lazy = anndata.experimental.read_lazy(str(_table_path(stores, path_name)))
     essential = lazy.uns["essential_metadata"]
 
     assert set(essential) == _EXPECTED_ESSENTIAL_KEYS

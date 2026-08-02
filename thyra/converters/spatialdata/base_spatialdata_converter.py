@@ -1370,17 +1370,41 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         )
         coords_df.set_index("instance_id", inplace=True)
 
-        region_map = getattr(self, "_region_map", None)
-        if region_map is not None:
-            keys = list(zip(x_idx.tolist(), y_idx.tolist()))
-            region_numbers = np.array(
-                [region_map.get(k, -1) for k in keys], dtype=np.int32
-            )
-            coords_df["region_number"] = region_numbers
-        else:
-            coords_df["region_number"] = np.ones(n_pixels, dtype=np.int32)
+        coords_df["region_number"] = self.build_region_numbers(x_idx, y_idx)
 
         return coords_df
+
+    def build_region_numbers(self, x_values, y_values) -> NDArray[np.int32]:
+        """``obs["region_number"]`` for the given pixel positions, in row order.
+
+        Written on every dataset for a consistent schema, so a consumer
+        does not have to branch on whether the acquisition had regions:
+        without a region map every pixel is region 1, which is also what
+        ``uns["regions"]`` reports for that case. Only the Bruker timsTOF
+        reader produces a map today; a position missing from it gets -1.
+
+        Shared because there are four places that build an obs table --
+        the in-memory 2D and 3D converters, the streaming-COO slice
+        builder and the hand-written PCS layout -- and each had its own
+        copy of this rule. The PCS one had no copy at all and simply
+        omitted the column.
+
+        Args:
+            x_values: Pixel x index per obs row.
+            y_values: Pixel y index per obs row.
+
+        Returns:
+            Region number per obs row.
+        """
+        n = len(x_values)
+        region_map = getattr(self, "_region_map", None)
+        if region_map is None:
+            return np.ones(n, dtype=np.int32)
+
+        keys = zip(x_values.tolist(), y_values.tolist())
+        return np.fromiter(
+            (region_map.get(key, -1) for key in keys), dtype=np.int32, count=n
+        )
 
     def _create_mass_dataframe(self) -> pd.DataFrame:
         """Create m/z dataframe for variable metadata.
@@ -2058,6 +2082,41 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # Add comprehensive dataset metadata if supported
         self._add_comprehensive_metadata(metadata)
 
+    def build_root_attrs(
+        self, comprehensive_metadata_obj: Any = None
+    ) -> Dict[str, Any]:
+        """The root-level attributes every write path must persist, identically.
+
+        The store's own attrs, as opposed to the table's ``uns`` block
+        :meth:`build_uns_metadata` owns. Sibling of that method and here for
+        the same reason: the streaming-PCS path hand-writes its Zarr layout
+        and composed its own, shorter set -- 7 attributes against 10 on real
+        ``pea.imzML``, missing ``coordinate_systems``,
+        ``format_specific_metadata`` and ``msi_dataset_info``.
+
+        ``coordinate_systems`` is the one that matters most in practice: it
+        is the structured contract saying what unit ``"global"`` is in, and
+        Ousia and the registration tooling read it rather than guessing.
+        A PCS store simply did not have it, and the route is chosen by size,
+        so the datasets that lost it are the largest ones.
+
+        Sections the reader has nothing for are omitted rather than written
+        empty, matching :meth:`build_uns_metadata`.
+
+        Args:
+            comprehensive_metadata_obj: Already-read comprehensive metadata,
+                when the caller has it. ``None`` reads it from the reader.
+
+        Returns:
+            Mapping of root attribute name to value.
+        """
+        if comprehensive_metadata_obj is None:
+            comprehensive_metadata_obj = self.reader.get_comprehensive_metadata()
+
+        attrs = self._create_pixel_size_attrs()
+        self._add_comprehensive_sections(attrs, comprehensive_metadata_obj)
+        return attrs
+
     def _setup_spatialdata_attrs(
         self, metadata: "SpatialData", comprehensive_metadata_obj
     ) -> None:
@@ -2067,14 +2126,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         logger.info("Adding comprehensive metadata to SpatialData.attrs")
 
-        # Create pixel size attributes
-        pixel_size_attrs = self._create_pixel_size_attrs()
-
-        # Add comprehensive metadata sections
-        self._add_comprehensive_sections(pixel_size_attrs, comprehensive_metadata_obj)
-
-        # Update SpatialData attributes
-        metadata.attrs.update(pixel_size_attrs)
+        metadata.attrs.update(self.build_root_attrs(comprehensive_metadata_obj))
 
     def _create_pixel_size_attrs(self) -> Dict[str, Any]:
         """Create pixel size and conversion metadata attributes."""
