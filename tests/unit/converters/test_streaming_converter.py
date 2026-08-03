@@ -245,8 +245,9 @@ def test_drop_empty_pixels_no_op_when_all_rows_have_data():
 def test_estimate_output_size_uses_real_bins_for_width_based_config():
     """Regression for #87: when ``target_bins`` is None, the size estimator
     must resolve the bin count via ``width_at_mz`` rather than fall back to a
-    hardcoded 10,000 placeholder. A 10k fallback would also pick the wrong
-    streaming method against ``PCS_SIZE_THRESHOLD_GB``.
+    hardcoded 10,000 placeholder. That fallback used to pick the wrong
+    streaming method as well; routing no longer depends on the estimate, so
+    what is left at stake is the number in the log.
     """
     reader = MockMSIReader(
         dimensions=(50, 50, 1),
@@ -680,8 +681,7 @@ def test_rectangular_grid():
     reason="SpatialData dependencies not available",
 )
 def test_auto_use_csc_mode_large_dataset():
-    """Test that auto mode selects CSC for large estimated datasets."""
-    # Create reader with large dimensions that exceeds PCS_SIZE_THRESHOLD_GB
+    """Auto mode selects the PCS (CSC) route, whatever the estimated size."""
     reader = MockMSIReader(
         dimensions=(100, 100, 1),  # 10000 pixels
         peaks_per_spectrum=500,
@@ -698,12 +698,9 @@ def test_auto_use_csc_mode_large_dataset():
             use_csc="auto",  # Auto mode
         )
 
-        # Check that auto mode correctly evaluates the threshold
-        # The _should_use_pcs method should be callable
-        should_use = converter._should_use_pcs()
-        # With 10000 pixels * 10000 m/z bins * 4 bytes ~ 0.37 GB
-        # This is below 50GB threshold, so should return False
-        assert isinstance(should_use, bool)
+        # ~0.37 GB estimated (10,000 pixels x 10,000 bins x 4 bytes), which
+        # under the old 30 GB gate sent this to COO. "auto" is PCS now.
+        assert converter._should_use_pcs() is True
 
 
 @pytest.mark.integration

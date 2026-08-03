@@ -17,13 +17,20 @@ There are four write paths and they had drifted:
   ``format_specific`` / ``instrument_info`` / ``raw_metadata`` / ``regions``
   dropped entirely.
 
-Which path a dataset takes is decided by size, in
+Which path a dataset took was decided by size at the time, in
 ``StreamingSpatialDataConverter._should_use_pcs`` -- so two acquisitions
 off the same instrument landed on opposite sides of the split and came out
-described differently.  On ``test_data/``: ``pea.imzML`` estimates 29.9 GB
+described differently.  On ``test_data/``: ``pea.imzML`` estimated 29.9 GB
 (COO, complete provenance) and ``bellini.imzML`` 43.3 GB (PCS, wrong
 ``spectrum_type``, everything else missing).  Ousia's import wizard forces
 ``use_csc=True``, so *every* wizard conversion took the PCS path.
+
+That size split is gone -- ``"auto"`` is PCS now, unconditionally -- which
+removes the *mechanism* that made two sibling datasets disagree but not the
+hazard: the paths still compose provenance separately, so a section added
+to one and not the other diverges just as silently. Hence this module keeps
+asserting parity across all of them rather than being retired with the
+threshold.
 
 Nothing caught it because ``MockMSIReader`` reported
 ``spectrum_type="processed"`` too -- the fixture agreed with the hardcoded
@@ -356,7 +363,7 @@ def test_slice_paths_write_the_same_obs_columns(stores):
 
     PCS hand-writes its ``obs`` group and simply had no ``region_number``
     column, so a consumer that branches on it saw a different schema
-    depending on which side of ``PCS_SIZE_THRESHOLD_GB`` the dataset fell.
+    depending on which side of the old size threshold the dataset fell.
     """
     reference_name = "in_memory"
     reference = set(_read_obs(_table_path(stores, reference_name)).columns)
