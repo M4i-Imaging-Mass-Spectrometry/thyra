@@ -259,10 +259,24 @@ for their respective zarrs.
 
 ## What if I open a zarr that doesn't have this attr?
 
-Older Thyra outputs (pre-schema) do not carry the
-``coordinate_systems`` attr. They are still readable, but you have
-to infer the convention from element layouts and accept some
-risk that two elements disagree silently.
+Two kinds of Thyra output lack the ``coordinate_systems`` attr, and
+the second is more recent than it looks:
+
+- **Anything written before v1.22.0**, which introduced the schema.
+- **Any store written by the streaming path with ``use_csc=True``,
+  up to and including v2.3.1.** That path hand-writes its Zarr root
+  attributes and its copy was short: 7 attrs against the 10 the
+  other three paths produce, missing ``coordinate_systems``,
+  ``format_specific_metadata`` and ``msi_dataset_info``. Fixed in
+  v3.0.0. This is the awkward one, because in those versions the
+  route was chosen by estimated size -- so the biggest datasets are
+  exactly the ones that lost it. (Since v3.1.1 that threshold is
+  gone and PCS is the streaming default, but by then the attr was
+  already being written.)
+
+Either way the store is still readable, but you have to infer the
+convention from element layouts and accept some risk that two
+elements disagree silently.
 
 If you control the data: **regenerate**. The schema is cheap to
 write and the resulting zarrs are self-describing forever after.

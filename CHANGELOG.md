@@ -100,6 +100,67 @@
 
 ## v3.0.0 (2026-08-02)
 
+<!-- Hand-written. The generator rendered this section empty; the six commits
+     below are `git log --no-merges v2.3.1..v3.0.0`. -->
+
+### Bug Fixes
+
+- **converters**: Drop the PCS path's phantom pixel rows, and refuse depth
+  ([`87f287c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/87f287c4b10b78ab3acea1a91d0bd2959a7be25b))
+
+- **converters**: Give the PCS store the root attrs and obs column it skipped
+  ([`2c719d4`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/2c719d4fbbd8d12416d16bf67b0fc488a79f9441))
+
+- **imzml**: Read file_mode and uuid from the file instead of by luck
+  ([`d61a09f`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/d61a09fa0e6324fd26e0f2cc382e433dfe5d1e7e))
+
+- **imzml**: Rebase z on the file instead of clamping z-1 at zero
+  ([`76c18b8`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/76c18b88eb9945cda58e4c749260e54f1525101e))
+
+- **metadata**: Refuse a dataset with no mass range instead of inventing one
+  ([`3cae48b`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/3cae48bceab94dceeadc50acb58e638447930f8f))
+
+- **resampling**: Drop out-of-range peaks instead of folding them into edge bins
+  ([`ef59115`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/ef591158e0f44d9370bee3f1759e58270f65d090))
+
+### Breaking Changes
+
+- A PCS store's row indices change. Nothing migrates an existing one.
+
+  The streaming-PCS path wrote one row per grid position where the other three
+  write one per acquired spectrum. Acquisitions are polygon-shaped and the grid
+  is their bounding box, so the corners came out as all-zero rows. On real
+  `pea.imzML` that is 17,423 rows against 12,737 spectra, 4,686 of them empty,
+  with a shapes polygon for each phantom. All four paths now agree at 12,737.
+
+  This affects any store written by the streaming path with `use_csc=True`,
+  which is chosen automatically for large datasets. Kept rows keep their *grid*
+  index as `instance_id`, gaps and all -- only the row offsets compact. The TIC
+  image stays full-grid, deliberately: it is a dense raster, not a per-pixel
+  table, which is why `sum(TIC) == sum(X)` still holds.
+
+  **Migration: reconvert.** Nothing rewrites an existing store in place, and
+  code that indexes rows positionally will read the wrong pixel. Index by
+  `instance_id` rather than by row offset and the change is invisible to you.
+
+  To tell the two layouts apart on disk, count the root attrs: a store written
+  before v3.0.0 by this path has 7, missing `coordinate_systems`,
+  `format_specific_metadata` and `msi_dataset_info` (see the second commit
+  above), and has no `obs/region_number` column. A v3.0.0 store has 10 and the
+  column, on every path.
+
+- `n_z > 1` is now refused on the streaming path rather than silently
+  flattened. The PCS scatter indexes rows by `y * n_x + x` with no z term, so a
+  multi-plane acquisition summed both planes onto one and returned success.
+  Use the 2D or 3D converter, which the refusal message names.
+
+- Stored values also change, without a row-layout change, for two inputs:
+  resampling with a narrowed mass range (`--resample-min-mz` /
+  `--resample-max-mz`) no longer piles the discarded part of every spectrum
+  onto the first and last bins, and a dataset from which no spectrum yields a
+  peak is now refused instead of being given an invented `(0.0, 1000.0)` mass
+  range that also sized the common axis.
+
 
 ## v2.3.1 (2026-08-02)
 
