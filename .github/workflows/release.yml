@@ -16,6 +16,25 @@ on:
         default: false
         type: boolean
 
+# Two merges landing close together used to race: each run checked out main,
+# spent ~25s installing semantic-release, and then both tried to push a version
+# commit. Run 30708175547 (merge of #138) died at exactly that -- "[LOCAL SHA]
+# != [UPSTREAM SHA]. Upstream branch 'origin/main' has changed!" -- because #139
+# pushed 29 seconds earlier. Serialising the whole workflow is what fixes it.
+#
+# cancel-in-progress MUST stay false. `semantic-release version` creates the
+# version commit and the tag and then pushes them; cancelling between those
+# steps leaves the repo tagged-but-not-bumped, which is far worse than a queued
+# run. Nothing here is safe to interrupt.
+#
+# The group is keyed on the event as well as the ref so a publish-only
+# workflow_dispatch is not stuck behind a push run -- it never calls
+# semantic-release (the release job is `if: github.event_name == 'push'`), so it
+# has nothing to race with. Only push-to-main runs need to serialise.
+concurrency:
+  group: release-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
     name: Create Release
@@ -79,6 +98,15 @@ jobs:
 
           # Past this point $NEXT is a genuine bump, so an existing tag really
           # does mean another run got there first.
+          #
+          # Re-fetch before asking. Checkout does fetch every tag (fetch-depth: 0
+          # fetches refs/tags/* regardless of fetch-tags), but it did so before
+          # the ~25s pip install above, so the local tag list is a stale
+          # snapshot. A sibling run that tagged inside that window is invisible
+          # here, and the guard waves it through. --force because a tag that
+          # moved must not be silently kept at its old value.
+          git fetch --tags --force origin
+
           if git rev-parse -q --verify "refs/tags/v$NEXT" >/dev/null; then
             echo "No release: v$NEXT is a new version but is already tagged -- a concurrent run created it."
             echo "released=false" >> $GITHUB_OUTPUT
