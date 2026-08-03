@@ -68,6 +68,22 @@ python = ">=3.12, <3.14"
 # exercises exactly this pip-resolved path so these bounds stay honest.
 # Bump the ceilings deliberately after re-testing against newer releases.
 dask = ">=2026.3.0, <2026.8"        # tested 2026.7.1 (spatialdata 0.8.0 needs >=2026.3.0)
+# The CLI is built on click -- `thyra/__main__.py` imports it at module scope,
+# so the `thyra` console script cannot start without it. It went undeclared
+# for the project's whole history before this line, and resolved only by
+# accident: dask requires click >=8.1, so every resolution to date happened
+# to supply one. That is luck, not a guarantee. If
+# dask ever drops or vendors click, `pip install thyra` yields an install
+# whose entry point dies with `ImportError: No module named 'click'` on the
+# first run, at __main__.py's import line, before any command executes.
+# The floor matches dask's own and the version the lockfile resolves. The
+# ceiling is `<9` because GroupedCommand subclasses click.Command and
+# overrides format_help(): a major release is free to change that. Verified
+# --help (including the grouped sections), --version and the Choice/IntRange
+# validators render identically on 8.1.8 (the lockfile, held there by
+# python-semantic-release's dev-only `<8.2` cap) and on 8.4.2, which is what
+# a plain `pip install thyra` resolves today and the lockfile never exercises.
+click = ">=8.1, <9"                 # tested 8.1.8 and 8.4.2
 defusedxml = ">=0.7.1"  # Secure XML parsing for the Bruker Rapiflex reader
 geopandas = ">=0.9.0"
 lxml = ">=4.6.0"
@@ -110,6 +126,20 @@ imagecodecs = ">=2024.1.1"  # For reading compressed TIFF optical images
 # that coercion was deleted when this floor moved. See issue #117.
 anndata = ">=0.13.2, <0.14"         # tested 0.13.2
 psutil = ">=5.0.0"
+# Imported directly, not merely re-exported through spatialdata: tifffile by
+# converters/spatialdata/base_spatialdata_converter.py, xarray by that module
+# and the 2D, 3D and streaming converters. Both arrive transitively today
+# (spatialdata requires xarray >=2024.10.0 outright; tifffile comes in behind
+# scikit-image and dask-image), so this is the same undeclared-direct-import
+# defect as click above -- but a quieter one. Their imports sit inside the
+# SPATIALDATA_AVAILABLE try/except, so losing either degrades instead of
+# crashing: every converter is replaced by a dummy and the run reports
+# "SpatialData dependencies not available" rather than naming the real cause.
+# Floors only, and deliberately so. They restate what the existing requirers
+# already demand, which makes the direct dependency honest without asserting
+# an upper bound nothing here has tested; the resolved set does not move.
+tifffile = ">=2022.8.12"
+xarray = ">=2024.10.0"
 
 [tool.poetry.group.test.dependencies]
 pytest = ">=7.0.0"
