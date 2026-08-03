@@ -106,9 +106,31 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install .
-        pip install pytest pytest-cov mock
     - name: Report the resolved dependency set
       run: pip list
+    - name: Verify the installed console script actually runs
+      # Deliberately placed BEFORE the test-only installs, so this runs
+      # against exactly the closure pyproject.toml declares and nothing
+      # else: a dependency supplied only by pytest/mock cannot mask a
+      # missing declaration here.
+      #
+      # `pip install .` can succeed while the shipped entry point is
+      # unusable. `click` was imported at module scope by thyra/__main__.py
+      # and declared nowhere in pyproject.toml, surviving only because dask
+      # happens to require it; the day that stopped being true, this job
+      # would have gone green and `thyra --help` would have raised
+      # ImportError for the user. Executing the console script is what
+      # closes that gap -- importing the package is not enough, because
+      # the entry point in [tool.poetry.scripts] is itself untested code.
+      #
+      # Run from outside the checkout so this exercises the INSTALLED
+      # distribution and cannot silently fall back to the repo's ./thyra.
+      run: |
+        cd /tmp
+        thyra --version
+        thyra --help
+    - name: Install the test-only dependencies
+      run: pip install pytest pytest-cov mock
     - name: Verify save / read-back round-trip on the resolved set
       # thyra + its dependencies come from the non-editable pip install
       # above; PYTHONPATH only puts the repo root on sys.path so the
