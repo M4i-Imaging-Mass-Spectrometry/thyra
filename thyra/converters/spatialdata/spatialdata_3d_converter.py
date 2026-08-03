@@ -272,12 +272,17 @@ class SpatialData3DConverter(BaseSpatialDataConverter):
         n_x, n_y, n_z = self._dimensions
 
         if n_z > 1:
-            # True 3D TIC image
+            # True 3D TIC image. The accumulator is indexed [y, x, z] (see
+            # _create_data_structures), while Image3DModel declares
+            # (c, z, y, x) -- so the axes have to be *moved*. This used to
+            # relabel the shape instead, which reshapes nothing and left
+            # every volume whose extents were not all equal permuted: a
+            # 5(x) x 3(y) x 2(z) acquisition was stored as (1, 3, 5, 2).
             tic_values = data_structures["tic_values"]
-            z_size, y_size, x_size = tic_values.shape
+            tic_values_zyx = np.transpose(tic_values, (2, 0, 1))
 
             # Add channel dimension for 3D image
-            tic_values_with_channel = tic_values.reshape(1, z_size, y_size, x_size)
+            tic_values_with_channel = tic_values_zyx[np.newaxis, ...]
 
             # The image is intrinsically in raster pixel indices.
             # Scale into physical micrometers so "global" agrees with
