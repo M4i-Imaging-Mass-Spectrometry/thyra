@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v3.2.2 (2026-08-03)
+
+### Bug Fixes
+
+- **converters**: Keep a volume's pixel footprints two-dimensional
+  ([`110d5e7`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/110d5e78ba898af8db18620ce9fd3398704aa3bd))
+
+
 ## v3.2.1 (2026-08-03)
 
 ### Bug Fixes
