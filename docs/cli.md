@@ -9,9 +9,10 @@ thyra [OPTIONS] INPUT OUTPUT
 **OUTPUT** -- Path for output `.zarr` directory
 
 !!! tip "Grouped help"
-    Run `thyra --help` to see all options organised by category (Conversion,
-    Logging, Resampling, Performance, Bruker-Specific, Other), and
-    `thyra --version` to print the installed version.
+    `thyra --help` lists every option under a category heading -- Conversion,
+    Logging, Resampling (advanced), Performance, imzML-specific,
+    Bruker-specific, Other, and a General section holding `--version` and
+    `--help` -- in the same order as the sections on this page.
 
 ---
 
