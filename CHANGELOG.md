@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v3.2.0 (2026-08-03)
+
+### Documentation
+
+- **output-format**: Retire the "pixel shapes are still 2D" limitation
+  ([`c42b7b2`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/c42b7b2293d2bda99889d944bd0dbd2c6733ba1d))
+
+### Features
+
+- **converters**: Give a volume's pixel footprints their slice depth
+  ([`7317792`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/7317792a79f5fe55a9306edf2934cf5348ada494))
+
+
 ## v3.1.1 (2026-08-03)
 
 ### Performance Improvements
