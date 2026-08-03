@@ -2,6 +2,36 @@
 
 <!-- version list -->
 
+## v3.0.1 (2026-08-03)
+
+### Bug Fixes
+
+- **converters**: Store the 3D TIC volume on the axes it declares
+  ([`4f0cf46`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/4f0cf468591230db6fddb65ce5278cb1b3718b59))
+
+### Documentation
+
+- Correct six false statements and document the preview entry point
+  ([`7756a4b`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/7756a4bf2dc7066c66150d074fa7cf59808a4593))
+
+- **handouts**: Add the loose-ends handout and refresh the index
+  ([`36ea1fe`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/36ea1fe0c5fea05594ecb79b7ef9e904ac74e3c3))
+
+- **handouts**: Record that the release-actor bypass does not exist
+  ([`7ab456d`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/7ab456d7ea38a73b5a6b4d610e6e855cfb7ba856))
+
+- **handouts**: Route the index to what is actually open
+  ([`97a1928`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/97a1928a9ac51ae20609a43ad0fda0dc7562d245))
+
+- **tests**: Record what the local imzML corpus can and cannot exercise
+  ([`fcad673`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/fcad67361928dd918c6e396a2b035f5349cc0d74))
+
+### Testing
+
+- Repair the integration lane's streaming-converter fixtures
+  ([`6247407`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/624740741cf00ddcb703f9407189d9fe68b17835))
+
+
 ## v3.0.0 (2026-08-02)
 
 
