@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v3.0.2 (2026-08-03)
+
+### Bug Fixes
+
+- **converters**: Guard the streaming COO path against out-of-grid coordinates
+  ([`2012287`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/2012287acbf56d74d72b985e20e1376116fd22d5))
+
+### Documentation
+
+- **handouts**: Mark H's remaining item blocked, not merely open
+  ([`5ac757a`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/5ac757a8a3abe99a85718a0b25fb7bd7a2e7b76b))
+
+### Testing
+
+- **converters**: Assert a named pixel's stored spectrum on all three write paths
+  ([#150](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/150),
+  [`3caad06`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/3caad062d3e63e73a86b5d5e8b964fb0b5212b9f))
+
+
 ## v3.0.1 (2026-08-03)
 
 ### Bug Fixes
