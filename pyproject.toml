@@ -12,7 +12,7 @@ license = "MIT"
 readme = "README.md"
 homepage = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra"
 repository = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra"
-documentation = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra#readme"
+documentation = "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/"
 keywords = [
     "mass-spectrometry",
     "imaging",
@@ -50,7 +50,9 @@ packages = [{include = "thyra"}]
 "Bug Tracker" = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues"
 "Discussions" = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/discussions"
 "Changelog" = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/blob/main/CHANGELOG.md"
-"Contributing" = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/blob/main/CONTRIBUTING.md"
+# There is no CONTRIBUTING.md at the repository root; the guide lives at
+# docs/contributing.md and is published as this page.
+"Contributing" = "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/contributing/"
 
 [tool.poetry.dependencies]
 python = ">=3.12, <3.14"

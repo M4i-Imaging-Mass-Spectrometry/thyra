@@ -287,8 +287,13 @@ the vendor's `libtimsdata.so` / `libtimsdata.dylib` to be installed separately.
 
 ### Pixel size not detected
 
-If Thyra cannot find pixel size metadata, it will ask for a manual value. You can
-also pass it explicitly:
+Thyra never prompts for one. If the source metadata declares no pixel size the
+run fails immediately -- before the converter is built, so nothing is written
+and there is no partial store to clean up -- logging `Pixel size not found in
+metadata` followed by `Use --pixel-size parameter (e.g., --pixel-size 25)`, and
+exits 1.
+
+Pass the value yourself and re-run:
 
 ```bash
 thyra input.imzML output.zarr --pixel-size 50

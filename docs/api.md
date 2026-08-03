@@ -1,9 +1,10 @@
 # API Reference
 
-Thyra's Python API centres on a single function: `convert_msi`. For most use
-cases, that is all you need. The remaining sections document configuration
-types, metadata objects, and base classes for advanced users who want to inspect
-results or extend Thyra with new formats.
+Thyra's Python API centres on two functions: `convert_msi`, which does the
+work, and `preview_msi`, which tells you what an input is without converting
+it. For most use cases those are all you need. The remaining sections document
+configuration types, metadata objects, and base classes for advanced users who
+want to inspect results or extend Thyra with new formats.
 
 ---
 
@@ -17,7 +18,7 @@ a SpatialData/Zarr directory.
 ```python
 from thyra import convert_msi
 
-# Minimal -- auto-detects format, pixel size, resampling, and streaming
+# Minimal -- auto-detects format, pixel size, and streaming
 success = convert_msi("input.imzML", "output.zarr")
 
 # With explicit parameters
@@ -28,6 +29,13 @@ success = convert_msi(
     pixel_size_um=10.0,
 )
 ```
+
+!!! warning "The Python API does not resample by default"
+    `resampling_config` defaults to `None`, and nothing builds one for you, so
+    the call above keeps the original mass axis. The `thyra` command-line tool
+    is the opposite -- it resamples unless you pass `--no-resample`, because
+    the default is applied in the CLI layer rather than in `convert_msi`. Pass
+    a `resampling_config` explicitly to get the CLI's behaviour from Python.
 
 ### With resampling configuration
 
@@ -45,13 +53,29 @@ success = convert_msi(
 
 ### Multi-region dataset (select one region)
 
+`region` takes either a `.mis` Area Name or a DB RegionNumber. A string is
+matched against the area names first and only parsed as a number if no name
+matches, so the two forms below are not interchangeable -- area `'03'` need not
+be RegionNumber 3.
+
 ```python
+# By the name flexImaging gives the area
 success = convert_msi(
     "data/slide.d",
     "output/tissue_only.zarr",
-    region=0,  # convert only region 0
+    region="03",
+)
+
+# By the database's own region number, which starts at 0
+success = convert_msi(
+    "data/slide.d",
+    "output/tissue_only.zarr",
+    region=0,
 )
 ```
+
+Thyra logs the RegionNumber-to-Area-Name mapping at `INFO` when it opens a
+multi-region dataset. See [`--region`](cli.md#conversion) for the detail.
 
 ### Force streaming for large datasets
 
@@ -66,6 +90,65 @@ success = convert_msi(
 ### Full signature
 
 ::: thyra.convert.convert_msi
+
+---
+
+## Previewing an Input
+
+`preview_msi` answers "what is this file?" without converting it. It detects
+the format, builds the reader, and reads metadata only -- no spectra are
+decoded and no store is written -- so it is cheap enough to call while a user
+waits. It is the entry point behind the Ousia import wizard's per-sample
+preview card.
+
+Two properties make it usable directly from UI code:
+
+- **It never raises.** Any failure -- a path that does not exist, an
+  unrecognised format, a truncated file -- comes back as an `MsiPreview` with
+  `readable=False` and `error` set to the message. Check `readable` before
+  reading the numeric fields; they hold zeroes when it is `False`.
+- **It is fast.** The design budget is under 500 ms for inputs up to about
+  50 GB, because it never touches the spectra.
+
+```python
+from pathlib import Path
+
+from thyra import preview_msi
+
+p = preview_msi(Path("example_data/synthetic_brain.imzML"))
+
+if p.readable:
+    print(p.grid_dims)        # (48, 36)
+    print(p.n_pixels)         # 1728
+    print(p.mz_range)         # (250.0, 1200.0)
+    print(p.pixel_size_um)    # 25.0
+    print(p.instrument_type)  # AxisType.CONSTANT
+else:
+    print("cannot read:", p.error)
+```
+
+Failure looks the same shape, which is the point:
+
+```python
+p = preview_msi(Path("no/such/file.imzML"))
+print(p.readable, p.error)
+# False Path does not exist: no\such\file.imzML
+```
+
+`instrument_type` is the `AxisType` the resampling decision tree would pick for
+this input, so a caller can show the default before the user commits to it.
+`has_escdat_folder` reports whether `<path>/EscDat/` exists, which is how a
+downstream tool decides whether EscDat-derived registration is available.
+
+::: thyra.preview.preview_msi
+    options:
+      show_root_heading: true
+      heading_level: 3
+
+::: thyra.preview.MsiPreview
+    options:
+      show_root_heading: true
+      heading_level: 3
 
 ---
 

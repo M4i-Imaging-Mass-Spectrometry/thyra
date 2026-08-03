@@ -34,7 +34,7 @@ The output is a single SpatialData/Zarr directory containing intensity matrices,
 | **Scale** | Memory efficient | Streaming mode for 100+ GB datasets |
 | **Optics** | Optical alignment | Automatic MSI-to-microscopy registration (Bruker) |
 | **Regions** | Multi-region | Handles slides with multiple tissue sections |
-| **Resampling** | Physics-aware | Instrument-specific mass axis resampling (on by default) |
+| **Resampling** | Physics-aware | Instrument-specific mass axis resampling (on by default in the CLI, opt-in from the Python API) |
 | **3D** | Volume support | Process as 3D volume or separate 2D slices |
 | **Platform** | Cross-platform | Windows, macOS, Linux |
 

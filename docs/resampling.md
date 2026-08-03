@@ -228,7 +228,7 @@ source m/z before its interpolated value is discarded instead of trusted. It is
 the same parameter Cardinal calls `tolerance` and matter calls `tol`.
 
 ```bash
-thyra convert data.imzML out.zarr \
+thyra data.imzML out.zarr \
   --resample-method tic_preserving \
   --resample-gap-tolerance 0.1
 ```
@@ -326,9 +326,25 @@ INFO - Calculated 190000 bins for constant axis type
 INFO - Building resampled mass axis: 250.00 - 1200.00 m/z, 190000 bins
 ```
 
-190,000 bins from 4,000 source points sounds extravagant, but the matrix is
-stored sparsely, so the store stays small -- roughly 29 MB here. Pass
-`--resample-bins` or `--no-resample` if you would rather not upsample.
+190,000 bins from 4,000 source points sounds extravagant, and on the
+`nearest_neighbor` path -- which is what `auto` picks for this dataset -- it
+very nearly is free. Each source point lands in exactly one bin, so the
+non-zero count does not depend on the bin width at all and only the index
+arrays lengthen: the tutorial store comes out at roughly 31 MB, and going from
+4,000 bins to 190,000 costs about +0.8% on disk.
+
+!!! warning "That only holds for `nearest_neighbor`"
+    `tic_preserving` interpolates, so it populates essentially every bin. The
+    matrix comes out 99.998% dense and the store becomes
+    `n_pixels x target_bins x ~7.5 bytes` -- independent of how sparse the
+    source was. Measured on this same 4,000-point source: at 190,000 bins it
+    costs 1.44 MB per pixel, so 400 pixels take 574 MB against 6.93 MB at
+    4,000 bins, an 82.9x blowup, and the 1,728-pixel tutorial dataset would
+    take roughly 2.5 GB.
+
+    On that path the default bin count is a decision rather than a detail.
+
+Pass `--resample-bins` or `--no-resample` if you would rather not upsample.
 
 ### The 10 million bin cap
 
