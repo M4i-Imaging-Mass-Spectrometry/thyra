@@ -15,6 +15,34 @@ on:
 permissions:
   contents: write
 
+# Every run of this workflow ends in `mkdocs gh-deploy --force`, which force-pushes
+# the whole built site over gh-pages. Two runs overlapping is therefore a lost-update
+# race, and the loser is decided by build duration, not by commit order: on
+# 2026-08-03 the merges of #146 and #148 started one second apart (10:36:11 and
+# 10:36:12) and took 1m25s and 2m59s. The newer content happened to finish last, so
+# the site is correct. Reverse the durations and #146's checkout -- which predates
+# #148's changes to 9 doc files -- would have force-pushed over them. Both runs
+# still report success and neither log mentions the other, so the only symptom is a
+# published site silently missing merged documentation.
+#
+# Unlike release.yml's group, this one is deliberately NOT keyed on the event or the
+# ref. There is exactly one gh-pages branch, so a workflow_dispatch and a push to
+# main are contending for the same force-push and must serialise against each other.
+# Keying the group would let precisely the two runs that conflict run concurrently.
+#
+# cancel-in-progress stays false, but not because gh-deploy is fragile -- it is not.
+# It publishes via `git fast-import` into a local ref and one `git push --force`,
+# never a gh-pages working tree, and a remote ref update is atomic, so a killed push
+# leaves gh-pages untouched. The reason is that cancellation is not synchronous: a
+# cancelled step gets SIGINT, 7.5s, SIGTERM, 2.5s before its process tree is killed,
+# and nothing documents that a queued run waits for that to finish. With `true` the
+# older run's force-push can still be in flight when the newer run starts, which
+# reintroduces the exact race this group exists to remove. Queueing has no such
+# window.
+concurrency:
+  group: pages-deploy
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
