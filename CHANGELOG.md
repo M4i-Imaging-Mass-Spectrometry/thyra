@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v3.2.1 (2026-08-03)
+
+### Bug Fixes
+
+- **converters**: Stop the PCS pre-scan sizing columns for spectra it skips
+  ([`b8ef02a`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/b8ef02ae885c621fd6423a69058d3391cddc8264))
+
+### Documentation
+
+- **changelog**: Backfill the v3.0.0 entry the generator dropped
+  ([`f831c28`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f831c286d36c95c6073c04d2bb640ed8bb6a50ac))
+
+
 ## v3.2.0 (2026-08-03)
 
 ### Documentation
