@@ -38,6 +38,13 @@ A converted dataset contains the following elements:
     rather than one 2D image per slice — see
     [3D Data / Z-Slices](#3d-data--z-slices).
 
+    The pixel shapes become `POLYGON Z`: each footprint is a flat square at the
+    micrometre depth of its own slice, so they meet the volume in z as well as
+    in x and y. They are footprints, not voxels — the extent in z is the slice
+    spacing and belongs to the image. See
+    [Coordinate systems](coordinate-systems.md) for why a `Translation` is not
+    used instead, and for the `UserWarning` spatialdata emits on 3D shapes.
+
 !!! tip "Default dataset ID"
     The default `dataset_id` is `msi_dataset`, so typical keys look like
     `msi_dataset_z0`, `msi_dataset_z0_tic`, etc. Change it with `--dataset-id`.
