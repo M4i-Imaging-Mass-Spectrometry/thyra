@@ -1278,18 +1278,28 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
                 nnz = len(mz_indices)
                 if nnz > 0:
-                    # Count entries per column (vectorized)
-                    np.add.at(col_counts, mz_indices, 1)
-                    total_nnz += nnz
-
-                    # Accumulate for average spectrum (vectorized)
+                    # Accumulate for average spectrum (vectorized). Left
+                    # outside the bounds check to match the COO pre-scan,
+                    # which also averages over every spectrum read rather
+                    # than every spectrum stored.
                     np.add.at(total_intensity, mz_indices, resampled_ints)
 
-                    # TIC and occupancy. Both are indexed by grid position,
-                    # so both need the bounds check: a reader yielding a
+                    # Column counts, TIC and occupancy all describe a
+                    # spectrum that is going to get a row, so all three sit
+                    # behind the bounds check: a reader yielding a
                     # coordinate outside the declared dimensions would
                     # otherwise wrap round and land on an unrelated pixel.
+                    #
+                    # col_counts and total_nnz size the CSC arrays, and the
+                    # scatter pass skips exactly the spectra this rejects
+                    # (row_of_grid gives them no row). Counting them here
+                    # reserved slots nothing ever wrote: the memmap is
+                    # zero-filled, so they surfaced as explicit zeros at
+                    # row 0, out of order within their column, which is a
+                    # matrix scipy reports as non-canonical.
                     if 0 <= y < n_y and 0 <= x < n_x:
+                        np.add.at(col_counts, mz_indices, 1)
+                        total_nnz += nnz
                         tic_values[y, x] = resampled_ints.sum()
                         occupancy[y * n_x + x] = True
                     else:
