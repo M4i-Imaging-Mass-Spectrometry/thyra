@@ -246,9 +246,7 @@ class SpatialData3DConverter(BaseSpatialDataConverter):
 
             # Add to tables and create shapes
             data_structures["tables"][self.dataset_id] = table
-            data_structures["shapes"][region_key] = self._create_pixel_shapes(
-                adata, is_3d=True
-            )
+            data_structures["shapes"][region_key] = self._create_pixel_shapes(adata)
 
             # Create TIC image
             self._create_tic_image(data_structures)

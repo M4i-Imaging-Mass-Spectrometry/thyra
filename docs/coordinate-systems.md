@@ -113,29 +113,45 @@ meaningful frame is **physical micrometers of the imaged tissue**.
 
 Both elements resolve to the same micrometer extent at ``"global"``.
 
-For a **multi-slice volume** (``--handle-3d`` over more than one plane) that
-holds in z as well. The pixel polygons are ``POLYGON Z``: a flat square at the
-micrometre depth of the slice it was acquired on, taken from the same
-``obs["spatial_z"]`` the table stores. So the deepest footprint sits at
-``(n_z - 1) * z_spacing_um``, which is where the TIC volume's last plane lands
-under its own ``Scale``.
+For a **multi-slice volume** (``--handle-3d`` over more than one plane) the
+promise holds in x and y, and is **deliberately silent in z for the shapes
+element**. The TIC volume carries the depth on its ``Scale``, and every table
+row carries it in ``obs["spatial_z"]``; the pixel polygons stay
+two-dimensional and make no claim about depth at all.
 
-These are **footprints, not voxels**. A pixel is its square at one depth, not a
-solid spanning the slice thickness — shapely has no solid geometry. The extent
-in z is the slice spacing, carried by the image.
+So a volume's elements agree like this:
 
-!!! note "Reading 3D shapes"
-    ``spatialdata``'s shapes model is 2D, so it emits a ``UserWarning`` that
-    "2 is expected" whenever these are parsed, validated or transformed. The
-    geometry is nonetheless carried and transformed correctly, verified
-    through a zarr round trip and a ``Scale`` into ``"global"``. The warning
-    is left unsuppressed: it is upstream stating the limits of its model, and
-    silencing it would hide that from consumers.
+| Element | x, y at ``"global"`` | z at ``"global"`` |
+|---------|---------------------|-------------------|
+| TIC volume | ``Scale([pixel_size_um, pixel_size_um])`` | ``Scale([z_spacing_um])`` |
+| Table | ``spatial_x``, ``spatial_y`` | ``spatial_z`` |
+| Pixel shapes | micrometres, ``Identity`` | **absent** — join via ``spatial_z`` |
 
-    Expressing the depth as a ``Translation`` on flat 2D geometry — the
-    obvious alternative — does **not** work. The transform silently drops z
-    and returns flat polygons, leaving a depth that exists only in the
-    metadata. ``tests/unit/converters/test_3d_pixel_shapes_z.py`` pins that.
+!!! note "Why the footprints carry no depth"
+    They briefly did. v3.2.0 made them ``POLYGON Z`` at the depth of their
+    slice, which is the geometrically honest representation, and it broke
+    ``spatialdata``'s spatial queries: a bounding box enclosing an entire test
+    volume returned 26 of 30 footprints and 26 of 30 table rows, silently. A
+    z-restricted query returned the same rows whether z was inside or far
+    outside the data.
+
+    Upstream asks for 2D here. ``ShapesModel.validate`` warns that a
+    3-dimensional geometry column "could led to unexpected behaviors" and
+    names ``force_2d()`` as the remedy — the query result above is that
+    behaviour. 3D shapes are not on the spatialdata roadmap
+    ([#109](https://github.com/scverse/spatialdata/issues/109), idle since
+    June 2023, covers images, labels and transformations), and the live 2.5D
+    discussion ([#961](https://github.com/scverse/spatialdata/issues/961))
+    scopes itself to points, images and labels. Serial-section MSI is 2.5D in
+    that taxonomy.
+
+    Expressing the depth as a ``Translation`` on flat geometry — the obvious
+    remaining alternative — does **not** work either: the transform silently
+    drops z, leaving a depth that exists only in metadata.
+
+    Both negative results are pinned by
+    ``tests/unit/converters/test_3d_pixel_shapes_z.py``. If either starts
+    passing, upstream has changed and this decision should be reopened.
 
 ### Mode B: with FlexImaging optical alignment
 

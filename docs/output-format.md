@@ -36,14 +36,13 @@ A converted dataset contains the following elements:
     slices are merged into a single table with `x`, `y`, `z` coordinates in
     `.obs`. The TIC image becomes a single **volume** of shape `(c, z, y, x)`
     rather than one 2D image per slice — see
-    [3D Data / Z-Slices](#3d-data--z-slices).
+    [3D Data / Z-Slices](#3d-data-z-slices).
 
-    The pixel shapes become `POLYGON Z`: each footprint is a flat square at the
-    micrometre depth of its own slice, so they meet the volume in z as well as
-    in x and y. They are footprints, not voxels — the extent in z is the slice
-    spacing and belongs to the image. See
-    [Coordinate systems](coordinate-systems.md) for why a `Translation` is not
-    used instead, and for the `UserWarning` spatialdata emits on 3D shapes.
+    The pixel shapes stay two-dimensional: one flat square per pixel per slice,
+    carrying no depth. Read a pixel's depth from the table's `spatial_z`
+    instead. See [Pixel footprints in a volume](#pixel-footprints-in-a-volume)
+    for why, and [Coordinate systems](coordinate-systems.md) for how the three
+    elements line up.
 
 !!! tip "Default dataset ID"
     The default `dataset_id` is `msi_dataset`, so typical keys look like
@@ -308,7 +307,7 @@ replaced by one **volume**:
 |---------|-----|--------------|
 | **Table** | `{dataset_id}` | pixels x m/z, with `x`, `y`, `z` and `spatial_x`, `spatial_y`, `spatial_z` in `.obs` |
 | **TIC volume** | `{dataset_id}_tic` | `(c, z, y, x)` — one channel, then the three spatial axes |
-| **Pixel Shapes** | `{dataset_id}_pixels` | GeoDataFrame of `POLYGON Z` footprints, each at its slice's depth |
+| **Pixel Shapes** | `{dataset_id}_pixels` | GeoDataFrame of 2D pixel boxes — one per pixel per slice, no z |
 
 ```python
 volume = sdata.images[f"{dataset_id}_tic"]
@@ -350,7 +349,7 @@ A `z_spacing_source` of `"assumed_isotropic"` means **nobody supplied a spacing
 and the in-plane pitch was reused** — treat the depth as unknown rather than as
 measured. Section thickness is set by the microtome, not by the raster, so the
 two agree only by coincidence. See
-[`--z-spacing`](cli.md#set---z-spacing-whenever-you-know-it).
+[`--z-spacing`](cli.md#set-z-spacing-whenever-you-know-it).
 
 !!! note "These keys only appear on volumes"
     `z_spacing_um` and `z_spacing_source` are written only when the store
@@ -361,33 +360,45 @@ two agree only by coincidence. See
 
 #### Pixel footprints in a volume
 
-The pixel polygons carry z too, so they meet the volume at `"global"` in all
-three axes. Each is a `POLYGON Z`: a flat square at the micrometre depth of the
-slice it was acquired on, the same value the table stores in `spatial_z`.
+The pixel polygons are **two-dimensional**, on every route including a volume.
+A slice's depth is not on the geometry; read it from the table's `spatial_z`,
+or from the volume's own `Scale`:
 
 ```python
 shapes = sdata.shapes[f"{dataset_id}_pixels"]
-geom = shapes.geometry.iloc[0]
-print(geom.has_z)                      # True on a multi-slice volume
-print(geom.exterior.coords[0][2])      # depth in um = z_index * z_spacing_um
+print(shapes.geometry.iloc[0].has_z)    # False, on 2D and 3D alike
+
+# Depth per pixel, in micrometres, from the table:
+obs = sdata.tables[dataset_id].obs
+print(obs.loc["0", "spatial_z"])        # z_index * z_spacing_um
 ```
 
-They are **footprints, not voxels**: a square at one depth, not a solid
-spanning the slice thickness — shapely has no solid geometry. The extent in z
-is the slice spacing, and it belongs to the image.
+Every footprint therefore resolves to the correct place in x and y, and carries
+no claim about z. Overlaying the shapes on the volume is exact in-plane and
+needs `spatial_z` to pick the slice.
 
-!!! note "spatialdata warns on 3D shapes"
-    `spatialdata`'s shapes model is 2D, so parsing, validating or transforming
-    these emits a `UserWarning` that "2 is expected". The geometry is carried
-    and scaled correctly regardless; the warning is left in place rather than
-    suppressed, because it is upstream describing the limits of its own model.
+!!! note "Why the footprints are flat"
+    They briefly were not. v3.2.0 made them `POLYGON Z` at the depth of their
+    slice, which is geometrically the more honest representation, and it broke
+    `spatialdata`'s spatial queries: a bounding box enclosing an entire test
+    volume returned 26 of 30 footprints and 26 of 30 table rows, with no
+    exception and no warning. A z-restricted query returned the same rows
+    whether z was inside or far outside the data.
 
-    Expressing the depth as a `Translation` on flat geometry instead does not
-    work — the transform silently drops z. See
-    [Coordinate systems](coordinate-systems.md).
+    `spatialdata` asks for 2D here: `ShapesModel.validate` warns that a
+    3-dimensional geometry column "could led to unexpected behaviors" and names
+    `force_2d()` as the remedy. 3D shapes are not on its roadmap
+    ([#109](https://github.com/scverse/spatialdata/issues/109) has been idle
+    since June 2023), and the live 2.5D discussion
+    ([#961](https://github.com/scverse/spatialdata/issues/961)) covers points,
+    images and labels only. Serial-section MSI is 2.5D in that sense.
 
-    Single-plane acquisitions and the per-slice 2D route keep flat geometry,
-    since neither has a z axis to place anything on.
+    So this is a deliberate trade: a documented gap in z, in exchange for
+    queries that return every pixel. Expressing the depth as a `Translation` on
+    flat geometry does not close the gap either — the transform silently drops
+    z. Both negative results are pinned by
+    `tests/unit/converters/test_3d_pixel_shapes_z.py`, which will fail if
+    upstream changes. See [Coordinate systems](coordinate-systems.md).
 
 ---
 

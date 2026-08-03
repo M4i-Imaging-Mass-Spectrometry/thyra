@@ -1,30 +1,40 @@
 # tests/unit/converters/test_3d_pixel_shapes_z.py
-"""A volume's pixel footprints sit at the depth of the slice they came from.
+"""A volume's pixel footprints are flat, and its depth lives elsewhere.
 
-``_create_pixel_shapes`` took an ``is_3d`` argument and never read it. Every
-slice's footprints were built from ``spatial_x``/``spatial_y`` alone, so a
-volume's polygons all stacked flat at z=0 while its TIC image spanned
-``n_z * z_spacing_um`` in depth. ``docs/coordinate-systems.md`` promises that
-every element in a Thyra store resolves to the same physical frame at
-``"global"``; for a volume that promise was false in z, and PR #160 (which made
-the *image* honest) did not change it.
+The history here is worth keeping, because the obvious reading of it is
+wrong in both directions.
 
-Footprints now carry z, taken from ``obs["spatial_z"]`` -- already micrometres,
-and the same column the table stores, which is what makes the two elements
-agree rather than merely both look plausible.
+``_create_pixel_shapes`` originally took an ``is_3d`` argument and never
+read it, so a volume's polygons stacked at z=0 while its TIC image spanned
+``n_z * z_spacing_um``. 7317792 fixed that by making the footprints
+``POLYGON Z`` at the depth of their slice. Geometrically that was right,
+and it broke ``spatialdata``'s spatial queries: measured on this fixture,
+a bounding box enclosing the entire dataset with 1000um of margin returned
+26 of 30 footprints and 26 of 30 table rows, with no exception and no
+warning. ``shapely.force_2d`` on the same geometry returned 30 of 30.
 
-**Why not the obvious alternative.** spatialdata's shapes model is 2D, which
-invites keeping flat geometry and putting the depth in a transformation (one
-element per slice, each with a ``Translation`` in z). Measured, that silently
-loses: the element parses without complaint, coexists with a 3D image and
-survives a zarr round trip, but the transform **drops z** and every slice comes
-back at the same depth -- a depth recorded in the metadata that never reaches
-the geometry. ``test_a_translation_would_not_have_worked`` pins that, because
-it is the change someone will otherwise propose again.
+So the depth was moved back off the geometry, and this file pins the
+resulting arrangement:
 
-These are footprints, not voxels: a flat square at one depth, since shapely has
-no solid. The pixel's extent in z is the slice spacing and is carried by the
-image, not by the polygon.
+* the polygons are 2D -- one square per pixel, in x and y only;
+* the depth is on the TIC image's ``Scale`` and in ``obs["spatial_z"]``,
+  both of which 255c177 made honest and neither of which changed here;
+* spatial queries return every pixel again.
+
+**This is not a claim that flat is ideal.** It is a claim that a
+documented gap beats a silently truncated query. ``spatialdata`` asks for
+it too: ``ShapesModel.validate`` warns that a 3-dimensional geometry
+column "could led to unexpected behaviors" and names ``force_2d()`` as the
+remedy. 3D shapes are absent from the upstream roadmap
+(scverse/spatialdata#109, idle since June 2023, covers images, labels and
+transformations), and the live 2.5D discussion (#961) scopes itself to
+points, images and labels. Serial-section MSI is 2.5D in that taxonomy.
+
+Two tests here are tripwires rather than assertions about Thyra:
+``test_polygon_z_still_breaks_spatial_queries`` and
+``test_a_translation_would_not_have_worked``. If either fails, upstream
+has changed and this decision is worth reopening -- that is a signal, not
+a regression.
 """
 
 from __future__ import annotations
@@ -52,10 +62,14 @@ _DATASET_ID = "vol"
 # for another and make a wrong answer look right.
 _N_X, _N_Y, _N_Z = 5, 3, 2
 
-# 25x apart, so a footprint placed with the in-plane pitch instead of the slice
+# 25x apart, so a depth placed with the in-plane pitch instead of the slice
 # spacing is off by more than any rounding could explain.
 _PIXEL_SIZE_UM = 10.0
 _Z_SPACING_UM = 250.0
+
+# Margin on the query box, in micrometres. Far larger than the dataset, so a
+# footprint can only be missing because the query mishandled it.
+_GENEROUS_MARGIN_UM = 1000.0
 
 
 def _config(n_z: int = _N_Z) -> MockMSIConfig:
@@ -92,111 +106,110 @@ def volume(tmp_path_factory) -> Dict[str, Any]:
     store = _convert_volume(tmp_path_factory.mktemp("shapes_z"))
     sdata = spatialdata.read_zarr(str(store))
     return {
+        "sdata": sdata,
         "shapes": sdata.shapes[f"{_DATASET_ID}_pixels"],
         "obs": sdata.tables[_DATASET_ID].obs,
         "image": sdata.images[f"{_DATASET_ID}_tic"],
     }
 
 
-def _depth(geometry) -> float:
-    """The z ordinate of a footprint. Flat, so any vertex will do."""
-    return float(geometry.exterior.coords[0][2])
+def _enclosing_box(shapes):
+    """A box around every footprint, with room to spare, as (min, max)."""
+    bounds = shapes.geometry.bounds
+    return (
+        [
+            float(bounds.minx.min()) - _GENEROUS_MARGIN_UM,
+            float(bounds.miny.min()) - _GENEROUS_MARGIN_UM,
+        ],
+        [
+            float(bounds.maxx.max()) + _GENEROUS_MARGIN_UM,
+            float(bounds.maxy.max()) + _GENEROUS_MARGIN_UM,
+        ],
+    )
 
 
-def test_volume_footprints_carry_z(volume):
-    """The reproduction. Before, these were 2D and every depth was absent."""
+def test_volume_footprints_are_flat(volume):
+    """The decision, stated directly.
+
+    One footprint per pixel across every slice, none of them carrying a z
+    ordinate. The count matters as much as the flatness: dropping z must
+    not also drop a slice.
+    """
     shapes = volume["shapes"]
 
     assert len(shapes) == _N_X * _N_Y * _N_Z
-    assert all(geometry.has_z for geometry in shapes.geometry)
+    assert not any(geometry.has_z for geometry in shapes.geometry)
 
 
-def test_each_footprint_sits_at_its_own_slice_depth(volume):
-    """Depth must be the slice index times the spacing -- in closed form.
+def test_a_whole_dataset_query_returns_every_footprint(volume):
+    """The regression this arrangement exists for.
 
-    Checked against the arithmetic rather than against the store, so this
-    fails if the converter and the expectation drift apart. The set of depths
-    is compared too: a bug that put every footprint on plane 0 would satisfy a
-    per-row check that only ever looked at plane 0.
+    Under POLYGON Z this returned 26 of 30 shapes and 26 of 30 table rows
+    for a box enclosing everything, silently. No exception, no warning --
+    a user filtering a volume to a region simply got fewer pixels than
+    they asked for, with nothing to indicate it.
     """
-    shapes, obs = volume["shapes"], volume["obs"]
+    from spatialdata import bounding_box_query
 
-    expected_depths = [z * _Z_SPACING_UM for z in range(_N_Z)]
-    assert sorted({_depth(g) for g in shapes.geometry}) == expected_depths
+    sdata, shapes = volume["sdata"], volume["shapes"]
+    minimum, maximum = _enclosing_box(shapes)
 
-    for label, geometry in zip(shapes.index, shapes.geometry):
-        z_index = int(obs.loc[label, "z"])
-        assert _depth(geometry) == pytest.approx(z_index * _Z_SPACING_UM)
+    result = bounding_box_query(
+        sdata,
+        axes=("x", "y"),
+        min_coordinate=minimum,
+        max_coordinate=maximum,
+        target_coordinate_system="global",
+    )
 
-
-def test_footprints_and_table_agree_at_global(volume):
-    """The two elements a consumer overlays must land at the same depth.
-
-    obs["spatial_z"] and the polygons are built in different places. Either
-    alone can be self-consistent while the pair disagrees, which is the class
-    of defect this whole area keeps producing.
-    """
-    shapes, obs = volume["shapes"], volume["obs"]
-
-    for label, geometry in zip(shapes.index, shapes.geometry):
-        assert _depth(geometry) == pytest.approx(float(obs.loc[label, "spatial_z"]))
+    assert result is not None, "a box enclosing the data returned nothing"
+    assert len(result.shapes[f"{_DATASET_ID}_pixels"]) == len(shapes)
+    assert len(result.tables[_DATASET_ID]) == len(shapes)
 
 
-def test_footprints_and_image_span_the_same_depth(volume):
-    """The volume's depth extent and the footprints' must be the same range.
+def test_the_depth_is_still_recorded_on_the_table_and_the_image(volume):
+    """Flat geometry must not mean the depth is gone from the store.
 
-    The image spans n_z planes scaled by z_spacing; the deepest footprint sits
-    on the last plane. If either the Scale or the footprint depth used the
-    in-plane pitch, these part company.
+    ``obs["spatial_z"]`` and the image's ``Scale`` are where it lives now,
+    and they have to keep agreeing with each other: a consumer reads one
+    or the other and must land in the same place.
     """
     from spatialdata.transformations import get_transformation
 
-    shapes, image = volume["shapes"], volume["image"]
-
-    n_z_planes = np.asarray(image.data).shape[1]
-    assert n_z_planes == _N_Z
+    obs, image = volume["obs"], volume["image"]
 
     axes = ("c", "z", "y", "x")
     matrix = get_transformation(image, "global").to_affine_matrix(
         input_axes=axes, output_axes=axes
     )
     z_scale = float(matrix[1, 1])
-
     assert z_scale == pytest.approx(_Z_SPACING_UM)
-    assert max(_depth(g) for g in shapes.geometry) == pytest.approx(
-        (n_z_planes - 1) * z_scale
-    )
+
+    n_z_planes = np.asarray(image.data).shape[1]
+    assert n_z_planes == _N_Z
+
+    depths = sorted(set(float(v) for v in obs["spatial_z"]))
+    assert depths == [z * _Z_SPACING_UM for z in range(_N_Z)]
+
+    # The table's deepest pixel and the image's last plane are the same place.
+    assert max(depths) == pytest.approx((n_z_planes - 1) * z_scale)
+
+    # And each row's depth is its own slice index, not plane 0 for everyone.
+    for label in obs.index:
+        z_index = int(obs.loc[label, "z"])
+        assert float(obs.loc[label, "spatial_z"]) == pytest.approx(
+            z_index * _Z_SPACING_UM
+        )
 
 
 def test_the_footprint_is_still_pixel_sized(volume):
-    """Adding depth must not disturb the in-plane extent.
-
-    A footprint is the pixel's square at one depth; it is not a voxel, and its
-    x/y size is still the in-plane pitch.
-    """
+    """The in-plane extent is the pitch, unchanged by any of this."""
     geometry = volume["shapes"].geometry.iloc[0]
     xs = [c[0] for c in geometry.exterior.coords]
     ys = [c[1] for c in geometry.exterior.coords]
 
     assert max(xs) - min(xs) == pytest.approx(_PIXEL_SIZE_UM)
     assert max(ys) - min(ys) == pytest.approx(_PIXEL_SIZE_UM)
-
-
-def test_a_single_slice_volume_stays_flat(tmp_path):
-    """``handle_3d`` alone is not a volume, so it gets no z.
-
-    ``SpatialData3DConverter`` forces ``handle_3d=True`` regardless of the
-    data, and a one-plane acquisition through it takes the 2D branch
-    everywhere else. Footprints must follow, or a flat dataset acquires a
-    depth axis it has no planes for.
-    """
-    import spatialdata
-
-    store = _convert_volume(tmp_path, n_z=1)
-    sdata = spatialdata.read_zarr(str(store))
-    shapes = sdata.shapes[f"{_DATASET_ID}_pixels"]
-
-    assert not any(geometry.has_z for geometry in shapes.geometry)
 
 
 def test_the_2d_route_is_unchanged(tmp_path):
@@ -223,17 +236,80 @@ def test_the_2d_route_is_unchanged(tmp_path):
         ), f"{key} grew a z coordinate"
 
 
+def test_polygon_z_still_breaks_spatial_queries():
+    """Tripwire: the measured reason the footprints are flat.
+
+    Builds the geometry 7317792 shipped -- flat squares at two different
+    depths -- and queries a box that encloses all of them in x and y. Some
+    come back missing. ``spatialdata``'s own ``ShapesModel.validate`` warns
+    that a 3-dimensional geometry column "could led to unexpected
+    behaviors"; this is that behaviour, and it is silent.
+
+    If this test fails, upstream now handles ``POLYGON Z`` in queries and
+    the flat-footprint decision is worth reopening. That is the point of
+    the test: it is a signal, not a regression.
+    """
+    import geopandas as gpd
+    from shapely.geometry import Polygon
+    from spatialdata import SpatialData, bounding_box_query
+    from spatialdata.models import ShapesModel
+    from spatialdata.transformations import Identity
+
+    half = _PIXEL_SIZE_UM / 2
+    geometries = []
+    for z_index in range(_N_Z):
+        z = z_index * _Z_SPACING_UM
+        for y_index in range(_N_Y):
+            for x_index in range(_N_X):
+                x = x_index * _PIXEL_SIZE_UM
+                y = y_index * _PIXEL_SIZE_UM
+                geometries.append(
+                    Polygon(
+                        [
+                            (x - half, y - half, z),
+                            (x + half, y - half, z),
+                            (x + half, y + half, z),
+                            (x - half, y + half, z),
+                        ]
+                    )
+                )
+
+    gdf = gpd.GeoDataFrame(
+        geometry=geometries, index=[str(i) for i in range(len(geometries))]
+    )
+    with pytest.warns(UserWarning, match="dimensions"):
+        parsed = ShapesModel.parse(gdf, transformations={"global": Identity()})
+
+    sdata = SpatialData(shapes={"pixels": parsed})
+    minimum, maximum = _enclosing_box(parsed)
+
+    result = bounding_box_query(
+        sdata,
+        axes=("x", "y"),
+        min_coordinate=minimum,
+        max_coordinate=maximum,
+        target_coordinate_system="global",
+    )
+    returned = 0 if result is None else len(result.shapes["pixels"])
+
+    assert returned < len(geometries), (
+        "a POLYGON Z bounding-box query now returns every footprint; "
+        "spatialdata may have gained 3D shape support, so revisit whether "
+        "the pixel footprints should carry their slice depth again"
+    )
+
+
 def test_a_translation_would_not_have_worked():
-    """Pins the measured negative result behind the POLYGON Z choice.
+    """Tripwire: the other representation, also measured, also rejected.
 
-    Keeping flat 2D geometry and expressing the depth as a ``Translation`` is
-    the natural reading of spatialdata's 2D shapes model, and it is the change
-    someone will proposeagain on seeing the UserWarning that POLYGON Z
-    provokes. It does not work, and it fails *silently*: the transform drops z
-    and returns flat geometry, so the depth lives only in the metadata.
+    Keeping flat geometry and expressing the depth as a ``Translation`` is
+    the natural reading of spatialdata's 2D shapes model, and it is the
+    change someone will propose on seeing that the footprints are flat. It
+    does not work, and it fails *silently*: the transform drops z and
+    returns flat geometry, so the depth would live only in metadata.
 
-    If a future spatialdata makes this work, this test fails -- and that is the
-    signal to revisit the choice, not a regression.
+    If a future spatialdata makes this work, this test fails -- and that is
+    the signal to revisit, not a regression.
     """
     import geopandas as gpd
     import spatialdata
@@ -261,5 +337,5 @@ def test_a_translation_would_not_have_worked():
     assert max(c[0] for c in geometry.exterior.coords) == pytest.approx(_PIXEL_SIZE_UM)
     assert not geometry.has_z, (
         "spatialdata now carries z through a Translation on 2D shapes; "
-        "revisit whether POLYGON Z is still the right representation"
+        "revisit how a volume's footprints should record their depth"
     )
