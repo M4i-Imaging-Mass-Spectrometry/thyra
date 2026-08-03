@@ -226,6 +226,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         pixel_size_um: float = 1.0,
         pixel_size_source: PixelSizeSource = PixelSizeSource.DEFAULT,
         handle_3d: bool = False,
+        z_spacing_um: Optional[float] = None,
         pixel_size_detection_info: Optional[Dict[str, Any]] = None,
         resampling_config: Optional[Union[Dict[str, Any], ResamplingConfig]] = None,
         sparse_format: str = "csc",
@@ -239,10 +240,16 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             reader: MSI data reader
             output_path: Path for output file
             dataset_id: Identifier for the dataset
-            pixel_size_um: Size of each pixel in micrometers
+            pixel_size_um: In-plane size of each pixel in micrometers
             pixel_size_source: How pixel size was determined
             handle_3d: Whether to process as 3D data (True) or 2D slices
                 (False)
+            z_spacing_um: Distance between consecutive slices in
+                micrometers.  Only meaningful when a true volume is
+                written (``handle_3d=True`` and more than one slice).
+                ``None`` (default) falls back to the in-plane pitch and
+                records that as an assumption rather than a measurement;
+                see :meth:`BaseMSIConverter._resolve_z_spacing`.
             pixel_size_detection_info: Optional metadata about pixel size
                 detection
             resampling_config: Optional resampling configuration dict
@@ -302,6 +309,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             pixel_size_um=pixel_size_um,
             pixel_size_source=pixel_size_source,
             handle_3d=handle_3d,
+            z_spacing_um=z_spacing_um,
             **kwargs_filtered,
         )
 
@@ -888,6 +896,9 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             elif self.pixel_size_source == PixelSizeSource.USER_PROVIDED:
                 logger.info(f"Using user-specified pixel size: {self.pixel_size_um} um")
 
+            # After pixel size, because the fallback is the pixel size.
+            self._resolve_z_spacing(essential)
+
             # Handle mass axis setup
             self._setup_mass_axis()
 
@@ -1361,8 +1372,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 "region": np.full(n_pixels, f"{self.dataset_id}_pixels"),
                 "spatial_x": x_idx * self.pixel_size_um,
                 "spatial_y": y_idx * self.pixel_size_um,
+                # Slice depth uses the z spacing, not the in-plane pitch:
+                # the table has to land in the same micrometre frame as
+                # the TIC volume's Scale, or the two disagree at "global".
                 "spatial_z": (
-                    z_idx * self.pixel_size_um
+                    z_idx * self.z_spacing_um
                     if n_z > 1
                     else np.zeros(n_pixels, dtype=np.float64)
                 ),
@@ -2208,6 +2222,19 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
           (FlexImaging does not generally calibrate the optical photo
           to um); leave them null and let the consumer fill in.
 
+        Multi-slice volumes additionally get `z_spacing_um` and
+        `z_spacing_source`. These are written **only** for volumes, so a
+        2D store is byte-identical to what earlier versions produced and
+        their absence is itself the signal that no z axis exists. That
+        is also why `convention_version` does not move: the keys are
+        purely additive, a consumer that does not do 3D is unaffected,
+        and bumping the version would make every existing consumer log a
+        "newer than I understand" warning on ordinary 2D datasets.
+
+        Note `z_spacing_um` is an absolute micrometre distance even when
+        `unit="pixel"`, because the 3D route always scales z by it
+        directly -- the optical affine only ever governs x and y.
+
         Returns:
             Dict suitable for storing under
             `zarr.attrs["coordinate_systems"]`.
@@ -2227,16 +2254,20 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             pixel_size_um_y = float(self.pixel_size_um)
             reference_element = None
 
-        return {
-            "global": {
-                "unit": unit,
-                "pixel_size_um_x": pixel_size_um_x,
-                "pixel_size_um_y": pixel_size_um_y,
-                "reference_element": reference_element,
-                "convention_version": self._COORDINATE_SYSTEMS_SCHEMA_VERSION,
-                "produced_by": f"thyra/{thyra_version}",
-            }
+        global_cs: Dict[str, Any] = {
+            "unit": unit,
+            "pixel_size_um_x": pixel_size_um_x,
+            "pixel_size_um_y": pixel_size_um_y,
+            "reference_element": reference_element,
+            "convention_version": self._COORDINATE_SYSTEMS_SCHEMA_VERSION,
+            "produced_by": f"thyra/{thyra_version}",
         }
+
+        if self._is_volume:
+            global_cs["z_spacing_um"] = float(self.z_spacing_um)
+            global_cs["z_spacing_source"] = self.z_spacing_source.value
+
+        return {"global": global_cs}
 
     def _add_comprehensive_sections(
         self, pixel_size_attrs: Dict[str, Any], comprehensive_metadata_obj
@@ -2286,6 +2317,8 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         metadata_dict["conversion_options"] = {
             "handle_3d": self.handle_3d,
             "pixel_size_um": self.pixel_size_um,
+            "z_spacing_um": self.z_spacing_um,
+            "z_spacing_source": self.z_spacing_source.value,
             "dataset_id": self.dataset_id,
             **self.options,
         }

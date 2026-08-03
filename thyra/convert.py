@@ -47,12 +47,20 @@ def _validate_string_parameters(format_type: str, dataset_id: str) -> bool:
     return True
 
 
-def _validate_numeric_parameters(pixel_size_um: Optional[float]) -> bool:
+def _validate_numeric_parameters(
+    pixel_size_um: Optional[float], z_spacing_um: Optional[float] = None
+) -> bool:
     """Validate numeric parameters."""
     if pixel_size_um is not None and (
         not isinstance(pixel_size_um, (int, float)) or pixel_size_um <= 0
     ):
         logger.error("Pixel size must be a positive number")
+        return False
+
+    if z_spacing_um is not None and (
+        not isinstance(z_spacing_um, (int, float)) or z_spacing_um <= 0
+    ):
+        logger.error("Z spacing must be a positive number")
         return False
 
     return True
@@ -64,12 +72,13 @@ def _validate_input_parameters(
     format_type: str,
     dataset_id: str,
     pixel_size_um: Optional[float],
+    z_spacing_um: Optional[float] = None,
 ) -> bool:
     """Validate all input parameters for convert_msi function."""
     return (
         _validate_paths_parameters(input_path, output_path)
         and _validate_string_parameters(format_type, dataset_id)
-        and _validate_numeric_parameters(pixel_size_um)
+        and _validate_numeric_parameters(pixel_size_um, z_spacing_um)
     )
 
 
@@ -209,6 +218,7 @@ def _create_converter(
     include_optical: bool = True,
     apply_optical_alignment: bool = True,
     streaming: Union[bool, Literal["auto"]] = "auto",
+    z_spacing_um: Optional[float] = None,
     **kwargs: Any,
 ) -> Any:
     """Create and return a converter for the specified format."""
@@ -217,6 +227,7 @@ def _create_converter(
         "pixel_size_um": pixel_size_um,
         "pixel_size_source": pixel_size_source,
         "handle_3d": handle_3d,
+        "z_spacing_um": z_spacing_um,
         "pixel_size_detection_info": pixel_size_detection_info,
         "resampling_config": resampling_config,
         "sparse_format": sparse_format,
@@ -278,6 +289,7 @@ def convert_msi(
     dataset_id: str = "msi_dataset",
     pixel_size_um: Optional[float] = None,
     handle_3d: bool = False,
+    z_spacing_um: Optional[float] = None,
     resampling_config: Optional[Dict[str, Any]] = None,
     reader_options: Optional[Dict[str, Any]] = None,
     sparse_format: str = "csc",
@@ -297,8 +309,16 @@ def convert_msi(
         output_path: Path for output file
         format_type: Output format type (default: "spatialdata")
         dataset_id: Identifier for the dataset
-        pixel_size_um: Pixel size in micrometers (None for auto)
+        pixel_size_um: In-plane pixel size in micrometers (None for auto)
         handle_3d: Whether to process as 3D data (default: False)
+        z_spacing_um: Distance between consecutive slices in micrometers.
+            Only meaningful together with ``handle_3d=True``; ignored
+            (with a warning) otherwise. ``None`` (default) means nothing
+            supplied one, in which case the in-plane pitch is reused and
+            the store records ``z_spacing_source="assumed_isotropic"``
+            so the guess is not mistaken for a measurement. Supply it
+            whenever the section thickness is known -- the in-plane
+            pitch matches it only by coincidence.
         resampling_config: Optional resampling configuration
         reader_options: Optional format-specific reader options:
             - intensity_threshold: float - Minimum intensity
@@ -355,8 +375,22 @@ def convert_msi(
         format_type,
         dataset_id,
         pixel_size_um,
+        z_spacing_um,
     ):
         return False
+
+    # A z spacing without --handle-3d changes nothing: the 2D route
+    # writes one image per slice and never builds a z axis. Say so rather
+    # than accepting it silently -- a caller who set it believes their
+    # volume is calibrated.
+    if z_spacing_um is not None and not handle_3d:
+        logger.warning(
+            "z_spacing_um=%g was given without handle_3d=True and will be "
+            "ignored: without 3D handling each slice is written as its own "
+            "2D image and there is no z axis to space out. Pass "
+            "handle_3d=True (--handle-3d) to build a volume.",
+            z_spacing_um,
+        )
 
     # Convert to Path objects and validate
     input_path = Path(input_path).resolve()
@@ -400,6 +434,7 @@ def convert_msi(
             include_optical=include_optical,
             apply_optical_alignment=apply_optical_alignment,
             streaming=streaming,
+            z_spacing_um=z_spacing_um,
             **kwargs,
         )
 

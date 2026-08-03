@@ -14,8 +14,9 @@ class EssentialMetadata:
         dimensions: Grid dimensions as ``(x, y, z)``.
         coordinate_bounds: Spatial extent as ``(min_x, max_x, min_y, max_y)``.
         mass_range: Mass-to-charge range as ``(min_mz, max_mz)``.
-        pixel_size: Pixel dimensions as ``(x_um, y_um)`` in micrometres,
-            or ``None`` when not detected.
+        pixel_size: In-plane pixel dimensions as ``(x_um, y_um)`` in
+            micrometres, or ``None`` when not detected.  This is the
+            raster pitch and says nothing about z; see ``z_spacing_um``.
         n_spectra: Total number of spectra in the dataset.
         total_peaks: Total number of peaks across all spectra (used for
             sparse matrix pre-allocation).
@@ -29,6 +30,16 @@ class EssentialMetadata:
             construction in the streaming converter.  Array of size
             ``n_pixels`` where ``arr[pixel_idx] = peak_count`` and
             ``pixel_idx = z * (n_x * n_y) + y * n_x + x``.
+        z_spacing_um: Distance between consecutive slices in micrometres,
+            or ``None`` when the source cannot report it.  This is a
+            *physical* distance set by how the sections were cut, and is
+            unrelated to the in-plane pitch in ``pixel_size`` -- the two
+            agree only by coincidence.  No reader populates this today:
+            imzML has no standard term for it, and 3D acquisitions are
+            frequently non-consecutive sections, so the value usually has
+            to be supplied by the user.  The field exists so a format that
+            *does* record it has somewhere to report it, and so the
+            converter's precedence chain has something to consult.
     """
 
     dimensions: Tuple[int, int, int]
@@ -42,6 +53,7 @@ class EssentialMetadata:
     coordinate_offsets: Optional[Tuple[int, int, int]] = None
     spectrum_type: Optional[str] = None
     peak_counts_per_pixel: Optional[NDArray[np.int32]] = None
+    z_spacing_um: Optional[float] = None
 
     @property
     def has_pixel_size(self) -> bool:

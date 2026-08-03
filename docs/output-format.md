@@ -33,7 +33,10 @@ A converted dataset contains the following elements:
 
 !!! note "3D mode"
     When converted with `--handle-3d`, the `_z{z}` suffix is dropped and all
-    slices are merged into a single table with `x`, `y`, `z` coordinates in `.obs`.
+    slices are merged into a single table with `x`, `y`, `z` coordinates in
+    `.obs`. The TIC image becomes a single **volume** of shape `(c, z, y, x)`
+    rather than one 2D image per slice — see
+    [3D Data / Z-Slices](#3d-data--z-slices).
 
 !!! tip "Default dataset ID"
     The default `dataset_id` is `msi_dataset`, so typical keys look like
@@ -288,8 +291,71 @@ z0_table = sdata.tables[slice_tables[0]]
 print(f"Slice 0: {z0_table.shape}")
 ```
 
+### 3D mode (`--handle-3d`)
+
 When converted with `--handle-3d`, all slices are combined into a single table
-with `x`, `y`, `z` coordinates in `.obs`.
+with `x`, `y`, `z` coordinates in `.obs`, and the per-slice TIC images are
+replaced by one **volume**:
+
+| Element | Key | Shape / dims |
+|---------|-----|--------------|
+| **Table** | `{dataset_id}` | pixels x m/z, with `x`, `y`, `z` and `spatial_x`, `spatial_y`, `spatial_z` in `.obs` |
+| **TIC volume** | `{dataset_id}_tic` | `(c, z, y, x)` — one channel, then the three spatial axes |
+| **Pixel Shapes** | `{dataset_id}_pixels` | GeoDataFrame of 2D pixel boxes |
+
+```python
+volume = sdata.images[f"{dataset_id}_tic"]
+print(volume.dims)                      # ('c', 'z', 'y', 'x')
+
+arr = np.asarray(volume.data)[0]        # drop channel -> (z, y, x)
+plt.imshow(arr[0], cmap="viridis")      # first slice
+```
+
+Note the axis order is `(c, z, y, x)`, not `(c, x, y, z)`: index a slice with
+`arr[z]`, not `arr[..., z]`.
+
+#### Voxel depth
+
+The volume carries a `Scale` to `"global"` built from **two** distinct numbers —
+the in-plane pixel pitch for `x` and `y`, and the slice spacing for `z`:
+
+```python
+from spatialdata.transformations import get_transformation
+
+axes = ("c", "z", "y", "x")
+matrix = get_transformation(volume, to_coordinate_system="global").to_affine_matrix(
+    input_axes=axes, output_axes=axes
+)
+print(matrix[1, 1])   # um per slice step
+print(matrix[3, 3])   # um per pixel in x
+```
+
+The slice spacing comes from `--z-spacing`. When nothing supplies one, Thyra
+falls back to the in-plane pitch and records that it did:
+
+```python
+cs = sdata.attrs["coordinate_systems"]["global"]
+cs["z_spacing_um"]      # the number used
+cs["z_spacing_source"]  # "manual" | "automatic" | "assumed_isotropic"
+```
+
+A `z_spacing_source` of `"assumed_isotropic"` means **nobody supplied a spacing
+and the in-plane pitch was reused** — treat the depth as unknown rather than as
+measured. Section thickness is set by the microtome, not by the raster, so the
+two agree only by coincidence. See
+[`--z-spacing`](cli.md#set---z-spacing-whenever-you-know-it).
+
+!!! note "These keys only appear on volumes"
+    `z_spacing_um` and `z_spacing_source` are written only when the store
+    actually holds a multi-slice volume. Their absence is how a 2D store says it
+    has no z axis, which is why `convention_version` stays at `1` — the keys are
+    additive and a consumer that never reads 3D sees the schema it already
+    knows.
+
+!!! warning "Pixel shapes are still 2D"
+    The pixel-polygon shapes carry no z coordinate, so all slices' polygons
+    coincide in depth. Use the table's `spatial_z` (or the volume itself) when
+    you need a per-slice position.
 
 ---
 
