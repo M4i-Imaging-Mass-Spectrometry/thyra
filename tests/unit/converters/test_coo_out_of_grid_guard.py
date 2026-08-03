@@ -30,6 +30,16 @@ vendor file, so the fixture reproduces the coordinate directly.
 
 Only x and y are exercised. ``_refuse_multiple_z_planes`` runs before
 either route is chosen, so ``n_z == 1`` and a z term cannot reach here.
+
+**The PCS guard this was ported from was itself incomplete**, which the
+per-pixel assertions here could not see. Its pre-scan counted
+``col_counts`` and ``total_nnz`` before the bounds check it already had,
+so it sized the CSC arrays for spectra its own scatter pass then skipped.
+The totals stayed right -- an unwritten slot is a zero and adds nothing
+to a row sum -- while the matrix itself was non-canonical. That is why
+the structural assertions at the bottom of this file exist alongside the
+value ones, and why they assert on both routes rather than only the one
+that was wrong.
 """
 
 import logging
@@ -274,3 +284,73 @@ def test_the_coo_store_still_opens_lazily(tmp_path):
     lazy_totals = {(int(x), int(y)): float(v) for x, y, v in zip(xs, ys, row_sums)}
 
     assert lazy_totals[_WRAP_TARGET] == pytest.approx(truth[_WRAP_TARGET], rel=1e-9)
+
+
+def _reader_nnz_in_grid(reader) -> int:
+    """Non-zeros the store should hold, counted off the reader.
+
+    Mock peaks sit exactly on the common mass axis, so resampling neither
+    merges nor drops one and a spectrum contributes as many entries as it
+    yields. Out-of-grid spectra contribute none: they get no row.
+    """
+    return sum(
+        len(mzs)
+        for (x, y, _z), mzs, _intensities in reader.iter_spectra()
+        if 0 <= x < _N_X and 0 <= y < _N_Y
+    )
+
+
+@pytest.mark.parametrize("use_csc", [True, False])
+def test_the_stored_matrix_is_structurally_clean(tmp_path, use_csc):
+    """Skipping a spectrum must not leave slots reserved for it.
+
+    The PCS pre-scan counted ``col_counts`` and ``total_nnz`` for every
+    spectrum with peaks, *including* the ones its own bounds check then
+    rejected, while the scatter pass skipped exactly those. The memmap is
+    zero-filled, so the reserved slots reached disk as explicit zeros at
+    row 0, out of order inside their column.
+
+    Measured on this fixture before the fix: PCS stored 174 entries with
+    7 explicit zeros and ``has_canonical_format`` False, against COO's
+    167 and 0. ``X.sum()`` raised from scipy, but ``todense()``,
+    ``read_zarr()`` and ``read_lazy()`` all succeeded silently.
+
+    No per-pixel value assertion can see this. Explicit zeros contribute
+    nothing to a row sum, which is why
+    ``test_both_routes_agree_on_out_of_grid_input`` passed throughout --
+    it compared totals, and the totals were right.
+    """
+    expected_nnz = _reader_nnz_in_grid(_OutOfGridReader(_config()))
+
+    out = tmp_path / f"clean_{use_csc}.zarr"
+    assert _convert(out, _OutOfGridReader(_config()), use_csc) is True
+
+    matrix = anndata.read_zarr(out / "tables" / _TABLE_KEY).X
+    csc = matrix.tocsc() if matrix.format != "csc" else matrix
+
+    assert csc.nnz == expected_nnz, "slots reserved for a skipped spectrum"
+    assert (csc.data == 0).sum() == 0, "explicit zeros from unwritten slots"
+    assert csc.has_canonical_format, "unsorted or duplicate indices"
+
+    # indptr has to agree with the array it indexes, or the CSC is
+    # malformed in a way an eager read can absorb and a lazy one need not.
+    assert int(csc.indptr[-1]) == csc.nnz
+
+
+def test_both_routes_store_the_same_number_of_entries(tmp_path):
+    """The structural half of the two-route agreement.
+
+    Row sums agreed even while the two routes held different numbers of
+    entries, so the count is asserted separately rather than folded into
+    the totals comparison.
+    """
+    pcs = tmp_path / "pcs_nnz.zarr"
+    coo = tmp_path / "coo_nnz.zarr"
+
+    assert _convert(pcs, _OutOfGridReader(_config()), use_csc=True) is True
+    assert _convert(coo, _OutOfGridReader(_config()), use_csc=False) is True
+
+    def _nnz(store: Path) -> int:
+        return int(anndata.read_zarr(store / "tables" / _TABLE_KEY).X.nnz)
+
+    assert _nnz(pcs) == _nnz(coo)
