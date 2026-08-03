@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v3.1.0 (2026-08-03)
+
+### Bug Fixes
+
+- **deps**: Declare click, tifffile and xarray as runtime dependencies
+  ([`74cb21d`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/74cb21da08aa14d4d3a6e46891205f9421c9209c))
+
+### Documentation
+
+- **tests**: Record that the whole imzML corpus is 1-based in x and y
+  ([`d92e2a9`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/d92e2a95ddbec90bc8995fb0fbdf7e164a8f8af2))
+
+### Features
+
+- **converters**: Give the 3D TIC volume a real z spacing
+  ([`255c177`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/255c177c8816f3c7381ce89dc5306a6d2039398c))
+
+
 ## v3.0.3 (2026-08-03)
 
 ### Bug Fixes
