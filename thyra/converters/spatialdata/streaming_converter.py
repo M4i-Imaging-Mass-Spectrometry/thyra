@@ -1004,9 +1004,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
                 # Add to tables and create shapes
                 data_structures["tables"][slice_id] = table
-                data_structures["shapes"][region_key] = self._create_pixel_shapes(
-                    adata, is_3d=False
-                )
+                data_structures["shapes"][region_key] = self._create_pixel_shapes(adata)
 
                 # Create TIC image for this slice
                 tic_values = slice_data["tic_values"]

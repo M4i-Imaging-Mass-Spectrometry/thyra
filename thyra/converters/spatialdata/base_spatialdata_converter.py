@@ -151,7 +151,7 @@ try:
     import xarray as xr
     import zarr
     from anndata import AnnData
-    from shapely.geometry import Polygon, box
+    from shapely.geometry import box
     from spatialdata import SpatialData
     from spatialdata.models import Image2DModel, ShapesModel, TableModel
     from spatialdata.transformations import Affine, Identity, Scale, Sequence
@@ -1509,48 +1509,63 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         coo_arrays["current_idx"] = end_idx
 
-    def _create_pixel_shapes(
-        self, adata: AnnData, is_3d: bool = False
-    ) -> "ShapesModel":
+    def _create_pixel_shapes(self, adata: AnnData) -> "ShapesModel":
         """Create geometric shapes for pixels with proper transformations.
 
         When optical alignment is available (FlexImaging with Area definitions),
         shapes are created in optical image pixel coordinates for proper overlay.
         Otherwise, shapes use physical (micrometer) coordinates.
 
-        For a multi-slice volume the footprints are ``POLYGON Z``: a flat
-        square at the micrometre depth of the slice it was acquired on,
-        taken from ``obs["spatial_z"]``. They are footprints, not voxels --
-        shapely has no solid, so a pixel is its square at one depth rather
-        than a box spanning the slice thickness.
+        **Footprints are two-dimensional, including on a multi-slice
+        volume.** A slice's depth is carried by the TIC image's ``Scale``
+        and by ``obs["spatial_z"]``; it is deliberately not also put on
+        the polygon geometry.
 
-        Two alternatives were measured and rejected:
+        Three options were measured. All three are imperfect, so what
+        follows is the reasoning rather than a claim that this one is
+        free:
 
+        * **``POLYGON Z``** -- geometrically the most honest, and what
+          7317792 shipped in v3.2.0. It breaks ``spatialdata``'s spatial
+          queries: measured on a 5x3x2 volume, a bounding box enclosing
+          the whole dataset with 1000um of margin returned 26 of 30
+          footprints and 26 of 30 table rows, with no exception and no
+          warning. ``shapely.force_2d`` on the same geometry restored
+          30 of 30. A z-restricted query returned the same rows whether
+          z was inside or far outside the data, so z is ignored by the
+          query path rather than honoured.
         * **Flat 2D shapes carrying the depth in a transformation**
-          (one element per slice, each with a ``Translation`` in z). This
-          is what spatialdata's 2D shapes model invites, and it does not
-          work: the element parses without complaint, coexists with a 3D
-          image and round-trips, but the transform **silently drops z**
-          and every slice comes back at the same depth. It would put a
-          depth in the metadata that never reaches the geometry.
-        * **Leaving them flat** and documenting it. Honest, but then
-          ``docs/coordinate-systems.md``'s promise that every element
-          agrees at ``"global"`` stays false in z.
+          (one element per slice, each with a ``Translation`` in z).
+          The element parses, coexists with a 3D image and round-trips,
+          but the transform **silently drops z** and every slice comes
+          back at the same depth -- a depth in the metadata that never
+          reaches the geometry. ``test_3d_pixel_shapes_z.py`` pins this,
+          because it is the change someone will otherwise propose.
+        * **Flat, with the depth on the image and in ``obs`` only** --
+          what this does.
 
-        The cost of the choice: ``ShapesModel.parse``/``validate`` and
-        every downstream ``transform`` emit a ``UserWarning`` that 2
-        dimensions are expected. It is left unsuppressed deliberately --
-        it is upstream telling consumers this is outside the model, and
-        hiding it would be Thyra deciding that on their behalf. Only the
-        micrometre branch gains z; under optical alignment the frame is
-        optical pixels, which have no depth calibration to place a slice
-        in.
+        The deciding argument is that ``spatialdata`` itself asks for
+        this. ``ShapesModel.validate`` warns that a 3-dimensional
+        geometry column "could led to unexpected behaviors" and names
+        ``force_2d()`` as the remedy; the query result above is that
+        behaviour. 3D shapes are not on the upstream roadmap
+        (scverse/spatialdata#109 has been idle since June 2023 and
+        covers images, labels and transformations only), and the live
+        2.5D discussion (#961) scopes itself to points, images and
+        labels. Serial-section MSI is 2.5D in that taxonomy.
+
+        What this costs: ``docs/coordinate-systems.md``'s promise that
+        every element agrees at ``"global"`` is exact in x and y and
+        silent in z for the shapes element. That is a documented gap
+        rather than a wrong answer, which a truncated query is not. See
+        ``docs/output-format.md`` for the consumer-facing statement.
+
+        Reinstating z means restoring the ``is_3d`` parameter at all
+        three call sites as well; it was removed with the geometry so it
+        could not sit unread, which is how the original defect arose.
 
         Args:
             adata: AnnData object containing coordinates
-            is_3d: Whether this is the 3D volume route. Combined with
-                :attr:`_is_volume` (which also requires more than one
-                plane), decides whether footprints carry z.
 
         Returns:
             SpatialData shapes model
@@ -1628,29 +1643,15 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             y_coords: NDArray[np.float64] = adata.obs["spatial_y"].values
             half_pixel_um = self.pixel_size_um / 2
 
-            # A volume's footprints carry the depth of the slice they were
-            # acquired on, so they meet the TIC volume at "global" instead
-            # of stacking flat at z=0. spatial_z is already the micrometre
-            # depth (z index * z_spacing_um), so it needs no scaling here
-            # -- the same column the table stores, which is what keeps the
-            # two elements agreeing.
-            z_coords: Optional[NDArray[np.float64]] = None
-            if is_3d and self._is_volume:
-                z_coords = adata.obs["spatial_z"].values
-
+            # Footprints are flat, on every route including volumes. A
+            # slice's depth lives on the TIC image's Scale and in
+            # obs["spatial_z"]; see the docstring for why it is not also
+            # put on the geometry.
             for i in range(len(adata)):
                 x, y = x_coords[i], y_coords[i]
                 x0, y0 = x - half_pixel_um, y - half_pixel_um
                 x1, y1 = x + half_pixel_um, y + half_pixel_um
-
-                if z_coords is None:
-                    pixel_box = box(x0, y0, x1, y1)
-                else:
-                    z = float(z_coords[i])
-                    pixel_box = Polygon(
-                        [(x0, y0, z), (x1, y0, z), (x1, y1, z), (x0, y1, z)]
-                    )
-                geometries.append(pixel_box)
+                geometries.append(box(x0, y0, x1, y1))
 
         # Create GeoDataFrame with appropriate index
         if valid_indices is not None:
