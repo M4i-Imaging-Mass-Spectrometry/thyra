@@ -6,7 +6,8 @@ constraints that must not be broken, and how to verify.
 
 **Most of this has shipped.** Read the State column before picking anything
 up. Three rows still hold live work, and one of them is a decision rather than
-code: C (decide), E (upstream), F (backlog). One item inside H is also open.
+code: C (decide), E (upstream), F (backlog). H's remaining item is blocked
+rather than available -- see below before picking it up.
 
 Everything here was investigated against `main` at **v1.27.0** on
 Windows 11, Python 3.12.7, with pandas 2.3.2 / anndata 0.12.2 /
@@ -25,7 +26,7 @@ gets written, which is the subject of half these handouts.
 | E | [upstream-lazy-table-pr.md](upstream-lazy-table-pr.md) | *upstream* | *scverse/spatialdata* | **OPEN upstream** -- scverse/spatialdata#1055 still unmerged (2026-08-03) |
 | F | [interpolation-resampling.md](interpolation-resampling.md) | *not created* | `../Thyra-interp` | **backlog** -- a capability gap, not a defect |
 | G | [resampling-scils-alignment.md](resampling-scils-alignment.md) | `fix/resampling-scils-alignment` | `../Thyra-resampling` | **DONE** -- v2.1.0-v2.2.3, item 5 left |
-| H | [loose-ends-after-scils-alignment.md](loose-ends-after-scils-alignment.md) | one per item | `../Thyra-loose` | items 3 and 4 shipped; **only item 2 is open**; item 1 is not Thyra's |
+| H | [loose-ends-after-scils-alignment.md](loose-ends-after-scils-alignment.md) | one per item | `../Thyra-loose` | items 3 and 4 shipped; item 2 is **BLOCKED**; item 1 is not Thyra's |
 
 Handout H is what was found *around* G and deliberately not folded into it.
 Three of its four items are settled, so do not read it front-to-back:
@@ -35,9 +36,12 @@ Three of its four items are settled, so do not read it front-to-back:
   dependency is a bare editable path dep with no version constraint -- is a
   defect in *Ousia's* dependency declaration. Nothing in this repository
   fixes it, and no work here should wait on it.
-- **Item 2**, `main` having no branch protection, is **the only open item**.
-  Re-verified 2026-08-03: the branch-protection API still answers
-  "Branch not protected".
+- **Item 2**, `main` having no branch protection, is the only item left and is
+  **BLOCKED** as of 2026-08-03: the release-actor bypass the item assumed
+  would exist does not. The branch-protection API does still answer
+  "Branch not protected", so the defect is real -- it is the fix that has no
+  route. Read "The trap" in the item before starting. The concurrency half
+  shipped separately in #144.
 - **Item 3**, `release.yml`'s dead "No release needed" branch, shipped in
   `11c808f`.
 - **Item 4**, taking spectrum representation explicitly, shipped in `5c7aa29`
