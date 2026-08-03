@@ -1,29 +1,47 @@
 # Parallel workstream handouts
 
-Four independent pieces of work, written to be run in parallel in separate
-git worktrees. Each handout is self-contained: it states what is wrong, the
-evidence, the constraints that must not be broken, and how to verify.
+Eight pieces of work, written to be run in parallel in separate git worktrees.
+Each handout is self-contained: it states what is wrong, the evidence, the
+constraints that must not be broken, and how to verify.
+
+**Most of this has shipped.** Read the State column before picking anything
+up. Three rows still hold live work, and one of them is a decision rather than
+code: C (decide), E (upstream), F (backlog). One item inside H is also open.
 
 Everything here was investigated against `main` at **v1.27.0** on
 Windows 11, Python 3.12.7, with pandas 2.3.2 / anndata 0.12.2 /
-spatialdata 0.7.3 / zarr 3.1.3.
+spatialdata 0.7.3 / zarr 3.1.3. `main` is **v3.0.0** now, and three of those
+four are below the floors `pyproject.toml` declares today -- anndata
+`>=0.13.2`, spatialdata `>=0.8.0`, zarr `>=3.1.4`. Re-measure before trusting
+a figure below: the anndata and zarr moves in particular changed how the store
+gets written, which is the subject of half these handouts.
 
-| # | Handout | Branch | Worktree | Priority |
+| # | Handout | Branch | Worktree | State |
 |---|---|---|---|---|
-| A | [pandas-3-string-dtypes.md](pandas-3-string-dtypes.md) | `fix/pandas3-string-dtypes` | `../Thyra-pandas3` | **first** |
-| B | [optimize-chunks.md](optimize-chunks.md) | `fix/optimize-chunks-sparse` | `../Thyra-chunks` | independent |
-| C | [write-amplification.md](write-amplification.md) | `perf/write-amplification` | `../Thyra-perf` | after A -- **[findings](findings-write-amplification.md)** |
-| D | [toolchain-hygiene.md](toolchain-hygiene.md) | `chore/toolchain-hygiene` | `../Thyra-toolchain` | independent |
-| E | [upstream-lazy-table-pr.md](upstream-lazy-table-pr.md) | *upstream* | *scverse/spatialdata* | independent |
-| F | [interpolation-resampling.md](interpolation-resampling.md) | *not created* | `../Thyra-interp` | backlog |
+| A | [pandas-3-string-dtypes.md](pandas-3-string-dtypes.md) | `fix/pandas3-string-dtypes` | `../Thyra-pandas3` | **SHIPPED** -- issue #117 closed, anndata floor raised, coercion deleted |
+| B | [optimize-chunks.md](optimize-chunks.md) | `fix/optimize-chunks-sparse` | `../Thyra-chunks` | **RESOLVED** -- flag survives as a hidden deprecated no-op |
+| C | [write-amplification.md](write-amplification.md) | `perf/write-amplification` | `../Thyra-perf` | **MEASURED, decision owed** -- **[findings](findings-write-amplification.md)** |
+| D | [toolchain-hygiene.md](toolchain-hygiene.md) | `chore/toolchain-hygiene` | `../Thyra-toolchain` | **RESOLVED** -- `pre-commit run --all-files` passes clean |
+| E | [upstream-lazy-table-pr.md](upstream-lazy-table-pr.md) | *upstream* | *scverse/spatialdata* | **OPEN upstream** -- scverse/spatialdata#1055 still unmerged (2026-08-03) |
+| F | [interpolation-resampling.md](interpolation-resampling.md) | *not created* | `../Thyra-interp` | **backlog** -- a capability gap, not a defect |
 | G | [resampling-scils-alignment.md](resampling-scils-alignment.md) | `fix/resampling-scils-alignment` | `../Thyra-resampling` | **DONE** -- v2.1.0-v2.2.3, item 5 left |
-| H | [loose-ends-after-scils-alignment.md](loose-ends-after-scils-alignment.md) | one per item | `../Thyra-loose` | **item 1 is not a chore** |
+| H | [loose-ends-after-scils-alignment.md](loose-ends-after-scils-alignment.md) | one per item | `../Thyra-loose` | items 3 and 4 shipped; **only item 2 is open**; item 1 is not Thyra's |
 
 Handout H is what was found *around* G and deliberately not folded into it.
-Its item 1 -- Ousia importing Thyra 2.2.3 against a spatialdata/anndata/zarr
-cluster that violates three of Thyra's four declared pins, silently, because
-the dependency is a bare editable path dep with no version constraint -- is
-the only one of the four that is not a chore. Read that before the others.
+Three of its four items are settled, so do not read it front-to-back:
+
+- **Item 1** -- Ousia importing Thyra against a spatialdata/anndata/zarr
+  cluster that violates Thyra's declared pins, silently, because the
+  dependency is a bare editable path dep with no version constraint -- is a
+  defect in *Ousia's* dependency declaration. Nothing in this repository
+  fixes it, and no work here should wait on it.
+- **Item 2**, `main` having no branch protection, is **the only open item**.
+  Re-verified 2026-08-03: the branch-protection API still answers
+  "Branch not protected".
+- **Item 3**, `release.yml`'s dead "No release needed" branch, shipped in
+  `11c808f`.
+- **Item 4**, taking spectrum representation explicitly, shipped in `5c7aa29`
+  as `--spectrum-type`.
 
 Handout G is the one to read before touching resampling. It records what the
 SCiLS Lab manual actually specifies -- SCiLS is the baseline Thyra's
@@ -66,17 +84,14 @@ Two consequences:
 
 ## Ordering and overlap
 
-**A must land first.** It is the only one fixing a defect users can hit
-today, and it touches `_save_output` in
-`thyra/converters/spatialdata/base_spatialdata_converter.py`.
+Historical, and no longer binding. **A has shipped**, so the constraint it
+imposed on everything else is gone, and B and D are resolved too.
 
-**C also touches that file** (`_process_single_spectrum`, the write
-orchestration). C should rebase on `main` once A has merged rather than
-racing it. If C starts before A lands, expect one small conflict in
-`_save_output`.
-
-**B and D share no files with anything else** and can run start-to-finish
-independently.
+What is left of this section: C is free to start from current `main`. But
+what C needs now is a **decision** on
+[the findings](findings-write-amplification.md) -- specifically whether the
+default bin count stays as it is on the `tic_preserving` path -- not more
+measurement. Read the findings before writing any code for it.
 
 ## Worktree setup
 

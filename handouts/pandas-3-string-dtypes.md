@@ -1,5 +1,25 @@
 # A. pandas 3.0 string dtypes break SpatialData writes
 
+> **RESOLVED** -- and not by the write-time coercion this handout proposes.
+> Raising the anndata floor to `>=0.13.2` fixed it upstream instead: anndata
+> 0.13 serializes pandas' `str` dtype natively (anndata #2133), so the
+> coercion became unnecessary and `_coerce_table_strings_to_object` was
+> deleted rather than written. See issue #117 and the comment at
+> `pyproject.toml`'s `anndata` pin.
+>
+> Two corrections to the brief below:
+>
+> - **The fix is a dependency floor, not code.** If you are reading this
+>   looking for the function to patch, there is no longer one to patch.
+> - **All three write paths pass now**, not just streaming PCS. Re-running
+>   this handout's own reproduction on `main` at v3.0.0 with
+>   `pd.set_option("future.infer_string", True)`, pandas 2.3.2 and
+>   anndata 0.13.2: in-memory **PASS**, streaming PCS **PASS**, streaming COO
+>   **PASS**. The table below records the v1.27.0 state and is kept for the
+>   record.
+>
+> Everything below is the original brief, unedited.
+
 **Branch:** `fix/pandas3-string-dtypes`
 **Worktree:** `../Thyra-pandas3`
 **Priority:** land this first. It is the only handout fixing something a
