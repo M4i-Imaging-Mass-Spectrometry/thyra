@@ -308,7 +308,7 @@ replaced by one **volume**:
 |---------|-----|--------------|
 | **Table** | `{dataset_id}` | pixels x m/z, with `x`, `y`, `z` and `spatial_x`, `spatial_y`, `spatial_z` in `.obs` |
 | **TIC volume** | `{dataset_id}_tic` | `(c, z, y, x)` — one channel, then the three spatial axes |
-| **Pixel Shapes** | `{dataset_id}_pixels` | GeoDataFrame of 2D pixel boxes |
+| **Pixel Shapes** | `{dataset_id}_pixels` | GeoDataFrame of `POLYGON Z` footprints, each at its slice's depth |
 
 ```python
 volume = sdata.images[f"{dataset_id}_tic"]
@@ -359,10 +359,35 @@ two agree only by coincidence. See
     additive and a consumer that never reads 3D sees the schema it already
     knows.
 
-!!! warning "Pixel shapes are still 2D"
-    The pixel-polygon shapes carry no z coordinate, so all slices' polygons
-    coincide in depth. Use the table's `spatial_z` (or the volume itself) when
-    you need a per-slice position.
+#### Pixel footprints in a volume
+
+The pixel polygons carry z too, so they meet the volume at `"global"` in all
+three axes. Each is a `POLYGON Z`: a flat square at the micrometre depth of the
+slice it was acquired on, the same value the table stores in `spatial_z`.
+
+```python
+shapes = sdata.shapes[f"{dataset_id}_pixels"]
+geom = shapes.geometry.iloc[0]
+print(geom.has_z)                      # True on a multi-slice volume
+print(geom.exterior.coords[0][2])      # depth in um = z_index * z_spacing_um
+```
+
+They are **footprints, not voxels**: a square at one depth, not a solid
+spanning the slice thickness — shapely has no solid geometry. The extent in z
+is the slice spacing, and it belongs to the image.
+
+!!! note "spatialdata warns on 3D shapes"
+    `spatialdata`'s shapes model is 2D, so parsing, validating or transforming
+    these emits a `UserWarning` that "2 is expected". The geometry is carried
+    and scaled correctly regardless; the warning is left in place rather than
+    suppressed, because it is upstream describing the limits of its own model.
+
+    Expressing the depth as a `Translation` on flat geometry instead does not
+    work — the transform silently drops z. See
+    [Coordinate systems](coordinate-systems.md).
+
+    Single-plane acquisitions and the per-slice 2D route keep flat geometry,
+    since neither has a z axis to place anything on.
 
 ---
 
