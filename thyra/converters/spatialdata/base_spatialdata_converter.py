@@ -527,12 +527,14 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         ``adata.uns``; the streaming-PCS path hand-writes the Zarr layout
         and used to compose its own, much smaller block -- with
         ``spectrum_type`` hardcoded to ``"processed"``, which is not even
-        a value the extractors produce. A dataset that crossed
-        ``StreamingSpatialDataConverter.PCS_SIZE_THRESHOLD_GB`` therefore
-        came out claiming a spectrum representation it did not have, and
-        without any of the other sections, while a slightly smaller one
-        from the same instrument came out complete. Both paths now render
-        this mapping, so a section added here reaches every store.
+        a value the extractors produce. Routing was on a size threshold at
+        the time, so a dataset large enough to reach the PCS path came out
+        claiming a spectrum representation it did not have, and without any
+        of the other sections, while a slightly smaller one from the same
+        instrument came out complete. Both paths now render this mapping,
+        so a section added here reaches every store. (The threshold is
+        gone -- PCS is the default route -- but the divergence it exposed
+        is exactly what this method exists to prevent.)
 
         Sections the reader has nothing for are omitted rather than
         written empty, so consumers can tell "not available from this

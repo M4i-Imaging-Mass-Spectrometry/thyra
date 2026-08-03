@@ -50,26 +50,39 @@ _INDEX_BUILD_CHUNK = 1_000_000
 class StreamingSpatialDataConverter(BaseSpatialDataConverter):
     """Memory-efficient streaming converter for MSI data to SpatialData format.
 
-    Uses a two-pass approach to keep memory bounded during processing:
-    - Pass 1: Count non-zeros to build sparse matrix structure (indptr)
-    - Pass 2: Write indices and data directly to Zarr
+    Two routes, both two-pass over the reader:
 
-    For large datasets (>50GB), uses CSC format with memory-mapped files
-    to handle datasets of any size with ~200MB RAM. For smaller datasets,
-    uses the simpler CSR approach.
+    - **PCS** (Pre-calculated Scatter, ``use_csc=True``, and what ``"auto"``
+      now picks). Pass 1 counts entries per column, pass 2 scatters straight
+      into memory-mapped CSC arrays and streams those to Zarr. The matrix is
+      never a scipy object in RAM.
+    - **COO** (``use_csc=False``). Pass 1 counts non-zeros per row, pass 2
+      writes CSR components to a temporary Zarr, which is then read back
+      whole into a ``scipy.sparse.csr_matrix`` and converted with
+      ``.tocsc()``. That materialise-then-convert step is the peak.
 
-    Key advantages:
-    - Memory stays bounded (~200MB) regardless of dataset size
-    - Writes directly to Zarr without scipy matrix in memory
-    - CSC format enables efficient ion image extraction
-    - Handles 1M+ pixels without memory issues
+    PCS is the default because it is faster *and* lighter, and the gap widens
+    with the dataset. Measured on ``MockMSIReader``, peak process RSS sampled
+    at 20 ms, one subprocess per route:
+
+    ===========  ==============  ==============
+    nnz          PCS             COO
+    ===========  ==============  ==============
+    16M          7.4 s / 540 MB  10.4 s / 655 MB
+    64M          35.6 s / 1.1 GB 58.5 s / 1.9 GB
+    ===========  ==============  ==============
+
+    Both routes iterate the reader twice, so the usual "PCS re-reads the
+    file" objection does not apply -- that cost is symmetric, which is why
+    PCS wins on time at all.
+
+    Note what the numbers do *not* say: PCS is not the "~200 MB regardless of
+    dataset size" this docstring used to claim. Its RSS grew 540 MB -> 1.1 GB
+    across those two points. Much of that is memmap pages, which count toward
+    working set while remaining evictable, so the private-memory gap is wider
+    than the table suggests -- but "bounded" was never true and is not
+    claimed here.
     """
-
-    # Threshold in GB above which PCS (Pre-calculated Scatter) method is used
-    # for memory-efficient CSC conversion. Below this, standard COO approach is used.
-    # Set to 30 GB to catch continuous mode datasets that would cause memory spikes
-    # (the standard method can use 2-3x the dataset size in peak memory).
-    PCS_SIZE_THRESHOLD_GB: float = 30.0
 
     def __init__(
         self,
@@ -88,11 +101,13 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 Default: 5000 spectra per chunk.
             temp_dir: Directory for temporary Zarr files. If None, uses
                 system temp directory. Cleaned up after conversion.
-            use_csc: Controls CSC format conversion method:
-                - "auto" (default): Use PCS method for large datasets (>50GB),
-                  standard method for smaller datasets
-                - True: Always use PCS method for memory-efficient CSC
-                - False: Use CSR format instead
+            use_csc: Which of the two write routes to take:
+                - "auto" (default): PCS. Kept as a distinct value from
+                  ``True`` so a caller can say "whatever the converter
+                  thinks best" and follow the default if it moves again.
+                - True: PCS, pinned.
+                - False: COO. The escape hatch -- it materialises the
+                  matrix in RAM, so reach for it only with a reason.
             **kwargs: Keyword arguments passed to BaseSpatialDataConverter
 
         Note:
@@ -115,10 +130,17 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         setattr(self.reader, "_quiet_mode", True)
 
     def _estimate_output_size_gb(self) -> float:
-        """Estimate the output dataset size in GB.
+        """Estimate the output dataset size in GB, for the log line.
 
-        Uses metadata to estimate the dense matrix size:
-        n_pixels * n_mz_bins * 4 bytes (float32)
+        Dense size, ``n_pixels * n_mz_bins * 4`` bytes (float32).
+
+        **Diagnostic only since PCS became the default.** Nothing routes on
+        this any more. It is kept because the number is genuinely useful in a
+        support log and because getting it right was not free: the fallback
+        below is wrong in both directions (see the comment in the body), and
+        deleting the function would delete that finding along with the tests
+        that pin it. If you are looking for the routing decision it is in
+        :meth:`_should_use_pcs`, which no longer calls this.
 
         Returns:
             Estimated size in gigabytes
@@ -131,19 +153,20 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
         # Prefer the axis that was actually built. ``convert()`` runs
         # ``_initialize_conversion()`` -- and so ``_setup_mass_axis()`` --
-        # before it asks which method to use, so by the time this gate is
-        # evaluated the real bin count is known and there is nothing to
-        # estimate. That matters most on the raw-axis path, where the
-        # fallback below assumes a 10 mDa spacing that the data need not
-        # have: a continuous file carrying 4,000 points over 250-1200 m/z
-        # was scored as though it had 95,000, and a processed file whose
-        # spectra share no m/z values was scored far too low, which routed
-        # the largest datasets to the method that holds the most in memory.
+        # before this is reached, so the real bin count is known and there
+        # is nothing to estimate. That matters most on the raw-axis path,
+        # where the fallback below assumes a 10 mDa spacing that the data
+        # need not have: a continuous file carrying 4,000 points over
+        # 250-1200 m/z was scored as though it had 95,000, and a processed
+        # file whose spectra share no m/z values was scored far too low.
+        # While this drove the routing (issue #87) that mis-sent the
+        # largest datasets to the method that holds the most in memory; it
+        # now only makes the logged number honest.
         if self._common_mass_axis is not None:
             n_mz_bins = len(self._common_mass_axis)
         elif self._resampling_config:
-            # Same resolution path the axis builder will use, so the gate
-            # against PCS_SIZE_THRESHOLD_GB sees the real bin count.
+            # Same resolution path the axis builder will use, so the
+            # reported bin count is the real one.
             _, _, _, n_mz_bins = self._resolve_resampling_plan()
         else:
             min_mass, max_mass = metadata.mass_range
@@ -163,43 +186,41 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         return size_gb
 
     def _should_use_pcs(self) -> bool:
-        """Determine whether to use PCS method based on settings and dataset size.
+        """Which write route to take. ``"auto"`` means PCS.
+
+        This used to compare an estimated dense size against a 30 GB
+        threshold and send anything smaller to COO -- which, since nothing
+        in the repo passes ``use_csc`` at all, made COO the *default* route
+        for essentially every conversion. The threshold assumed PCS bought
+        memory safety at a cost in speed, so it was worth paying only on
+        datasets big enough to need it.
+
+        Measured, that trade does not exist: PCS is faster and lighter at
+        every size tried, and its margin grows with the dataset (the table
+        in the class docstring). Both routes iterate the reader twice, so
+        there is no second read to pay for. A threshold whose cheap side is
+        never actually cheaper is not a threshold, so it is gone rather
+        than retuned -- a retuned one would just be a number nobody could
+        justify either.
+
+        ``use_csc=False`` still selects COO, so the route remains reachable
+        and tested; it is an escape hatch now rather than the default.
 
         Returns:
-            True if PCS method should be used, False otherwise
+            True if the PCS route should be used, False for COO.
         """
         if self._use_csc is True:
             return True
-        elif self._use_csc is False:
+        if self._use_csc is False:
             return False
-        else:  # "auto"
-            estimated_size = self._estimate_output_size_gb()
-            use_pcs = estimated_size > self.PCS_SIZE_THRESHOLD_GB
-            if use_pcs:
-                logger.info(
-                    f"Dataset size ({estimated_size:.1f} GB) exceeds threshold "
-                    f"({self.PCS_SIZE_THRESHOLD_GB} GB) - using PCS method"
-                )
-            else:
-                logger.info(
-                    f"Dataset size ({estimated_size:.1f} GB) below threshold "
-                    f"({self.PCS_SIZE_THRESHOLD_GB} GB) - using standard method"
-                )
-            return use_pcs
+        return True  # "auto"
 
     def convert(self) -> bool:
         """Stream-convert MSI data to SpatialData format.
 
-        Overrides the base convert() method. Writes directly to final output
-        Zarr without creating scipy sparse matrix, keeping memory bounded.
-
-        For large datasets (>50GB by default), uses the Pre-calculated Scatter
-        (PCS) approach for CSC format:
-        - O(N) time complexity (no sorting required)
-        - ~200 MB memory regardless of dataset size
-        - CSC format for efficient ion image access
-
-        For smaller datasets, uses the standard COO approach which is simpler.
+        Overrides the base convert() method. Both routes stream to Zarr; see
+        the class docstring for what separates them and why PCS is the
+        default. ``use_csc=False`` selects COO.
 
         Returns:
             True if conversion was successful, False otherwise
@@ -209,16 +230,21 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             self._initialize_conversion()
             self._refuse_multiple_z_planes()
 
-            # Decide which method to use based on settings and dataset size
+            # Diagnostic only -- the route below does not depend on it. Called
+            # here rather than inside _should_use_pcs() so the predicate stays
+            # a predicate, and after _initialize_conversion() so it reports the
+            # built axis instead of guessing at it.
+            self._estimate_output_size_gb()
+
             if self._should_use_pcs():
-                # Use no-cache approach for memory-efficient CSC conversion
-                # This processes spectra twice but eliminates the ~200GB cache file
+                # Scatter straight into memmapped CSC arrays: the matrix is
+                # never a scipy object in RAM.
                 result = self._convert_to_csc_no_cache()
                 logger.info(
                     f"Zero-copy CSC conversion complete: {result['total_nnz']:,} non-zeros"
                 )
             else:
-                # Use standard COO approach for smaller datasets
+                # Opt-in COO route: materialises the matrix to convert it.
                 self._setup_temp_storage()
                 coo_result = self._stream_build_coo()
                 data_structures = self._create_data_structures_from_coo(coo_result)
