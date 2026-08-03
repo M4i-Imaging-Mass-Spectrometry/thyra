@@ -350,7 +350,22 @@ def _handle_post_conversion(success: bool, output: Path) -> bool:
 
 
 class GroupedCommand(click.Command):
-    """Command that groups options into sections in --help output."""
+    """Command that groups options into sections in --help output.
+
+    Every visible option must appear in exactly one ``GROUPS`` entry.
+    Anything missing still shows up -- ``format_help`` sweeps the remainder
+    into a trailing ``Options:`` section rather than dropping it -- but that
+    section is a defect signal, not a home. It is where
+    ``--resample-gap-tolerance`` and ``--spectrum-type`` sat for two
+    releases, next to ``--version`` and ``--help``, while docs/cli.md told
+    readers the help was organised by category.
+
+    ``tests/unit/test_cli_help_grouping.py`` fails if the trailing section is
+    ever non-empty again, so adding an option without classifying it here is
+    caught before release rather than by a reader.
+
+    Section order is mirrored by docs/cli.md; keep the two in step.
+    """
 
     GROUPS = {
         "Conversion": [
@@ -371,8 +386,10 @@ class GroupedCommand(click.Command):
             "--resample-max-mz",
             "--resample-width-at-mz",
             "--resample-reference-mz",
+            "--resample-gap-tolerance",
         ],
         "Performance": ["--streaming", "--sparse-format"],
+        "imzML-specific": ["--spectrum-type"],
         "Bruker-specific": [
             "--use-recalibrated",
             "--no-recalibrated",
@@ -380,6 +397,7 @@ class GroupedCommand(click.Command):
             "--intensity-threshold",
         ],
         "Other": ["--dataset-id", "--handle-3d"],
+        "General": ["--version", "--help"],
     }
 
     def format_help(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
