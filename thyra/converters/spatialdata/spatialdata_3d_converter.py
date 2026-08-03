@@ -292,8 +292,19 @@ class SpatialData3DConverter(BaseSpatialDataConverter):
                 dims=("c", "z", "y", "x"),
             )
 
+            # z gets its own spacing. It used to reuse the in-plane pitch,
+            # which asserts that consecutive slices sit exactly one pixel
+            # width apart -- true only by coincidence, since sections are
+            # cut by a microtome and the raster is set by the stage. The
+            # voxel values were right; the volume was simply the wrong
+            # depth. See BaseMSIConverter._resolve_z_spacing for where the
+            # number comes from when the caller supplies nothing.
+            #
+            # Scale pairs values with axis *names*, not by position, so
+            # this reads ("x", "y", "z") against a (c, z, y, x) image
+            # deliberately. Do not "reorder" it to match the dims.
             transform = Scale(
-                [self.pixel_size_um, self.pixel_size_um, self.pixel_size_um],
+                [self.pixel_size_um, self.pixel_size_um, self.z_spacing_um],
                 axes=("x", "y", "z"),
             )
             try:

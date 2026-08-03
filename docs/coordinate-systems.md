@@ -35,6 +35,10 @@ zarr.attrs["coordinate_systems"] = {
         "reference_element": str | None,
         "convention_version": 1,
         "produced_by": "thyra/<version>",
+
+        # Multi-slice volumes only -- see "The z axis" below
+        "z_spacing_um": float,
+        "z_spacing_source": "manual" | "automatic" | "assumed_isotropic",
     }
 }
 ```
@@ -46,6 +50,36 @@ zarr.attrs["coordinate_systems"] = {
 | ``reference_element`` | Name of the canonical raster element that defines pixel space, when ``unit="pixel"``. ``None`` otherwise. |
 | ``convention_version`` | Schema version; bump when the shape of this attr changes. Currently ``1``. |
 | ``produced_by`` | ``"thyra/<version>"`` for Thyra-produced zarrs. |
+| ``z_spacing_um`` | Micrometers between consecutive slices. **Only present on multi-slice volumes.** Always an absolute micrometer distance, even when ``unit="pixel"``: the optical affine governs only x and y, while z is always scaled directly. |
+| ``z_spacing_source`` | Where ``z_spacing_um`` came from. **Only present on multi-slice volumes.** |
+
+---
+
+## The z axis
+
+A 2D store has no slice-to-slice distance, so it carries neither z field. Their
+**absence is the signal** that there is no z axis — which is also why adding
+them did not move ``convention_version``: they are purely additive, and a
+consumer that never reads volumes sees exactly the schema it already knew.
+
+``z_spacing_source`` is the field that matters:
+
+| Value | Meaning |
+|-------|---------|
+| ``"manual"`` | The caller supplied it (``--z-spacing`` / ``z_spacing_um=``). Trust it. |
+| ``"automatic"`` | The source metadata reported it. Trust it. |
+| ``"assumed_isotropic"`` | **Nobody supplied one.** The in-plane pixel pitch was reused, which asserts that slices sit exactly one pixel width apart. Treat the depth as unknown. |
+
+Section thickness is set by the microtome that cut the sections; the in-plane
+pitch is set by the stage that rastered them. The two agree only by coincidence,
+and for 3D MSI usually do not — often by an order of magnitude. A volume whose
+``z_spacing_source`` is ``"assumed_isotropic"`` has correct voxel *values* and an
+unreliable *depth*, so rendering it in micrometers stretches or squashes the
+stack along z.
+
+Thyra cannot detect this: imzML has no standard term for slice spacing, and 3D
+acquisitions are frequently non-consecutive sections, so the value has to be
+supplied by whoever prepared them.
 
 Consumers that don't know the schema can still open the zarr; they
 just won't be able to render distances in micrometers without

@@ -284,6 +284,7 @@ thyra data.d output.zarr --intensity-threshold 100
 |--------|---------|-------------|
 | `--dataset-id TEXT` | `msi_dataset` | Dataset identifier used in element keys |
 | `--handle-3d` | off | Process as 3D volume instead of 2D slices |
+| `--z-spacing FLOAT` | in-plane pixel size | Distance between consecutive slices, in um. Only used with `--handle-3d` |
 
 ### Examples
 
@@ -294,7 +295,32 @@ thyra input.imzML output.zarr --dataset-id hippocampus
 
 # Combine z-slices into a single 3D table
 thyra volume.imzML output.zarr --handle-3d
+
+# 20 um sections acquired on a 50 um raster
+thyra volume.imzML output.zarr --handle-3d --pixel-size 50 --z-spacing 20
 ```
+
+### Set `--z-spacing` whenever you know it
+
+`--pixel-size` is the **in-plane** raster pitch. It says nothing about how far
+apart consecutive slices are: that distance is set by the microtome that cut the
+sections, not by the stage that rastered them, and the two match only by
+coincidence.
+
+With no `--z-spacing`, Thyra reuses the in-plane pitch, warns, and records
+`z_spacing_source: "assumed_isotropic"` in the store so the guess stays
+distinguishable from a measurement. The volume's voxel values are unaffected
+either way — what is wrong is its depth, so a viewer reading it in micrometres
+renders the stack squashed or stretched along z.
+
+There is no way to detect this from the data. imzML has no term for slice
+spacing, and 3D MSI acquisitions are frequently non-consecutive sections, so
+the number has to come from whoever cut them.
+
+!!! warning "It does nothing without `--handle-3d`"
+    Without 3D handling each slice is written as its own 2D image and there is
+    no z axis to space out. Passing `--z-spacing` on its own is logged as
+    ignored rather than silently accepted.
 
 ---
 

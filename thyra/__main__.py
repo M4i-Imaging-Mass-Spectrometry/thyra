@@ -396,7 +396,7 @@ class GroupedCommand(click.Command):
             "--interactive-calibration",
             "--intensity-threshold",
         ],
-        "Other": ["--dataset-id", "--handle-3d"],
+        "Other": ["--dataset-id", "--handle-3d", "--z-spacing"],
         "General": ["--version", "--help"],
     }
 
@@ -613,7 +613,18 @@ class GroupedCommand(click.Command):
 @click.option(
     "--handle-3d",
     is_flag=True,
-    help="Process as 3D data instead of 2D slices",
+    help="Process as 3D data instead of 2D slices (see --z-spacing)",
+)
+@click.option(
+    "--z-spacing",
+    type=float,
+    default=None,
+    help=(
+        "Distance between consecutive slices in um, for --handle-3d. "
+        "Default: reuse the in-plane pixel size and record it as an "
+        "assumption -- correct only if sections happen to be one pixel "
+        "width apart. Set this whenever the section thickness is known."
+    ),
 )
 def main(
     input: Path,
@@ -622,6 +633,7 @@ def main(
     dataset_id: str,
     pixel_size: Optional[float],
     handle_3d: bool,
+    z_spacing: Optional[float],
     optimize_chunks: bool,
     log_level: str,
     log_file: Optional[Path],
@@ -663,6 +675,7 @@ def main(
     _validate_positive_float(
         intensity_threshold, "intensity_threshold", "Intensity threshold"
     )
+    _validate_positive_float(z_spacing, "z_spacing", "Z spacing")
     _validate_input_path(input)
     _validate_output_path(output)
 
@@ -716,6 +729,7 @@ def main(
         dataset_id=dataset_id,
         pixel_size_um=pixel_size,
         handle_3d=handle_3d,
+        z_spacing_um=z_spacing,
         resampling_config=resampling_config,
         reader_options=reader_options,
         sparse_format=sparse_format,

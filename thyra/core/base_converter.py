@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from enum import Enum
 from os import PathLike
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -14,6 +14,9 @@ from tqdm import tqdm
 
 from .base_reader import BaseMSIReader
 
+if TYPE_CHECKING:
+    from ..metadata.types import EssentialMetadata
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,6 +26,26 @@ class PixelSizeSource(Enum):
     DEFAULT = "default"  # Using default 1.0 (fallback)
     USER_PROVIDED = "manual"  # User explicitly provided via parameter
     AUTO_DETECTED = "automatic"  # Detected from metadata
+
+
+class ZSpacingSource(Enum):
+    """How the slice-to-slice (z) spacing was determined.
+
+    Deliberately separate from :class:`PixelSizeSource`: the in-plane
+    pitch is a property of the raster and is nearly always recoverable
+    from the file, while the z spacing is a property of how the sections
+    were physically cut and usually is not recoverable at all.
+
+    ``ASSUMED_ISOTROPIC`` is the one that matters. It records that
+    nothing supplied a spacing and the in-plane pitch was reused, which
+    is what this code has always done -- the point of naming it is that
+    a consumer can now tell a measured spacing from a guessed one
+    instead of receiving both as bare numbers.
+    """
+
+    ASSUMED_ISOTROPIC = "assumed_isotropic"  # Nothing supplied one; reused x pitch
+    USER_PROVIDED = "manual"  # Explicit z_spacing_um argument
+    AUTO_DETECTED = "automatic"  # Reported by the source metadata
 
 
 class BaseMSIConverter(ABC):
@@ -41,6 +64,7 @@ class BaseMSIConverter(ABC):
         pixel_size_source: PixelSizeSource = PixelSizeSource.DEFAULT,
         compression_level: int = 5,
         handle_3d: bool = False,
+        z_spacing_um: Optional[float] = None,
         **kwargs: Any,
     ):
         """Initialize the MSI converter.
@@ -49,12 +73,25 @@ class BaseMSIConverter(ABC):
             reader: MSI data reader instance
             output_path: Path for output file
             dataset_id: Identifier for the dataset
-            pixel_size_um: Size of each pixel in micrometers
+            pixel_size_um: In-plane pixel pitch in micrometers
             pixel_size_source: How pixel size was determined
             compression_level: Compression level for output
             handle_3d: Whether to process as 3D data
+            z_spacing_um: Distance between consecutive slices in
+                micrometers.  Only meaningful with ``handle_3d=True``.
+                ``None`` (default) means "nobody said", which falls back
+                to the in-plane pitch and records that it was assumed --
+                see :meth:`_resolve_z_spacing`.
             **kwargs: Additional keyword arguments
+
+        Raises:
+            ValueError: If ``z_spacing_um`` is given and is not positive.
         """
+        if z_spacing_um is not None and (
+            not isinstance(z_spacing_um, (int, float)) or z_spacing_um <= 0
+        ):
+            raise ValueError(f"z_spacing_um must be positive, got {z_spacing_um}")
+
         self.reader = reader
         self.output_path = Path(output_path)
         self.dataset_id = dataset_id
@@ -62,6 +99,15 @@ class BaseMSIConverter(ABC):
         self.pixel_size_source = pixel_size_source
         self.compression_level = compression_level
         self.handle_3d = handle_3d
+
+        # Settled in _resolve_z_spacing() once metadata is loaded, because
+        # the fallback is the in-plane pitch and that may itself still be
+        # the placeholder 1.0 until auto-detection has run.
+        self._z_spacing_um_arg = (
+            float(z_spacing_um) if z_spacing_um is not None else None
+        )
+        self.z_spacing_um: float = float(pixel_size_um)
+        self.z_spacing_source = ZSpacingSource.ASSUMED_ISOTROPIC
         self.options: Dict[str, Any] = kwargs
         self._common_mass_axis: Optional[NDArray[np.float64]] = None
         self._dimensions: Optional[Tuple[int, int, int]] = None
@@ -134,6 +180,9 @@ class BaseMSIConverter(ABC):
             elif self.pixel_size_source == PixelSizeSource.USER_PROVIDED:
                 logger.info(f"Using user-specified pixel size: {self.pixel_size_um} um")
 
+            # After pixel size, because the fallback is the pixel size.
+            self._resolve_z_spacing(essential)
+
             # Load mass axis separately (still expensive operation)
             self._common_mass_axis = self.reader.get_common_mass_axis()
             if len(self._common_mass_axis) == 0:
@@ -152,6 +201,89 @@ class BaseMSIConverter(ABC):
         except Exception as e:
             logger.error(f"Error during initialization: {e}")
             raise
+
+    @property
+    def _is_volume(self) -> bool:
+        """True when this conversion writes a real multi-slice volume.
+
+        ``handle_3d`` alone is not enough: it is forced on by
+        ``SpatialData3DConverter.__init__`` regardless of the data, and a
+        single-slice acquisition converted through that class still takes
+        the 2D branch of ``_create_tic_image``. Only the combination has
+        a z axis to space out.
+        """
+        return bool(self.handle_3d and self._dimensions and self._dimensions[2] > 1)
+
+    def _resolve_z_spacing(self, essential: "EssentialMetadata") -> None:
+        """Settle the slice-to-slice spacing, and record where it came from.
+
+        Precedence mirrors the in-plane pitch: an explicit argument wins,
+        then whatever the source could report, then a fallback.
+
+        The fallback is the in-plane pitch, which is what every 3D volume
+        this project has written so far already used. What changes is that
+        it is no longer *stated as a fact*: ``z_spacing_source`` marks it
+        as an assumption, the store carries that marker, and a volume
+        built on a guess is loud about it in the log.
+
+        Reusing the in-plane pitch asserts that consecutive slices sit
+        exactly one pixel-width apart. Sections are cut by a microtome and
+        the raster is set by the stage, so the two agree only by
+        coincidence -- for 3D MSI usually not at all, and often by an
+        order of magnitude. A consumer reading the volume in micrometres
+        renders the stack at the wrong depth.
+
+        Args:
+            essential: Metadata for the dataset being converted.
+        """
+        if self._z_spacing_um_arg is not None:
+            self.z_spacing_um = self._z_spacing_um_arg
+            self.z_spacing_source = ZSpacingSource.USER_PROVIDED
+        elif getattr(essential, "z_spacing_um", None) is not None:
+            self.z_spacing_um = float(essential.z_spacing_um)
+            self.z_spacing_source = ZSpacingSource.AUTO_DETECTED
+        else:
+            self.z_spacing_um = float(self.pixel_size_um)
+            self.z_spacing_source = ZSpacingSource.ASSUMED_ISOTROPIC
+
+        self._log_z_spacing()
+
+    def _log_z_spacing(self) -> None:
+        """Report the resolved z spacing, warning when it was assumed.
+
+        Silent for anything that is not a volume: a 2D conversion has no
+        slice-to-slice distance to get wrong, and warning about one on
+        every ordinary dataset would train people to ignore the message
+        on the datasets where it matters.
+        """
+        if not self._is_volume:
+            logger.debug(
+                "Not a multi-slice volume; z spacing (%g um, %s) is unused.",
+                self.z_spacing_um,
+                self.z_spacing_source.value,
+            )
+            return
+
+        if self.z_spacing_source is ZSpacingSource.ASSUMED_ISOTROPIC:
+            logger.warning(
+                "No z spacing was supplied, so this volume assumes slices sit "
+                "one in-plane pixel apart (%g um). That is a guess, not a "
+                "measurement: section thickness is set by the microtome, not "
+                "by the raster, so any consumer reading this volume in "
+                "micrometres will render the stack at the wrong depth unless "
+                "the two happen to coincide. Pass --z-spacing (CLI) or "
+                "z_spacing_um= (API) to set it. The store records this as "
+                "z_spacing_source='%s' so the assumption stays visible.",
+                self.z_spacing_um,
+                ZSpacingSource.ASSUMED_ISOTROPIC.value,
+            )
+        else:
+            logger.info(
+                "Using %s z spacing: %g um (in-plane pitch %g um)",
+                self.z_spacing_source.value,
+                self.z_spacing_um,
+                self.pixel_size_um,
+            )
 
     @abstractmethod
     def _create_data_structures(self) -> Any:
@@ -397,7 +529,7 @@ class BaseMSIConverter(ABC):
         # Add spatial coordinates
         coords_df["spatial_x"] = coords_df["x"] * self.pixel_size_um
         coords_df["spatial_y"] = coords_df["y"] * self.pixel_size_um
-        coords_df["spatial_z"] = coords_df["z"] * self.pixel_size_um
+        coords_df["spatial_z"] = coords_df["z"] * self.z_spacing_um
 
         return coords_df
 
