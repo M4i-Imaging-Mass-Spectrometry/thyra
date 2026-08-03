@@ -390,11 +390,6 @@ def main():
     )
     parser.add_argument("--save", action="store_true", help="Save report to file")
     parser.add_argument(
-        "--trends",
-        action="store_true",
-        help="Generate trend analysis (requires --save)",
-    )
-    parser.add_argument(
         "--no-save", action="store_true", help="Don't save report to file"
     )
     parser.add_argument(

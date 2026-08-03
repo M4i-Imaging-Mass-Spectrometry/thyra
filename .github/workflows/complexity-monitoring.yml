@@ -63,9 +63,6 @@ jobs:
     - name: Install project
       run: poetry install --no-interaction
 
-    - name: Install click for monitoring script
-      run: poetry add --group dev click
-
     - name: Run complexity monitoring
       run: |
         echo "Starting complexity monitoring..."
@@ -84,11 +81,10 @@ jobs:
             --files-changed \
             --save
         else
-          echo "Main branch or scheduled run: Full analysis with trends"
+          echo "Main branch or scheduled run: Full analysis"
           poetry run python .github/scripts/complexity_monitor.py \
             --threshold 15 \
-            --save \
-            --trends
+            --save
         fi
 
         COMPLEXITY_EXIT_CODE=$?
@@ -147,8 +143,13 @@ jobs:
             fs.readFileSync(path.join(reportsDir, files[0]), 'utf8')
           );
 
+          // The report carries the threshold it was actually generated with;
+          // reading it back beats a literal that silently goes stale the first
+          // time the --threshold argument above changes.
+          const threshold = latestReport.threshold ?? 'N/A';
+
           let comment = '## Complexity Monitoring Report\n\n';
-          comment += `**Threshold:** ${latestReport.complexity_distribution ? '15' : 'N/A'}\n`;
+          comment += `**Threshold:** ${threshold}\n`;
           comment += `**Total Violations:** ${latestReport.total_violations}\n`;
 
           if (latestReport.total_violations > 0) {
@@ -167,7 +168,7 @@ jobs:
               comment += `${i + 1}. \`${func.file}:${func.line}\` - ${func.function} (${func.complexity})\n`;
             }
 
-            comment += '\n> **Warning:** Consider refactoring functions with complexity > 15 for better maintainability.';
+            comment += `\n> **Warning:** Consider refactoring functions with complexity > ${threshold} for better maintainability.`;
           } else {
             comment += '\n**Excellent!** No complexity violations found.';
           }
