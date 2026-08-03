@@ -165,6 +165,52 @@ global linear-TOF grid (666,526 values from 300 spectra fit
 common axis despite being stored as `processed`. pea and xenium are genuinely
 arbitrary centroids.
 
+### Every file is 1-based in x and y — measured, not assumed
+
+`_get_spectrum_coordinates` converts to 0-based with a hardcoded `x - 1, y - 1`,
+where z is instead rebased on the smallest value present (`_z_base`). PR #147
+guarded the converter against the coordinate that asymmetry would produce, and
+left open whether any real file actually produces one. It does not:
+
+| | min x | max x | min y | max y | cvParams seen |
+| --- | --- | --- | --- | --- | --- |
+| bellini | 1 | 128 | 1 | 128 | 16,384 |
+| pea | 1 | 131 | 1 | 133 | 12,737 |
+| 20240826_xenium_0041899 | 1 | 1007 | 1 | 1469 | 918,855 |
+
+The cvParam count equals each file's spectrum count exactly, which is what makes
+the minima trustworthy — a partial scan would undercount and could miss the one
+spectrum that mattered. `IMS:1000052` appears zero times in all three, as
+recorded above.
+
+**So a 0-based file is unreachable in this corpus, across two vendors.** Do not
+re-derive this; it costs a full scan of a 2.1 GB XML.
+
+Three things keep it from being the whole answer, though:
+
+- **The CV permits 0.** `IMS:1000050`, `IMS:1000051` and `IMS:1000052` all carry
+  value type `xsd:nonNegativeInteger` (see `thyra/metadata/ontology/_ims.py`),
+  which includes zero, and it is the *same* type for all three. There is no
+  ontological basis for rebasing z but not x and y — the reason z got
+  `_z_base()` was pyimzml's own inconsistency, not a vendor file.
+- **Out-of-grid is only reachable downward.** `_calculate_dimensions` sets
+  `n_x = max(raw x)` while the reader yields `raw_x - 1`, so a 1-based file fits
+  the grid exactly and *cannot* land outside it in either direction. A 0-based
+  file would send its entire `x = 0` column to `-1`, which #147 now drops with a
+  warning instead of wrapping onto the far edge.
+- **Rebasing x/y like z would not be a free fix.** Subtracting the observed
+  minimum is safe for z because z is a plane index. For x and y it moves the
+  spatial origin: a legitimately 1-based acquisition cropped to `x >= 50`
+  currently keeps its absolute position (with an empty left margin that
+  `_drop_empty_pixels` trims from obs), and would instead be shifted to 0.
+  Whether the origin is the slide or the acquisition is a real decision, not a
+  bug — which is why nothing was changed here.
+
+Worth noting the codebase already contains both habits: the Bruker rapiflex
+reader *measures* its origin (`x = raster_idx % raster_width`, documented as
+"normalize to 0-based by subtracting first_x/first_y", so it cannot go
+negative), while the imzML reader assumes its own.
+
 ## Adding New Tests
 
 When adding new functionality to the `thyra` package, please follow these guidelines for testing:
