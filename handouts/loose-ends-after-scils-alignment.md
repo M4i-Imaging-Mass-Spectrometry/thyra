@@ -129,6 +129,10 @@ can reproduce the violation above with the one-liner in *Environment*.
 
 ## 2. `main` has no branch protection
 
+**Status: BLOCKED 2026-08-03 -- the bypass this item assumed does not exist.**
+Read "The trap" below before starting. The concurrency half of the release
+gating shipped separately in #144; this half did not.
+
 **Branch:** `chore/require-checks-on-main`
 
 `gh api repos/M4i-Imaging-Mass-Spectrometry/thyra/branches/main/protection`
@@ -142,32 +146,101 @@ This was not worth fixing before, because PRs based on feature branches got
 the *base*). PR #132 (`8ccca25`) fixed that. Required checks are now
 meaningful, so turning them on is worth doing.
 
-The seven checks that run today:
+**Eleven** checks run today, not the seven this handout was written with.
+PR #145 added the `integration` lane on 2026-08-03 and the list changed the
+same day this item was first attempted. Re-enumerate from a recent **pull
+request** before using it -- `main` only ever sees a subset:
 
 ```
-clean-venv-install (3.12)      test (ubuntu-latest, 3.12)
-clean-venv-install (3.13)      test (ubuntu-latest, 3.13)
-complexity-check               test (windows-latest, 3.12)
-                               test (windows-latest, 3.13)
+clean-venv-install (3.12)      test (ubuntu-latest, 3.12)      integration (ubuntu-latest, 3.12)
+clean-venv-install (3.13)      test (ubuntu-latest, 3.13)      integration (ubuntu-latest, 3.13)
+complexity-check               test (windows-latest, 3.12)     integration (windows-latest, 3.12)
+                               test (windows-latest, 3.13)     integration (windows-latest, 3.13)
 ```
 
-### The trap, and it is a real one
+Neither `tests.yml` nor `complexity-monitoring.yml` filters on `paths:`, so
+every one of these runs on every PR. That matters: a required context that
+does not run on some PR blocks that PR forever.
 
-**`release.yml` pushes directly to `main`.** Line 75 runs `semantic-release
+### The trap, and it is a real one -- now measured, and worse than described
+
+**`release.yml` pushes directly to `main`.** `:119` runs `semantic-release
 version`, which creates the version commit *and* the tag and pushes them, using
-`secrets.GITHUB_TOKEN` (`:37`, `:79`). Branch protection with required status
+`secrets.GITHUB_TOKEN` (`:56`, `:123`). Branch protection with required status
 checks will **block that push** unless the release actor can bypass it. A
 release that cannot push leaves the repo tagged-but-not-bumped, or not tagged
 at all.
+
+(Line numbers are as of #144, which added the concurrency group. They have
+moved twice already -- check before trusting them.)
 
 Ousia has already been bitten by the adjacent version of this; see the
 `release-pr-blocked-by-protection` note. Thyra's failure mode is different
 (direct push, not a parked PR) but the cause is the same class.
 
-So: configure protection **with a bypass for the release actor**, and prove it
-by watching one real release complete end to end before considering this done.
-If a bypass cannot be arranged, say so and stop -- a repo that cannot cut a
-release is worse than one without required checks.
+**This was attempted on 2026-08-03 and the bypass could not be arranged.**
+The plan above was to use a repository ruleset so the GitHub Actions app could
+go in `bypass_actors`. That plan is **refuted**. Do not spend the afternoon on
+it again.
+
+Everything below was measured against a throwaway branch
+(`ci/ruleset-probe-target`) with a real active ruleset and a workflow pushing
+with `secrets.GITHUB_TOKEN` -- i.e. the exact release mechanism, not an
+argument about it. All probe artefacts were deleted afterwards; the repo is
+back to no protection and no rulesets.
+
+| what pushed | bypass configured | result |
+|---|---|---|
+| `GITHUB_TOKEN` bot | none | **BLOCKED** -- `GH013 ... 7 of 7 required status checks are expected` |
+| `GITHUB_TOKEN` bot | `RepositoryRole` 2 + 4 + 5 (write/maintain/admin) | **BLOCKED**, identical error |
+| admin user's PAT | `RepositoryRole` 5 | **ALLOWED** |
+| `GITHUB_TOKEN` bot | n/a, rules were `deletion` + `non_fast_forward` only | **ALLOWED** |
+
+Two things follow.
+
+**The Actions app cannot be a repo-level bypass actor at all.** Posting
+`{"actor_id": 15368, "actor_type": "Integration"}` is rejected outright:
+
+```
+422 Validation Failed
+Actor GitHub Actions integration must be part of the ruleset source or owner organization
+```
+
+`RepositoryRole`, `OrganizationAdmin` and `DeployKey` are all accepted -- only
+the Actions app is not. And a repository role does not help, because the bot
+holds an app-installation token and matches no collaborator role. That is the
+third row of the table: the same bypass that lets a human admin through does
+nothing for the bot.
+
+**`tagged-but-not-bumped` is not hypothetical -- it is the default outcome.**
+A `target: branch` ruleset does not govern tag refs. The probe pushed a tag
+into the protected branch's repo while the branch push was being rejected, and
+the tag **landed** (`PROBE_TAG_RESULT=ALLOWED`). So under required status
+checks with no working bypass, `semantic-release version` gets its tag onto the
+remote and loses the version commit. Exactly the state this handout feared.
+
+### What is actually available
+
+1. **A credential that is not `GITHUB_TOKEN`.** A PAT or deploy key belonging
+   to an actor that *can* bypass, stored as a repo secret and used for
+   `token:` in release.yml's checkout. Measured to work for an admin PAT with a
+   `RepositoryRole: 5` bypass. The repo currently has **no secrets at all**
+   (`actions/secrets` is empty), so this needs one minted first. Prefer a
+   deploy key or a scoped GitHub App over a personal PAT -- a PAT ties releases
+   to one person's account.
+2. **An organization-level ruleset.** The 422 above says the app must belong to
+   "the ruleset source or owner organization", which suggests an org ruleset
+   would accept the Actions app where a repo ruleset will not. **Unverified** --
+   it needs the `admin:org` scope, which the credentials on hand did not have.
+   Verify before building on it.
+3. **The safe subset, available right now.** `deletion` + `non_fast_forward`
+   with no bypass at all is measured not to block the bot (fourth row). It stops
+   main being force-pushed or deleted. It does *not* stop an untested merge, so
+   it is not this item -- but it is free and it cannot break a release.
+
+Until one of 1 or 2 is in place, **do not turn on required status checks for
+`main`.** A repo that cannot cut a release is worse than one without required
+checks.
 
 Consider also requiring a linear history or not; that is a preference, not a
 defect, and the repo currently uses merge commits.
