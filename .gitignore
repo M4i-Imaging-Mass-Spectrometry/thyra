@@ -73,3 +73,10 @@ benchmarks/test_*.py
 # .github/scripts/, the one tracked scripts directory, so git refused to add
 # changes to the complexity monitor without -f.
 /scripts/
+
+# Generated analysis output. The complexity monitor writes
+# reports/complexity/ on every run -- in CI, where it is uploaded as a
+# 30-day artifact, and locally for anyone running the script by hand.
+# Nothing under here has ever been tracked. Anchored for the same reason
+# /scripts/ is.
+/reports/
