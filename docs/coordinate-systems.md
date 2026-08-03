@@ -113,6 +113,30 @@ meaningful frame is **physical micrometers of the imaged tissue**.
 
 Both elements resolve to the same micrometer extent at ``"global"``.
 
+For a **multi-slice volume** (``--handle-3d`` over more than one plane) that
+holds in z as well. The pixel polygons are ``POLYGON Z``: a flat square at the
+micrometre depth of the slice it was acquired on, taken from the same
+``obs["spatial_z"]`` the table stores. So the deepest footprint sits at
+``(n_z - 1) * z_spacing_um``, which is where the TIC volume's last plane lands
+under its own ``Scale``.
+
+These are **footprints, not voxels**. A pixel is its square at one depth, not a
+solid spanning the slice thickness — shapely has no solid geometry. The extent
+in z is the slice spacing, carried by the image.
+
+!!! note "Reading 3D shapes"
+    ``spatialdata``'s shapes model is 2D, so it emits a ``UserWarning`` that
+    "2 is expected" whenever these are parsed, validated or transformed. The
+    geometry is nonetheless carried and transformed correctly, verified
+    through a zarr round trip and a ``Scale`` into ``"global"``. The warning
+    is left unsuppressed: it is upstream stating the limits of its model, and
+    silencing it would hide that from consumers.
+
+    Expressing the depth as a ``Translation`` on flat 2D geometry — the
+    obvious alternative — does **not** work. The transform silently drops z
+    and returns flat polygons, leaving a depth that exists only in the
+    metadata. ``tests/unit/converters/test_3d_pixel_shapes_z.py`` pins that.
+
 ### Mode B: with FlexImaging optical alignment
 
 When the input includes a ``.mis`` ``ImageFile`` and registration

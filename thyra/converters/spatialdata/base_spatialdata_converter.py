@@ -151,7 +151,7 @@ try:
     import xarray as xr
     import zarr
     from anndata import AnnData
-    from shapely.geometry import box
+    from shapely.geometry import Polygon, box
     from spatialdata import SpatialData
     from spatialdata.models import Image2DModel, ShapesModel, TableModel
     from spatialdata.transformations import Affine, Identity, Scale, Sequence
@@ -1518,9 +1518,39 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         shapes are created in optical image pixel coordinates for proper overlay.
         Otherwise, shapes use physical (micrometer) coordinates.
 
+        For a multi-slice volume the footprints are ``POLYGON Z``: a flat
+        square at the micrometre depth of the slice it was acquired on,
+        taken from ``obs["spatial_z"]``. They are footprints, not voxels --
+        shapely has no solid, so a pixel is its square at one depth rather
+        than a box spanning the slice thickness.
+
+        Two alternatives were measured and rejected:
+
+        * **Flat 2D shapes carrying the depth in a transformation**
+          (one element per slice, each with a ``Translation`` in z). This
+          is what spatialdata's 2D shapes model invites, and it does not
+          work: the element parses without complaint, coexists with a 3D
+          image and round-trips, but the transform **silently drops z**
+          and every slice comes back at the same depth. It would put a
+          depth in the metadata that never reaches the geometry.
+        * **Leaving them flat** and documenting it. Honest, but then
+          ``docs/coordinate-systems.md``'s promise that every element
+          agrees at ``"global"`` stays false in z.
+
+        The cost of the choice: ``ShapesModel.parse``/``validate`` and
+        every downstream ``transform`` emit a ``UserWarning`` that 2
+        dimensions are expected. It is left unsuppressed deliberately --
+        it is upstream telling consumers this is outside the model, and
+        hiding it would be Thyra deciding that on their behalf. Only the
+        micrometre branch gains z; under optical alignment the frame is
+        optical pixels, which have no depth calibration to place a slice
+        in.
+
         Args:
             adata: AnnData object containing coordinates
-            is_3d: Whether to handle as 3D data
+            is_3d: Whether this is the 3D volume route. Combined with
+                :attr:`_is_volume` (which also requires more than one
+                plane), decides whether footprints carry z.
 
         Returns:
             SpatialData shapes model
@@ -1598,14 +1628,28 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             y_coords: NDArray[np.float64] = adata.obs["spatial_y"].values
             half_pixel_um = self.pixel_size_um / 2
 
+            # A volume's footprints carry the depth of the slice they were
+            # acquired on, so they meet the TIC volume at "global" instead
+            # of stacking flat at z=0. spatial_z is already the micrometre
+            # depth (z index * z_spacing_um), so it needs no scaling here
+            # -- the same column the table stores, which is what keeps the
+            # two elements agreeing.
+            z_coords: Optional[NDArray[np.float64]] = None
+            if is_3d and self._is_volume:
+                z_coords = adata.obs["spatial_z"].values
+
             for i in range(len(adata)):
                 x, y = x_coords[i], y_coords[i]
-                pixel_box = box(
-                    x - half_pixel_um,
-                    y - half_pixel_um,
-                    x + half_pixel_um,
-                    y + half_pixel_um,
-                )
+                x0, y0 = x - half_pixel_um, y - half_pixel_um
+                x1, y1 = x + half_pixel_um, y + half_pixel_um
+
+                if z_coords is None:
+                    pixel_box = box(x0, y0, x1, y1)
+                else:
+                    z = float(z_coords[i])
+                    pixel_box = Polygon(
+                        [(x0, y0, z), (x1, y0, z), (x1, y1, z), (x0, y1, z)]
+                    )
                 geometries.append(pixel_box)
 
         # Create GeoDataFrame with appropriate index
