@@ -44,6 +44,10 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # Needed by the test gate below, which reads this commit's workflow runs.
+      # Declaring `permissions` at all makes every unlisted scope `none`, so
+      # omitting this denies it rather than falling back to a default.
+      actions: read
     outputs:
       released: ${{ steps.release.outputs.released }}
       version: ${{ steps.release.outputs.version }}
@@ -127,8 +131,88 @@ jobs:
             exit 0
           fi
 
-          # Past this point $NEXT is a genuine bump, so an existing tag really
-          # does mean another run got there first.
+          # Past this point a release is actually going to be cut, so this is
+          # where the commit has to earn it.
+          #
+          # Nothing has ever stood between a merge and PyPI: this workflow and
+          # tests.yml both fire on the same push and run alongside each other,
+          # so a red suite never stopped a publish. v3.0.0 went out from a
+          # commit no test job had even seen.
+          #
+          # Branch protection is the obvious gate and it is a MEASURED dead
+          # end -- see handouts/loose-ends-after-scils-alignment.md. A
+          # secrets.GITHUB_TOKEN push cannot bypass required status checks, so
+          # turning them on blocks this workflow's own version commit while the
+          # tag still lands, leaving the repo tagged-but-not-bumped. This gate
+          # needs no bypass: rather than stop the merge, refuse to release from
+          # it.
+          #
+          # The gate is on tests specifically, not on "every check for this
+          # commit". Waiting on every check sounds safer and is worse: it makes
+          # advisory workflows (complexity monitoring) able to veto a release,
+          # and "some check finished and none are pending" can be satisfied by
+          # one fast unrelated check that completed before the test run had
+          # even registered. Naming the workflow also means this can never wait
+          # on itself -- this workflow has a different name, so no self
+          # exclusion is needed.
+          #
+          # It gates $RELEASE_SHA, NOT $GITHUB_SHA. Those are usually the same
+          # commit and deliberately are not always: the checkout above releases
+          # main's tip rather than the commit that triggered this run. Gating
+          # the trigger would check one commit's tests and publish a different
+          # one -- the exact vacuous gate this exists to prevent.
+          GATE_WORKFLOW="Tests"
+
+          echo "Gate: waiting for '$GATE_WORKFLOW' on $RELEASE_SHA"
+          STATUS=absent
+          CONCLUSION=none
+          for attempt in $(seq 1 60); do
+            RUN=$(gh api \
+                    "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$RELEASE_SHA&per_page=100" \
+                  | jq --arg wf "$GATE_WORKFLOW" \
+                      '[.workflow_runs[] | select(.name == $wf)]
+                       | sort_by(.created_at) | last')
+            STATUS=$(echo "$RUN" | jq -r '.status // "absent"')
+            CONCLUSION=$(echo "$RUN" | jq -r '.conclusion // "none"')
+            echo "  attempt $attempt: $GATE_WORKFLOW is $STATUS/$CONCLUSION"
+            if [ "$STATUS" = "completed" ]; then break; fi
+            sleep 30
+          done
+
+          # Fail closed on every branch. A blocked release is not a lost one:
+          # the commits stay on main and the next push releases them together.
+          if [ "$STATUS" != "completed" ]; then
+            echo "REFUSING TO RELEASE: '$GATE_WORKFLOW' is '$STATUS' for $RELEASE_SHA after 30 minutes."
+            echo "If it never ran at all, tests.yml has lost its 'push: [main]' trigger"
+            echo "and this gate would otherwise be vacuous."
+            exit 1
+          fi
+          if [ "$CONCLUSION" != "success" ]; then
+            echo "REFUSING TO RELEASE: '$GATE_WORKFLOW' concluded '$CONCLUSION' for $RELEASE_SHA."
+            exit 1
+          fi
+          echo "Gate: '$GATE_WORKFLOW' passed."
+
+          # Waiting for a test run takes minutes, where the window this job
+          # previously had between reading the tip and pushing was ~60-90s. If
+          # main moved while we waited then $RELEASE_SHA is no longer the tip,
+          # the checkout is stale, and `semantic-release version` would die on
+          # "Upstream branch 'origin/main' has changed!" -- the failure the tip
+          # checkout above was added to end. Stand down cleanly instead: the
+          # merge that moved main queued its own release run behind this one,
+          # and semantic-release bumps from every commit since the last tag, so
+          # that run covers these commits too. Nothing is dropped by yielding.
+          git fetch origin +refs/heads/main:refs/remotes/origin/main
+          TIP=$(git rev-parse refs/remotes/origin/main)
+          if [ "$TIP" != "$RELEASE_SHA" ]; then
+            echo "No release: main moved $RELEASE_SHA -> $TIP while waiting for tests."
+            echo "The queued run for $TIP releases these commits."
+            echo "released=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # $NEXT is a genuine bump, so an existing tag really does mean
+          # another run got there first.
           #
           # Re-fetch before asking. Checkout does fetch every tag (fetch-depth: 0
           # fetches refs/tags/* regardless of fetch-tags), but it did so before
