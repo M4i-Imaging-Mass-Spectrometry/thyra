@@ -461,6 +461,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         nnz_per_row = np.zeros(n_rows, dtype=np.int64)
         total_nnz = 0
         pixel_count = 0
+        n_out_of_bounds = 0
 
         region_map, region_total, region_count = self._init_region_accumulators(n_cols)
 
@@ -476,11 +477,22 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 mz_indices, resampled_ints = self._process_spectrum(mzs, intensities)
                 nnz = len(mz_indices)
 
-                nnz_per_row[pixel_idx] = nnz
-                total_nnz += nnz
-
+                # The row count and the TIC are both indexed by grid
+                # position, so both need the bounds check: a coordinate
+                # outside the declared dimensions would otherwise wrap
+                # round and land on an unrelated pixel. Unlike the PCS
+                # pre-scan the guard sits outside the `nnz > 0` test,
+                # because this assignment is unconditional -- a wrapped
+                # empty spectrum would overwrite a real row's count with
+                # zero. total_nnz travels with nnz_per_row so that
+                # indptr[-1] keeps matching the array size derived from
+                # it; pass 2 skips the same spectra.
                 if 0 <= y < n_y and 0 <= x < n_x:
+                    nnz_per_row[pixel_idx] = nnz
+                    total_nnz += nnz
                     tic_values[y, x] = float(np.sum(resampled_ints))
+                else:
+                    n_out_of_bounds += 1
 
                 if nnz > 0:
                     np.add.at(total_intensity, mz_indices, resampled_ints)
@@ -500,6 +512,15 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 pbar.update(1)
 
         logger.info(f"Pass 1 complete: {total_nnz:,} total non-zeros")
+        if n_out_of_bounds:
+            logger.warning(
+                "%d spectra sat outside the declared %dx%d grid and were "
+                "skipped. Previously they were written to a wrapped-round "
+                "row index, silently overwriting an unrelated pixel.",
+                n_out_of_bounds,
+                n_x,
+                n_y,
+            )
 
         # Build indptr from nnz counts
         indptr = np.zeros(n_rows + 1, dtype=np.int64)
@@ -628,7 +649,11 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 mz_indices, resampled_ints = self._process_spectrum(mzs, intensities)
                 nnz = len(mz_indices)
 
-                if nnz > 0:
+                # Same bounds check as pass 1, and it has to be the same
+                # one: that pass reserved no room for a spectrum outside
+                # the grid, so writing it here would overrun the row it
+                # wrapped onto and displace that row's own entries.
+                if nnz > 0 and 0 <= y < n_y and 0 <= x < n_x:
                     pos = write_pos[pixel_idx]
                     positions = np.arange(pos, pos + nnz)
                     buf_positions.append(positions)
