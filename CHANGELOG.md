@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v3.0.3 (2026-08-03)
+
+### Bug Fixes
+
+- **cli**: Put every --help option in a category, and keep it that way
+  ([`bbc7865`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/bbc7865b11dc44c726454a25802fa621f8224b1f))
+
+
 ## v3.0.2 (2026-08-03)
 
 ### Bug Fixes
