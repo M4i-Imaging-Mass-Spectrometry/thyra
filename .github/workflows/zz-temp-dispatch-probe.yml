@@ -1,0 +1,25 @@
+# TEMPORARY -- deleted before this branch merges. Do not review as shipping code.
+#
+# Proves the single load-bearing assumption behind the `deploy-docs` job added
+# to release.yml: that a workflow_dispatch created with GITHUB_TOKEN really
+# does create a docs run in THIS repo, with `actions: write` scoped to the job.
+# Identical call, identical token, identical permission.
+name: TEMP dispatch probe
+
+on:
+  push:
+    branches: [ci/release-triggers-docs]
+
+jobs:
+  probe:
+    name: Can GITHUB_TOKEN dispatch docs.yml
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch docs.yml exactly as deploy-docs will
+        run: |
+          gh workflow run docs.yml --ref main -R "$GITHUB_REPOSITORY"
+          echo "dispatch accepted"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
