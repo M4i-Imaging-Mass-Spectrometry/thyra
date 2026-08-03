@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v3.1.1 (2026-08-03)
+
+### Performance Improvements
+
+- **converters**: Make PCS the streaming default and drop the size threshold
+  ([`291bdfd`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/291bdfd496afe003f747372f7dfa95d7ea85b402))
+
+
 ## v3.1.0 (2026-08-03)
 
 ### Bug Fixes
