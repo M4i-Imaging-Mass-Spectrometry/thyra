@@ -32,7 +32,7 @@ for a full walkthrough, including the published example dataset
 - **Memory Efficient**: Handles large datasets (100+ GB) through streaming processing
 - **Optical Alignment**: Automatic MSI-to-optical image registration for Bruker data
 - **Multi-Region Support**: Handles slides with multiple tissue sections
-- **Resampling**: Physics-aware mass axis resampling (enabled by default)
+- **Resampling**: Physics-aware mass axis resampling (on by default in the CLI; opt-in from the Python API)
 - **3D Support**: Process volume data or treat as 2D slices
 - **Cross-Platform**: Windows, macOS, and Linux
 

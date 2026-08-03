@@ -40,7 +40,7 @@ thyra input.imzML output.zarr && python analyse.py output.zarr
 |--------|---------|-------------|
 | `--format [spatialdata]` | `spatialdata` | Output format |
 | `--pixel-size FLOAT` | auto-detect | Pixel size in micrometers |
-| `--region INTEGER` | all | Convert a specific region number |
+| `--region TEXT` | all | Convert one region, by `.mis` Area Name or by DB RegionNumber |
 | `--resample / --no-resample` | enabled | Mass axis resampling |
 | `--include-optical / --no-optical` | enabled | Include optical images in output |
 
@@ -53,16 +53,30 @@ thyra input.imzML output.zarr
 # Specify pixel size manually (when metadata is unavailable)
 thyra input.imzML output.zarr --pixel-size 25
 
-# Convert only region 0 from a multi-region dataset
+# Convert one region, named the way flexImaging names it
+thyra data.d output.zarr --region 03
+
+# Or by the database's own region number
 thyra data.d output.zarr --region 0
 
 # Skip optical images
 thyra data.d output.zarr --no-optical
 ```
 
-!!! note "Region numbers"
-    Region numbers start at 0. Use `-v DEBUG` to see which regions were detected
-    and how many spectra each contains.
+!!! note "Naming a region"
+    `--region` takes a string, and the value is matched against the `.mis`
+    Area Names first. Only if nothing matches is it parsed as a DB
+    RegionNumber, which starts at 0. Passing something that is neither is an
+    error that lists the area names it did find.
+
+    The two numbering schemes do not have to agree, which is exactly why area
+    `'03'` need not be RegionNumber 3. For a multi-region dataset Thyra logs
+    the whole mapping at `INFO` during startup -- a header line
+    `Region mapping (DB RegionNumber -> .mis Area Name):` followed by one
+    `RegionNumber <n> -> Area '<name>' (<n> frames)` line per region -- so a
+    plain run already tells you which is which before you pick one.
+
+    Use `-v DEBUG` for the per-region spectrum counts as well.
 
 ---
 
@@ -279,4 +293,69 @@ thyra input.imzML output.zarr --dataset-id hippocampus
 
 # Combine z-slices into a single 3D table
 thyra volume.imzML output.zarr --handle-3d
+```
+
+---
+
+## The other two commands
+
+Installing Thyra puts three commands on your path, not one.
+
+### `thyra-example-data`
+
+Writes the small synthetic imzML dataset the [tutorial](tutorial.md) uses. No
+download, no vendor SDK.
+
+```
+thyra-example-data [OUTPUT] [OPTIONS]
+```
+
+**OUTPUT** -- Path for the `.imzML` (default:
+`example_data/synthetic_brain.imzML`). A non-`.imzML` suffix is replaced.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--pixels-x INTEGER` | `48` | Grid width in pixels |
+| `--pixels-y INTEGER` | `36` | Grid height in pixels |
+| `--pixel-size FLOAT` | `25.0` | Pixel size in micrometers written to the metadata |
+| `--mz-bins INTEGER` | `4000` | Number of points on the m/z axis |
+| `--seed INTEGER` | `0` | Random seed |
+| `--verbose` | off | Verbose output |
+
+```bash
+# The tutorial's dataset: 48 x 36 pixels, 4,000 m/z points, seed 0
+thyra-example-data example_data/synthetic_brain.imzML
+
+# A larger phantom on a coarser axis
+thyra-example-data big.imzML --pixels-x 200 --pixels-y 150 --mz-bins 2000
+```
+
+!!! note "`--seed` is what makes the tutorial reproducible"
+    Generation is deterministic given the seed, so the default `--seed 0`
+    produces byte-identical data on every machine -- which is why the
+    tutorial can print exact numbers and expect yours to match. Change the
+    seed and the numbers change with it.
+
+### `thyra-check-ontology`
+
+Validates the CV (controlled vocabulary) terms in an imzML file against
+Thyra's ontology cache, and reports any it does not recognise.
+
+```
+thyra-check-ontology INPUT [OPTIONS]
+```
+
+**INPUT** -- An `.imzML` file, or a directory to check every file in.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--output PATH` | none | Save results as JSON instead of printing them |
+| `--verbose` | off | Verbose output, including the per-file summary |
+
+```bash
+# Check one file
+thyra-check-ontology sample.imzML
+
+# Check a whole directory and keep the report
+thyra-check-ontology data/ --output ontology_report.json
 ```

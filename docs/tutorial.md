@@ -29,8 +29,9 @@ Thyra requires Python 3.12 or 3.13. Check what you have:
 thyra --version
 ```
 
-This tutorial was written and verified against `thyra` 1.25.5 and
-`spatialdata` 0.7.3. To check the `spatialdata` version too:
+Every figure below was last re-verified against `thyra` 3.0.0 with
+`spatialdata` 0.8.0, `anndata` 0.13.2, `zarr` 3.1.6 and `pandas` 2.3.2 --
+the set `pyproject.toml` pins. To check the `spatialdata` version too:
 
 ```bash
 python -c "import spatialdata; print(spatialdata.__version__)"
@@ -92,7 +93,7 @@ INFO - Converted sparse matrix for msi_dataset_z0: 6,885,838 non-zero entries (C
 INFO - Conversion completed successfully
 ```
 
-Conversion takes a few seconds and produces a roughly 29 MB `.zarr` directory.
+Conversion takes a few seconds and produces a roughly 31 MB `.zarr` directory.
 
 !!! info "Why 190,000 m/z bins from 4,000 input points?"
     Resampling is on by default and builds a uniform axis with 5 mDa bins

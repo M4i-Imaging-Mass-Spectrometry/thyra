@@ -7,6 +7,9 @@ on:
       - "docs/**"
       - "mkdocs.yml"
       - "thyra/**"
+      # docs/changelog.md is a snippets include of this file, so a release that
+      # only rewrites the changelog still changes a published page.
+      - "CHANGELOG.md"
   workflow_dispatch:
 
 permissions:

@@ -243,7 +243,9 @@ Thyra follows [Semantic Versioning](https://semver.org/) (SemVer):
    ```
 
 3. **Breaking Changes** - Always include `!` in commit type or `BREAKING CHANGE:` in footer
-4. **Changelog** - Automatically generated from commit messages
+4. **Changelog** - Automatically generated from commit messages into
+   `CHANGELOG.md`. Never edit it by hand; the [Changelog](changelog.md) page
+   includes that file verbatim.
 
 ### Development Versions
 

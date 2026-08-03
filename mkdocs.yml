@@ -60,6 +60,14 @@ markdown_extensions:
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite
+  # docs/changelog.md includes the repository's CHANGELOG.md rather than
+  # duplicating it. base_path is resolved against the working directory mkdocs
+  # is invoked from, which is the repository root for both `mkdocs build` and
+  # the gh-deploy step in .github/workflows/docs.yml. check_paths turns a
+  # missing or moved target into a build error rather than an empty page.
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
   - pymdownx.tabbed:
       alternate_style: true
   - toc:
