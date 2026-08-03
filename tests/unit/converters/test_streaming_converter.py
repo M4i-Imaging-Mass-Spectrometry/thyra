@@ -84,17 +84,34 @@ class MockMSIReader:
     def iter_spectra(
         self, batch_size: Optional[int] = None
     ) -> Generator[Tuple[Tuple[int, int, int], np.ndarray, np.ndarray], None, None]:
-        """Yield mock spectra for all pixels."""
+        """Yield mock spectra for all pixels.
+
+        Peaks are drawn from the very axis :meth:`get_common_mass_axis`
+        reports, not merely from the same mass RANGE. Without resampling,
+        ``BaseMSIConverter._map_mass_to_indices`` keeps only the peaks
+        landing within 1e-6 Da of a common-axis point and silently drops
+        the rest, so m/z values that just fall inside the range map to
+        nothing: every spectrum arrives empty, the occupancy is empty,
+        and the shapes frame is built from zero pixels. A mock whose two
+        methods describe different mass axes is not a stand-in for any
+        real reader.
+        """
         n_x, n_y, n_z = self.dimensions
-        min_mz, max_mz = self.mass_range
+        common_mass_axis = self.get_common_mass_axis()
 
         for z in range(n_z):
             for y in range(n_y):
                 for x in range(n_x):
-                    # Generate random m/z values within range
-                    mzs = np.sort(
-                        np.random.uniform(min_mz, max_mz, self.peaks_per_spectrum)
+                    # Sample distinct axis positions: a duplicate index would
+                    # write the same (pixel, m/z) cell twice.
+                    peak_indices = np.sort(
+                        np.random.choice(
+                            common_mass_axis.size,
+                            self.peaks_per_spectrum,
+                            replace=False,
+                        )
                     )
+                    mzs = common_mass_axis[peak_indices]
                     # Generate random intensities
                     intensities = np.random.exponential(1000, self.peaks_per_spectrum)
 
@@ -525,9 +542,9 @@ def test_streaming_converter_memory_efficiency():
     # Resampling config is required for memory-efficient conversion
     # Without it, raw mass axis collection can explode memory
     resampling_config = {
-        "method": "linear",
+        "method": "tic_preserving",
         "target_bins": 1000,
-        "axis_type": "uniform",
+        "axis_type": "constant",
     }
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -702,7 +719,7 @@ def test_auto_use_csc_mode_with_resampling():
     )
 
     resampling_config = {
-        "method": "linear",
+        "method": "tic_preserving",
         "target_bins": 5000,  # Custom target bins
     }
 
