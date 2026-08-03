@@ -73,6 +73,37 @@ jobs:
       - name: Create Release
         id: release
         run: |
+          # Release main's tip, not the commit that triggered this run.
+          #
+          # The concurrency group at the top of this file serialises release
+          # RUNS. It cannot stop a MERGE landing while one is running, because a
+          # merge is a push, not a workflow run -- so it does not fix the
+          # "[LOCAL SHA] != [UPSTREAM SHA] / Upstream branch 'origin/main' has
+          # changed!" failure it was added for. That failure recurred eight
+          # minutes after #144 shipped, in a run whose own checkout contained the
+          # concurrency block: run 30806223426 checked out b5c3d8c, spent ~50s
+          # installing semantic-release, and by the time it pushed, two further
+          # merges had moved main to 9b9fd81.
+          #
+          # Any merge landing inside this job's ~60-90s window does that. The
+          # window cannot be closed by scheduling, only by not caring where main
+          # was when the run started.
+          #
+          # Re-pointing at the tip is also right on its own terms: what is on
+          # main is what ships, and semantic-release computes the bump from every
+          # commit since the last tag, so nothing is skipped by releasing a newer
+          # commit than the one that triggered us. It is what makes a replaced
+          # queue entry harmless -- GitHub keeps only one pending run per group,
+          # and the survivor now covers the replaced run's commits too.
+          #
+          # Explicit refspec rather than `git fetch origin main`, so that
+          # refs/remotes/origin/main is definitely updated and not just
+          # FETCH_HEAD.
+          git fetch origin +refs/heads/main:refs/remotes/origin/main
+          git checkout -B main refs/remotes/origin/main
+          RELEASE_SHA=$(git rev-parse HEAD)
+          echo "releasing from origin/main tip $RELEASE_SHA (this run was triggered by $GITHUB_SHA)"
+
           # `--print` reports the version semantic-release WOULD release. When
           # nothing on main is releasable -- a ci:/chore:/docs:/test: commit --
           # it prints the CURRENT version, not an empty string. So an emptiness
