@@ -32,10 +32,19 @@ thyra input.imzML output.zarr
 
 # Bruker .d folder
 thyra data.d output.zarr
+
+# Waters .raw folder
+thyra data.raw output.zarr
+
+# PHI SmartSoft-TOF ToF-SIMS .raw file
+thyra tofsims_run.raw output.zarr
 ```
 
 That's it -- Thyra auto-detects the format, reads the pixel size from metadata,
 resamples onto a common mass axis, and writes a SpatialData/Zarr directory.
+
+See [Supported Formats](supported-formats.md) for the full list, how each one
+is detected, and what metadata each can supply.
 
 ### Python API
 

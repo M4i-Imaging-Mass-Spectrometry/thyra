@@ -30,12 +30,14 @@ Example usage:
 
 from .bruker_extractor import BrukerMetadataExtractor
 from .imzml_extractor import ImzMLMetadataExtractor
+from .phi_extractor import PhiMetadataExtractor
 from .waters_extractor import WatersMetadataExtractor
 
 # Public API
 __all__ = [
     "BrukerMetadataExtractor",
     "ImzMLMetadataExtractor",
+    "PhiMetadataExtractor",
     "WatersMetadataExtractor",
 ]
 
@@ -46,6 +48,7 @@ FORMAT_EXTRACTORS = {
     "tsf": BrukerMetadataExtractor,
     "tdf": BrukerMetadataExtractor,
     "waters": WatersMetadataExtractor,
+    "phi": PhiMetadataExtractor,
 }
 
 

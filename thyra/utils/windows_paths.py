@@ -23,11 +23,16 @@ path with the prefix converts cleanly.
 
 The prefix is applied only when the projected deepest key would not fit
 otherwise, so ordinary paths are handled exactly as before. It is not
-applied to input paths: readers reach vendor SDKs that may not accept
-extended-length syntax.
+applied to the *source data* path: readers reach vendor SDKs that may not
+accept extended-length syntax.
+
+Reading a converted store back is subject to the same limit, and a store
+whose keys sit past it looks structurally invalid rather than merely
+unreachable -- see :func:`prepare_zarr_read_path`.
 """
 
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -96,6 +101,55 @@ def projected_deepest_key_length(output_path: Path, dataset_id: str) -> int:
     return len(str(output_path)) + 1 + len(dataset_id) + DEEPEST_KEY_RESERVE
 
 
+def prepare_zarr_read_path(store_path: Path) -> Path:
+    r"""Return a path that can actually open a store written to a long path.
+
+    The write side is protected by :func:`prepare_zarr_output_path`, but the
+    limit applies just as much to reading it back. A store whose keys sit past
+    260 characters is written correctly and then cannot be opened by
+    ``spatialdata.read_zarr(path)``: the deep keys are invisible, so the store
+    looks structurally invalid rather than merely unreachable. Plain
+    ``os.path.exists`` on those keys returns ``False`` too, which makes the
+    store look corrupt when it is intact.
+
+    Unlike the output helper this cannot project the deepest key, because the
+    keys already exist and their length depends on what was written. It walks
+    the store to find the longest key instead, which is cheap next to the
+    read that follows.
+
+    Args:
+        store_path: Path to an existing Zarr store.
+
+    Returns:
+        The path to hand to the reader, extended if the store needs it.
+    """
+    if sys.platform != "win32":
+        return store_path
+
+    longest = len(str(store_path))
+    try:
+        for root, _dirs, files in os.walk(store_path):
+            for name in files:
+                longest = max(longest, len(root) + 1 + len(name))
+    except OSError:
+        # Walking already failed, which is itself a sign the prefix is needed.
+        return to_extended_length_path(store_path)
+
+    if longest <= WINDOWS_MAX_PATH:
+        return store_path
+
+    if _long_paths_enabled():
+        return store_path
+
+    logger.info(
+        "Store contains keys up to %d characters, past the %d character "
+        "Windows limit. Reading through an extended-length path.",
+        longest,
+        WINDOWS_MAX_PATH,
+    )
+    return to_extended_length_path(store_path)
+
+
 def prepare_zarr_output_path(output_path: Path, dataset_id: str) -> Path:
     """Return the path to hand to Zarr, extended if the store needs it.
 
@@ -122,10 +176,13 @@ def prepare_zarr_output_path(output_path: Path, dataset_id: str) -> Path:
         return output_path
 
     extended = to_extended_length_path(output_path)
-    logger.info(
+    logger.warning(
         "Output path is long enough that the deepest Zarr key would exceed "
         "the %d character Windows limit (projected %d). Writing through an "
-        "extended-length path so the conversion is not truncated.",
+        "extended-length path so the conversion is not truncated. Note that "
+        "reading the store back is subject to the same limit: pass it "
+        "through thyra.utils.windows_paths.prepare_zarr_read_path, or move "
+        "the store somewhere shallower, or enable Windows long-path support.",
         WINDOWS_MAX_PATH,
         projected,
     )

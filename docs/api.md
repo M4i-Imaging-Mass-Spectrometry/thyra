@@ -221,9 +221,11 @@ with ImzMLReader("sample.imzML") as reader:
 
 ## Reader Base Class
 
-All format readers (ImzML, Bruker, Waters) inherit from this base class. If
-you are writing a custom reader for a new format, subclass `BaseMSIReader`
-and implement the abstract methods below.
+All format readers (ImzML, Bruker, Waters, PHI) inherit from this base class.
+If you are writing a custom reader for a new format, subclass `BaseMSIReader`
+and implement the abstract methods below. See
+[Supported Formats](supported-formats.md) for which optional methods are worth
+implementing and what each one buys you.
 
 ::: thyra.core.base_reader.BaseMSIReader
     options:
@@ -231,7 +233,9 @@ and implement the abstract methods below.
         - get_essential_metadata
         - get_comprehensive_metadata
         - get_common_mass_axis
+        - get_mass_axis_annotations
         - get_optical_image_paths
+        - get_peak_counts_per_pixel
         - iter_spectra
         - get_region_map
         - get_region_info

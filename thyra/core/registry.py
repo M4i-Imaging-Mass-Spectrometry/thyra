@@ -36,11 +36,12 @@ class MSIRegistry:
         self._lock = RLock()
         self._readers: Dict[str, Type[BaseMSIReader]] = {}
         self._converters: Dict[str, Type[BaseMSIConverter]] = {}
-        # Extension mapping for file-based formats
+        # Extension mapping for file-based formats. '.raw' is deliberately
+        # absent: it is claimed by both Waters and PHI and can only be
+        # resolved by inspecting the path (see _detect_raw_format).
         self._extension_to_format = {
             ".imzml": "imzml",
             ".d": "bruker",
-            ".raw": "waters",
         }
 
     def register_reader(
@@ -112,6 +113,25 @@ class MSIRegistry:
             pass
         return False
 
+    def _detect_phi_format(self, path: Path) -> bool:
+        """Check if path is a PHI SmartSoft-TOF .raw file.
+
+        PHI writes a single file whose ASCII header opens with the four-byte
+        ``SOFH`` magic. This is what distinguishes it from Waters .raw data,
+        which is a directory.
+
+        Args:
+            path: File path to check
+
+        Returns:
+            True if the file starts with the PHI SOFH magic
+        """
+        try:
+            with path.open("rb") as handle:
+                return handle.read(4) == b"SOFH"
+        except (OSError, PermissionError):
+            return False
+
     def detect_format(self, input_path: Path) -> str:
         """Detect MSI format from input path.
 
@@ -120,6 +140,7 @@ class MSIRegistry:
         - .d directories (Bruker timsTOF)
         - Folders with .dat + _poslog.txt (Bruker Rapiflex)
         - .raw directories (Waters MassLynx)
+        - .raw files (PHI SmartSoft-TOF ToF-SIMS)
         """
         if not input_path.exists():
             raise ValueError(f"Input path does not exist: {input_path}")
@@ -136,7 +157,7 @@ class MSIRegistry:
         if extension == ".d":
             return self._detect_bruker_d_format(input_path)
         if extension == ".raw":
-            return self._detect_waters_raw_format(input_path)
+            return self._detect_raw_format(input_path)
         if input_path.is_dir():
             return self._detect_directory_format(input_path)
         self._raise_unsupported_format(input_path)
@@ -152,16 +173,25 @@ class MSIRegistry:
             return bruker_format
         raise ValueError("Bruker .d directory missing analysis " f"files: {input_path}")
 
-    def _detect_waters_raw_format(self, input_path: Path) -> str:
-        """Validate and detect Waters format from .raw directory."""
-        if not input_path.is_dir():
+    def _detect_raw_format(self, input_path: Path) -> str:
+        """Resolve a .raw path to the vendor that wrote it.
+
+        Two vendors claim the extension and they are distinguished by shape:
+        Waters .raw is a directory of _FUNC*.DAT files, PHI .raw is a single
+        file whose header begins with the SOFH magic.
+        """
+        if input_path.is_dir():
+            if self._detect_waters_format(input_path):
+                return "waters"
             raise ValueError(
-                "Waters format requires .raw directory, " f"got file: {input_path}"
+                "Waters .raw directory missing " f"_FUNC*.DAT files: {input_path}"
             )
-        if self._detect_waters_format(input_path):
-            return "waters"
+        if self._detect_phi_format(input_path):
+            return "phi"
         raise ValueError(
-            "Waters .raw directory missing " f"_FUNC*.DAT files: {input_path}"
+            f"Unrecognised .raw file: {input_path}. Expected either a Waters "
+            "directory containing _FUNC*.DAT files, or a PHI SmartSoft-TOF "
+            "file beginning with the SOFH magic."
         )
 
     def _detect_directory_format(self, input_path: Path) -> str:
@@ -179,7 +209,8 @@ class MSIRegistry:
             ".imzml",
             ".d (timsTOF)",
             "folder (Rapiflex)",
-            ".raw (Waters)",
+            ".raw directory (Waters)",
+            ".raw file (PHI SmartSoft-TOF)",
         ]
         raise ValueError(
             f"Unsupported format for '{input_path}'. "
@@ -265,8 +296,7 @@ def detect_format(input_path: Path) -> str:
         input_path: Path to MSI data file or directory
 
     Returns:
-        Format name ('imzml', 'bruker', 'rapiflex',
-        or 'waters')
+        Format name ('imzml', 'bruker', 'rapiflex', 'waters', or 'phi')
     """
     return _registry.detect_format(input_path)
 

@@ -614,9 +614,14 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         logger.debug("Added MSI metadata to AnnData .uns: %s", sorted(uns))
 
     def _serialize_for_zarr(self, obj):
-        """Recursively convert tuples to lists for Zarr serialization."""
+        """Recursively convert tuples to lists for Zarr serialization.
+
+        Dict keys are coerced to strings: Zarr group members must be named,
+        and a non-string key otherwise fails at write time, after the whole
+        conversion has already been done.
+        """
         if isinstance(obj, dict):
-            return {k: self._serialize_for_zarr(v) for k, v in obj.items()}
+            return {str(k): self._serialize_for_zarr(v) for k, v in obj.items()}
         elif isinstance(obj, (list, tuple)):
             return [self._serialize_for_zarr(item) for item in obj]
         elif hasattr(obj, "__dict__"):
@@ -1434,10 +1439,50 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         if self._common_mass_axis is None:
             raise ValueError("Common mass axis is not initialized")
 
+        n_channels = len(self._common_mass_axis)
+        columns: Dict[str, Any] = {"mz": self._common_mass_axis}
+        columns.update(self._validated_mass_axis_annotations())
+
         return pd.DataFrame(
-            {"mz": self._common_mass_axis},
-            index=[f"mz_{i}" for i in range(len(self._common_mass_axis))],
+            columns,
+            index=[f"mz_{i}" for i in range(n_channels)],
         )
+
+    def _validated_mass_axis_annotations(self) -> Dict[str, Any]:
+        """Reader-supplied per-channel columns that fit the axis being written.
+
+        A reader whose native axis is not m/z (flight time, drift time) can
+        keep that axis alongside ``mz`` so the conversion stays reversible.
+        Annotations whose length does not match are dropped rather than
+        raising: that is the expected outcome when resampling rebuilds the
+        axis, and it must not fail an otherwise good conversion.
+        """
+        if self._common_mass_axis is None:
+            return {}
+        n_channels = len(self._common_mass_axis)
+
+        try:
+            annotations = self.reader.get_mass_axis_annotations()
+        except Exception as exc:  # pragma: no cover - reader-defined
+            logger.warning("Reader failed to supply mass axis annotations: %s", exc)
+            return {}
+
+        validated: Dict[str, Any] = {}
+        for name, values in (annotations or {}).items():
+            if name == "mz":
+                logger.warning("Ignoring mass axis annotation named 'mz'")
+                continue
+            if len(values) != n_channels:
+                logger.info(
+                    "Dropping mass axis annotation %r: %d values for a "
+                    "%d channel axis (expected when resampling rebuilds it)",
+                    name,
+                    len(values),
+                    n_channels,
+                )
+                continue
+            validated[name] = values
+        return validated
 
     def _get_pixel_index(self, x: int, y: int, z: int) -> int:
         """Calculate linear pixel index from 3D coordinates.

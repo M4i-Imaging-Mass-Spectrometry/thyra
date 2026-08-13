@@ -79,11 +79,13 @@ nav:
   - Getting Started: getting-started.md
   - Tutorial: tutorial.md
   - Explore the Output: explore-the-output.ipynb
+  - Supported Formats: supported-formats.md
   - CLI Reference: cli.md
   - Resampling: resampling.md
   - Output Format: output-format.md
   - Coordinate Systems: coordinate-systems.md
   - imzML Parser Notes: imzml-parser-notes.md
+  - PHI ToF-SIMS Notes: phi-tofsims-notes.md
   - API Reference: api.md
   - Contributing: contributing.md
   - Code of Conduct: code-of-conduct.md

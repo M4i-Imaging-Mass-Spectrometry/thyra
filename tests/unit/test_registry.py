@@ -169,13 +169,24 @@ class TestRegistry:
 
         assert detect_format(raw_dir) == "waters"
 
-    def test_waters_not_directory(self, tmp_path):
-        """Test error for .raw file instead of directory."""
+    def test_raw_file_without_phi_magic_is_rejected(self, tmp_path):
+        """A .raw file is a PHI candidate, so the error names both vendors.
+
+        Waters .raw is a directory and PHI .raw is a file, so a plain file
+        that lacks the PHI SOFH magic belongs to neither.
+        """
         fake_raw = tmp_path / "test.raw"
         fake_raw.touch()
 
-        with pytest.raises(ValueError, match="requires .raw directory"):
+        with pytest.raises(ValueError, match="Unrecognised .raw file"):
             detect_format(fake_raw)
+
+    def test_detect_format_phi(self, tmp_path):
+        """Test PHI format detection via .raw file with SOFH magic."""
+        phi_raw = tmp_path / "test.raw"
+        phi_raw.write_bytes(b"SOFH\r\nImagePixels: 4\r\nEOFH\r\n")
+
+        assert detect_format(phi_raw) == "phi"
 
     def test_waters_missing_func_files(self, tmp_path):
         """Test error for .raw directory without _FUNC*.DAT files."""
