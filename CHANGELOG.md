@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v3.3.0 (2026-08-13)
+
+### Bug Fixes
+
+- **converters**: Stop the annotation hook pinning the CSC memmap open
+  ([`6e2267d`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/6e2267d5ba9c8a2db1fecd11b3ddb300a4b86167))
+
+### Documentation
+
+- **phi**: Say plainly which paths are untested, and invite the data
+  ([`d70a93a`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/d70a93ab70a0db127bec7cc505b38b42851ec768))
+
+### Features
+
+- **readers**: Read PHI SmartSoft-TOF ToF-SIMS .raw data
+  ([`bea94f9`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/bea94f9622fe3307b464e7815038b31ec3f2256c))
+
+
 ## v3.2.2 (2026-08-03)
 
 ### Bug Fixes
