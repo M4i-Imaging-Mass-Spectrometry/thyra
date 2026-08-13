@@ -66,6 +66,9 @@ _X_SHIFT = np.uint64(32)
 _Y_SHIFT = np.uint64(43)
 _HIGH_SHIFT = np.uint64(_VALID_HIGH_SHIFT)
 
+#: Appended ASCII blocks are small; cap the read rather than trusting the size.
+_ASCII_INFO_LIMIT = 1 << 16
+
 _HEADER_STRUCT = struct.Struct("<H")
 _SIZE_STRUCT = struct.Struct("<I")
 _TILE_STRUCT = struct.Struct("<II")
@@ -100,6 +103,7 @@ class BlockIndex:
         clean: Whether the chain terminated exactly at end-of-file.
         pixels_per_tile: Raster edge length, used to turn the tile indices in
             :attr:`tiles` into pixel offsets.
+        data_block_id: Block id the events were read from, for diagnostics.
     """
 
     data_spans: List[DataSpan] = field(default_factory=list)
@@ -110,6 +114,7 @@ class BlockIndex:
     end_offset: int = 0
     clean: bool = True
     pixels_per_tile: int = 0
+    data_block_id: int = 0
 
     @property
     def n_records(self) -> int:
@@ -152,6 +157,53 @@ def _parse_ascii_info(payload: bytes) -> Dict[str, str]:
     return info
 
 
+def _read_tile_origin(handle, pos: int, index: BlockIndex) -> Optional[Tuple[int, int]]:
+    """Read a block 6 tile origin, recording it as newly seen if it is."""
+    handle.seek(pos)
+    raw = handle.read(_TILE_STRUCT.size)
+    if len(raw) < _TILE_STRUCT.size:
+        return None
+    tile = _TILE_STRUCT.unpack(raw)
+    if tile not in index.tiles:
+        index.tiles.append(tile)
+    return tile
+
+
+def _read_ascii_info(handle, pos: int, record_size: int, index: BlockIndex) -> None:
+    """Record an appended ASCII info block, if it parses to anything."""
+    handle.seek(pos)
+    info = _parse_ascii_info(handle.read(min(record_size, _ASCII_INFO_LIMIT)))
+    if info:
+        index.appended.append(info)
+
+
+def _finalise_index(index: BlockIndex, path: Path, pos: int, file_size: int) -> None:
+    """Record where the walk stopped and complain if it stopped early."""
+    index.end_offset = pos
+    index.clean = pos == file_size
+    if not index.clean:
+        logger.warning(
+            "PHI block chain for %s ended at byte %d of %d; the trailing %d "
+            "bytes were not accounted for",
+            path.name,
+            pos,
+            file_size,
+            file_size - pos,
+        )
+    if not index.data_spans:
+        raise ValueError(
+            f"No event blocks (id {index.data_block_id}) found in {path}. "
+            "Is this a PHI imaging acquisition?"
+        )
+    logger.info(
+        "PHI block scan: %d event blocks, %d records, %d frames, %d tile(s)",
+        len(index.data_spans),
+        index.n_records,
+        index.n_frames,
+        max(len(index.tiles), 1),
+    )
+
+
 def scan_blocks(path: Path, header: PhiHeader) -> BlockIndex:
     """Walk the block chain, recording structure without reading event data.
 
@@ -171,8 +223,8 @@ def scan_blocks(path: Path, header: PhiHeader) -> BlockIndex:
     path = Path(path)
     file_size = path.stat().st_size
     data_id = header.data_block_id
-    index = BlockIndex(pixels_per_tile=header.image_pixels)
-    tile_x = tile_y = 0
+    index = BlockIndex(pixels_per_tile=header.image_pixels, data_block_id=data_id)
+    tile = (0, 0)
 
     with path.open("rb") as handle:
         pos = header.header_size
@@ -192,50 +244,22 @@ def scan_blocks(path: Path, header: PhiHeader) -> BlockIndex:
                 usable = min(record_size, file_size - pos)
                 usable -= usable % EVENT_SIZE
                 if usable > 0:
-                    index.data_spans.append(DataSpan(pos, usable, tile_x, tile_y))
+                    index.data_spans.append(DataSpan(pos, usable, *tile))
                 pos += record_size
             elif block_id == BLOCK_TILE:
-                handle.seek(pos)
-                tile_raw = handle.read(_TILE_STRUCT.size)
-                if len(tile_raw) < _TILE_STRUCT.size:
+                read = _read_tile_origin(handle, pos, index)
+                if read is None:
                     break
-                tile_x, tile_y = _TILE_STRUCT.unpack(tile_raw)
-                if (tile_x, tile_y) not in index.tiles:
-                    index.tiles.append((tile_x, tile_y))
+                tile = read
                 pos += _TILE_STRUCT.size
             elif block_id == BLOCK_FRAME_END:
                 index.n_frames += 1
             else:
                 if block_id == BLOCK_ASCII_INFO and record_size:
-                    handle.seek(pos)
-                    info = _parse_ascii_info(handle.read(min(record_size, 1 << 16)))
-                    if info:
-                        index.appended.append(info)
+                    _read_ascii_info(handle, pos, record_size, index)
                 pos += record_size
 
-    index.end_offset = pos
-    index.clean = pos == file_size
-    if not index.clean:
-        logger.warning(
-            "PHI block chain for %s ended at byte %d of %d; the trailing %d "
-            "bytes were not accounted for",
-            path.name,
-            pos,
-            file_size,
-            file_size - pos,
-        )
-    if not index.data_spans:
-        raise ValueError(
-            f"No event blocks (id {data_id}) found in {path}. "
-            "Is this a PHI imaging acquisition?"
-        )
-    logger.info(
-        "PHI block scan: %d event blocks, %d records, %d frames, %d tile(s)",
-        len(index.data_spans),
-        index.n_records,
-        index.n_frames,
-        len(index.tiles) or 1,
-    )
+    _finalise_index(index, path, pos, file_size)
     return index
 
 

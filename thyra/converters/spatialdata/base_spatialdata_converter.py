@@ -1461,10 +1461,23 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             return {}
         n_channels = len(self._common_mass_axis)
 
+        # getattr rather than a bare call: readers predating this hook, and
+        # test doubles that do not subclass BaseMSIReader, simply have nothing
+        # to contribute and should not have to raise to say so.
+        getter = getattr(self.reader, "get_mass_axis_annotations", None)
+        if getter is None:
+            return {}
+
         try:
-            annotations = self.reader.get_mass_axis_annotations()
+            annotations = getter()
         except Exception as exc:  # pragma: no cover - reader-defined
-            logger.warning("Reader failed to supply mass axis annotations: %s", exc)
+            # Format eagerly. Passing the exception itself to the logger keeps
+            # it alive inside the log record, and with it its traceback, the
+            # caller frames reachable through tb_frame.f_back, and any memmap
+            # those frames hold -- which on Windows leaves the backing file
+            # locked long after the conversion has finished.
+            detail = f"{type(exc).__name__}: {exc}"
+            logger.warning("Reader failed to supply mass axis annotations: %s", detail)
             return {}
 
         validated: Dict[str, Any] = {}

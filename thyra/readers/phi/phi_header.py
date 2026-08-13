@@ -162,6 +162,54 @@ def _split_header_text(text: str) -> Tuple[Dict[str, str], Dict[str, Dict[str, s
     return entries, sections
 
 
+def _read_header_text(path: Path) -> str:
+    """Read and delimit the ASCII header region of a PHI file."""
+    with path.open("rb") as handle:
+        probe = handle.read(_MAX_HEADER_PROBE)
+
+    if not probe.startswith(SOFH_MAGIC):
+        raise ValueError(
+            f"Not a PHI SmartSoft-TOF raw file (missing SOFH magic): {path}"
+        )
+    end = probe.find(EOFH_MARKER)
+    if end == -1:
+        raise ValueError(f"Malformed PHI header, no EOFH terminator: {path}")
+    return probe[:end].decode("latin-1")
+
+
+def _parse_polarity(
+    entries: Dict[str, str], sections: Dict[str, Dict[str, str]]
+) -> str:
+    """Read the secondary ion polarity, from either place it is recorded."""
+    text = sections.get("Polarity", {}).get(
+        "Polarity", entries.get("SecIonPolarity", "")
+    )
+    return "negative" if "-" in text or "Negative" in text else "positive"
+
+
+def _parse_raster(
+    entries: Dict[str, str], lmig: Dict[str, str]
+) -> Tuple[Optional[float], Optional[float]]:
+    """Read the raster edge length and its scan-generator calibration factor."""
+    raster = _to_float(lmig.get("Raster Size (um)") or entries.get("ScanWidthX"))
+    calibration = lmig.get("Raster Size Calibration", "")
+    factor = _to_float(calibration.split(",")[0]) if calibration else 0.0
+    return (raster or None, factor or None)
+
+
+def _validate_header(header: PhiHeader, path: Path) -> None:
+    """Reject headers whose numbers cannot describe a real acquisition."""
+    if header.image_pixels <= 0:
+        raise ValueError(f"PHI header declares a non-positive ImagePixels: {path}")
+    if header.mass_slope <= 0:
+        raise ValueError(f"PHI header declares a non-positive Mass/Time: {path}")
+    if header.stop_flight_time_us <= header.start_flight_time_us:
+        raise ValueError(
+            f"PHI header flight-time range is empty: {header.start_flight_time_us} "
+            f"to {header.stop_flight_time_us} us in {path}"
+        )
+
+
 def parse_phi_header(path: Path) -> PhiHeader:
     """Parse the ASCII header of a PHI ``.raw`` file.
 
@@ -176,43 +224,21 @@ def parse_phi_header(path: Path) -> PhiHeader:
             unterminated, or a field required for conversion is missing.
     """
     path = Path(path)
-    with path.open("rb") as handle:
-        probe = handle.read(_MAX_HEADER_PROBE)
-
-    if not probe.startswith(SOFH_MAGIC):
-        raise ValueError(
-            f"Not a PHI SmartSoft-TOF raw file (missing SOFH magic): {path}"
-        )
-    end = probe.find(EOFH_MARKER)
-    if end == -1:
-        raise ValueError(f"Malformed PHI header, no EOFH terminator: {path}")
-
-    entries, sections = _split_header_text(probe[:end].decode("latin-1"))
+    entries, sections = _split_header_text(_read_header_text(path))
 
     acq = sections.get("Acq Base", {})
     lmig = sections.get("PHI LMIG", {})
     mosaic = sections.get("Mosaic Area", {})
 
-    for required in ("HeaderSize", "ImagePixels", "Mass/Time", "MassOffset"):
-        if required not in entries:
-            raise ValueError(
-                f"PHI header is missing required field '{required}': {path}"
-            )
+    missing = [
+        name
+        for name in ("HeaderSize", "ImagePixels", "Mass/Time", "MassOffset")
+        if name not in entries
+    ]
+    if missing:
+        raise ValueError(f"PHI header is missing required field '{missing[0]}': {path}")
 
-    polarity_text = sections.get("Polarity", {}).get(
-        "Polarity", entries.get("SecIonPolarity", "")
-    )
-    polarity = (
-        "negative"
-        if "-" in polarity_text or "Negative" in polarity_text
-        else "positive"
-    )
-
-    raster = lmig.get("Raster Size (um)") or entries.get("ScanWidthX")
-    raster_cal = lmig.get("Raster Size Calibration", "")
-    raster_cal_value = (
-        _to_float(raster_cal.split(",")[0]) if raster_cal else None
-    ) or None
+    raster_um, raster_calibration = _parse_raster(entries, lmig)
 
     header = PhiHeader(
         entries=entries,
@@ -226,11 +252,11 @@ def parse_phi_header(path: Path) -> PhiHeader:
         bin_size_ns=_to_float(entries.get("SpecBinSize"), 0.128),
         start_mz=_to_float(acq.get("Start Mass (amu)"), 0.0),
         stop_mz=_to_float(acq.get("End Mass (amu)"), 0.0),
-        polarity=polarity,
+        polarity=_parse_polarity(entries, sections),
         n_frames=_to_int(entries.get("NoFrames") or acq.get("Frames"), 1),
         msms_active="Inactive" not in acq.get("MSMS Active", "Inactive"),
-        raster_size_um=_to_float(raster) or None,
-        raster_size_calibration=raster_cal_value,
+        raster_size_um=raster_um,
+        raster_size_calibration=raster_calibration,
         declared_tiles=(
             _to_int(mosaic.get("Number Of Tiles X"), 1) or 1,
             _to_int(mosaic.get("Number Of Tiles Y"), 1) or 1,
@@ -239,16 +265,7 @@ def parse_phi_header(path: Path) -> PhiHeader:
         calibrants=parse_calibrants(entries.get("Calibration", "")),
     )
 
-    if header.image_pixels <= 0:
-        raise ValueError(f"PHI header declares a non-positive ImagePixels: {path}")
-    if header.mass_slope <= 0:
-        raise ValueError(f"PHI header declares a non-positive Mass/Time: {path}")
-    if header.stop_flight_time_us <= header.start_flight_time_us:
-        raise ValueError(
-            f"PHI header flight-time range is empty: {header.start_flight_time_us} "
-            f"to {header.stop_flight_time_us} us in {path}"
-        )
-
+    _validate_header(header, path)
     logger.debug(
         "Parsed PHI header: %d x %d px, %s polarity, %d frames, "
         "calibration slope=%s offset=%s",
