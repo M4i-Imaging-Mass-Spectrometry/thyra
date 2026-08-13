@@ -1700,7 +1700,10 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         var_group.attrs["encoding-type"] = "dataframe"
         var_group.attrs["encoding-version"] = "0.2.0"
         var_group.attrs["_index"] = "_index"
-        var_group.attrs["column-order"] = ["mz"]
+        # A reader whose native axis is not m/z keeps that axis here too, so
+        # this route stores the same columns as the dataframe-based ones.
+        annotations = self._validated_mass_axis_annotations()
+        var_group.attrs["column-order"] = ["mz"] + sorted(annotations)
 
         mz_values = self._common_mass_axis
         if mz_values is None:
@@ -1722,6 +1725,11 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         a = var_group.create_array("mz", data=mz_values)
         a.attrs["encoding-type"] = "array"
         a.attrs["encoding-version"] = "0.2.0"
+
+        for name in sorted(annotations):
+            a = var_group.create_array(name, data=np.asarray(annotations[name]))
+            a.attrs["encoding-type"] = "array"
+            a.attrs["encoding-version"] = "0.2.0"
 
         # uns (metadata)
         uns_group = table_group.create_group("uns")

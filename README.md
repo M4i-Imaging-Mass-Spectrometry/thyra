@@ -27,7 +27,7 @@ for a full walkthrough, including the published example dataset
 
 ## Features
 
-- **Multiple Input Formats**: ImzML, Bruker (.d directories), Waters (.raw directories)
+- **Multiple Input Formats**: ImzML, Bruker (.d directories), Waters (.raw directories), PHI SmartSoft-TOF ToF-SIMS (.raw files)
 - **SpatialData Output**: Modern, cloud-ready format with Zarr backend
 - **Memory Efficient**: Handles large datasets (100+ GB) through streaming processing
 - **Optical Alignment**: Automatic MSI-to-optical image registration for Bruker data
@@ -53,9 +53,16 @@ thyra input.imzML output.zarr
 # Bruker data with verbose logging
 thyra data.d output.zarr -v DEBUG
 
+# PHI SmartSoft-TOF ToF-SIMS (a .raw file, not a directory)
+thyra tofsims_run.raw output.zarr
+
 # Disable resampling
 thyra input.imzML output.zarr --no-resample
 ```
+
+Thyra auto-detects the input format. Note that `.raw` is claimed by two
+vendors and resolved by shape: Waters writes a directory, PHI writes a single
+file. See [Supported Formats](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/supported-formats/).
 
 ### Python API
 

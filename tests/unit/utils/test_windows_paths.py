@@ -21,11 +21,73 @@ from thyra.utils.windows_paths import (
     DEEPEST_KEY_RESERVE,
     WINDOWS_MAX_PATH,
     prepare_zarr_output_path,
+    prepare_zarr_read_path,
     projected_deepest_key_length,
     to_extended_length_path,
 )
 
 EXTENDED_PREFIX = "\\\\?\\"
+
+
+class TestPrepareZarrReadPath:
+    """Reading a store back is subject to the same limit as writing it.
+
+    A store written through an extended-length path is intact, but its deep
+    keys are invisible to a plain read, which makes it look corrupt.
+    """
+
+    @pytest.fixture
+    def on_windows(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(windows_paths, "_long_paths_enabled", lambda: False)
+
+    @staticmethod
+    def _store_with_key_length(monkeypatch, total: int) -> Path:
+        """A store whose longest key is ``total`` characters.
+
+        The walk is faked rather than written to disk: creating a key past
+        the limit is exactly the thing that needs the prefix, so a real file
+        cannot be used to test the code that decides to apply it.
+        """
+        store = Path("C:\\stores\\store.zarr")
+        name = "k" * max(1, total - len(str(store)) - 1)
+        monkeypatch.setattr(
+            windows_paths.os, "walk", lambda p: [(str(store), [], [name])]
+        )
+        return store
+
+    def test_shallow_store_is_untouched(self, on_windows, monkeypatch):
+        store = self._store_with_key_length(monkeypatch, 120)
+
+        assert prepare_zarr_read_path(store) == store
+
+    def test_deep_store_is_extended(self, on_windows, monkeypatch):
+        store = self._store_with_key_length(monkeypatch, WINDOWS_MAX_PATH + 20)
+
+        result = prepare_zarr_read_path(store)
+
+        assert str(result).startswith(EXTENDED_PREFIX)
+        assert str(result).endswith(str(store))
+
+    def test_no_op_off_windows(self, monkeypatch):
+        store = self._store_with_key_length(monkeypatch, WINDOWS_MAX_PATH + 20)
+        monkeypatch.setattr(sys, "platform", "linux")
+
+        assert prepare_zarr_read_path(store) == store
+
+    def test_no_op_when_long_paths_are_enabled(self, monkeypatch):
+        store = self._store_with_key_length(monkeypatch, WINDOWS_MAX_PATH + 20)
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(windows_paths, "_long_paths_enabled", lambda: True)
+
+        assert prepare_zarr_read_path(store) == store
+
+    def test_missing_store_is_left_alone(self, on_windows, tmp_path):
+        """os.walk yields nothing for a missing store, so there is nothing
+        to protect and the caller should see its own path in the error."""
+        missing = tmp_path / "does_not_exist.zarr"
+
+        assert prepare_zarr_read_path(missing) == missing
 
 
 class TestToExtendedLengthPath:

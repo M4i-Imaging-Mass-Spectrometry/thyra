@@ -29,7 +29,7 @@ The output is a single SpatialData/Zarr directory containing intensity matrices,
 
 | | Feature | Description |
 |---|---------|-------------|
-| **Formats** | Multiple inputs | ImzML, Bruker (.d timsTOF + Rapiflex), Waters (.raw) |
+| **Formats** | Multiple inputs | ImzML, Bruker (.d timsTOF + Rapiflex), Waters (.raw directory), PHI SmartSoft-TOF (.raw file) |
 | **Output** | SpatialData/Zarr | Cloud-ready, chunked, standardised |
 | **Scale** | Memory efficient | Streaming mode for 100+ GB datasets |
 | **Optics** | Optical alignment | Automatic MSI-to-microscopy registration (Bruker) |
@@ -90,11 +90,16 @@ tic = np.asarray(sdata.images["msi_dataset_z0_tic"])[0]
 
 ### Input
 
-| Format | Extension | Instruments |
-|--------|-----------|-------------|
-| ImzML  | `.imzML`  | Any vendor exporting to open standard |
-| Bruker | `.d`      | timsTOF fleX, Rapiflex MALDI-TOF |
-| Waters | `.raw`    | MassLynx imaging (DESI, MALDI) |
+| Format | Path | Instruments |
+|--------|------|-------------|
+| ImzML  | `.imzML` file | Any vendor exporting to the open standard |
+| Bruker | `.d` directory | timsTOF fleX, Rapiflex MALDI-TOF |
+| Waters | `.raw` directory | MassLynx imaging (DESI, MALDI) |
+| PHI    | `.raw` file | SmartSoft-TOF nanoTOF (ToF-SIMS) |
+
+`.raw` is claimed by two vendors and resolved by shape: Waters writes a
+directory, PHI writes a single file. See
+[Supported Formats](supported-formats.md).
 
 ### Output
 
@@ -108,6 +113,7 @@ tic = np.asarray(sdata.images["msi_dataset_z0_tic"])[0]
 
 - **[Getting Started](getting-started.md)** -- installation, first conversion, common workflows
 - **[Tutorial](tutorial.md)** -- step-by-step walkthrough, from an example dataset to ion images
+- **[Supported Formats](supported-formats.md)** -- every input format, how it is detected, what metadata it supplies
 - **[CLI Reference](cli.md)** -- every command-line option explained
 - **[Resampling](resampling.md)** -- how the common mass axis is chosen, and how to control it
 - **[Output Format](output-format.md)** -- what the .zarr contains and how to use it

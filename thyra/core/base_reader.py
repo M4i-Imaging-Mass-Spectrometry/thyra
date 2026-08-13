@@ -213,6 +213,30 @@ class BaseMSIReader(ABC):
         # Return only the valid indices and their corresponding intensities
         return indices[indices_valid], intensities[indices_valid]
 
+    def get_mass_axis_annotations(
+        self,
+    ) -> Optional[dict]:
+        """Get extra per-channel columns to store alongside the m/z axis.
+
+        Returns a mapping of column name to an array with one entry per
+        entry of :meth:`get_common_mass_axis`. These are written into the
+        table's ``var`` next to ``mz``.
+
+        This exists so a format whose native axis is not m/z can keep that
+        axis in the output. Time-of-flight instruments measure flight time
+        and derive m/z from a calibration, so storing the flight time makes
+        the conversion reversible without the reader: a later recalibration
+        can be applied to the stored times directly.
+
+        Annotations are dropped if their length does not match the axis the
+        converter actually writes, which is what happens when resampling is
+        enabled and the axis is rebuilt.
+
+        Returns:
+            Mapping of column name to per-channel values, or None.
+        """
+        return None
+
     def get_region_map(self) -> Optional[dict]:
         """Get per-pixel region mapping for multi-region datasets.
 
