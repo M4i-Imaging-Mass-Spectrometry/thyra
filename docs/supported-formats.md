@@ -125,6 +125,12 @@ with PhiReader("tofsims_run.raw") as reader:
     print(reader.calibration_source)  # 'appended' or 'header'
 ```
 
+Verified against the instrument software's own exports: the total ion image is
+reconstructed bit-exactly, and the exported peak images to 99.7%. Mosaic,
+MS/MS and depth-profiling acquisitions are implemented but have only been
+tested against synthetic files -- if you have real data in one of those modes,
+please [open an issue](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues).
+
 See [PHI ToF-SIMS Notes](phi-tofsims-notes.md) for the file layout, the
 calibration behaviour, and why the time axis is binned the way it is.
 

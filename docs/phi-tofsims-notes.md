@@ -226,8 +226,9 @@ Some properties of this format are worth knowing before analysis:
 
 ## Not yet exercised on real data
 
-Implemented from the format and covered by tests against synthetic files, but
-never run against a real acquisition:
+These paths are implemented from the format and covered by tests, but those
+tests build **synthetic** `.raw` files. No real acquisition using them has been
+through the reader, so treat them as untested rather than working:
 
 - **Mosaic acquisitions** (block 6 tile origins). The reference file declares
   `Number Of Tiles X=8, Y=2` but has mosaic mode off and contains no block 6,
@@ -236,6 +237,19 @@ never run against a real acquisition:
 - **MS/MS acquisitions**, where events move to block id 8.
 - **Depth profiling / 3D.** The reference file has `NoSputCycles: 0`. Thyra
   treats PHI data as 2D.
+
+The gap is data, not effort: each was straightforward to write and is
+impossible to confirm without a file that exercises it. Everything Thyra *is*
+verified on was verified the same way — against the instrument's own exports —
+and the same would be done here.
+
+!!! tip "Have one of these acquisitions?"
+    Please [open an issue](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues)
+    if you need one of these supported. A single representative file is enough
+    to turn any of them from untested into verified, and a `.bif6` export
+    alongside it makes the check exact. Say which acquisition mode you used and
+    roughly how large the file is; the data itself does not have to be attached
+    to the issue.
 
 ## Related exports
 
