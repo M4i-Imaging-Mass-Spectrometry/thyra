@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v3.4.0 (2026-08-19)
+
+### Features
+
+- **resampling**: Recognise PHI ToF-SIMS instead of defaulting it to constant
+  ([`ea21fa6`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/ea21fa6ba695d3d4ab48b0e50f5e5a59600b2a25))
+
+
 ## v3.3.0 (2026-08-13)
 
 ### Bug Fixes
