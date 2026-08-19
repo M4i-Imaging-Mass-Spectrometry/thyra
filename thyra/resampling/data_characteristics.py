@@ -33,6 +33,7 @@ class DataCharacteristics:
     # Format-specific flags
     is_rapiflex_format: bool = False
     is_timstof: bool = False
+    is_phi_tofsims: bool = False
 
     @property
     def needs_resampling(self) -> bool:
@@ -137,6 +138,12 @@ class DataCharacteristics:
         # but case-sensitive on the brand "timsTOF" / "timstof".
         is_timstof = bool(instrument_name and "timstof" in instrument_name.lower())
 
+        # PhiMetadataExtractor stamps the exact string "PHI SmartSoft-TOF raw";
+        # the prefix match leaves room for a future SmartSoft revision to
+        # extend it without silently dropping back to DefaultDetector.
+        source_format = format_specific.get("format") if format_specific else None
+        is_phi_tofsims = bool(source_format and source_format.startswith("PHI "))
+
         return cls(
             spectrum_type=spectrum_type,
             total_peaks=total_peaks,
@@ -146,4 +153,5 @@ class DataCharacteristics:
             manufacturer=manufacturer,
             is_rapiflex_format=is_rapiflex,
             is_timstof=is_timstof,
+            is_phi_tofsims=is_phi_tofsims,
         )

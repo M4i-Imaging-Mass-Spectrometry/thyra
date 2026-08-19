@@ -90,7 +90,7 @@ because Bruker names the family many ways (`timsTOF fleX MALDI-2`,
 ### Which detector wins
 
 Detectors are tried in a fixed priority order and the first match wins:
-timsTOF, Rapiflex, FT-ICR, Orbitrap, generic centroid, then a catch-all
+timsTOF, Rapiflex, FT-ICR, Orbitrap, PHI, generic centroid, then a catch-all
 default. This table is the actual observed behaviour of that chain:
 
 | Metadata | Detector | Method | Axis type |
@@ -99,9 +99,23 @@ default. This table is the actual observed behaviour of that chain:
 | timsTOF, profile high-density | timsTOF | `nearest_neighbor` | `reflector_tof` |
 | Rapiflex, profile | Rapiflex MALDI-TOF | `tic_preserving` | `constant` |
 | Bruker MALDI-TOF | Rapiflex MALDI-TOF | `tic_preserving` | `constant` |
+| PHI SmartSoft-TOF `.raw` | PHI SmartSoft-TOF (ToF-SIMS) | `nearest_neighbor` | `linear_tof` |
 | unknown vendor, profile (any density) | Unknown (default) | `nearest_neighbor` | `constant` |
 | unknown, centroid | ImzML Centroid | `nearest_neighbor` | `reflector_tof` |
 | no usable metadata | Unknown (default) | `nearest_neighbor` | `constant` |
+
+!!! note "Why PHI needs its own row"
+    Without it PHI reaches the catch-all default and is reported as
+    `constant`. Thyra's own answer would still be `nearest_neighbor`, so
+    nothing breaks inside Thyra -- but `preview_msi` hands that axis type
+    to callers, and a caller that maps `constant` to profile-MALDI
+    conventions arrives at `tic_preserving` onto an equidistant axis. That
+    combination is destructive here: a PHI pixel holds a median of 44
+    measured points across m/z 0.5--1850, and interpolating between them
+    fabricates intensity in every bin in the gaps, with the TIC rescale
+    hiding it behind a total that still balances. The detector reports the
+    law the data actually follows -- `PhiMassAxis` steps at a constant
+    flight time, so spacing goes as `sqrt(m/z)` -- which is `linear_tof`.
 
 !!! info "`tic_preserving` is gated on the source and target axis laws matching"
     A detector may only ask for `tic_preserving` if it knows the spacing law

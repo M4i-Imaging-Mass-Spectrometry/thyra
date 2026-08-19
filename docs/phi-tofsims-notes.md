@@ -194,6 +194,58 @@ from their bin centre, worst case 64 ps, which at m/z 79 is 4.7 ppm or
 
 ---
 
+## Resampling onto a common axis
+
+Converting a single `.raw` needs no resampling -- the reader's own axis is the
+output axis. Resampling only comes up when several samples have to share one
+mass axis, and PHI is an awkward case for it.
+
+`InstrumentDetectorChain` recognises the format (via the
+`format_specific["format"]` stamp) and answers **`nearest_neighbor` on a
+`linear_tof` axis**. Both halves matter.
+
+**Why `linear_tof`.** Channels are laid out at a constant flight-time step, and
+m/z goes as the square of time, so the m/z spacing grows as `sqrt(m/z)` -- the
+`linear_tof` law exactly. Measured on the reference file: 9.8e-5 u per channel
+at m/z 1 against 5.0e-4 at m/z 26, a ratio of 5.1 where `sqrt(26)` is 5.099.
+
+**Why not `tic_preserving`.** The method interpolates onto the target axis and
+rescales the result back to the source TIC. A PHI pixel is not a profile
+spectrum -- it holds only the channels that happened to fire, a median of 44
+points spread across m/z 0.5--1850. `np.interp` draws a straight line between
+consecutive points, so every bin in those gaps comes back with an intensity
+nothing measured, and the rescale then normalises the total to the pixel's true
+TIC. **The fabrication is invisible to any total-ion check**: on the reference
+file the total came out at 70.3704 against a true 70.3707, while the average
+spectrum went from 56% hard zeros to 0.1% -- empty regions such as m/z 200
+sitting at 44% of the base peak. Use `nearest_neighbor`, or if the method is
+forced, set `ResamplingConfig.gap_tolerance_da` (see
+[Resampling](resampling.md) and `thyra.resampling.gaps`).
+
+### Choosing a bin width
+
+The instrument's measured resolving power on the reference file is **R ~ 4,000**
+(median), which is normal for a nanoTOF:
+
+| ion | m/z | FWHM | R |
+|---|---|---|---|
+| C⁻ | 12.000 | 5.02 mDa | 2,393 |
+| CN⁻ | 26.003 | 5.35 mDa | 4,861 |
+| CNO⁻ | 41.998 | 8.90 mDa | 4,717 |
+| PO₃⁻ | 78.958 | 17.12 mDa | 4,613 |
+
+Note that this is resolving power, not axis spacing -- the 128 ps grid samples
+each peak 11 to 20 times. A target axis only has to keep a few samples per
+FWHM. A `linear_tof` axis of 0.01 Da at a reference of m/z 500 gives 189,191
+bins over the full range and 2.3 to 4.3 samples per FWHM, which keeps CN⁻ and
+C₂H₂⁻ -- 12.6 mDa apart, or 1.94 FWHM, genuinely resolved by this instrument --
+5.5 bins apart.
+
+!!! danger "A constant 0.1 Da axis destroys this data"
+    It is roughly 19x the peak width at m/z 26, so CN⁻ and C₂H₂⁻ land in the
+    same bin along with everything else between them. Constant-width axes suit
+    profile MALDI-TOF; they do not suit ToF-SIMS.
+
 ## Pixel size
 
 Derived as `Raster Size (um) / ImagePixels`, which for the reference file is
