@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from thyra import MsiPreview, preview_msi
-from thyra.resampling.types import AxisType
+from thyra.resampling.types import AxisType, ResamplingMethod
 
 
 class TestImzMLPreview:
@@ -59,6 +59,22 @@ class TestImzMLPreview:
         # either ``None`` or a valid AxisType enum value.
         assert result.instrument_type is None or isinstance(
             result.instrument_type, AxisType
+        )
+
+    def test_resampling_method_is_reported(self, create_minimal_imzml):
+        """The method is its own answer, not something callers re-derive.
+
+        A caller that infers the method from the axis type gets it wrong
+        wherever a detector pairs them unconventionally -- which is how PHI
+        ToF-SIMS ended up interpolated: the catch-all default reports a
+        ``constant`` axis while asking for ``nearest_neighbor``.
+        """
+        imzml_path, _ibd_path, _mzs, _intensities = create_minimal_imzml
+
+        result = preview_msi(imzml_path)
+
+        assert result.resampling_method is None or isinstance(
+            result.resampling_method, ResamplingMethod
         )
 
     def test_escdat_probe_false_for_bare_imzml(self, create_minimal_imzml):
@@ -113,6 +129,7 @@ class TestUnreadableInputs:
         assert result.grid_dims == (0, 0)
         assert result.instrument_type is None
         assert result.pixel_size_um is None
+        assert result.resampling_method is None
 
     def test_unsupported_extension(self, temp_dir):
         bogus = temp_dir / "data.xyz"

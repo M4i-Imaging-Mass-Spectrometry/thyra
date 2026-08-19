@@ -25,7 +25,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from .core.registry import detect_format, get_reader_class
 from .resampling.decision_tree import ResamplingDecisionTree
-from .resampling.types import AxisType
+from .resampling.types import AxisType, ResamplingMethod
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,17 @@ class MsiPreview:
             without raising.
         error: The exception's ``str()`` when ``readable=False``;
             ``None`` otherwise.
+        resampling_method: The :class:`ResamplingMethod` the
+            :class:`ResamplingDecisionTree` picks for this input, or
+            ``None`` if metadata could not be extracted.  Report this
+            rather than re-deriving a method from
+            :attr:`instrument_type`: the two are separate answers from
+            the detector, and inferring one from the other gets it
+            wrong wherever a detector pairs them unconventionally.  A
+            caller that assumed ``constant`` implied profile MALDI --
+            and so ``tic_preserving`` -- reached exactly that bug on
+            PHI ToF-SIMS, which the catch-all default reports as
+            ``constant`` while asking for ``nearest_neighbor``.
     """
 
     mz_range: Tuple[float, float]
@@ -73,6 +84,7 @@ class MsiPreview:
     has_escdat_folder: bool
     readable: bool
     error: Optional[str] = None
+    resampling_method: Optional[ResamplingMethod] = None
 
 
 def _probe_escdat(path: Path) -> bool:
@@ -207,6 +219,23 @@ def _guess_axis_type(essential: Any, comprehensive: Any) -> Optional[AxisType]:
         return None
 
 
+def _guess_resampling_method(
+    essential: Any, comprehensive: Any
+) -> Optional[ResamplingMethod]:
+    """Best-effort ResamplingMethod pick.  Returns ``None`` on hard failure.
+
+    Same contract as :func:`_guess_axis_type`, and deliberately a separate
+    call rather than something a caller derives from the axis type -- the
+    detector answers the two questions independently.
+    """
+    try:
+        metadata_dict = _resampling_metadata_dict(essential, comprehensive)
+        return ResamplingDecisionTree().select_strategy(metadata_dict)
+    except Exception as exc:
+        logger.debug("ResamplingMethod auto-detection failed for preview: %s", exc)
+        return None
+
+
 def _close_quietly(reader: Optional[Any]) -> None:
     """Close a reader, swallowing any errors.  Best-effort cleanup."""
     if reader is None:
@@ -275,6 +304,7 @@ def preview_msi(path: Path) -> MsiPreview:
             has_escdat_folder=_probe_escdat(path),
             readable=True,
             error=None,
+            resampling_method=_guess_resampling_method(essential, comprehensive),
         )
     finally:
         _close_quietly(reader)

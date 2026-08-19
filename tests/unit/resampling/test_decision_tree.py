@@ -14,6 +14,7 @@ from thyra.resampling.instrument_detectors import (
     InstrumentDetector,
     InstrumentDetectorChain,
     OrbitrapDetector,
+    PhiToFSIMSDetector,
     RapiflexDetector,
     TimsTOFDetector,
 )
@@ -183,6 +184,7 @@ class TestInstrumentDetectorChain:
             "RapiflexDetector",
             "FTICRDetector",
             "OrbitrapDetector",
+            "PhiToFSIMSDetector",
             "CentroidImzMLDetector",
             "DefaultDetector",
         ]
@@ -207,6 +209,72 @@ class TestInstrumentDetectorChain:
         characteristics = DataCharacteristics()
         detector = self.chain.detect(characteristics)
         assert isinstance(detector, DefaultDetector)
+
+    def test_phi_detected_before_default(self):
+        """PHI must not reach DefaultDetector, which would report CONSTANT."""
+        characteristics = DataCharacteristics(is_phi_tofsims=True)
+        detector = self.chain.detect(characteristics)
+        assert isinstance(detector, PhiToFSIMSDetector)
+
+
+class TestPhiToFSIMSDetector:
+    """PHI ToF-SIMS: sparse per-pixel data on a flight-time grid.
+
+    Reaching ``DefaultDetector`` here is not a cosmetic miss. It reports a
+    CONSTANT axis, and a caller that maps constant to profile-MALDI
+    conventions ends up interpolating a pixel that holds a median of 44
+    measured points across m/z 0.5-1850 -- fabricating intensity in every
+    bin between them, with the TIC rescale hiding it behind a balanced
+    total.
+    """
+
+    def setup_method(self):
+        self.detector = PhiToFSIMSDetector()
+
+    def test_matches_the_phi_raw_format_stamp(self):
+        """PhiMetadataExtractor writes format_specific["format"]."""
+        characteristics = DataCharacteristics.from_metadata(
+            {"format_specific": {"format": "PHI SmartSoft-TOF raw"}}
+        )
+        assert characteristics.is_phi_tofsims
+        assert self.detector.matches(characteristics)
+
+    def test_does_not_match_other_formats(self):
+        for fmt in ("Rapiflex", "imzML", "Bruker TSF", ""):
+            characteristics = DataCharacteristics.from_metadata(
+                {"format_specific": {"format": fmt}}
+            )
+            assert not characteristics.is_phi_tofsims, fmt
+            assert not self.detector.matches(characteristics), fmt
+
+    def test_missing_format_specific_does_not_match(self):
+        assert not DataCharacteristics.from_metadata({}).is_phi_tofsims
+
+    def test_uses_nearest_neighbor(self):
+        """Interpolating across the gaps in a sparse pixel invents signal."""
+        assert (
+            self.detector.get_resampling_method() is ResamplingMethod.NEAREST_NEIGHBOR
+        )
+
+    def test_uses_linear_tof_axis(self):
+        """PhiMassAxis steps at a constant flight time, so spacing ~ sqrt(m)."""
+        assert self.detector.get_axis_type() is AxisType.LINEAR_TOF
+
+    def test_declares_its_source_grid_law(self):
+        """An undeclared law cannot clear the TIC-preserving gate."""
+        assert self.detector.source_grid_law is AxisType.LINEAR_TOF
+
+    def test_chain_selects_nearest_neighbor_for_phi(self):
+        """The whole chain, not just the detector in isolation."""
+        chain = InstrumentDetectorChain()
+        characteristics = DataCharacteristics.from_metadata(
+            {"format_specific": {"format": "PHI SmartSoft-TOF raw"}}
+        )
+        assert (
+            chain.get_resampling_method(characteristics)
+            is ResamplingMethod.NEAREST_NEIGHBOR
+        )
+        assert chain.get_axis_type(characteristics) is AxisType.LINEAR_TOF
 
 
 class _TICPreservingDetector(InstrumentDetector):

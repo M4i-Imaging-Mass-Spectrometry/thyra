@@ -240,6 +240,64 @@ class OrbitrapDetector(InstrumentDetector):
         return AxisType.ORBITRAP
 
 
+class PhiToFSIMSDetector(InstrumentDetector):
+    """Detector for PHI SmartSoft-TOF ToF-SIMS data (nanoTOF instruments).
+
+    Without this detector PHI data reaches :class:`DefaultDetector`, which
+    reports ``CONSTANT``. That answer is wrong twice over, and the second
+    way is expensive: a downstream caller that maps a constant axis to
+    profile-MALDI conventions gets ``tic_preserving`` onto an equidistant
+    axis, and interpolating a PHI pixel -- a median of 44 measured points
+    spread over m/z 0.5-1850 -- fabricates intensity in every bin between
+    them. The TIC rescale then hides the damage behind a total that still
+    balances.
+    """
+
+    @property
+    def name(self) -> str:
+        """Return detector name."""
+        return "PHI SmartSoft-TOF (ToF-SIMS)"
+
+    def matches(self, characteristics: DataCharacteristics) -> bool:
+        """Check whether the reader stamped the PHI raw format."""
+        return characteristics.is_phi_tofsims
+
+    def get_resampling_method(self) -> ResamplingMethod:
+        """Return nearest-neighbour: PHI pixels are sparse, not profile.
+
+        The instrument records individual ion arrivals, so a pixel holds
+        only the channels that happened to fire -- 64 occupied channels out
+        of 863,670 on the reference acquisition. That is centroid-like data
+        whatever the axis says, and interpolating across the gaps between
+        those points invents signal. Nearest-neighbour cannot.
+        """
+        return ResamplingMethod.NEAREST_NEIGHBOR
+
+    def get_axis_type(self) -> AxisType:
+        """Return the linear-TOF law the detector's own grid follows."""
+        return AxisType.LINEAR_TOF
+
+    @property
+    def source_grid_law(self) -> Optional[AxisType]:
+        """Report the linear-TOF law of the source grid.
+
+        ``PhiMassAxis`` lays channels out at a constant flight-time step
+        (``SpecBinSize``, 128 ps on the reference file) and derives m/z as
+        ``(slope * t + offset) ** 2``. Constant steps in time put the m/z
+        spacing proportional to ``sqrt(m/z)``, which is exactly
+        :attr:`AxisType.LINEAR_TOF`. Measured on the reference acquisition:
+        9.8e-5 u per channel at m/z 1 against 5.0e-4 at m/z 26, a ratio of
+        5.1 where ``sqrt(26)`` is 5.099.
+
+        Declaring it matters even though :meth:`get_resampling_method`
+        returns nearest-neighbour, because it is what would let a caller
+        that explicitly asks for ``tic_preserving`` clear
+        ``_gate_tic_preserving`` when it targets a linear-TOF axis -- the
+        one case where interpolating this data is defensible.
+        """
+        return AxisType.LINEAR_TOF
+
+
 class DefaultDetector(InstrumentDetector):
     """Fallback detector for unknown instruments.
 
@@ -292,6 +350,7 @@ class InstrumentDetectorChain:
             RapiflexDetector(),
             FTICRDetector(),
             OrbitrapDetector(),
+            PhiToFSIMSDetector(),
             # Generic spectrum type detector
             CentroidImzMLDetector(),
             # Fallback last
