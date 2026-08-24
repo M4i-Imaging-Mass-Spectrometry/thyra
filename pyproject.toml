@@ -149,40 +149,47 @@ thyra-check-ontology = "thyra.tools.check_ontology:main"
 thyra-example-data = "thyra.tools.make_example_data:main"
 
 # With the metadata in [project], package discovery is the only thing left for
-# poetry-core here. The dependency groups below stay Poetry-style for now
-# because Poetry still drives CI and local installs; they move to PEP 735
-# [dependency-groups] when the uv switch lands.
+# poetry-core here; it goes too when the build backend moves to hatchling.
 [tool.poetry]
 packages = [{include = "thyra"}]
 
-[tool.poetry.group.test.dependencies]
-pytest = ">=7.0.0"
-pytest-cov = ">=4.0.0"
-mock = ">=4.0.0"
-
-[tool.poetry.group.dev.dependencies]
-black = ">=23.0.0"
-isort = ">=5.12.0"
-flake8 = ">=6.0.0"
-mypy = ">=1.0.0"
-pydocstyle = ">=6.3.0"
-python-semantic-release = "*"
-python-dotenv = "^1.1.1"
-pre-commit = ">=3.0.0"
-bandit = {extras = ["toml"], version = ">=1.7.0"}
-types-requests = ">=2.25.0"
-types-PyYAML = ">=6.0.0"
-matplotlib = ">=3.7.0"
-ipykernel = "^6.30.1"
-jupyter = "^1.1.1"
-docformatter = "^1.7.7"
-ptitprince = "^0.3.1"
-
-[tool.poetry.group.docs.dependencies]
-mkdocs = ">=1.6, <2"
-mkdocs-material = ">=9.5"
-mkdocs-jupyter = ">=0.25, <1"       # renders docs/*.ipynb as site pages
-mkdocstrings = {extras = ["python"], version = ">=0.27"}
+# PEP 735 dependency groups, managed by uv. `uv sync` installs the project
+# plus the `dev` group by default; CI test jobs install only `test` via
+# `uv sync --no-default-groups --group test` so pytest never drags in
+# Jupyter, matplotlib or the docs stack.
+[dependency-groups]
+test = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "mock>=4.0.0",
+]
+dev = [
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+    "pydocstyle>=6.3.0",
+    # Its `click <8.2` cap is what holds the lockfile's click at 8.1.8; the
+    # published bound in [project] is `<9` and is tested beyond that cap --
+    # see the click comment above.
+    "python-semantic-release",
+    "python-dotenv>=1.1.1,<2",
+    "pre-commit>=3.0.0",
+    "bandit[toml]>=1.7.0",
+    "types-requests>=2.25.0",
+    "types-PyYAML>=6.0.0",
+    "matplotlib>=3.7.0",
+    "ipykernel>=6.30.1,<7",
+    "jupyter>=1.1.1,<2",
+    "docformatter>=1.7.7,<2",
+    "ptitprince>=0.3.1,<0.4",
+]
+docs = [
+    "mkdocs>=1.6, <2",
+    "mkdocs-material>=9.5",
+    "mkdocs-jupyter>=0.25, <1",       # renders docs/*.ipynb as site pages
+    "mkdocstrings[python]>=0.27",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

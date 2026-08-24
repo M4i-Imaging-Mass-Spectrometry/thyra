@@ -80,3 +80,6 @@ benchmarks/test_*.py
 # Nothing under here has ever been tracked. Anchored for the same reason
 # /scripts/ is.
 /reports/
+
+# Virtual environment (uv creates it in-project by default)
+.venv/
