@@ -1,6 +1,6 @@
 [flake8]
 # Single source of truth for flake8. The pre-commit hook deliberately passes
-# no arguments so that `poetry run flake8`, `pre-commit run`, and CI all apply
+# no arguments so that `uv run flake8`, `pre-commit run`, and CI all apply
 # exactly these settings. Keep them here, not in hook args.
 max-line-length = 100
 extend-ignore = E203, W503
@@ -11,7 +11,7 @@ per-file-ignores =
 # d8f1e42).
 max-complexity = 15
 # flake8 always checks a path passed explicitly on the command line, so this
-# list only applies to discovery mode (`poetry run flake8`). pre-commit passes
+# list only applies to discovery mode (`uv run flake8`). pre-commit passes
 # filenames explicitly, so it carries a matching `exclude:` on the flake8 hook
 # -- keep the two in step.
 exclude =

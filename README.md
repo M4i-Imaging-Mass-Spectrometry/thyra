@@ -109,9 +109,9 @@ Output: **SpatialData/Zarr** -- cloud-ready, efficient, standardized
 ```bash
 git clone https://github.com/M4i-Imaging-Mass-Spectrometry/thyra.git
 cd thyra
-poetry install
-poetry run pre-commit install
-poetry run pytest
+uv sync
+uv run pre-commit install
+uv run pytest
 ```
 
 ## Contributing

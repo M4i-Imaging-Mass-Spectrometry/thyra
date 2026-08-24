@@ -16,7 +16,7 @@ Thank you for your interest in contributing to Thyra! This document provides gui
 ### Prerequisites
 
 - Python 3.12 or 3.13
-- Poetry for dependency management
+- [uv](https://docs.astral.sh/uv/) for dependency management
 - Git
 
 ### Setup Steps
@@ -29,17 +29,17 @@ Thank you for your interest in contributing to Thyra! This document provides gui
 
 2. **Install Dependencies**
    ```bash
-   poetry install
+   uv sync
    ```
 
 3. **Install Pre-commit Hooks** (Recommended)
    ```bash
-   poetry run pre-commit install
+   uv run pre-commit install
    ```
 
 4. **Verify Installation**
    ```bash
-   poetry run pytest -m "not integration"
+   uv run pytest -m "not integration"
    ```
 
 ## Code Style Guidelines
@@ -63,14 +63,14 @@ We use automated tools to maintain consistent code style:
 
 ```bash
 # Format code
-poetry run black .
-poetry run isort .
+uv run black .
+uv run isort .
 
 # Run linting
-poetry run flake8
+uv run flake8
 
 # Run security checks
-poetry run bandit -r thyra/
+uv run bandit -r thyra/
 ```
 
 ## Testing Requirements
@@ -79,12 +79,12 @@ poetry run bandit -r thyra/
 
 1. **Unit Tests** - Fast tests for individual functions
    ```bash
-   poetry run pytest -m "not integration"
+   uv run pytest -m "not integration"
    ```
 
 2. **Integration Tests** - End-to-end workflow tests
    ```bash
-   poetry run pytest -m "integration"
+   uv run pytest -m "integration"
    ```
 
 ### Test Coverage
@@ -92,7 +92,7 @@ poetry run bandit -r thyra/
 - Aim for >80% code coverage for new code
 - Run tests with coverage:
   ```bash
-  poetry run pytest --cov=thyra --cov-report=html
+  uv run pytest --cov=thyra --cov-report=html
   ```
 
 ### Writing Tests
@@ -118,10 +118,10 @@ poetry run bandit -r thyra/
 
 3. **Run Quality Checks**
    ```bash
-   poetry run black .
-   poetry run isort .
-   poetry run flake8
-   poetry run pytest
+   uv run black .
+   uv run isort .
+   uv run flake8
+   uv run pytest
    ```
 
 4. **Commit Your Changes**
