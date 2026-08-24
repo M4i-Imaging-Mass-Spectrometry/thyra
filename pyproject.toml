@@ -1,9 +1,6 @@
 [build-system]
-# poetry-core 2.x is where PEP 621 [project] support lives; the backend swap
-# to hatchling is a later, separate change so the artifacts this produces stay
-# byte-identical while the metadata moves.
-requires = ["poetry-core>=2.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "thyra"
@@ -148,10 +145,22 @@ thyra = "thyra.__main__:main"
 thyra-check-ontology = "thyra.tools.check_ontology:main"
 thyra-example-data = "thyra.tools.make_example_data:main"
 
-# With the metadata in [project], package discovery is the only thing left for
-# poetry-core here; it goes too when the build backend moves to hatchling.
-[tool.poetry]
-packages = [{include = "thyra"}]
+# Explicit rather than relying on hatchling's name-based auto-detection, and
+# the sdist is pinned to what poetry-core used to ship: the package, the docs
+# it renders into the wheel-adjacent metadata, and nothing else -- hatchling's
+# default sdist would otherwise sweep in tests/, docs/ and the CI scripts.
+[tool.hatch.build.targets.wheel]
+packages = ["thyra"]
+
+[tool.hatch.build.targets.sdist]
+# Leading slashes anchor to the project root: hatchling patterns are
+# git-style, so a bare "README.md" would also sweep in every nested README
+# (handouts/, tests/). hatchling adds pyproject.toml and .gitignore itself.
+include = [
+    "/thyra",
+    "/README.md",
+    "/LICENSE",
+]
 
 # PEP 735 dependency groups, managed by uv. `uv sync` installs the project
 # plus the `dev` group by default; CI test jobs install only `test` via
