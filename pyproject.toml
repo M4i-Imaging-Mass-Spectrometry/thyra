@@ -1,18 +1,20 @@
 [build-system]
-requires = ["poetry-core>=1.0.0"]
+# poetry-core 2.x is where PEP 621 [project] support lives; the backend swap
+# to hatchling is a later, separate change so the artifacts this produces stay
+# byte-identical while the metadata moves.
+requires = ["poetry-core>=2.0"]
 build-backend = "poetry.core.masonry.api"
 
-[tool.poetry]
+[project]
 name = "thyra"
 version = "3.4.0"
 description = "A modern Python library for converting Mass Spectrometry Imaging (MSI) data into SpatialData/Zarr format - your portal to spatial omics"
-authors = ["Theodoros Visvikis <t.visvikis@maastrichtuniversity.nl>"]
-maintainers = ["Theodoros Visvikis <t.visvikis@maastrichtuniversity.nl>"]
+authors = [{ name = "Theodoros Visvikis", email = "t.visvikis@maastrichtuniversity.nl" }]
+maintainers = [{ name = "Theodoros Visvikis", email = "t.visvikis@maastrichtuniversity.nl" }]
 license = "MIT"
+license-files = ["LICENSE"]
 readme = "README.md"
-homepage = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra"
-repository = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra"
-documentation = "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/"
+requires-python = ">=3.12, <3.14"
 keywords = [
     "mass-spectrometry",
     "imaging",
@@ -25,13 +27,12 @@ keywords = [
     "bruker",
     "spatial-omics",
     "data-conversion",
-    "scientific-computing"
+    "scientific-computing",
 ]
 
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
@@ -44,102 +45,115 @@ classifiers = [
     "Typing :: Typed",
     "Environment :: Console",
 ]
-packages = [{include = "thyra"}]
 
-[tool.poetry.urls]
+dependencies = [
+    # The spatialdata / ome-zarr / zarr / dask cluster is tightly coupled and
+    # all four release frequently with breaking cross-version interactions.
+    # Floors alone are NOT enough for `pip install thyra`: without upper
+    # bounds pip resolves a mismatched set (a stale spatialdata alongside a
+    # much newer ome-zarr and dask), which fails to save/read back a
+    # SpatialData object. The upper bounds below pin this cluster to
+    # the tested, lockfile-consistent set so a plain pip install lands on a
+    # working combination. The clean-venv CI job in .github/workflows/tests.yml
+    # exercises exactly this pip-resolved path so these bounds stay honest.
+    # Bump the ceilings deliberately after re-testing against newer releases.
+    "dask>=2026.3.0, <2026.8",        # tested 2026.7.1 (spatialdata 0.8.0 needs >=2026.3.0)
+    # The CLI is built on click -- `thyra/__main__.py` imports it at module scope,
+    # so the `thyra` console script cannot start without it. It went undeclared
+    # for the project's whole history before this line, and resolved only by
+    # accident: dask requires click >=8.1, so every resolution to date happened
+    # to supply one. That is luck, not a guarantee. If
+    # dask ever drops or vendors click, `pip install thyra` yields an install
+    # whose entry point dies with `ImportError: No module named 'click'` on the
+    # first run, at __main__.py's import line, before any command executes.
+    # The floor matches dask's own and the version the lockfile resolves. The
+    # ceiling is `<9` because GroupedCommand subclasses click.Command and
+    # overrides format_help(): a major release is free to change that. Verified
+    # --help (including the grouped sections), --version and the Choice/IntRange
+    # validators render identically on 8.1.8 (the lockfile, held there by
+    # python-semantic-release's dev-only `<8.2` cap) and on 8.4.2, which is what
+    # a plain `pip install thyra` resolves today and the lockfile never exercises.
+    "click>=8.1, <9",                 # tested 8.1.8 and 8.4.2
+    "defusedxml>=0.7.1",  # Secure XML parsing for the Bruker Rapiflex reader
+    "geopandas>=0.9.0",
+    "lxml>=4.6.0",
+    "numpy>=2.0.0, <3",
+    # pandas 3.0 makes `future.infer_string` the default, which gives the table
+    # indices and string columns pandas' `str` dtype. anndata >= 0.13 serializes
+    # that natively (anndata #2133); older anndata could not, which is why this
+    # project carried a write-time coercion until the anndata floor moved. The
+    # ceiling is NOT `<3`: capping there would strand users whose other packages
+    # want pandas 3. `<4` records the newest major actually exercised -- the unit
+    # suite passes on 2.3.2 (the lockfile) and on 3.0.5 with this set.
+    "pandas>=2.0.0, <4",              # tested 2.3.2 and 3.0.5
+    "pyimzML>=1.4.0",
+    "scipy>=1.7.0",
+    "Shapely>=2.0.0",
+    "spatialdata>=0.8.0, <0.9",       # tested 0.8.0
+    # Floor pulls the fix for the zarr_format/Group.create_array() bug that
+    # bit ome_zarr 0.12.x with newer dask, and spatialdata 0.8 requires >= 0.16.
+    "ome-zarr>=0.16.0, <0.19",        # tested 0.18.0
+    "tqdm>=4.50.0",
+    # Floor is 3.1.4, and it is load-bearing. anndata >= 0.13 writes every zarr v3
+    # array with `shards="auto"`. zarr < 3.1.4 sized the auto chunk with
+    # `max_bytes=1024` where its own comment says "aim for a 1MiB chunk" (compare
+    # `_auto_partition` in 3.1.3 vs 3.1.4), so one shard -- one FILE -- came out at
+    # ~1 KB. Measured on test_data/pea.imzML: 393,310 files for a single table and
+    # 434 s of a 445 s conversion spent in the write, against 12 files and 2.7 s on
+    # 3.1.6. Nothing in Thyra changed; the anndata 0.13 bump alone did this.
+    # 3.1.4 is also where `array.target_shard_size_bytes` arrives, which is the
+    # knob _chunking.table_write_config sets to claim the budget from anndata.
+    "zarr>=3.1.4, <3.2",              # tested 3.1.6
+    "imagecodecs>=2024.1.1",  # For reading compressed TIFF optical images
+    # Floor is 0.13.2, not 0.13.0. anndata 0.13.0 imports
+    # `typing_extensions.sentinel` (needs typing-extensions >= 4.16) but declares
+    # no floor for it, so a resolver prefers 0.13.0, pairs it with an older
+    # typing-extensions, and produces an environment that installs cleanly and
+    # then dies at import. 0.13.2 declares the floor correctly.
+    #
+    # 0.13 is also the release that made the pandas 3 string-dtype coercion in
+    # base_spatialdata_converter.py unnecessary (anndata #2221, fixed by #2133);
+    # that coercion was deleted when this floor moved. See issue #117.
+    "anndata>=0.13.2, <0.14",         # tested 0.13.2
+    "psutil>=5.0.0",
+    # Imported directly, not merely re-exported through spatialdata: tifffile by
+    # converters/spatialdata/base_spatialdata_converter.py, xarray by that module
+    # and the 2D, 3D and streaming converters. Both arrive transitively today
+    # (spatialdata requires xarray >=2024.10.0 outright; tifffile comes in behind
+    # scikit-image and dask-image), so this is the same undeclared-direct-import
+    # defect as click above -- but a quieter one. Their imports sit inside the
+    # SPATIALDATA_AVAILABLE try/except, so losing either degrades instead of
+    # crashing: every converter is replaced by a dummy and the run reports
+    # "SpatialData dependencies not available" rather than naming the real cause.
+    # Floors only, and deliberately so. They restate what the existing requirers
+    # already demand, which makes the direct dependency honest without asserting
+    # an upper bound nothing here has tested; the resolved set does not move.
+    "tifffile>=2022.8.12",
+    "xarray>=2024.10.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra"
+Repository = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra"
+Documentation = "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/"
 "Bug Tracker" = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues"
-"Discussions" = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/discussions"
-"Changelog" = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/blob/main/CHANGELOG.md"
+Discussions = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/discussions"
+Changelog = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/blob/main/CHANGELOG.md"
 # There is no CONTRIBUTING.md at the repository root; the guide lives at
 # docs/contributing.md and is published as this page.
-"Contributing" = "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/contributing/"
+Contributing = "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/contributing/"
 
-[tool.poetry.dependencies]
-python = ">=3.12, <3.14"
+[project.scripts]
+thyra = "thyra.__main__:main"
+thyra-check-ontology = "thyra.tools.check_ontology:main"
+thyra-example-data = "thyra.tools.make_example_data:main"
 
-# The spatialdata / ome-zarr / zarr / dask cluster is tightly coupled and
-# all four release frequently with breaking cross-version interactions.
-# Floors alone are NOT enough for `pip install thyra`: without upper
-# bounds pip resolves a mismatched set (a stale spatialdata alongside a
-# much newer ome-zarr and dask), which fails to save/read back a
-# SpatialData object. The upper bounds below pin this cluster to
-# the tested, lockfile-consistent set so a plain pip install lands on a
-# working combination. The clean-venv CI job in .github/workflows/tests.yml
-# exercises exactly this pip-resolved path so these bounds stay honest.
-# Bump the ceilings deliberately after re-testing against newer releases.
-dask = ">=2026.3.0, <2026.8"        # tested 2026.7.1 (spatialdata 0.8.0 needs >=2026.3.0)
-# The CLI is built on click -- `thyra/__main__.py` imports it at module scope,
-# so the `thyra` console script cannot start without it. It went undeclared
-# for the project's whole history before this line, and resolved only by
-# accident: dask requires click >=8.1, so every resolution to date happened
-# to supply one. That is luck, not a guarantee. If
-# dask ever drops or vendors click, `pip install thyra` yields an install
-# whose entry point dies with `ImportError: No module named 'click'` on the
-# first run, at __main__.py's import line, before any command executes.
-# The floor matches dask's own and the version the lockfile resolves. The
-# ceiling is `<9` because GroupedCommand subclasses click.Command and
-# overrides format_help(): a major release is free to change that. Verified
-# --help (including the grouped sections), --version and the Choice/IntRange
-# validators render identically on 8.1.8 (the lockfile, held there by
-# python-semantic-release's dev-only `<8.2` cap) and on 8.4.2, which is what
-# a plain `pip install thyra` resolves today and the lockfile never exercises.
-click = ">=8.1, <9"                 # tested 8.1.8 and 8.4.2
-defusedxml = ">=0.7.1"  # Secure XML parsing for the Bruker Rapiflex reader
-geopandas = ">=0.9.0"
-lxml = ">=4.6.0"
-numpy = ">=2.0.0, <3"
-# pandas 3.0 makes `future.infer_string` the default, which gives the table
-# indices and string columns pandas' `str` dtype. anndata >= 0.13 serializes
-# that natively (anndata #2133); older anndata could not, which is why this
-# project carried a write-time coercion until the anndata floor moved. The
-# ceiling is NOT `<3`: capping there would strand users whose other packages
-# want pandas 3. `<4` records the newest major actually exercised -- the unit
-# suite passes on 2.3.2 (the lockfile) and on 3.0.5 with this set.
-pandas = ">=2.0.0, <4"              # tested 2.3.2 and 3.0.5
-pyimzML = ">=1.4.0"
-scipy = ">=1.7.0"
-Shapely = ">=2.0.0"
-spatialdata = ">=0.8.0, <0.9"       # tested 0.8.0
-# Floor pulls the fix for the zarr_format/Group.create_array() bug that
-# bit ome_zarr 0.12.x with newer dask, and spatialdata 0.8 requires >= 0.16.
-ome-zarr = ">=0.16.0, <0.19"        # tested 0.18.0
-tqdm = ">=4.50.0"
-# Floor is 3.1.4, and it is load-bearing. anndata >= 0.13 writes every zarr v3
-# array with `shards="auto"`. zarr < 3.1.4 sized the auto chunk with
-# `max_bytes=1024` where its own comment says "aim for a 1MiB chunk" (compare
-# `_auto_partition` in 3.1.3 vs 3.1.4), so one shard -- one FILE -- came out at
-# ~1 KB. Measured on test_data/pea.imzML: 393,310 files for a single table and
-# 434 s of a 445 s conversion spent in the write, against 12 files and 2.7 s on
-# 3.1.6. Nothing in Thyra changed; the anndata 0.13 bump alone did this.
-# 3.1.4 is also where `array.target_shard_size_bytes` arrives, which is the
-# knob _chunking.table_write_config sets to claim the budget from anndata.
-zarr = ">=3.1.4, <3.2"              # tested 3.1.6
-imagecodecs = ">=2024.1.1"  # For reading compressed TIFF optical images
-# Floor is 0.13.2, not 0.13.0. anndata 0.13.0 imports
-# `typing_extensions.sentinel` (needs typing-extensions >= 4.16) but declares
-# no floor for it, so a resolver prefers 0.13.0, pairs it with an older
-# typing-extensions, and produces an environment that installs cleanly and
-# then dies at import. 0.13.2 declares the floor correctly.
-#
-# 0.13 is also the release that made the pandas 3 string-dtype coercion in
-# base_spatialdata_converter.py unnecessary (anndata #2221, fixed by #2133);
-# that coercion was deleted when this floor moved. See issue #117.
-anndata = ">=0.13.2, <0.14"         # tested 0.13.2
-psutil = ">=5.0.0"
-# Imported directly, not merely re-exported through spatialdata: tifffile by
-# converters/spatialdata/base_spatialdata_converter.py, xarray by that module
-# and the 2D, 3D and streaming converters. Both arrive transitively today
-# (spatialdata requires xarray >=2024.10.0 outright; tifffile comes in behind
-# scikit-image and dask-image), so this is the same undeclared-direct-import
-# defect as click above -- but a quieter one. Their imports sit inside the
-# SPATIALDATA_AVAILABLE try/except, so losing either degrades instead of
-# crashing: every converter is replaced by a dummy and the run reports
-# "SpatialData dependencies not available" rather than naming the real cause.
-# Floors only, and deliberately so. They restate what the existing requirers
-# already demand, which makes the direct dependency honest without asserting
-# an upper bound nothing here has tested; the resolved set does not move.
-tifffile = ">=2022.8.12"
-xarray = ">=2024.10.0"
+# With the metadata in [project], package discovery is the only thing left for
+# poetry-core here. The dependency groups below stay Poetry-style for now
+# because Poetry still drives CI and local installs; they move to PEP 735
+# [dependency-groups] when the uv switch lands.
+[tool.poetry]
+packages = [{include = "thyra"}]
 
 [tool.poetry.group.test.dependencies]
 pytest = ">=7.0.0"
@@ -170,11 +184,6 @@ mkdocs-material = ">=9.5"
 mkdocs-jupyter = ">=0.25, <1"       # renders docs/*.ipynb as site pages
 mkdocstrings = {extras = ["python"], version = ">=0.27"}
 
-[tool.poetry.scripts]
-thyra = "thyra.__main__:main"
-thyra-check-ontology = "thyra.tools.check_ontology:main"
-thyra-example-data = "thyra.tools.make_example_data:main"
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
@@ -194,7 +203,7 @@ filterwarnings = [
 # === SEMANTIC RELEASE CONFIGURATION                         ===
 # =============================================================
 [tool.semantic_release]
-version_toml = ["pyproject.toml:tool.poetry.version"]
+version_toml = ["pyproject.toml:project.version"]
 version_variables = [
     "thyra/__init__.py:__version__",
 ]
