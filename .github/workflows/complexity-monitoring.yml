@@ -33,41 +33,22 @@ jobs:
         # `git fetch --depth=1 origin $GITHUB_BASE_REF` would be cheaper, but a
         # three-dot diff needs a common ancestor and two depth-1 tips have none.
         # The cost is small enough not to be worth that risk: a full clone of
-        # this repo packs to 26 MiB against 12 MiB shallow, next to a
-        # `poetry install` that dominates the job either way.
+        # this repo packs to 26 MiB against 12 MiB shallow.
         fetch-depth: 0
 
+    # No dependency install. complexity_monitor.py imports only the standard
+    # library (argparse/ast/json/subprocess/...), so the full Poetry venv this
+    # job used to build and cache was never needed to run it.
     - name: Set up Python
       uses: actions/setup-python@v6
       with:
         python-version: '3.12'
 
-    - name: Install Poetry
-      uses: snok/install-poetry@v1
-      with:
-        version: latest
-        virtualenvs-create: true
-        virtualenvs-in-project: true
-
-    - name: Load cached venv
-      id: cached-poetry-dependencies
-      uses: actions/cache@v6
-      with:
-        path: .venv
-        key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
-
-    - name: Install dependencies
-      if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
-      run: poetry install --no-interaction --no-root
-
-    - name: Install project
-      run: poetry install --no-interaction
-
     - name: Run complexity monitoring
       run: |
         echo "Starting complexity monitoring..."
         echo "Current directory: $(pwd)"
-        echo "Python version: $(poetry run python --version)"
+        echo "Python version: $(python --version)"
         echo "Event: ${{ github.event_name }}"
 
         echo "Running complexity monitor..."
@@ -76,13 +57,13 @@ jobs:
         # Use different modes based on event type
         if [ "${{ github.event_name }}" = "pull_request" ]; then
           echo "PR detected: Analyzing changed files only (fast mode)"
-          poetry run python .github/scripts/complexity_monitor.py \
+          python .github/scripts/complexity_monitor.py \
             --threshold 15 \
             --files-changed \
             --save
         else
           echo "Main branch or scheduled run: Full analysis"
-          poetry run python .github/scripts/complexity_monitor.py \
+          python .github/scripts/complexity_monitor.py \
             --threshold 15 \
             --save
         fi
@@ -211,7 +192,7 @@ jobs:
         # banner would introduce an empty stretch of log. What is wanted here is
         # the whole-repo summary, which is also the part `--files-changed` runs
         # above deliberately do not compute.
-        poetry run python .github/scripts/complexity_monitor.py --threshold 15 --no-save || true
+        python .github/scripts/complexity_monitor.py --threshold 15 --no-save || true
 
     - name: Set complexity check status
       run: |
