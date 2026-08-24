@@ -67,6 +67,18 @@ body {
   background: linear-gradient(135deg, #792074, #9A4B3D);
 }
 
+/* The logomark is filled with this same purple -> brick gradient, so on the
+   bar above it reads as a faint ghost rather than a logo. Knock it out to
+   solid white -- the usual treatment for a brand mark on a coloured field --
+   rather than plating a background behind it: brightness(0) flattens every
+   gradient stop to black while keeping the alpha, invert(1) turns that white.
+   The gradient logotype on the home page is untouched. The second selector is
+   the same mark in the mobile drawer's title bar, which is also primary. */
+.md-header__button.md-logo img,
+.md-nav__button.md-logo img {
+  filter: brightness(0) invert(1);
+}
+
 /* ---- Navigation tabs bar ---- */
 /* Clean white bar beneath the gradient header */
 .md-tabs {
