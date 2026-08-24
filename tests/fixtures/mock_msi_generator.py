@@ -8,7 +8,7 @@ extractor contract), so it is a drop-in stand-in for a real reader.
 
 Run as a script for a quick streaming-conversion smoke test:
 
-    poetry run python tests/fixtures/mock_msi_generator.py [--size small|medium|large|huge]
+    uv run python tests/fixtures/mock_msi_generator.py [--size small|medium|large|huge]
 
 Sizes:
     small  : 100x100 pixels, ~10k spectra (quick test, <1s)
