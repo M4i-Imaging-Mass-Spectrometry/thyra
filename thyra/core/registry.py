@@ -158,6 +158,8 @@ class MSIRegistry:
             return self._detect_bruker_d_format(input_path)
         if extension == ".raw":
             return self._detect_raw_format(input_path)
+        if extension in (".imdx", ".kbd"):
+            self._raise_shimadzu_in_development(input_path)
         if input_path.is_dir():
             return self._detect_directory_format(input_path)
         self._raise_unsupported_format(input_path)
@@ -202,6 +204,21 @@ class MSIRegistry:
         if self._detect_waters_format(input_path):
             return "waters"
         self._raise_unsupported_format(input_path)
+
+    def _raise_shimadzu_in_development(self, input_path: Path) -> NoReturn:
+        """Raise a guidance error for recognised Shimadzu imaging data.
+
+        Shimadzu iMScope data (.kbd from LabSolutions, .imdx from
+        IMAGEREVEAL MS) is recognised but native reading is still in
+        development. Until it lands, IMAGEREVEAL MS can export the data
+        as imzML, which Thyra converts today.
+        """
+        raise ValueError(
+            f"Shimadzu imaging data detected: {input_path}. Native support "
+            "for Shimadzu formats (.imdx, .kbd) is in development. In the "
+            "meantime, export the dataset as imzML from IMAGEREVEAL MS and "
+            "convert the imzML file instead."
+        )
 
     def _raise_unsupported_format(self, input_path: Path) -> NoReturn:
         """Raise error for unsupported format."""
