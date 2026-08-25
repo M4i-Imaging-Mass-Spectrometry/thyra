@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v3.5.0 (2026-08-25)
+
+### Build System
+
+- Move project metadata to PEP 621 [project] table
+  ([`4410adf`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/4410adf98e81355c221e4d578934e645ce8dad54))
+
+- Swap the build backend from poetry-core to hatchling
+  ([`b6cb013`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/b6cb013a1c2cb810664dfc98079e171a0cc83576))
+
+- Switch dependency management from Poetry to uv
+  ([`dc14d0c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/dc14d0c670db782b791ef2248844daaab291c0e7))
+
+### Documentation
+
+- Update developer commands from poetry to uv
+  ([`9694229`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/969422914891857d7cf77114d761507df7ecf3aa))
+
+### Features
+
+- Recognize Shimadzu imaging formats (.imdx, .kbd) with imzML guidance
+  ([`21b9a56`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/21b9a562e54f99b02ce5310dcee99c3c40ad1103))
+
+
 ## v3.4.0 (2026-08-19)
 
 ### Features
