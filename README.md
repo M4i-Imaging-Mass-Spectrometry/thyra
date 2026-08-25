@@ -101,6 +101,8 @@ Full documentation: **[M4i-Imaging-Mass-Spectrometry.github.io/thyra](https://M4
 | ImzML | `.imzML` | Full support |
 | Bruker | `.d` | Full support (timsTOF + Rapiflex) |
 | Waters | `.raw` | Full support |
+| PHI SmartSoft-TOF | `.raw` | Full support |
+| Shimadzu | `.imdx`, `.kbd` | In development (workaround: imzML export from IMAGEREVEAL MS) |
 
 Output: **SpatialData/Zarr** -- cloud-ready, efficient, standardized
 
