@@ -8,8 +8,9 @@ one carries and for the two ways they can be destroyed without a test noticing.
 
 A number of assertions below pin behaviour that is **wrong**. Each carries a
 comment naming the audit finding it characterises and what a fix would turn it
-into. ``assert pixel_size == (4406.25, 4406.25)`` is a record of a 1000x error
-reaching disk today, not a claim that it should.
+into. ``assert imzmldict["pixel size x"] == 4406.25`` is a record of pyimzml
+discarding a nanometre unit, not a claim that 4406.25 um is the pixel size --
+the extractor compensates, which is what ``TestUnitNanometre`` now asserts.
 """
 
 import shutil
@@ -246,7 +247,28 @@ class TestIontofSparse:
 
 
 class TestUnitNanometre:
-    """Audit #9: the discarded ``unitAccession``, worth a factor of 1000."""
+    """Audit #9, closed: the discarded ``unitAccession``, worth a factor of 1000.
+
+    ``_extract_pixel_size_fast`` now pairs the bare ``imzmldict`` number with
+    the unit preserved on the ParamGroup path and converts to micrometres, so
+    the assertions below state the truth rather than characterise the error.
+    """
+
+    def _variant_with_unit(self, tmp_path, unit_accession: str, unit_name: str):
+        """Copy the fixture pair into ``tmp_path`` with the unit swapped."""
+        text = raw_bytes("unit_nanometre").decode("utf-8")
+        text = text.replace(
+            'unitAccession="UO:0000018"', f'unitAccession="{unit_accession}"'
+        )
+        text = text.replace('unitName="nanometer"', f'unitName="{unit_name}"')
+
+        imzml = tmp_path / "unit_variant.imzML"
+        imzml.write_text(text, encoding="utf-8")
+        shutil.copyfile(
+            fixture_path("unit_nanometre").with_suffix(".ibd"),
+            imzml.with_suffix(".ibd"),
+        )
+        return imzml
 
     def test_the_document_declares_nanometre(self):
         """The unit is in the file. Whether anything reads it is the next test."""
@@ -257,15 +279,13 @@ class TestUnitNanometre:
         assert 'unitName="nanometer"' in text
 
     def test_imzmldict_drops_the_unit(self):
-        """CHARACTERISATION of audit #9 -- currently wrong, no lane owns the fix.
+        """pyimzml's dict is still unit-blind; the extractor must not trust it.
 
         ``convert_cv_param`` takes no unit argument, so ``__readimzmlmeta``
         cannot carry one and ``imzmldict['pixel size x']`` is a bare number in
-        whatever unit the vendor declared. 4406.25 nanometre is 4.40625 um.
-
-        Handout I assigns #9 to neither lane I nor lane J; it is documented in
-        ``docs/imzml-parser-notes.md`` as open. Whoever closes it inverts this
-        assertion to ``== pytest.approx(4.40625)``.
+        whatever unit the vendor declared. This pins the reason
+        ``_extract_pixel_size_fast`` reads the unit off the ParamGroup path
+        rather than taking this number at face value.
         """
         reader = open_reader("unit_nanometre")
         try:
@@ -274,27 +294,20 @@ class TestUnitNanometre:
         finally:
             reader.close()
 
-    def test_the_1000x_error_reaches_essential_metadata(self):
-        """CHARACTERISATION of audit #9 -- currently wrong, no lane owns the fix.
-
-        ``_extract_pixel_size_fast`` reads straight out of ``imzmldict`` and
-        labels the result micrometres, so the unit loss becomes a spatial error
-        the moment it is used. Truth is (4.40625, 4.40625).
-        """
+    def test_nanometre_pixel_size_reaches_essential_metadata_in_um(self):
+        """4406.25 nanometre reads as 4.40625 um, not 4406.25 um."""
         reader = open_reader("unit_nanometre")
         try:
             assert reader.get_essential_metadata().pixel_size == pytest.approx(
-                (4406.25, 4406.25)
+                (4.40625, 4.40625)
             )
         finally:
             reader.close()
 
-    def test_the_1000x_error_reaches_disk(self, temp_dir):
-        """CHARACTERISATION of audit #9 -- currently wrong, no lane owns the fix.
-
-        End to end, because the point of #9 is that ``convert_msi`` returns
-        ``True`` and writes wrong coordinates rather than failing. Truth for a
-        2x2 acquisition at 4.40625 um is ``[0, 4.40625, 0, 4.40625]``.
+    def test_converted_coordinates_reach_disk_in_um(self, temp_dir):
+        """End to end, because the point of #9 was that ``convert_msi`` returned
+        ``True`` and wrote coordinates 1000x too large rather than failing. For
+        a 2x2 acquisition at 4.40625 um the x positions are ``[0, 4.40625]``.
         """
         import spatialdata
 
@@ -304,14 +317,38 @@ class TestUnitNanometre:
 
         table = next(iter(spatialdata.read_zarr(output).tables.values()))
 
-        assert sorted(set(table.obs["spatial_x"])) == pytest.approx([0.0, 4406.25])
+        assert sorted(set(table.obs["spatial_x"])) == pytest.approx([0.0, 4.40625])
+
+    def test_millimetre_pixel_size_is_scaled_up(self, tmp_path):
+        """UO:0000016 goes the other way: x1000 rather than /1000."""
+        imzml = self._variant_with_unit(tmp_path, "UO:0000016", "millimeter")
+        reader = ImzMLReader(imzml)
+        try:
+            assert reader.get_essential_metadata().pixel_size == pytest.approx(
+                (4406250.0, 4406250.0)
+            )
+        finally:
+            reader.close()
+
+    def test_an_unrecognised_unit_is_refused(self, tmp_path):
+        """A unit outside mm/um/nm raises instead of guessing a factor.
+
+        UO:0000015 is centimetre -- a real length unit deliberately not in the
+        table, so accepting it unconverted would be a silent x10000 error.
+        """
+        imzml = self._variant_with_unit(tmp_path, "UO:0000015", "centimeter")
+        reader = ImzMLReader(imzml)
+        try:
+            with pytest.raises(ValueError, match="UO:0000015"):
+                reader.get_essential_metadata()
+        finally:
+            reader.close()
 
     def test_the_unit_survives_on_the_param_group_path(self):
-        """The fix is reachable: ``cv_params`` keeps what ``imzmldict`` threw away.
+        """``cv_params`` keeps what ``imzmldict`` threw away.
 
-        This is the assertion that makes #9 worth fixing rather than merely
-        documenting -- the information is still in the parsed metadata, one
-        attribute along a different access path.
+        This is the path the fix reads: the unit is in the parsed metadata,
+        one attribute along a different access path from the bare number.
         """
         reader = open_reader("unit_nanometre")
         try:
