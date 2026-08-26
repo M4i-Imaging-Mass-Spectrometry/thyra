@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v3.5.1 (2026-08-26)
+
+### Bug Fixes
+
+- Convert imzML pixel size to micrometres using its declared unit
+  ([`adeb252`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/adeb252ee819827538b3c98e86b6942f77eb589e))
+
+### Build System
+
+- Sync uv.lock with the 3.5.0 version bump
+  ([`9b91660`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/9b916607dc0970ef9e40bc26004bdb7826b06e41))
+
+
 ## v3.5.0 (2026-08-25)
 
 ### Build System
