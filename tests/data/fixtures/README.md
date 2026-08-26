@@ -19,7 +19,7 @@ repository actually carries is under 6 KB.
 | Pair | The one thing it carries |
 |---|---|
 | `iontof_sparse` | ISO-8859-1, CRLF, unindented, no `mzML/@version`, no `IMS:1000052`, three misspelled ontology names, `max dimension` contradicting `pixel size`, and a sparse 6-of-16 acquisition. The whole IONTOF/bellini class in one file. |
-| `unit_nanometre` | `IMS:1000046/47` carrying `UO:0000018` nanometre. pyimzml's `imzmldict` drops the unit, so a 4.40625 um pixel is read as 4406.25 um. |
+| `unit_nanometre` | `IMS:1000046/47` carrying `UO:0000018` nanometre. pyimzml's `imzmldict` drops the unit, so a 4.40625 um pixel would read as 4406.25 um if the extractor did not fetch the unit from the ParamGroup path. |
 | `two_scansettings` | Two `<scanSettings>` blocks with different pixel sizes. `__readimzmlmeta` resolves each accession by first-match-anywhere, producing a chimera present in neither block. |
 | `two_precision_terms` | One param group declaring both `32-bit float` and `64-bit float`. pyimzml picks by dict insertion order and says nothing. |
 
