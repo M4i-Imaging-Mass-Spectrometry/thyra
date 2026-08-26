@@ -460,6 +460,26 @@ A section the source format has nothing for is omitted rather than written
 empty, so `"instrument_info" not in uns` means "this format does not carry
 it" rather than "it was carried and lost".
 
+### Structured metadata: `uns["msi_metadata"]`
+
+The sections above preserve what the source said, in the source's own
+vocabulary. `uns["msi_metadata"]` is the normalised, versioned view of the
+same facts: fixed field names, PSI-MS/NCBITaxon/UBERON/CHEBI ontology
+terms, and a schema a validator can hold it to.
+
+```python
+block = msi_table.uns["msi_metadata"]
+
+print(block["schema_version"])                    # "0.1.0"
+print(block["ms_analysis"]["pixel_size_um"])      # {"x": 20.0, "y": 20.0}
+print(block["provenance"]["source_format"])       # "imzml"
+```
+
+It is written by every converter path identically, validated by
+`thyra validate`, and exported to a METASPACE submission by
+`thyra export-metaspace`. See [Metadata Schema](metadata-schema.md) for
+the full contract.
+
 ---
 
 ## Recipes

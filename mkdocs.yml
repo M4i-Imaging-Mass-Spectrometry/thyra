@@ -83,6 +83,7 @@ nav:
   - CLI Reference: cli.md
   - Resampling: resampling.md
   - Output Format: output-format.md
+  - Metadata Schema: metadata-schema.md
   - Coordinate Systems: coordinate-systems.md
   - imzML Parser Notes: imzml-parser-notes.md
   - PHI ToF-SIMS Notes: phi-tofsims-notes.md

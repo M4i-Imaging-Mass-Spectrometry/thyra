@@ -113,6 +113,15 @@ dependencies = [
     # that coercion was deleted when this floor moved. See issue #117.
     "anndata>=0.13.2, <0.14",         # tested 0.13.2
     "psutil>=5.0.0",
+    # The MSI metadata schema (thyra/metadata/schema) is written against the
+    # pydantic v2 validation API, and the committed JSON Schema artifact is
+    # generated from the models (a unit test keeps the two in sync). pydantic
+    # already arrives transitively -- ome-zarr-models in the spatialdata stack
+    # requires >=2.11.5 -- so like click above this restates a direct import
+    # as a direct dependency rather than changing the resolved set. Floor 2.7
+    # is the oldest line the code is plausibly compatible with; the lockfile
+    # resolves 2.12.x and the JSON-sync test pins the emission against it.
+    "pydantic>=2.7, <3",              # tested 2.12.5
     # Imported directly, not merely re-exported through spatialdata: tifffile by
     # converters/spatialdata/base_spatialdata_converter.py, xarray by that module
     # and the 2D, 3D and streaming converters. Both arrive transitively today
@@ -141,7 +150,10 @@ Changelog = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/blob/main/CH
 Contributing = "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/contributing/"
 
 [project.scripts]
-thyra = "thyra.__main__:main"
+# cli() dispatches `thyra validate` / `thyra export-metaspace` by first
+# argument and falls through to the positional conversion command, so
+# `thyra INPUT OUTPUT` keeps working unchanged.
+thyra = "thyra.__main__:cli"
 thyra-check-ontology = "thyra.tools.check_ontology:main"
 thyra-example-data = "thyra.tools.make_example_data:main"
 

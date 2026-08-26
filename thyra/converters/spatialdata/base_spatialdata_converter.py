@@ -562,7 +562,45 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         except Exception as e:
             logger.warning("Could not build the full uns provenance block: %s", e)
 
+        self._collect_msi_metadata_block(uns, comp_meta)
+
         return uns
+
+    def _resolved_pixel_size_xy(self) -> Tuple[float, float]:
+        """The in-plane pixel pitch as ``(x_um, y_um)``.
+
+        The converter itself carries a single float (auto-detection
+        keeps the source's x pitch), but the detection info still has
+        the true per-axis values for anisotropic rasters -- the
+        metadata block records those, since it describes the
+        acquisition rather than the rendering.
+        """
+        info = self._pixel_size_detection_info or {}
+        if "detected_x_um" in info and "detected_y_um" in info:
+            return (float(info["detected_x_um"]), float(info["detected_y_um"]))
+        return (float(self.pixel_size_um), float(self.pixel_size_um))
+
+    def _collect_msi_metadata_block(self, uns: Dict[str, Any], comp_meta: Any) -> None:
+        """Add the versioned ``msi_metadata`` schema block.
+
+        Built in its own try so a schema failure cannot take the other
+        provenance sections down with it.  See docs/metadata-schema.md
+        for the storage contract and ``thyra validate`` for the
+        consumer side.
+        """
+        from thyra.metadata.schema import MSI_METADATA_UNS_KEY, build_msi_metadata
+
+        try:
+            info = self._pixel_size_detection_info or {}
+            meta = build_msi_metadata(
+                comp_meta,
+                pixel_size_um=self._resolved_pixel_size_xy(),
+                pixel_size_source=self.pixel_size_source.value,
+                source_format=info.get("source_format"),
+            )
+            uns[MSI_METADATA_UNS_KEY] = meta.to_uns_dict()
+        except Exception as e:
+            logger.warning("Could not build the msi_metadata block: %s", e)
 
     def _collect_essential_metadata(self, uns: Dict[str, Any], comp_meta: Any) -> None:
         """Add ``essential_metadata`` (tuples become lists for Zarr)."""

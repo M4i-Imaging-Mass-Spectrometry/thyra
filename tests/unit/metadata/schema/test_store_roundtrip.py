@@ -1,0 +1,82 @@
+"""The block a converter writes must read back and validate.
+
+The uns parity suite (tests/unit/converters/test_uns_provenance_parity.py)
+asserts the block is identical across all four write paths; this file
+covers the consumer side: reading it out of a real store, validating
+it, and exporting METASPACE metadata from it.
+"""
+
+import json
+
+import pytest
+from click.testing import CliRunner
+
+from tests.fixtures.mock_msi_generator import MockMSIConfig, MockMSIReader
+from thyra.converters.spatialdata.base_spatialdata_converter import (
+    SPATIALDATA_AVAILABLE,
+)
+from thyra.metadata.schema import (
+    MSI_METADATA_SCHEMA_VERSION,
+    read_msi_metadata_blocks,
+    validate_document,
+)
+
+pytestmark = pytest.mark.skipif(
+    not SPATIALDATA_AVAILABLE,
+    reason="SpatialData dependencies not available",
+)
+
+
+@pytest.fixture(scope="module")
+def store(tmp_path_factory):
+    from thyra.converters.spatialdata.spatialdata_2d_converter import (
+        SpatialData2DConverter,
+    )
+
+    output = tmp_path_factory.mktemp("schema_store") / "out.zarr"
+    converter = SpatialData2DConverter(
+        reader=MockMSIReader(
+            MockMSIConfig(n_x=4, n_y=4, n_mz_bins=200, peaks_per_spectrum=(10, 20))
+        ),
+        output_path=output,
+        dataset_id="mock",
+        pixel_size_um=10.0,
+    )
+    assert converter.convert() is True
+    return output
+
+
+class TestStoreRoundTrip:
+    def test_block_reads_back_and_validates(self, store):
+        blocks = read_msi_metadata_blocks(store)
+        assert blocks, "converted store carries no msi_metadata block"
+        for block in blocks.values():
+            assert block["schema_version"] == MSI_METADATA_SCHEMA_VERSION
+            assert block["ms_analysis"]["pixel_size_um"] == {"x": 10.0, "y": 10.0}
+            meta, issues = validate_document(block)
+            assert meta is not None
+            assert not [i for i in issues if i.severity == "error"]
+
+    def test_validate_cli_passes_on_a_real_store(self, store):
+        from thyra.metadata.schema.cli import validate_command
+
+        result = CliRunner().invoke(validate_command, [str(store)])
+        assert result.exit_code == 0, result.output
+
+    def test_export_metaspace_cli_works_on_a_real_store(self, store, tmp_path):
+        from thyra.metadata.schema.cli import export_metaspace_command
+
+        output = tmp_path / "submission.json"
+        result = CliRunner().invoke(
+            export_metaspace_command, [str(store), "-o", str(output)]
+        )
+        assert result.exit_code == 0, result.output
+        document = json.loads(output.read_text(encoding="utf-8"))
+        assert document["MS_Analysis"]["Pixel_Size"] == {"Xaxis": 10, "Yaxis": 10}
+
+    def test_a_zarr_group_that_is_not_spatialdata_is_reported_cleanly(self, tmp_path):
+        import zarr
+
+        zarr.open_group(str(tmp_path / "plain.zarr"), mode="a")
+        with pytest.raises(ValueError, match="tables"):
+            read_msi_metadata_blocks(tmp_path / "plain.zarr")

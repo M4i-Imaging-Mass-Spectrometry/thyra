@@ -3827,7 +3827,7 @@ wheels = [
 
 [[package]]
 name = "thyra"
-version = "3.4.0"
+version = "3.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "anndata" },
@@ -3841,6 +3841,7 @@ dependencies = [
     { name = "ome-zarr" },
     { name = "pandas" },
     { name = "psutil" },
+    { name = "pydantic" },
     { name = "pyimzml" },
     { name = "scipy" },
     { name = "shapely" },
@@ -3895,6 +3896,7 @@ requires-dist = [
     { name = "ome-zarr", specifier = ">=0.16.0,<0.19" },
     { name = "pandas", specifier = ">=2.0.0,<4" },
     { name = "psutil", specifier = ">=5.0.0" },
+    { name = "pydantic", specifier = ">=2.7,<3" },
     { name = "pyimzml", specifier = ">=1.4.0" },
     { name = "scipy", specifier = ">=1.7.0" },
     { name = "shapely", specifier = ">=2.0.0" },
