@@ -1,0 +1,82 @@
+# thyra/metadata/schema/store_io.py
+"""Read the ``msi_metadata`` block back out of a converted store.
+
+Deliberately memory-bounded: only the ``uns/msi_metadata`` group of
+each table is read, never the intensity matrix, so validating or
+exporting metadata from a 100+ GB store costs nothing.
+"""
+
+import json
+import logging
+from pathlib import Path
+from typing import Any, Dict, Union
+
+from .models import MSI_METADATA_UNS_KEY
+
+logger = logging.getLogger(__name__)
+
+
+def read_msi_metadata_blocks(store_path: Union[str, Path]) -> Dict[str, Dict[str, Any]]:
+    """Read every table's ``msi_metadata`` block from a SpatialData store.
+
+    Args:
+        store_path: Path to a converted ``.zarr`` store.
+
+    Returns:
+        Mapping of table name to the block as a plain dict.  Tables
+        without a block are skipped; a store written by a Thyra version
+        that predates the schema therefore returns an empty mapping.
+
+    Raises:
+        ValueError: If the path is not a SpatialData store (no
+            ``tables`` group).
+    """
+    import anndata as ad
+    import zarr
+
+    root = zarr.open_group(str(store_path), mode="r")
+    if "tables" not in root:
+        raise ValueError(
+            f"{store_path} does not look like a SpatialData store: "
+            "it has no 'tables' group"
+        )
+
+    tables = root["tables"]
+    blocks: Dict[str, Dict[str, Any]] = {}
+    for name in sorted(tables.keys()):
+        try:
+            uns = tables[name]["uns"]
+        except KeyError:
+            logger.debug("Table %s has no uns group", name)
+            continue
+        if MSI_METADATA_UNS_KEY not in uns:
+            logger.debug("Table %s has no %s block", name, MSI_METADATA_UNS_KEY)
+            continue
+        block = dict(ad.io.read_elem(uns[MSI_METADATA_UNS_KEY]))
+        # `processing` is stored as JSON (a list of objects cannot
+        # round-trip through AnnData/zarr); hand callers the parsed form.
+        if isinstance(block.get("processing"), str):
+            try:
+                block["processing"] = json.loads(block["processing"])
+            except json.JSONDecodeError:
+                logger.warning("Table %s has an unparseable processing section", name)
+        blocks[name] = block
+
+    return blocks
+
+
+def deep_merge(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
+    """Return ``base`` with ``overlay`` merged over it, recursively.
+
+    Nested dicts merge key-by-key; any other overlay value replaces the
+    base value.  Neither input is modified.  Used to overlay
+    user-supplied metadata (organism, condition, matrix, ...) onto the
+    auto-populated block at validation or export time.
+    """
+    merged = dict(base)
+    for key, value in overlay.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged

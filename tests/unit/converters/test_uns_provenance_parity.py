@@ -287,6 +287,7 @@ def test_every_path_stores_the_same_provenance(stores):
         "instrument_info",
         "raw_metadata",
         "regions",
+        "msi_metadata",
     )
     blocks = {
         name: {

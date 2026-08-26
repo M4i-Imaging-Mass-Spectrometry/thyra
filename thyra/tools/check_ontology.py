@@ -24,7 +24,7 @@ def _setup_logging(verbose: bool):
         logging.basicConfig(level=logging.INFO)
 
 
-def _print_file_results(results: dict, args, unknown_terms: list):
+def _print_file_results(results: dict, args, unknown_list: list):
     """Print results for single file validation."""
     if not args.output:
         if args.verbose and "summary" in results:
@@ -35,10 +35,10 @@ def _print_file_results(results: dict, args, unknown_terms: list):
             print("Test summary for file")
             print()
 
-        if unknown_terms:
-            print(f"Found {len(unknown_terms)} unknown terms:")
-            for term in unknown_terms[:20]:
-                print(f"  - {term}")
+        if unknown_list:
+            print(f"Found {len(unknown_list)} unknown terms:")
+            for term in unknown_list[:20]:
+                print(f"  - {term['accession']}: {term['name']}")
         else:
             print("No unknown terms encountered.")
         print()
@@ -80,8 +80,10 @@ def main():
 
     if input_path.is_file():
         results = validator.validate_file(input_path)
-        unknown_terms = results.get("unknown_terms", [])
-        _print_file_results(results, args, unknown_terms)
+        # validate_file reports `unknown_terms` as a count; the terms
+        # themselves are in `unknown_list`.
+        unknown_list = results.get("unknown_list", [])
+        _print_file_results(results, args, unknown_list)
     else:
         results = validator.validate_directory(input_path)
         _print_directory_results(results)

@@ -689,25 +689,48 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         return raw_metadata
 
     def _extract_spectrum_cvparams(self) -> Optional[List[Dict[str, Any]]]:
-        """Extract cvParams from first spectrum for centroid detection."""
+        """Extract the file-description cvParams, accessions included.
+
+        The tuples on ``ParamGroup.cv_params`` are
+        ``(name, accession, value, raw_name, raw_value, unit_name,
+        unit_accession)``.  The accession is the part that makes the
+        stored copy lossless: the name alone cannot be resolved back to
+        the CV concept, and the whole point of carrying these through is
+        that the converted store is annotated with the same PSI CV terms
+        as the raw file it came from.  Unit fields are included only
+        when the source set them, following the omit-vs-empty
+        convention.
+        """
         try:
             if not hasattr(self.parser, "metadata") or not self.parser.metadata:
                 return None
 
-            # Look for spectrum-level cvParams in the metadata
-            if hasattr(self.parser.metadata, "file_description"):
-                file_desc = self.parser.metadata.file_description
-                if hasattr(file_desc, "param_by_name"):
-                    params = file_desc.param_by_name
-                    cv_params = []
+            file_desc = getattr(self.parser.metadata, "file_description", None)
+            if file_desc is None or not hasattr(file_desc, "cv_params"):
+                return None
 
-                    # Check for centroid spectrum in file description
-                    for name, value in params.items():
-                        cv_params.append({"name": name, "value": value})
+            cv_params = []
+            for (
+                name,
+                accession,
+                value,
+                _,
+                _,
+                unit_name,
+                unit_acc,
+            ) in file_desc.cv_params:
+                entry: Dict[str, Any] = {
+                    "name": name,
+                    "accession": accession,
+                    "value": value,
+                }
+                if unit_name:
+                    entry["unit_name"] = unit_name
+                if unit_acc:
+                    entry["unit_accession"] = unit_acc
+                cv_params.append(entry)
 
-                    return cv_params
-
-            return None
+            return cv_params or None
         except Exception as e:
             logger.debug(f"Could not extract spectrum cvParams: {e}")
             return None
