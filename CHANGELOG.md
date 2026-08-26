@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v3.7.1 (2026-08-26)
+
+### Performance Improvements
+
+- Cut per-spectrum recompute across the conversion hot loops
+  ([`edfd4d1`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/edfd4d15ffc396e59fd3fc0469d7203f246211a6))
+
+
 ## v3.7.0 (2026-08-26)
 
 ### Features
