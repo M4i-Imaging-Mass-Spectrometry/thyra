@@ -49,17 +49,41 @@ def _first_string(mapping: Dict[str, Any], keys: Tuple[str, ...]) -> Optional[st
     return None
 
 
+def _polarity_from_cv_params(raw_metadata: Dict[str, Any]) -> Optional[str]:
+    """Polarity declared by the raw file's own cvParams, if unambiguous.
+
+    imzML declares polarity as MS:1000130 (positive scan) / MS:1000129
+    (negative scan) in the file description; the extractor preserves
+    those with their accessions.  A file declaring both (alternating
+    polarity) has no single truthful value and returns ``None``.
+    """
+    cv_params = raw_metadata.get("cvParams")
+    if not isinstance(cv_params, list):
+        return None
+    accessions = {
+        entry.get("accession") for entry in cv_params if isinstance(entry, dict)
+    }
+    positive = "MS:1000130" in accessions
+    negative = "MS:1000129" in accessions
+    if positive == negative:
+        return None
+    return "positive" if positive else "negative"
+
+
 def _build_ms_analysis(
     acquisition: Dict[str, Any],
     instrument: Dict[str, Any],
     format_specific: Dict[str, Any],
+    raw_metadata: Dict[str, Any],
     pixel_size_um: Tuple[float, float],
     source_format: Optional[str],
 ) -> MSAnalysis:
     """Assemble the acquisition section from what the extractors report."""
     fields: Dict[str, Any] = {}
 
-    polarity = normalize_polarity(acquisition.get("polarity"))
+    polarity = normalize_polarity(
+        acquisition.get("polarity") or _polarity_from_cv_params(raw_metadata)
+    )
     if polarity is not None:
         fields["polarity"], fields["polarity_term"] = polarity
 
@@ -126,18 +150,25 @@ def build_msi_metadata(
     acquisition: Dict[str, Any] = {}
     instrument: Dict[str, Any] = {}
     format_specific: Dict[str, Any] = {}
+    raw_metadata: Dict[str, Any] = {}
     source_path: Optional[str] = None
     if comprehensive is not None:
         acquisition = dict(comprehensive.acquisition_params or {})
         instrument = dict(comprehensive.instrument_info or {})
         format_specific = dict(comprehensive.format_specific or {})
+        raw_metadata = dict(comprehensive.raw_metadata or {})
         essential = comprehensive.essential
         if essential is not None:
             source_path = str(essential.source_path)
 
     return MSIMetadata(
         ms_analysis=_build_ms_analysis(
-            acquisition, instrument, format_specific, pixel_size_um, source_format
+            acquisition,
+            instrument,
+            format_specific,
+            raw_metadata,
+            pixel_size_um,
+            source_format,
         ),
         processing=list(processing or []),
         provenance=Provenance(

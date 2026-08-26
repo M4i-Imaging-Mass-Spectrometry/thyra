@@ -13,6 +13,10 @@
               "type": "null"
             }
           ],
+          "cv": {
+            "accession": "MS:1000443",
+            "name": "mass analyzer type"
+          },
           "default": null,
           "description": "E.g. 'TOF', 'Orbitrap', 'FTICR'.",
           "title": "Analyzer"
@@ -38,6 +42,10 @@
               "type": "null"
             }
           ],
+          "cv": {
+            "accession": "MS:1000800",
+            "name": "mass resolving power"
+          },
           "default": null,
           "description": "Resolving power at a reference m/z."
         },
@@ -50,6 +58,10 @@
               "type": "null"
             }
           ],
+          "cv": {
+            "accession": "MS:1000031",
+            "name": "instrument model"
+          },
           "default": null,
           "description": "Instrument model as reported by the source.",
           "title": "Instrument Model"
@@ -63,6 +75,10 @@
               "type": "null"
             }
           ],
+          "cv": {
+            "accession": "MS:1000008",
+            "name": "ionization type"
+          },
           "default": null,
           "description": "E.g. 'MALDI', 'DESI', 'SIMS'.",
           "title": "Ionisation Source"
@@ -95,6 +111,10 @@
               "type": "null"
             }
           ],
+          "cv": {
+            "accession": "MS:1000465",
+            "name": "scan polarity"
+          },
           "default": null,
           "description": "Ion polarity mode.",
           "title": "Polarity"
@@ -147,12 +167,20 @@
       "description": "In-plane raster pitch in micrometres.",
       "properties": {
         "x": {
+          "cv": {
+            "accession": "IMS:1000046",
+            "name": "pixel size (x)"
+          },
           "description": "Pixel size along x in micrometres.",
           "exclusiveMinimum": 0,
           "title": "X",
           "type": "number"
         },
         "y": {
+          "cv": {
+            "accession": "IMS:1000047",
+            "name": "pixel size y"
+          },
           "description": "Pixel size along y in micrometres.",
           "exclusiveMinimum": 0,
           "title": "Y",

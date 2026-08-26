@@ -12,6 +12,16 @@ fact many ways, imzML metadata is free-form cvParams, and every pipeline
 re-invents its own dictionary. This block fixes the names, maps them to
 ontologies, and ships a validator.
 
+!!! info "Where this sits in the format stack"
+    Raw/archival exchange is the domain of
+    [mzPeak](https://github.com/HUPO-PSI/mzPeak) (the HUPO-PSI working
+    draft succeeding mzML); SpatialData is the analysis-ready layer and
+    Thyra's output. Thyra is the bridge between the two, and this
+    schema is the analysis-layer metadata contract: PSI CV-anchored
+    like the raw layer, so nothing is lost crossing the bridge. Raw
+    ragged spectra stay in the raw layer; they are deliberately not
+    part of Thyra's output.
+
 ```python
 import spatialdata as sd
 
@@ -116,6 +126,61 @@ On disk the list is stored as a JSON string (AnnData/zarr cannot
 round-trip a list of objects -- the same reason `uns["regions"]` is
 JSON); `read_msi_metadata_blocks` and `validate_document` decode it
 transparently.
+
+---
+
+## PSI CV alignment
+
+Beyond the per-document `*_term` values, every schema **field** that
+instantiates a PSI CV concept is bound to that concept's accession in
+the JSON Schema itself (a `cv` annotation on the field definition), so
+the claim "Thyra's output is annotated with the same PSI CV terms as
+the raw file it came from" is machine-checkable from the committed
+artifact alone:
+
+| Field | CV concept |
+|-------|-----------|
+| `ms_analysis.pixel_size_um.x` | `IMS:1000046` pixel size (x) |
+| `ms_analysis.pixel_size_um.y` | `IMS:1000047` pixel size y |
+| `ms_analysis.polarity` | `MS:1000465` scan polarity |
+| `ms_analysis.ionisation_source` | `MS:1000008` ionization type |
+| `ms_analysis.analyzer` | `MS:1000443` mass analyzer type |
+| `ms_analysis.instrument_model` | `MS:1000031` instrument model |
+| `ms_analysis.detector_resolving_power` | `MS:1000800` mass resolving power |
+
+On the input side, every imzML file-description cvParam is preserved in
+`uns["raw_metadata"]["cvParams"]` **with its accession** (and unit
+accession where the source set one) -- the name alone cannot be resolved
+back to the CV concept. Polarity declared there (`MS:1000130` /
+`MS:1000129`) auto-populates the schema field.
+
+### Candidate CV terms
+
+Several imaging concepts this schema needs have no CV term yet. They
+are tracked in `CANDIDATE_CV_CONCEPTS` as the vocabulary to raise in
+the PSI/mzPeak imaging discussions, so this schema and the future
+standard converge:
+
+- pixel size semantics (raster pitch vs laser spot vs binned size)
+- pixel size provenance (measured vs user-supplied vs default)
+- coordinate origin and axis handedness
+- stage offset of the raster origin
+- ROI / acquisition region identity
+- missing / empty pixel semantics
+- continuous-vs-processed source provenance after conversion
+- mass axis resampling provenance (method, axis law, target bins)
+
+### LinkML rendering
+
+The schema is also rendered as LinkML at
+`thyra/metadata/schema/msi_metadata.linkml.yaml` -- classes, slots,
+required flags, `slot_uri` CV bindings and the polarity enum with
+`meaning:` accessions. The pydantic models remain the source of truth
+for what Thyra writes and validates; the YAML is the discussion artifact
+for LinkML-native settings (the PSI/mzPeak imaging work, the planned
+spec repository), and a unit test keeps the two from drifting. A later
+migration to LinkML-as-source changes no field names and nothing on
+disk.
 
 ---
 

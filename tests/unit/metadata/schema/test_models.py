@@ -72,6 +72,55 @@ class TestMSIMetadata:
         assert analysis.polarity == "negative"
 
 
+class TestCvBindings:
+    def test_bound_fields_are_exactly_the_expected_set(self):
+        from thyra.metadata.schema.models import field_cv_bindings
+
+        accessions = {cv["accession"] for cv in field_cv_bindings().values()}
+        assert accessions == {
+            "IMS:1000046",  # pixel size (x)
+            "IMS:1000047",  # pixel size y
+            "MS:1000465",  # scan polarity
+            "MS:1000008",  # ionization type
+            "MS:1000443",  # mass analyzer type
+            "MS:1000031",  # instrument model
+            "MS:1000800",  # mass resolving power
+        }
+
+    def test_every_binding_resolves_in_the_local_tables(self):
+        from thyra.metadata.ontology.cache import ONTOLOGY
+        from thyra.metadata.schema.models import field_cv_bindings
+
+        for path, cv in field_cv_bindings().items():
+            entry = ONTOLOGY.terms.get(cv["accession"])
+            assert entry is not None, f"{path}: unknown {cv['accession']}"
+            assert (
+                entry[0] == cv["name"]
+            ), f"{path}: bound name {cv['name']!r} vs CV label {entry[0]!r}"
+
+    def test_bindings_land_in_the_committed_json_schema(self):
+        # The claim must be checkable from the artifact alone, without
+        # importing Thyra.
+        import json
+        from pathlib import Path
+
+        from thyra.metadata.schema import models
+
+        artifact = (
+            Path(models.__file__).parent / models.SCHEMA_JSON_FILENAME
+        ).read_text(encoding="utf-8")
+        rendered = json.dumps(json.loads(artifact))
+        assert '"IMS:1000046"' in rendered
+        assert '"MS:1000443"' in rendered
+
+    def test_candidate_concepts_are_declared(self):
+        from thyra.metadata.schema import models
+
+        concepts = [c for c, _ in models.CANDIDATE_CV_CONCEPTS]
+        assert any("resampling" in c for c in concepts)
+        assert any("stage offset" in c for c in concepts)
+
+
 class TestProcessing:
     def test_processing_steps_round_trip(self):
         from thyra.metadata.schema import ProcessingStep, SoftwareRef

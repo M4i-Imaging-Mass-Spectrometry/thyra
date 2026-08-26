@@ -22,13 +22,14 @@ def _comprehensive(
     acquisition_params=None,
     instrument_info=None,
     format_specific=None,
+    raw_metadata=None,
 ) -> ComprehensiveMetadata:
     return ComprehensiveMetadata(
         essential=_essential(),
         format_specific=format_specific or {},
         acquisition_params=acquisition_params or {},
         instrument_info=instrument_info or {},
-        raw_metadata={},
+        raw_metadata=raw_metadata or {},
     )
 
 
@@ -74,6 +75,42 @@ class TestBuildMsiMetadata:
         assert analysis.polarity_term.accession == "MS:1000130"
         assert analysis.ionisation_source == "SIMS"
         assert analysis.analyzer == "TOF"
+
+    def test_imzml_polarity_comes_from_the_preserved_cv_params(self):
+        # imzML declares polarity as MS:1000130/MS:1000129 in the file
+        # description; the extractor preserves those with accessions.
+        meta = build_msi_metadata(
+            _comprehensive(
+                raw_metadata={
+                    "cvParams": [
+                        {
+                            "name": "positive scan",
+                            "accession": "MS:1000130",
+                            "value": True,
+                        }
+                    ]
+                }
+            ),
+            pixel_size_um=(20.0, 20.0),
+            source_format="imzml",
+        )
+        assert meta.ms_analysis.polarity == "positive"
+        assert meta.ms_analysis.polarity_term is not None
+        assert meta.ms_analysis.polarity_term.accession == "MS:1000130"
+
+    def test_a_file_declaring_both_polarities_stays_unset(self):
+        meta = build_msi_metadata(
+            _comprehensive(
+                raw_metadata={
+                    "cvParams": [
+                        {"accession": "MS:1000130"},
+                        {"accession": "MS:1000129"},
+                    ]
+                }
+            ),
+            pixel_size_um=(20.0, 20.0),
+        )
+        assert meta.ms_analysis.polarity is None
 
     def test_bruker_maldi_flag_sets_the_source(self):
         meta = build_msi_metadata(

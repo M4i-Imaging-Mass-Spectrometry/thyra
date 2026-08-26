@@ -58,6 +58,52 @@ MSI_VAR_RESERVED_COLUMNS = (
     "fdr",
 )
 
+# Imaging concepts this schema needs that have no PSI CV term yet.
+# These are the candidate terms to raise in the mzPeak / PSI-MS imaging
+# discussions, so this schema's vocabulary and the future standard's
+# converge.  Each entry: (concept, where it lives in Thyra's output).
+CANDIDATE_CV_CONCEPTS = (
+    (
+        "pixel size semantics (raster pitch vs laser spot vs binned size)",
+        "ms_analysis.pixel_size_um",
+    ),
+    (
+        "pixel size provenance (measured vs user-supplied vs default)",
+        "provenance.pixel_size_source",
+    ),
+    (
+        "coordinate origin and axis handedness",
+        "root attrs coordinate_systems.global",
+    ),
+    (
+        "stage offset of the raster origin",
+        "root attrs coordinate_systems.global.stage_offset_um",
+    ),
+    ("ROI / acquisition region identity", "uns['regions']"),
+    ("missing / empty pixel semantics", "obs row filtering"),
+    (
+        "continuous-vs-processed source provenance after conversion",
+        "uns['essential_metadata'].spectrum_type",
+    ),
+    (
+        "mass axis resampling provenance (method, axis law, target bins)",
+        "processing steps",
+    ),
+)
+
+
+def _cv(accession: str, name: str) -> Dict[str, Any]:
+    """``json_schema_extra`` payload binding a field to its PSI CV concept.
+
+    The binding is emitted into the JSON Schema artifact, so the claim
+    "this field is the CV concept MS:1000443" is machine-readable
+    without importing Thyra.  Value-level terms (which analyzer, which
+    polarity) are carried per document by the ``*_term`` fields; this
+    binds the field itself to the concept it instantiates.
+    """
+    return {"cv": {"accession": accession, "name": name}}
+
+
 _CURIE_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*:\S+$"
 _SEMVER_PATTERN = r"^\d+\.\d+\.\d+$"
 
@@ -92,8 +138,16 @@ class OntologyTerm(_SchemaModel):
 class PixelSizeUm(_SchemaModel):
     """In-plane raster pitch in micrometres."""
 
-    x: float = Field(gt=0, description="Pixel size along x in micrometres.")
-    y: float = Field(gt=0, description="Pixel size along y in micrometres.")
+    x: float = Field(
+        gt=0,
+        description="Pixel size along x in micrometres.",
+        json_schema_extra=_cv("IMS:1000046", "pixel size (x)"),
+    )
+    y: float = Field(
+        gt=0,
+        description="Pixel size along y in micrometres.",
+        json_schema_extra=_cv("IMS:1000047", "pixel size y"),
+    )
 
 
 class ResolvingPower(_SchemaModel):
@@ -160,29 +214,39 @@ class MSAnalysis(_SchemaModel):
     """
 
     polarity: Optional[Literal["positive", "negative"]] = Field(
-        default=None, description="Ion polarity mode."
+        default=None,
+        description="Ion polarity mode.",
+        json_schema_extra=_cv("MS:1000465", "scan polarity"),
     )
     polarity_term: Optional[OntologyTerm] = Field(
         default=None,
         description="PSI-MS scan polarity term (MS:1000130 / MS:1000129).",
     )
     ionisation_source: Optional[str] = Field(
-        default=None, description="E.g. 'MALDI', 'DESI', 'SIMS'."
+        default=None,
+        description="E.g. 'MALDI', 'DESI', 'SIMS'.",
+        json_schema_extra=_cv("MS:1000008", "ionization type"),
     )
     ionisation_source_term: Optional[OntologyTerm] = Field(
         default=None, description="PSI-MS ionisation type term."
     )
     analyzer: Optional[str] = Field(
-        default=None, description="E.g. 'TOF', 'Orbitrap', 'FTICR'."
+        default=None,
+        description="E.g. 'TOF', 'Orbitrap', 'FTICR'.",
+        json_schema_extra=_cv("MS:1000443", "mass analyzer type"),
     )
     analyzer_term: Optional[OntologyTerm] = Field(
         default=None, description="PSI-MS mass analyzer type term."
     )
     instrument_model: Optional[str] = Field(
-        default=None, description="Instrument model as reported by the source."
+        default=None,
+        description="Instrument model as reported by the source.",
+        json_schema_extra=_cv("MS:1000031", "instrument model"),
     )
     detector_resolving_power: Optional[ResolvingPower] = Field(
-        default=None, description="Resolving power at a reference m/z."
+        default=None,
+        description="Resolving power at a reference m/z.",
+        json_schema_extra=_cv("MS:1000800", "mass resolving power"),
     )
     pixel_size_um: PixelSizeUm = Field(
         description="In-plane raster pitch in micrometres."
@@ -320,3 +384,28 @@ class MSIMetadata(_SchemaModel):
         if "processing" in data:
             data["processing"] = json.dumps(data["processing"])
         return data
+
+
+def field_cv_bindings() -> Dict[str, Dict[str, str]]:
+    """Every field-to-CV binding, keyed by its path in the JSON Schema.
+
+    Collected from the emitted JSON Schema rather than the models, so
+    the result is exactly what an external consumer of the committed
+    artifact sees.
+    """
+    bindings: Dict[str, Dict[str, str]] = {}
+
+    def _walk(node: Any, path: str) -> None:
+        if isinstance(node, dict):
+            cv = node.get("cv")
+            if isinstance(cv, dict):
+                bindings[path] = cv
+            for key, child in node.items():
+                if key != "cv":
+                    _walk(child, f"{path}.{key}" if path else key)
+        elif isinstance(node, list):
+            for index, child in enumerate(node):
+                _walk(child, f"{path}[{index}]")
+
+    _walk(MSIMetadata.model_json_schema(), "")
+    return bindings
