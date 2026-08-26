@@ -187,33 +187,34 @@ succeeding. That is exactly where SCiLS puts `MS:1000127`.
 
 ---
 
-## Still open
+## Fixed in Thyra, still true of pyimzml
 
-One finding is real, unfixed, and owned by nobody:
+One finding was real enough to grow code: **`imzmldict` discards
+`unitAccession`.** `convert_cv_param(accession, value)` takes no unit argument,
+so `__readimzmlmeta` cannot carry one even though `ParamGroup.cv_params`
+preserves it. `imzmldict['pixel size x']` is a bare number in whatever unit the
+vendor declared, and Thyra used to label it micrometres. A file declaring its
+pixel as `4406.25` nanometre (`UO:0000018`) therefore landed on disk with
+`obs/spatial_x` a thousand times too large, and `convert_msi` returned `True`.
 
-**`imzmldict` discards `unitAccession`.** `convert_cv_param(accession, value)`
-takes no unit argument, so `__readimzmlmeta` cannot carry one even though
-`ParamGroup.cv_params` preserves it. `imzmldict['pixel size x']` is a bare
-number in whatever unit the vendor declared, and Thyra labels it micrometres. A
-file declaring its pixel as `4406.25` nanometre (`UO:0000018`) therefore lands on
-disk with `obs/spatial_x` a thousand times too large, and `convert_msi` returns
-`True`.
+The information is never lost from the document, only from the dict, so
+`ImzMLMetadataExtractor` now reads the unit-bearing path — each `cv_params`
+tuple is `(name, accession, value, raw_name, raw_value, unit_name,
+unit_accession)` — and converts: `UO:0000016` mm x1000, `UO:0000017` um x1,
+`UO:0000018` nm /1000. Any other declared unit is refused with a `ValueError`,
+which fails the conversion; a cvParam with no unit at all keeps the historical
+micrometre reading, because real vendor files (the IONTOF class among them)
+write `IMS:1000046` unitless and were being read correctly.
 
-The information is not lost from the document, only from the dict — the fix is
-to read the unit-bearing path, where each `cv_params` tuple is `(name,
-accession, value, raw_name, raw_value, unit_name, unit_accession)`, and convert
-`UO:0000016` mm x1000, `UO:0000017` um x1, `UO:0000018` nm /1000, refusing
-anything else loudly.
-
-Corroboration that the ambiguity is genuine rather than theoretical: pyimzml's
+Corroboration that the ambiguity was genuine rather than theoretical: pyimzml's
 own `get_physical_coordinates` docstring says it returns **nanometers** while
 multiplying by the same unlabelled `pixel size x` that Thyra treats as
 micrometres. The library's author disagreed with Thyra about the unit.
 
 The behaviour is pinned by
 `tests/unit/readers/test_hand_authored_fixtures.py::TestUnitNanometre`, whose
-assertions are characterisation — they record the error rather than endorse it,
-and say so.
+assertions now state the correct conversion — including the refusal — rather
+than characterise the error.
 
 ---
 
