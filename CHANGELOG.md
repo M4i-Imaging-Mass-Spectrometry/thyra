@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v3.7.0 (2026-08-26)
+
+### Features
+
+- Record the resolved resampling plan in processing provenance
+  ([`e7f24c0`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/e7f24c0839ba4f4e0abdfa06837bb186b608d757))
+
+
 ## v3.6.0 (2026-08-26)
 
 
