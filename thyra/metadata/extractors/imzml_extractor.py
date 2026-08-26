@@ -15,6 +15,7 @@ from ...resampling.constants import (
     SpectrumType,
     normalize_spectrum_type,
 )
+from ...utils.pyimzml_direct import read_spectrum_mzs_only
 from ..types import ComprehensiveMetadata, EssentialMetadata
 
 logger = logging.getLogger(__name__)
@@ -392,7 +393,12 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             Tuple of (min_mz, max_mz, n_peaks) or None if failed.
         """
         try:
-            mzs, intensities = self.parser.getspectrum(idx)
+            # Read and decode the m/z array only. The scan needs the m/z
+            # extrema and the peak count; the intensity array -- half the
+            # bytes read per spectrum -- was fetched and immediately
+            # discarded. Parsers without pyimzml's offset tables fall back
+            # to the documented getspectrum.
+            mzs = read_spectrum_mzs_only(self.parser, idx)
             n_peaks = len(mzs)
 
             # Store per-pixel count if tracking
@@ -401,15 +407,9 @@ class ImzMLMetadataExtractor(MetadataExtractor):
                     idx, coords, dimensions, peak_counts, n_peaks
                 )
 
-            # Release references
-            del intensities
-
             if n_peaks > 0:
-                result = (float(np.min(mzs)), float(np.max(mzs)), n_peaks)
-                del mzs
-                return result
+                return (float(np.min(mzs)), float(np.max(mzs)), n_peaks)
 
-            del mzs
             return None
 
         except Exception as e:

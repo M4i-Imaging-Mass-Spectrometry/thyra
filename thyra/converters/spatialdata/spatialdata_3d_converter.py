@@ -120,12 +120,17 @@ class SpatialData3DConverter(BaseSpatialDataConverter):
             # Resampled case - intensities match common mass axis length
             data_structures["total_intensity"] += intensities
         else:
-            # Non-resampled case - need to map to indices
-            for i, intensity in enumerate(intensities):
-                if i < len(mz_indices) and mz_indices[i] < len(
-                    data_structures["total_intensity"]
-                ):
-                    data_structures["total_intensity"][mz_indices[i]] += intensity
+            # Sparse case - scatter onto the mapped indices. Guard the
+            # lengths the way the old per-element loop did: only pairs
+            # that exist in both arrays, only in-bounds indices.
+            n = min(len(intensities), len(mz_indices))
+            idx = mz_indices[:n]
+            in_bounds = idx < len(data_structures["total_intensity"])
+            np.add.at(
+                data_structures["total_intensity"],
+                idx[in_bounds],
+                intensities[:n][in_bounds],
+            )
         data_structures["pixel_count"] += 1
 
         # Per-region accumulation for multi-region datasets
