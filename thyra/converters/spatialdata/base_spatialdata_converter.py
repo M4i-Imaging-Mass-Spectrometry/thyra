@@ -328,6 +328,9 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         self._sparse_format = sparse_format.lower()
         self._include_optical = include_optical
         self._apply_optical_alignment = apply_optical_alignment
+        # Filled by _build_resampled_mass_axis(); consumed by
+        # _processing_provenance().
+        self._resolved_resampling_plan: Optional[Dict[str, Any]] = None
         if self._sparse_format not in ("csc", "csr"):
             raise ValueError(
                 f"sparse_format must be 'csc' or 'csr', got '{sparse_format}'"
@@ -624,6 +627,14 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 if value is None:
                     continue
                 parameters[field_name] = getattr(value, "value", value)
+            # The resolved plan wins over the requested config: with
+            # "auto" settings the config says nothing about the method
+            # and axis the decision tree actually picked, and the step
+            # must declare what was done, not what was asked for.
+            for field_name, value in (self._resolved_resampling_plan or {}).items():
+                if value is None:
+                    continue
+                parameters[field_name] = getattr(value, "value", value)
             steps.append(
                 ProcessingStep(
                     name="mass axis resampling",
@@ -877,6 +888,18 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         from ...resampling.common_axis import CommonAxisBuilder
 
         min_mz, max_mz, axis_type, target_bins = self._resolve_resampling_plan()
+
+        # Kept for provenance: the processing step must declare what was
+        # actually done, and with "auto" settings the requested config
+        # says nothing about the method and axis the decision tree
+        # resolved to.  See _processing_provenance().
+        self._resolved_resampling_plan = {
+            "method": getattr(self, "_resampling_method", None),
+            "axis_type": axis_type,
+            "target_bins": target_bins,
+            "min_mz": min_mz,
+            "max_mz": max_mz,
+        }
 
         if hasattr(self, "_manual_axis_type") and self._manual_axis_type is not None:
             logger.info(f"Using manually specified axis type: {axis_type}")

@@ -121,6 +121,35 @@ class TestStoreRoundTrip:
         # Unset config fields are dropped, not serialised as nulls.
         assert "min_mz" not in parameters
 
+    def test_resolved_resampling_lands_in_the_stored_step(self, tmp_path):
+        from thyra.converters.spatialdata.spatialdata_2d_converter import (
+            SpatialData2DConverter,
+        )
+
+        output = tmp_path / "resampled.zarr"
+        converter = SpatialData2DConverter(
+            reader=MockMSIReader(
+                MockMSIConfig(n_x=4, n_y=4, n_mz_bins=200, peaks_per_spectrum=(10, 20))
+            ),
+            output_path=output,
+            dataset_id="mock",
+            pixel_size_um=10.0,
+            resampling_config={"method": "nearest_neighbor", "target_bins": 100},
+        )
+        assert converter.convert() is True
+
+        block = read_msi_metadata_blocks(output)["mock_z0"]
+        step = next(
+            s for s in block["processing"] if s["name"] == "mass axis resampling"
+        )
+        # The step declares what was DONE: the resolved axis, not just
+        # the requested config.
+        parameters = step["parameters"]
+        assert parameters["method"] == "nearest_neighbor"
+        assert parameters["target_bins"] == 100
+        assert parameters["axis_type"]
+        assert parameters["min_mz"] < parameters["max_mz"]
+
     def test_a_zarr_group_that_is_not_spatialdata_is_reported_cleanly(self, tmp_path):
         import zarr
 
