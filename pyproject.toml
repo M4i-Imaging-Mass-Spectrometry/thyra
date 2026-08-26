@@ -223,7 +223,22 @@ version_toml = ["pyproject.toml:project.version"]
 version_variables = [
     "thyra/__init__.py:__version__",
 ]
-build_command = "pip install build && python -m build"
+# `uv lock` runs here rather than as a workflow step because the build
+# command is the only hook that executes AFTER semantic-release stamps the
+# new version into pyproject.toml and BEFORE it makes the release commit.
+# Without it, the lockfile's own `[[package]] name = "thyra"` entry keeps
+# the previous version. The release commit lands on main without a test run
+# (a GITHUB_TOKEN push starts no workflows), so nothing notices until the
+# first branch cut after the release fails every CI job at
+# `uv sync --locked` with "The lockfile at `uv.lock` needs to be updated" --
+# see the one-off repair on PR #177 after v3.5.0. Regenerating the lockfile
+# is only half the fix: `assets` below is what carries it into the release
+# commit. uv reaches this command's PATH via the same SHA-pinned setup-uv
+# step the test workflow uses (see release.yml).
+build_command = "uv lock && pip install build && python -m build"
+# Extra files to include in the release commit beyond the version-stamped
+# ones above.
+assets = ["uv.lock"]
 upload_to_vcs_release = true
 
 [tool.semantic_release.branches.main]
