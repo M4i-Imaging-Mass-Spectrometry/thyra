@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v3.7.2 (2026-08-26)
+
+### Bug Fixes
+
+- Refuse silent peak drops in _map_mass_to_indices
+  ([`f062233`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f062233b0dc7ab97f684d956bdd6cd1d939e5843))
+
+
 ## v3.7.1 (2026-08-26)
 
 ### Performance Improvements
