@@ -64,6 +64,16 @@ jobs:
         with:
           python-version: '3.12'
 
+      # semantic-release's build_command starts with `uv lock` so the release
+      # commit carries a lockfile matching the version it stamps (see
+      # [tool.semantic_release] in pyproject.toml). This step is what puts uv
+      # on the PATH that build_command inherits. Same SHA pin as tests.yml; no
+      # python-version input, because setup-python above already provides the
+      # interpreter and `uv lock` resolves from requires-python, not from
+      # whichever Python is installed.
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
