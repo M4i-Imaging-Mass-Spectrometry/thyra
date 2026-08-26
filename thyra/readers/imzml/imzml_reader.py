@@ -19,6 +19,7 @@ from ...core.base_reader import BaseMSIReader
 from ...core.registry import register_reader
 from ...metadata.extractors.imzml_extractor import ImzMLMetadataExtractor
 from ...resampling.constants import normalize_spectrum_type
+from ...utils.pyimzml_direct import read_spectrum_mzs_only
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,14 @@ _ZLIB_NAME = "zlib compression"
 # spec-legal, pyimzml's own writer emits it for ``intensity_dtype=np.int32``,
 # and it converts correctly today.
 _PLATFORM_DEPENDENT_PRECISIONS = frozenset({"l"})
+
+
+# A coalescing block reader for the .ibd was built and benchmarked here on
+# 2026-08-26 and then removed: with the OS page cache warm, a 120k-spectrum
+# iteration pass costs ~0.75 s whether reads are per-spectrum seek+read
+# pairs or 8 MiB windows -- small cached reads are a few microseconds, so
+# there was nothing to coalesce away. Do not re-add one without a
+# measurement on storage where it wins (cold cache, network shares).
 
 
 class _OffsetArrays(NamedTuple):
@@ -308,6 +317,13 @@ def _merge_disjoint(box_a: List[Any], box_b: List[Any]) -> NDArray[Any]:
 def _read_spectrum_mzs(parser: Any, idx: int) -> Optional[NDArray[Any]]:
     """Read one spectrum's m/z values, or None if missing or unreadable.
 
+    Reads and decodes the m/z binary array only, with the same
+    seek/read/frombuffer sequence pyimzml's ``getspectrum`` performs --
+    that call also fetches the intensity array, which this caller (the
+    processed-mode mass axis build) immediately discards, doubling the
+    bytes read per spectrum for nothing. Duck-typed parsers without
+    pyimzml's offset tables fall back to ``getspectrum``.
+
     Args:
         parser: An initialized ImzML parser.
         idx: Spectrum index.
@@ -316,14 +332,13 @@ def _read_spectrum_mzs(parser: Any, idx: int) -> Optional[NDArray[Any]]:
         The m/z array, or None when the spectrum is empty or failed to read.
     """
     try:
-        spectrum_data = parser.getspectrum(idx)
+        mzs = read_spectrum_mzs_only(parser, idx)
     except Exception as e:
         logger.warning(f"Error getting spectrum {idx}: {e}")
         return None
 
-    if spectrum_data is None or len(spectrum_data) < 1:
+    if mzs is None:
         return None
-    mzs = spectrum_data[0]
     return mzs if mzs.size else None
 
 
@@ -535,6 +550,13 @@ class ImzMLReader(BaseMSIReader):
         )
         self._z_base_value: Optional[int] = None  # See _z_base()
 
+        # Continuous-mode fast read: the shared m/z block, and whether the
+        # file really does point every spectrum at one block -- verified
+        # from the offsets, not assumed from the declared mode. See
+        # _read_spectrum_arrays.
+        self._continuous_mzs: Optional[NDArray[np.float64]] = None
+        self._continuous_uniform: bool = False
+
         # Store path but don't initialize parser yet - wait for first use
         if data_path is not None:
             self.filepath = data_path
@@ -720,6 +742,18 @@ class ImzMLReader(BaseMSIReader):
         arrays = _offset_arrays(parser)
         self._validate_offset_arrays(arrays)
         self._validate_ibd_extent(parser, arrays)
+
+        # Does every spectrum point at one shared m/z block? True for a
+        # well-formed continuous file, and the licence for the fast read in
+        # _read_spectrum_arrays -- measured off the offsets rather than
+        # trusted from the declared mode, so a file that declares
+        # continuous while writing per-spectrum m/z blocks is read the
+        # slow, correct way instead of being handed spectrum 0's axis.
+        if self.is_continuous and arrays.mz_offsets.size:
+            self._continuous_uniform = bool(
+                (arrays.mz_offsets == arrays.mz_offsets[0]).all()
+                and (arrays.mz_lengths == arrays.mz_lengths[0]).all()
+            )
 
         n_scan_settings = len(parser.metadata.scan_settings)
         if n_scan_settings != 1:
@@ -1031,15 +1065,23 @@ class ImzMLReader(BaseMSIReader):
 
             if self.is_continuous:
                 logger.info("Using m/z values from first spectrum (continuous mode)")
-                spectrum_data = parser.getspectrum(0)
-                if spectrum_data is None or len(spectrum_data) < 1:
-                    raise ValueError("Could not get first spectrum")
+                if self._continuous_mzs is not None:
+                    # Iteration already decoded the shared block; reuse the
+                    # object so axis and yielded m/z stay identity-equal
+                    # whichever is asked for first.
+                    self._common_mass_axis = self._continuous_mzs
+                else:
+                    spectrum_data = parser.getspectrum(0)
+                    if spectrum_data is None or len(spectrum_data) < 1:
+                        raise ValueError("Could not get first spectrum")
 
-                mzs = spectrum_data[0]
-                if mzs.size == 0:
-                    raise ValueError("First spectrum contains no m/z values")
+                    mzs = spectrum_data[0]
+                    if mzs.size == 0:
+                        raise ValueError("First spectrum contains no m/z values")
 
-                self._common_mass_axis = mzs
+                    self._common_mass_axis = mzs
+                    if self._continuous_uniform:
+                        self._continuous_mzs = mzs
             else:
                 self._common_mass_axis = self._extract_continuous_mass_axis(parser)
 
@@ -1164,6 +1206,53 @@ class ImzMLReader(BaseMSIReader):
             (x - 1, y - 1, z - self._z_base()),
         )
 
+    def _read_spectrum_arrays(
+        self, parser: ImzMLParser, idx: int
+    ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Read one spectrum's arrays, reusing the shared m/z block when legal.
+
+        pyimzml's ``getspectrum`` seeks and decodes both binary arrays on
+        every call. In continuous mode every spectrum references the same
+        m/z block (verified against the offsets at init -- see
+        ``_continuous_uniform``), so re-reading it per spectrum roughly
+        triples the decode work: measured ~1.6 ms per 331k-point spectrum
+        for both arrays against ~0.5 ms for the intensities alone, paid
+        twice per streaming conversion. Here the m/z block is decoded once
+        and only the intensity bytes are read per spectrum, with the same
+        seek/read/frombuffer sequence pyimzml itself performs.
+
+        Args:
+            parser: An initialized ImzML parser.
+            idx: Spectrum index.
+
+        Returns:
+            The (m/z, intensity) arrays, exactly as ``getspectrum`` would.
+        """
+        if not self._continuous_uniform:
+            return cast(
+                Tuple[NDArray[np.float64], NDArray[np.float64]],
+                parser.getspectrum(idx),
+            )
+
+        mzs = self._continuous_mzs
+        if mzs is None:
+            # Prefer the axis object get_common_mass_axis cached, so the
+            # arrays this yields are identity-equal to the converter's
+            # common axis and its equality checks cost O(1).
+            if self._common_mass_axis is not None:
+                mzs = self._continuous_mzs = self._common_mass_axis
+            else:
+                mzs, intensities = parser.getspectrum(idx)
+                self._continuous_mzs = mzs
+                return mzs, intensities
+
+        m = parser.m
+        m.seek(parser.intensityOffsets[idx])
+        data = m.read(
+            parser.intensityLengths[idx] * parser.sizeDict[parser.intensityPrecision]
+        )
+        return mzs, np.frombuffer(data, dtype=parser.intensityPrecision)
+
     def _process_single_spectrum(
         self, parser: ImzMLParser, idx: int, pbar
     ) -> Optional[
@@ -1172,7 +1261,7 @@ class ImzMLReader(BaseMSIReader):
         """Process a single spectrum and return its data."""
         try:
             coords = self._get_spectrum_coordinates(parser, idx)
-            mzs, intensities = parser.getspectrum(idx)
+            mzs, intensities = self._read_spectrum_arrays(parser, idx)
 
             # Apply intensity threshold filtering if configured
             mzs, intensities = self._apply_intensity_filter(mzs, intensities)
@@ -1354,31 +1443,21 @@ class ImzMLReader(BaseMSIReader):
     def get_total_peak_count(self) -> int:
         """Get total number of peaks across all spectra.
 
-        For ImzML, this requires iterating through spectra to count peaks.
+        The imzML header already declares every spectrum's array length
+        (``IMS:1000103``, held in ``parser.mzLengths``), so this is a sum
+        over an in-memory list. It used to read and decode every binary
+        array in the file to count values whose count was already known.
 
         Returns:
             Total number of peaks across all spectra
         """
         self._ensure_parser_initialized()
         parser = cast(ImzMLParser, self.parser)
-        total_spectra = len(parser.coordinates)
 
-        logger.info("Counting peaks across all spectra for exact allocation...")
-        total_peaks = 0
-
-        with tqdm(
-            total=total_spectra,
-            desc="Counting peaks",
-            unit="spectrum",
-        ) as pbar:
-            for idx in range(total_spectra):
-                try:
-                    mzs, _ = parser.getspectrum(idx)
-                    total_peaks += len(mzs)
-                except Exception as e:
-                    logger.warning(f"Error getting spectrum {idx}: {e}")
-                pbar.update(1)
-
+        n = len(parser.mzLengths)
+        total_peaks = int(
+            np.sum(np.fromiter(parser.mzLengths, dtype=np.int64, count=n))
+        )
         logger.info(f"Total peak count: {total_peaks:,}")
         return total_peaks
 
