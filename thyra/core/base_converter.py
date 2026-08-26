@@ -573,11 +573,23 @@ class BaseMSIConverter(ABC):
     def _map_mass_to_indices(self, mzs: NDArray[np.float64]) -> NDArray[np.int_]:
         """Map m/z values to indices in the common mass axis with high accuracy.
 
+        The returned array is parallel to ``mzs`` (same length, same order),
+        so callers may pair it element-for-element with the spectrum's
+        intensity array.
+
         Args:
             mzs: Array of m/z values
 
         Returns:
-            Array of indices in common mass axis
+            Array of indices in common mass axis, parallel to ``mzs``
+
+        Raises:
+            ValueError: If any m/z value has no common-axis entry within
+                tolerance. Without resampling the axis is built from the
+                spectra themselves, so every value must match exactly; a
+                near-miss means the axis and the data have diverged, and
+                dropping the value silently would desync the index and
+                intensity arrays downstream.
         """
         if self._common_mass_axis is None:
             raise ValueError("Common mass axis is not initialized.")
@@ -606,18 +618,31 @@ class BaseMSIConverter(ABC):
                     self._identity_mass_indices = cached
                 return cached
 
-        # Use searchsorted for exact mapping
-        indices = np.searchsorted(axis, mzs)
+        # searchsorted returns the right-hand neighbor; the nearest axis
+        # entry may sit on either side, so compare both before validating.
+        right = np.clip(np.searchsorted(axis, mzs), 0, len(axis) - 1)
+        left = np.maximum(right - 1, 0)
+        indices = np.where(
+            np.abs(axis[right] - mzs) <= np.abs(axis[left] - mzs), right, left
+        )
 
-        # Ensure indices are within bounds
-        indices = np.clip(indices, 0, len(axis) - 1)
-
-        # For complete accuracy, validate the indices
         # Very small tolerance threshold for floating point differences
         max_diff = 1e-6
-        mask = np.abs(axis[indices] - mzs) <= max_diff
+        diffs = np.abs(axis[indices] - mzs)
+        bad = diffs > max_diff
+        if np.any(bad):
+            worst = int(np.argmax(diffs))
+            raise ValueError(
+                f"{int(np.count_nonzero(bad))} of {mzs.size} m/z values have "
+                f"no common mass axis entry within {max_diff:g} (worst: m/z "
+                f"{mzs[worst]!r} is {diffs[worst]:.6g} from nearest axis "
+                f"entry {axis[indices[worst]]!r}). The common mass axis does "
+                f"not cover this spectrum; refusing to drop values silently "
+                f"because callers pair these indices with the full intensity "
+                f"array."
+            )
 
-        return indices[mask]
+        return indices
 
     def _add_to_sparse_matrix(
         self,
