@@ -19,6 +19,16 @@ from ..types import ComprehensiveMetadata, EssentialMetadata
 
 logger = logging.getLogger(__name__)
 
+# Micrometres per declared pixel-size unit, keyed by unitAccession. Everything
+# downstream of the extractor -- ``EssentialMetadata.pixel_size``,
+# ``obs/spatial_*`` -- is micrometres, so a unit outside this table is refused
+# rather than passed through as a silent scale error.
+UM_PER_UNIT = {
+    "UO:0000016": 1000.0,  # millimeter
+    "UO:0000017": 1.0,  # micrometer
+    "UO:0000018": 0.001,  # nanometer
+}
+
 
 class ImzMLMetadataExtractor(MetadataExtractor):
     """ImzML-specific metadata extractor with optimized two-phase extraction."""
@@ -470,7 +480,15 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         return mass_range
 
     def _extract_pixel_size_fast(self) -> Optional[Tuple[float, float]]:
-        """Fast pixel size extraction from imzmldict first."""
+        """Fast pixel size extraction from imzmldict, converted to micrometres.
+
+        ``imzmldict`` discards ``unitAccession`` -- ``convert_cv_param`` takes
+        no unit argument -- so ``pixel size x`` is a bare number in whatever
+        unit the vendor declared. Taking that number at face value stored a
+        nanometre pixel size as micrometres, 1000x too large, and
+        ``convert_msi`` still returned ``True``. The unit survives on the
+        ParamGroup path, so it is read from there and the value converted.
+        """
         if hasattr(self.parser, "imzmldict") and self.parser.imzmldict:
             # Check for pixel size parameters in the parsed dictionary
             x_size = self.parser.imzmldict.get("pixel size x")
@@ -478,11 +496,71 @@ class ImzMLMetadataExtractor(MetadataExtractor):
 
             if x_size is not None and y_size is not None:
                 try:
-                    return (float(x_size), float(y_size))
+                    x_size, y_size = float(x_size), float(y_size)
                 except (ValueError, TypeError):
-                    pass
+                    return None  # Defer to comprehensive extraction
+
+                units = self._pixel_size_unit_accessions()
+                return (
+                    self._pixel_size_to_um(
+                        x_size, units.get(ImzMLAccessions.PIXEL_SIZE_X)
+                    ),
+                    self._pixel_size_to_um(
+                        y_size, units.get(ImzMLAccessions.PIXEL_SIZE_Y)
+                    ),
+                )
 
         return None  # Defer to comprehensive extraction
+
+    def _pixel_size_unit_accessions(self) -> Dict[str, Optional[str]]:
+        """The declared ``unitAccession`` of each pixel-size cvParam.
+
+        ``__readimzmlmeta`` resolves each accession by first match anywhere in
+        the document, so the unit is looked up the same way: scan-settings
+        blocks in document order, first declaration of each accession wins.
+        That keeps the unit paired with the value ``imzmldict`` actually holds
+        when a file carries more than one ``<scanSettings>`` block.
+        """
+        units: Dict[str, Optional[str]] = {}
+        metadata = getattr(self.parser, "metadata", None)
+        scan_settings = getattr(metadata, "scan_settings", None)
+        if not isinstance(scan_settings, dict):
+            return units
+
+        wanted = (ImzMLAccessions.PIXEL_SIZE_X, ImzMLAccessions.PIXEL_SIZE_Y)
+        for group in scan_settings.values():
+            for param in getattr(group, "cv_params", []):
+                # (name, accession, value, raw_name, raw_value, unit_name,
+                #  unit_accession)
+                accession, unit_accession = param[1], param[6]
+                if accession in wanted and accession not in units:
+                    units[accession] = unit_accession
+        return units
+
+    def _pixel_size_to_um(self, value: float, unit_accession: Optional[str]) -> float:
+        """Convert a declared pixel size to micrometres, or refuse.
+
+        No declared unit keeps the historical reading: the bare number is
+        micrometres. Real vendor files (the IONTOF class among them) write
+        ``IMS:1000046`` with no ``unitAccession`` at all, so refusing here
+        would reject files that were being read correctly.
+
+        Raises:
+            ValueError: If the file declares a unit outside ``UM_PER_UNIT``.
+                Guessing a factor for, say, centimetre would be the same
+                silent scale error this method exists to close.
+        """
+        if unit_accession is None:
+            return value
+        factor = UM_PER_UNIT.get(unit_accession)
+        if factor is None:
+            raise ValueError(
+                f"{self.imzml_path} declares its pixel size in unit "
+                f"{unit_accession!r}, which Thyra cannot convert to "
+                f"micrometres. Supported units: UO:0000016 (millimeter), "
+                f"UO:0000017 (micrometer), UO:0000018 (nanometer)."
+            )
+        return value * factor
 
     def _estimate_memory(self, n_spectra: int) -> float:
         """Estimate memory usage in GB."""
@@ -884,7 +962,17 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         return None
 
     def _extract_pixel_size_from_xml(self) -> Optional[Tuple[float, float]]:
-        """Extract pixel size using full XML parsing as fallback."""
+        """Extract pixel size using full XML parsing as fallback.
+
+        The unit conversion happens outside the ``try`` so a refused unit
+        propagates as loudly as it does on the fast path, while a merely
+        unparseable document still degrades to "no pixel size".
+        """
+        x_size = None
+        y_size = None
+        x_unit = None
+        y_unit = None
+
         try:
             if not hasattr(self.parser, "metadata") or not hasattr(
                 self.parser.metadata, "root"
@@ -899,22 +987,24 @@ class ImzMLMetadataExtractor(MetadataExtractor):
                 "ims": "http://www.maldi-msi.org/download/imzml/imagingMS.obo",
             }
 
-            x_size = None
-            y_size = None
-
             # Search for cvParam elements with the pixel size accessions
             for cvparam in root.findall(".//mzml:cvParam", namespaces):
                 accession = cvparam.get("accession")
-                if accession == "IMS:1000046":  # pixel size x
+                if accession == ImzMLAccessions.PIXEL_SIZE_X:
                     x_size = float(cvparam.get("value", 0))
-                elif accession == "IMS:1000047":  # pixel size y
+                    x_unit = cvparam.get("unitAccession")
+                elif accession == ImzMLAccessions.PIXEL_SIZE_Y:
                     y_size = float(cvparam.get("value", 0))
-
-            if x_size is not None and y_size is not None:
-                logger.info(f"Detected pixel size from XML: x={x_size}μm, y={y_size}μm")
-                return (x_size, y_size)
+                    y_unit = cvparam.get("unitAccession")
 
         except Exception as e:
             logger.warning(f"Failed to parse XML metadata for pixel size: {e}")
+            return None
+
+        if x_size is not None and y_size is not None:
+            x_um = self._pixel_size_to_um(x_size, x_unit)
+            y_um = self._pixel_size_to_um(y_size, y_unit)
+            logger.info(f"Detected pixel size from XML: x={x_um}μm, y={y_um}μm")
+            return (x_um, y_um)
 
         return None
