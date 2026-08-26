@@ -27,7 +27,8 @@ module and kept in sync by a unit test; regenerate it with
 ``python -m thyra.metadata.schema.generate``.
 """
 
-from typing import Any, Dict, Literal, Optional
+import json
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -42,6 +43,20 @@ MSI_METADATA_UNS_KEY = "msi_metadata"
 
 # The committed JSON Schema artifact for this schema version.
 SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_1.json"
+
+# Fixed var column conventions for the MSI table.  ``mz`` is required
+# and written by every converter; the remaining names are reserved for
+# annotation results so downstream consumers can rely on one spelling
+# (see docs/metadata-schema.md).  Nothing may reuse these names with a
+# different meaning; ``thyra validate`` checks the ``mz`` contract.
+MSI_VAR_REQUIRED_COLUMNS = ("mz",)
+MSI_VAR_RESERVED_COLUMNS = (
+    "mz",
+    "formula",
+    "adduct",
+    "annotation_source",
+    "fdr",
+)
 
 _CURIE_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*:\S+$"
 _SEMVER_PATTERN = r"^\d+\.\d+\.\d+$"
@@ -189,6 +204,38 @@ class MSAnalysis(_SchemaModel):
         return self
 
 
+class SoftwareRef(_SchemaModel):
+    """A software agent, the way mzQC records analysis software."""
+
+    name: str = Field(min_length=1, description="Software name, e.g. 'thyra'.")
+    version: str = Field(min_length=1, description="Software version.")
+    uri: Optional[str] = Field(default=None, description="Homepage or repository URL.")
+
+
+class ProcessingStep(_SchemaModel):
+    """One processing action between the raw data and this store.
+
+    Modeled on mzQC provenance: an ordered list of steps, each naming
+    the software that performed it and the parameters it ran with.  The
+    converter records its own steps (conversion, mass axis resampling);
+    downstream tools append theirs (normalisation, peak picking,
+    annotation) when they modify the store.
+    """
+
+    name: str = Field(
+        min_length=1,
+        description=(
+            "What was done, e.g. 'conversion', 'mass axis resampling', "
+            "'normalisation', 'peak picking', 'annotation'."
+        ),
+    )
+    software: SoftwareRef = Field(description="The software that did it.")
+    parameters: Dict[str, Union[str, int, float, bool]] = Field(
+        default_factory=dict,
+        description="The parameters the step ran with.",
+    )
+
+
 class Provenance(_SchemaModel):
     """Who wrote the block and from what.
 
@@ -244,6 +291,10 @@ class MSIMetadata(_SchemaModel):
     ms_analysis: MSAnalysis = Field(
         description="How the data was acquired; auto-populated where possible."
     )
+    processing: List[ProcessingStep] = Field(
+        default_factory=list,
+        description="Ordered processing history, oldest first (mzQC-style).",
+    )
     provenance: Provenance = Field(
         description="Who wrote this block and from what source."
     )
@@ -252,13 +303,20 @@ class MSIMetadata(_SchemaModel):
         """Serialise for storage in ``table.uns``.
 
         ``None`` fields are dropped, and the ``sample`` / ``preparation``
-        sections are omitted entirely when empty -- following the store
-        convention that a section the source has nothing for is omitted
-        rather than written empty, so consumers can tell "not available"
-        from "available and empty".
+        / ``processing`` sections are omitted entirely when empty --
+        following the store convention that a section the source has
+        nothing for is omitted rather than written empty, so consumers
+        can tell "not available" from "available and empty".
+
+        ``processing`` is stored as a JSON string: it is a list of
+        objects, which AnnData/zarr cannot round-trip (the same reason
+        ``uns["regions"]`` is JSON).  ``read_msi_metadata_blocks`` and
+        ``validate_document`` both decode it transparently.
         """
         data: Dict[str, Any] = self.model_dump(mode="json", exclude_none=True)
-        for section in ("sample", "preparation"):
+        for section in ("sample", "preparation", "processing"):
             if not data.get(section):
                 data.pop(section, None)
+        if "processing" in data:
+            data["processing"] = json.dumps(data["processing"])
         return data

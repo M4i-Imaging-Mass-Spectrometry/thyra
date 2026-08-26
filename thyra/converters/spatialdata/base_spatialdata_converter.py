@@ -597,10 +597,41 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 pixel_size_um=self._resolved_pixel_size_xy(),
                 pixel_size_source=self.pixel_size_source.value,
                 source_format=info.get("source_format"),
+                processing=self._processing_provenance(),
             )
             uns[MSI_METADATA_UNS_KEY] = meta.to_uns_dict()
         except Exception as e:
             logger.warning("Could not build the msi_metadata block: %s", e)
+
+    def _processing_provenance(self) -> List[Any]:
+        """The processing steps this conversion performed, oldest first.
+
+        Modeled on mzQC provenance.  The list must be identical across
+        every write path for the same input (the uns parity suite
+        compares the block verbatim), so nothing route-specific -- the
+        sparse layout, the streaming/in-memory split -- belongs here.
+        """
+        from thyra import __version__
+        from thyra.metadata.schema import ProcessingStep, SoftwareRef
+
+        thyra_ref = SoftwareRef(name="thyra", version=__version__)
+        steps = [ProcessingStep(name="conversion", software=thyra_ref)]
+
+        config = self._resampling_config
+        if config is not None:
+            parameters: Dict[str, Any] = {}
+            for field_name, value in vars(config).items():
+                if value is None:
+                    continue
+                parameters[field_name] = getattr(value, "value", value)
+            steps.append(
+                ProcessingStep(
+                    name="mass axis resampling",
+                    software=thyra_ref,
+                    parameters=parameters,
+                )
+            )
+        return steps
 
     def _collect_essential_metadata(self, uns: Dict[str, Any], comp_meta: Any) -> None:
         """Add ``essential_metadata`` (tuples become lists for Zarr)."""
@@ -1518,11 +1549,20 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             logger.warning("Reader failed to supply mass axis annotations: %s", detail)
             return {}
 
+        from thyra.metadata.schema import MSI_VAR_RESERVED_COLUMNS
+
         validated: Dict[str, Any] = {}
         for name, values in (annotations or {}).items():
             if name == "mz":
                 logger.warning("Ignoring mass axis annotation named 'mz'")
                 continue
+            if name in MSI_VAR_RESERVED_COLUMNS:
+                logger.info(
+                    "Mass axis annotation %r uses a var column name the "
+                    "metadata spec reserves for annotation results; it must "
+                    "carry that meaning (see docs/metadata-schema.md)",
+                    name,
+                )
             if len(values) != n_channels:
                 logger.info(
                     "Dropping mass axis annotation %r: %d values for a "
@@ -2406,11 +2446,55 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             "produced_by": f"thyra/{thyra_version}",
         }
 
+        # Additive keys; `convention_version` stays 1 for the same
+        # reason as z_spacing_um below.  `raster_to_global_affine` is
+        # the explicit 3x3 row-major affine from TIC raster indices to
+        # "global" (the same mapping the TIC element's transform
+        # expresses), so a consumer that reads only attrs still gets
+        # the full placement.  `coordinate_offsets_px` preserves the
+        # source's raw acquisition-index offsets, which 0-based
+        # normalisation otherwise erases; `stage_offset_um` is their
+        # physical equivalent, written only when "global" is in
+        # micrometers so it cannot be misread in the optical-pixel
+        # variant.
+        if self._tic_to_image_matrix is not None:
+            global_cs["raster_to_global_affine"] = [
+                [float(v) for v in row] for row in self._tic_to_image_matrix
+            ]
+        else:
+            in_plane = float(self.pixel_size_um)
+            global_cs["raster_to_global_affine"] = [
+                [in_plane, 0.0, 0.0],
+                [0.0, in_plane, 0.0],
+                [0.0, 0.0, 1.0],
+            ]
+        offsets = self._source_coordinate_offsets()
+        if offsets is not None:
+            global_cs["coordinate_offsets_px"] = [int(v) for v in offsets]
+            if unit == "micrometer":
+                global_cs["stage_offset_um"] = [
+                    float(offsets[0]) * float(self.pixel_size_um),
+                    float(offsets[1]) * float(self.pixel_size_um),
+                ]
+
         if self._is_volume:
             global_cs["z_spacing_um"] = float(self.z_spacing_um)
             global_cs["z_spacing_source"] = self.z_spacing_source.value
 
         return {"global": global_cs}
+
+    def _source_coordinate_offsets(self) -> Optional[Tuple[int, int, int]]:
+        """The reader's raw coordinate offsets, if it reported any."""
+        try:
+            essential = self.reader.get_essential_metadata()
+        except Exception as e:
+            logger.debug("Could not read coordinate offsets: %s", e)
+            return None
+        offsets = getattr(essential, "coordinate_offsets", None)
+        if offsets is None:
+            return None
+        x, y, z = offsets
+        return (int(x), int(y), int(z))
 
     def _add_comprehensive_sections(
         self, pixel_size_attrs: Dict[str, Any], comprehensive_metadata_obj

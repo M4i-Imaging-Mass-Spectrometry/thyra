@@ -57,6 +57,31 @@ class TestStoreRoundTrip:
             assert meta is not None
             assert not [i for i in issues if i.severity == "error"]
 
+    def test_processing_history_records_the_conversion(self, store):
+        from thyra import __version__
+
+        for block in read_msi_metadata_blocks(store).values():
+            steps = block["processing"]
+            assert steps[0]["name"] == "conversion"
+            assert steps[0]["software"] == {
+                "name": "thyra",
+                "version": __version__,
+            }
+            # No resampling was configured, so no resampling step.
+            assert [s["name"] for s in steps] == ["conversion"]
+
+    def test_root_attrs_carry_the_explicit_affine(self, store):
+        import zarr
+
+        cs_global = dict(zarr.open_group(str(store), mode="r").attrs)[
+            "coordinate_systems"
+        ]["global"]
+        assert cs_global["raster_to_global_affine"] == [
+            [10.0, 0.0, 0.0],
+            [0.0, 10.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+
     def test_validate_cli_passes_on_a_real_store(self, store):
         from thyra.metadata.schema.cli import validate_command
 
@@ -73,6 +98,28 @@ class TestStoreRoundTrip:
         assert result.exit_code == 0, result.output
         document = json.loads(output.read_text(encoding="utf-8"))
         assert document["MS_Analysis"]["Pixel_Size"] == {"Xaxis": 10, "Yaxis": 10}
+
+    def test_resampling_step_serialises_the_config(self, tmp_path):
+        from thyra.converters.spatialdata.spatialdata_2d_converter import (
+            SpatialData2DConverter,
+        )
+
+        converter = SpatialData2DConverter(
+            reader=MockMSIReader(
+                MockMSIConfig(n_x=4, n_y=4, n_mz_bins=200, peaks_per_spectrum=(10, 20))
+            ),
+            output_path=tmp_path / "out.zarr",
+            dataset_id="mock",
+            pixel_size_um=10.0,
+            resampling_config={"method": "nearest_neighbor", "target_bins": 100},
+        )
+        steps = converter._processing_provenance()
+        assert [s.name for s in steps] == ["conversion", "mass axis resampling"]
+        parameters = steps[1].parameters
+        assert parameters["method"] == "nearest_neighbor"
+        assert parameters["target_bins"] == 100
+        # Unset config fields are dropped, not serialised as nulls.
+        assert "min_mz" not in parameters
 
     def test_a_zarr_group_that_is_not_spatialdata_is_reported_cleanly(self, tmp_path):
         import zarr

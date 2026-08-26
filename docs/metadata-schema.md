@@ -53,6 +53,7 @@ you -- see [Completing the metadata](#completing-the-metadata).
 | | `instrument_model` | text | -- |
 | | `detector_resolving_power` | `{value, at_mz}` | -- |
 | | `pixel_size_um` | `{x, y}`, **required** | -- |
+| `processing` | list of `{name, software {name, version, uri}, parameters}` | ordered steps, oldest first | -- |
 | `provenance` | `thyra_version` | text, required | -- |
 | | `source_format` | `"imzml"`, `"bruker"`, ... | -- |
 | | `source_path` | text | -- |
@@ -89,6 +90,53 @@ from the format itself.
 
 Everything else -- organism, tissue, condition, matrix, resolving power --
 cannot come from a raw file and stays empty until you provide it.
+
+### Processing history
+
+`processing` is the dataset's processing provenance, modeled on
+[mzQC](https://github.com/HUPO-PSI/mzQC): an ordered list of steps, each
+naming the software that performed it and the parameters it ran with.
+The converter records its own steps -- `conversion` always, and
+`mass axis resampling` with the resolved resampling parameters when
+resampling was enabled. Downstream tools (normalisation, peak picking,
+annotation) append theirs when they modify the store.
+
+```python
+[
+  {"name": "conversion",
+   "software": {"name": "thyra", "version": "3.5.0"}},
+  {"name": "mass axis resampling",
+   "software": {"name": "thyra", "version": "3.5.0"},
+   "parameters": {"method": "nearest_neighbor", "target_bins": 50000,
+                  "reference_mz": 1000.0}}
+]
+```
+
+On disk the list is stored as a JSON string (AnnData/zarr cannot
+round-trip a list of objects -- the same reason `uns["regions"]` is
+JSON); `read_msi_metadata_blocks` and `validate_document` decode it
+transparently.
+
+---
+
+## var column conventions
+
+The MSI table's `.var` column names are fixed by the spec so every
+consumer can rely on one spelling:
+
+| Column | Written by | Meaning |
+|--------|-----------|---------|
+| `mz` | every converter, **required** | The common mass axis. Numeric, finite, strictly increasing. |
+| `formula` | annotation tools | Molecular formula of the annotation |
+| `adduct` | annotation tools | Adduct, e.g. `+H`, `-H`, `+Na` |
+| `annotation_source` | annotation tools | Tool/database that produced the annotation |
+| `fdr` | annotation tools | False discovery rate of the annotation |
+
+Readers may add extra per-channel columns (a non-m/z native axis such as
+flight time stays alongside `mz`), and annotation tools may add columns
+beyond these -- but the reserved names above must never be reused with a
+different meaning. `thyra validate` checks the `mz` contract on every
+table of a store.
 
 ---
 
@@ -143,9 +191,11 @@ thyra validate PATH [--merge USER.json] [--json]
 ```
 
 `PATH` is a converted `.zarr` store or a standalone metadata `.json`
-document. Only the metadata block is read -- validating a 100 GB store is
-instant. Exit status is `0` when every document conforms (warnings
-allowed) and `1` otherwise, so it can gate CI.
+document. Only the metadata block (and, for stores, the `var` axis) is
+read -- validating a 100 GB store is instant. For stores it also checks
+the [var column contract](#var-column-conventions) and that every table
+carries a metadata block. Exit status is `0` when every document
+conforms (warnings allowed) and `1` otherwise, so it can gate CI.
 
 Errors mean the document does not conform: structural violations, unknown
 PSI-MS/IMS/UO accessions, version incompatibility. Warnings mean it

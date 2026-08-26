@@ -219,6 +219,16 @@ plt.title(f"Pixel {pixel_idx}")
 plt.show()
 ```
 
+### var columns
+
+`var` always carries `mz` (numeric, finite, strictly increasing).
+Readers whose native axis is not m/z keep that axis alongside it, and
+annotation tools add `formula`, `adduct`, `annotation_source` and
+`fdr` -- names fixed by the
+[metadata schema](metadata-schema.md#var-column-conventions) so they
+mean the same thing in every store. `thyra validate` checks the `mz`
+contract on every table.
+
 ---
 
 ## Pixel Coordinates

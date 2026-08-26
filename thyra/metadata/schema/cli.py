@@ -21,7 +21,7 @@ import click
 from .metaspace import to_metaspace
 from .models import MSI_METADATA_UNS_KEY, MSIMetadata
 from .store_io import deep_merge, read_msi_metadata_blocks
-from .validate import ValidationIssue, validate_document
+from .validate import ValidationIssue, check_store_var_conventions, validate_document
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +69,16 @@ def _apply_merge(
     return {label: deep_merge(doc, overlay) for label, doc in documents.items()}
 
 
+def _store_var_issues(path: Path) -> Dict[str, List[ValidationIssue]]:
+    """Per-table var-contract issues; empty for JSON document input."""
+    if path.is_file() and path.suffix.lower() == ".json":
+        return {}
+    try:
+        return check_store_var_conventions(path)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
 def _echo_issues(label: str, issues: List[ValidationIssue]) -> None:
     """Print one document's findings in a stable, greppable layout."""
     for issue in sorted(issues, key=lambda i: (i.severity != "error", i.location)):
@@ -95,15 +105,30 @@ def validate_command(path: Path, merge_path: Optional[Path], as_json: bool) -> N
     """Validate MSI metadata against the Thyra metadata schema.
 
     PATH is a converted SpatialData .zarr store or a metadata JSON
-    document. Exit status is 0 when every document conforms (warnings
-    allowed), 1 otherwise, so it can gate CI.
+    document. For a store, the var column contract is checked too
+    ('mz' present, numeric, finite, strictly increasing). Exit status
+    is 0 when every document conforms (warnings allowed), 1 otherwise,
+    so it can gate CI.
     """
     documents = _apply_merge(_load_documents(path), merge_path)
+    var_issues = _store_var_issues(path)
 
     report: Dict[str, Any] = {}
     failed = False
-    for label, document in documents.items():
-        _, issues = validate_document(document)
+    for label in sorted(set(documents) | set(var_issues)):
+        if label in documents:
+            _, issues = validate_document(documents[label])
+        else:
+            # The table exists in the store but carries no metadata
+            # block; every table a converter writes gets one.
+            issues = [
+                ValidationIssue(
+                    "error",
+                    MSI_METADATA_UNS_KEY,
+                    "table carries no msi_metadata block",
+                )
+            ]
+        issues = list(issues) + var_issues.get(label, [])
         errors = [issue for issue in issues if issue.severity == "error"]
         failed = failed or bool(errors)
         report[label] = {

@@ -72,6 +72,31 @@ class TestMSIMetadata:
         assert analysis.polarity == "negative"
 
 
+class TestProcessing:
+    def test_processing_steps_round_trip(self):
+        from thyra.metadata.schema import ProcessingStep, SoftwareRef
+
+        meta = _minimal().model_copy(deep=True)
+        meta.processing = [
+            ProcessingStep(
+                name="mass axis resampling",
+                software=SoftwareRef(name="thyra", version="1.0.0"),
+                parameters={"target_bins": 50000, "method": "nearest_neighbor"},
+            )
+        ]
+        restored = MSIMetadata.model_validate(meta.model_dump())
+        assert restored.processing[0].parameters["target_bins"] == 50000
+
+    def test_empty_processing_is_omitted_from_uns(self):
+        assert "processing" not in _minimal().to_uns_dict()
+
+    def test_step_requires_software(self):
+        from thyra.metadata.schema import ProcessingStep
+
+        with pytest.raises(ValidationError):
+            ProcessingStep(name="normalisation")
+
+
 class TestToUnsDict:
     def test_none_fields_are_dropped(self):
         data = _minimal().to_uns_dict()

@@ -35,6 +35,11 @@ zarr.attrs["coordinate_systems"] = {
         "reference_element": str | None,
         "convention_version": 1,
         "produced_by": "thyra/<version>",
+        "raster_to_global_affine": [[a, b, tx], [c, d, ty], [0, 0, 1]],
+
+        # Only when the reader reports raw coordinate offsets
+        "coordinate_offsets_px": [x, y, z],
+        "stage_offset_um": [x_um, y_um],  # micrometer variant only
 
         # Multi-slice volumes only -- see "The z axis" below
         "z_spacing_um": float,
@@ -50,6 +55,9 @@ zarr.attrs["coordinate_systems"] = {
 | ``reference_element`` | Name of the canonical raster element that defines pixel space, when ``unit="pixel"``. ``None`` otherwise. |
 | ``convention_version`` | Schema version; bump when the shape of this attr changes. Currently ``1``. |
 | ``produced_by`` | ``"thyra/<version>"`` for Thyra-produced zarrs. |
+| ``raster_to_global_affine`` | Explicit 3x3 row-major affine from TIC raster indices to ``"global"`` -- the same mapping the TIC element's transform expresses, duplicated here so a consumer that reads only attrs still gets the full placement. A pure pixel-size scale in the micrometer variant; the optical alignment matrix in the pixel variant. Purely additive (``convention_version`` stays 1, same reasoning as the z fields below). |
+| ``coordinate_offsets_px`` | The source's raw acquisition-index offsets ``[x, y, z]``, which 0-based normalisation otherwise erases. **Only present when the reader reports them.** |
+| ``stage_offset_um`` | ``coordinate_offsets_px`` times the pixel size: where the raster origin sat, in micrometers, relative to the source's index origin. **Only written when ``unit="micrometer"``**, so it cannot be misread in the optical-pixel variant. |
 | ``z_spacing_um`` | Micrometers between consecutive slices. **Only present on multi-slice volumes.** Always an absolute micrometer distance, even when ``unit="pixel"``: the optical affine governs only x and y, while z is always scaled directly. |
 | ``z_spacing_source`` | Where ``z_spacing_um`` came from. **Only present on multi-slice volumes.** |
 

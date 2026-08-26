@@ -9,10 +9,10 @@ acquisition) or from vendor metadata that directly encodes the fact
 """
 
 import logging
-from typing import Any, Dict, Literal, Optional, Tuple, cast
+from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 from ..types import ComprehensiveMetadata
-from .models import MSAnalysis, MSIMetadata, PixelSizeUm, Provenance
+from .models import MSAnalysis, MSIMetadata, PixelSizeUm, ProcessingStep, Provenance
 from .vocab import normalize_analyzer, normalize_ionisation_source, normalize_polarity
 
 logger = logging.getLogger(__name__)
@@ -99,6 +99,7 @@ def build_msi_metadata(
     pixel_size_um: Tuple[float, float],
     pixel_size_source: Optional[str] = None,
     source_format: Optional[str] = None,
+    processing: Optional[List[ProcessingStep]] = None,
 ) -> MSIMetadata:
     """Build an :class:`MSIMetadata` document from extracted metadata.
 
@@ -113,6 +114,8 @@ def build_msi_metadata(
             (``"automatic"`` / ``"manual"`` / ``"default"``).
         source_format: Detected input format name (``"imzml"``,
             ``"bruker"``, ...), when known.
+        processing: Ordered processing steps performed so far, oldest
+            first (see :class:`ProcessingStep`).
 
     Returns:
         The populated document.  Fields the source does not report are
@@ -136,6 +139,7 @@ def build_msi_metadata(
         ms_analysis=_build_ms_analysis(
             acquisition, instrument, format_specific, pixel_size_um, source_format
         ),
+        processing=list(processing or []),
         provenance=Provenance(
             thyra_version=__version__,
             source_format=source_format,

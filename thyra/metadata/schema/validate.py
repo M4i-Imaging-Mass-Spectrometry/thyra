@@ -15,9 +15,11 @@ but says something suspicious.  ``thyra validate`` exits non-zero only
 on errors, so warnings do not break CI pipelines that gate on it.
 """
 
+import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from pydantic import ValidationError
 
@@ -193,6 +195,18 @@ def validate_document(
             )
         ]
 
+    # On disk, `processing` is a JSON string (a list of objects cannot
+    # round-trip through AnnData/zarr); accept both spellings so a raw
+    # uns dict validates without going through read_msi_metadata_blocks.
+    if isinstance(doc.get("processing"), str):
+        doc = dict(doc)
+        try:
+            doc["processing"] = json.loads(doc["processing"])
+        except json.JSONDecodeError as exc:
+            return None, [
+                ValidationIssue("error", "processing", f"not valid JSON: {exc}")
+            ]
+
     issues = _check_schema_version(doc)
     if any(issue.severity == "error" for issue in issues):
         return None, issues
@@ -207,3 +221,71 @@ def validate_document(
 
     issues.extend(_check_ontology_terms(meta))
     return meta, issues
+
+
+def check_store_var_conventions(
+    store_path: Union[str, Path],
+) -> Dict[str, List[ValidationIssue]]:
+    """Check every table's ``var`` against the fixed column conventions.
+
+    The spec fixes ``var`` column names (see ``MSI_VAR_RESERVED_COLUMNS``)
+    and requires ``mz``: present, numeric, finite, strictly increasing.
+    Only the ``var`` group is read -- never the intensity matrix -- so
+    this stays cheap on stores of any size.
+
+    Args:
+        store_path: Path to a converted ``.zarr`` store.
+
+    Returns:
+        Mapping of table name to the issues found for it (empty list
+        when the table conforms).
+
+    Raises:
+        ValueError: If the path is not a SpatialData store (no
+            ``tables`` group).
+    """
+    import numpy as np
+    import zarr
+
+    root = zarr.open_group(str(store_path), mode="r")
+    if "tables" not in root:
+        raise ValueError(
+            f"{store_path} does not look like a SpatialData store: "
+            "it has no 'tables' group"
+        )
+
+    results: Dict[str, List[ValidationIssue]] = {}
+    for name in sorted(root["tables"].keys()):
+        issues: List[ValidationIssue] = []
+        results[name] = issues
+        try:
+            var_group = root["tables"][name]["var"]
+        except KeyError:
+            issues.append(ValidationIssue("error", "var", "table has no var group"))
+            continue
+        if "mz" not in var_group:
+            issues.append(
+                ValidationIssue(
+                    "error", "var.mz", "required var column 'mz' is missing"
+                )
+            )
+            continue
+
+        mz = np.asarray(var_group["mz"])
+        if not np.issubdtype(mz.dtype, np.number):
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "var.mz",
+                    f"'mz' must be numeric, found dtype {mz.dtype}",
+                )
+            )
+        elif mz.size and not bool(np.isfinite(mz).all()):
+            issues.append(
+                ValidationIssue("error", "var.mz", "'mz' contains non-finite values")
+            )
+        elif mz.size > 1 and not bool((np.diff(mz) > 0).all()):
+            issues.append(
+                ValidationIssue("error", "var.mz", "'mz' is not strictly increasing")
+            )
+    return results

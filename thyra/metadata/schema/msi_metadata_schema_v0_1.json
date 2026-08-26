@@ -166,6 +166,49 @@
       "title": "PixelSizeUm",
       "type": "object"
     },
+    "ProcessingStep": {
+      "additionalProperties": false,
+      "description": "One processing action between the raw data and this store.\n\nModeled on mzQC provenance: an ordered list of steps, each naming\nthe software that performed it and the parameters it ran with.  The\nconverter records its own steps (conversion, mass axis resampling);\ndownstream tools append theirs (normalisation, peak picking,\nannotation) when they modify the store.",
+      "properties": {
+        "name": {
+          "description": "What was done, e.g. 'conversion', 'mass axis resampling', 'normalisation', 'peak picking', 'annotation'.",
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "parameters": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "description": "The parameters the step ran with.",
+          "title": "Parameters",
+          "type": "object"
+        },
+        "software": {
+          "$ref": "#/$defs/SoftwareRef",
+          "description": "The software that did it."
+        }
+      },
+      "required": [
+        "name",
+        "software"
+      ],
+      "title": "ProcessingStep",
+      "type": "object"
+    },
     "Provenance": {
       "additionalProperties": false,
       "description": "Who wrote the block and from what.\n\nDeliberately small: the store's ``uns[\"essential_metadata\"]`` and\nroot attributes already record dimensions, mass range, spectrum\ntype and conversion timestamp.  This section records only what is\nneeded to interpret the *metadata block itself*, and contains no\ntimestamps so that two conversions of the same input produce an\nidentical block (the uns parity tests rely on this).",
@@ -419,6 +462,43 @@
       },
       "title": "SamplePreparation",
       "type": "object"
+    },
+    "SoftwareRef": {
+      "additionalProperties": false,
+      "description": "A software agent, the way mzQC records analysis software.",
+      "properties": {
+        "name": {
+          "description": "Software name, e.g. 'thyra'.",
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "uri": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Homepage or repository URL.",
+          "title": "Uri"
+        },
+        "version": {
+          "description": "Software version.",
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "title": "SoftwareRef",
+      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -431,6 +511,14 @@
     "preparation": {
       "$ref": "#/$defs/SamplePreparation",
       "description": "How the sample was prepared; user-supplied."
+    },
+    "processing": {
+      "description": "Ordered processing history, oldest first (mzQC-style).",
+      "items": {
+        "$ref": "#/$defs/ProcessingStep"
+      },
+      "title": "Processing",
+      "type": "array"
     },
     "provenance": {
       "$ref": "#/$defs/Provenance",

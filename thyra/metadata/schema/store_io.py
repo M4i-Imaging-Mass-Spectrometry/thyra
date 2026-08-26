@@ -6,6 +6,7 @@ each table is read, never the intensity matrix, so validating or
 exporting metadata from a 100+ GB store costs nothing.
 """
 
+import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, Union
@@ -51,7 +52,15 @@ def read_msi_metadata_blocks(store_path: Union[str, Path]) -> Dict[str, Dict[str
         if MSI_METADATA_UNS_KEY not in uns:
             logger.debug("Table %s has no %s block", name, MSI_METADATA_UNS_KEY)
             continue
-        blocks[name] = dict(ad.io.read_elem(uns[MSI_METADATA_UNS_KEY]))
+        block = dict(ad.io.read_elem(uns[MSI_METADATA_UNS_KEY]))
+        # `processing` is stored as JSON (a list of objects cannot
+        # round-trip through AnnData/zarr); hand callers the parsed form.
+        if isinstance(block.get("processing"), str):
+            try:
+                block["processing"] = json.loads(block["processing"])
+            except json.JSONDecodeError:
+                logger.warning("Table %s has an unparseable processing section", name)
+        blocks[name] = block
 
     return blocks
 
