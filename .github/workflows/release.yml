@@ -77,7 +77,15 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install python-semantic-release
+          # Both pins are load-bearing. GitPython 3.1.60 removed
+          # Actor.name_email_regex, which semantic-release <= 10.6.1 reads at
+          # config load, so the fresh unpinned install this used to do died on
+          # every invocation the day 3.1.60 shipped -- and the --print gate
+          # below read the resulting empty output as "no release" and went
+          # green (runs 32957432684 and 32957823551). Move both pins together,
+          # to a semantic-release that handles current GitPython, after
+          # verifying `semantic-release version --print` against a clone.
+          pip install "python-semantic-release==10.6.1" "gitpython==3.1.59"
 
       - name: Configure Git
         run: |
@@ -121,18 +129,28 @@ jobs:
           # `--print` reports the version semantic-release WOULD release. When
           # nothing on main is releasable -- a ci:/chore:/docs:/test: commit --
           # it prints the CURRENT version, not an empty string. So an emptiness
-          # test can never fire, and what actually stopped the no-op release was
-          # the already-tagged guard below, reporting a concurrent run that
-          # never happened. Compare against the last released version instead,
-          # which is the thing "is there a release to cut?" really asks.
-          NEXT=$(semantic-release version --print 2>/dev/null || true)
-          LAST=$(semantic-release version --print-last-released 2>/dev/null || true)
+          # test can never fire on a healthy no-op, and what actually stopped
+          # the no-op release was the already-tagged guard below, reporting a
+          # concurrent run that never happened. Compare against the last
+          # released version instead, which is the thing "is there a release
+          # to cut?" really asks.
+          #
+          # stderr goes to a file rather than /dev/null: an empty print means
+          # semantic-release itself crashed before deciding anything, and the
+          # discarded stderr held the only evidence. The GitPython 3.1.60
+          # break was exactly this -- two runs reported "no release" with a
+          # green check while a fix commit sat unreleased on main.
+          NEXT=$(semantic-release version --print 2>"$RUNNER_TEMP/psr-print.log" || true)
+          LAST=$(semantic-release version --print-last-released 2>>"$RUNNER_TEMP/psr-print.log" || true)
           echo "next=${NEXT:-<none>} last-released=${LAST:-<none>}"
 
           if [ -z "$NEXT" ]; then
-            echo "No release: semantic-release could not determine a version."
-            echo "released=false" >> $GITHUB_OUTPUT
-            exit 0
+            # Not a no-op: a healthy no-op prints the current version (see
+            # above). Fail the job so the crash is seen, instead of skipping
+            # the release with a green check.
+            cat "$RUNNER_TEMP/psr-print.log"
+            echo "semantic-release produced no version -- it crashed rather than declined. Failing."
+            exit 1
           fi
 
           if [ "$NEXT" = "$LAST" ]; then
