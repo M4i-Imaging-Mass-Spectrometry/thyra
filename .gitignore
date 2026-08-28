@@ -53,6 +53,8 @@ Archive/
 # ...except documentation notebooks, which are published as part of the docs
 # site and must be committed with their outputs.
 !docs/*.ipynb
+# ...and the shared workflow notebooks (e.g. the Colab validation workflow).
+!notebooks/*.ipynb
 
 # Temporary files
 temp_*
