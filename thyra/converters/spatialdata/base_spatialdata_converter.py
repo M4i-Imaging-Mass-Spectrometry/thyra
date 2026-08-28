@@ -46,6 +46,49 @@ def _suppress_upstream_warnings():
         yield
 
 
+def _numeric_only(value: Any) -> bool:
+    """True when a list round-trips through AnnData/zarr as a numeric array."""
+    if isinstance(value, list):
+        return all(_numeric_only(item) for item in value)
+    if isinstance(value, np.ndarray):
+        return value.dtype.kind in "iufb"
+    return isinstance(value, (bool, int, float, np.integer, np.floating, np.bool_))
+
+
+def _json_fallback(obj: Any) -> Any:
+    """Last-resort encoder for values ``json.dumps`` does not know."""
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, np.generic):
+        return obj.item()
+    return str(obj)
+
+
+def _jsonify_string_lists(obj: Any) -> Any:
+    """Replace any list that is not purely numeric with its JSON encoding.
+
+    AnnData/zarr cannot round-trip such lists: a list of dicts is
+    stringified entry by entry into Python ``repr`` strings, and any list
+    of strings comes back as a numpy string array -- whose ``deepcopy``
+    segfaults outright on numpy 2.1-2.2 (numpy#28609). Since every table
+    copy deepcopies ``uns`` (``AnnData.copy``, spatial queries, joins),
+    one such array in ``uns`` kills the reader's process with no
+    traceback. JSON side-steps both: it stores a single scalar string,
+    and hands consumers the actual structure back through
+    ``json.loads`` instead of ``repr`` output.
+
+    Purely numeric lists (nested included) are kept: they become plain
+    numeric arrays, which are safe and more useful as arrays.
+    """
+    if isinstance(obj, dict):
+        return {key: _jsonify_string_lists(value) for key, value in obj.items()}
+    if isinstance(obj, list):
+        if _numeric_only(obj):
+            return obj
+        return json.dumps(obj, default=_json_fallback)
+    return obj
+
+
 def _resolve_config_enum(raw: Any, by_name: Dict[str, Any], key: str) -> Any:
     """Resolve one resampling-config value to its enum member.
 
@@ -792,15 +835,24 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         }
 
     def _collect_optional_sections(self, uns: Dict[str, Any], comp_meta: Any) -> None:
-        """Add the vendor sections the reader actually populated."""
+        """Add the vendor sections the reader actually populated.
+
+        Lists that are not purely numeric (imzML ``cvParams``, or any
+        string list a vendor extractor reports) are stored as JSON
+        strings -- see :func:`_jsonify_string_lists` for why letting
+        them reach the writer as lists corrupts them and crashes
+        readers on numpy 2.1-2.2.
+        """
         for key in ("format_specific", "acquisition_params", "instrument_info"):
             value = getattr(comp_meta, key, None)
             if value:
-                uns[key] = self._serialize_for_zarr(value)
+                uns[key] = _jsonify_string_lists(self._serialize_for_zarr(value))
 
         raw_metadata = getattr(comp_meta, "raw_metadata", None)
         if raw_metadata:
-            uns["raw_metadata"] = self._serialize_for_zarr(raw_metadata)
+            uns["raw_metadata"] = _jsonify_string_lists(
+                self._serialize_for_zarr(raw_metadata)
+            )
 
     def _collect_region_info(self, uns: Dict[str, Any]) -> None:
         """Add the acquisition region summary as JSON.

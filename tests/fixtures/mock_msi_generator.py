@@ -105,7 +105,19 @@ class _MockMetadataExtractor(MetadataExtractor):
             format_specific={"format": "mock"},
             acquisition_params={},
             instrument_info={"instrument": "mock"},
-            raw_metadata={"source": "mock"},
+            raw_metadata={
+                "source": "mock",
+                # The two list shapes the store contract distinguishes:
+                # cvParams is the shape imzML extractors report (a list of
+                # dicts, stored as JSON), scan_window a purely numeric
+                # list (stored as an array). MS:1000579 carries no
+                # polarity/spectrum-type semantics, so the msi_metadata
+                # builder ignores it.
+                "cvParams": [
+                    {"name": "MS1 spectrum", "accession": "MS:1000579", "value": True},
+                ],
+                "scan_window": [100.0, 1000.0],
+            },
         )
 
 
