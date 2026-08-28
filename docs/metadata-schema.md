@@ -151,7 +151,9 @@ artifact alone:
 On the input side, every imzML file-description cvParam is preserved in
 `uns["raw_metadata"]["cvParams"]` **with its accession** (and unit
 accession where the source set one) -- the name alone cannot be resolved
-back to the CV concept. Polarity declared there (`MS:1000130` /
+back to the CV concept. The list is stored as a JSON string (see
+[Output Format](output-format.md#provenance) for why); `json.loads`
+hands back the list of terms. Polarity declared there (`MS:1000130` /
 `MS:1000129`) auto-populates the schema field.
 
 ### Candidate CV terms

@@ -268,9 +268,57 @@ def test_vendor_sections_are_stored(stores, path_name):
 
     assert uns.get("format_specific") == {"format": "mock"}
     assert uns.get("instrument_info") == {"instrument": "mock"}
-    assert uns.get("raw_metadata") == {"source": "mock"}
+    raw = uns.get("raw_metadata") or {}
+    assert raw.get("source") == "mock"
     assert "acquisition_params" not in uns
     assert uns.get("regions"), f"{path_name} stored no region summary"
+
+
+@pytest.mark.parametrize("path_name", list(WRITE_PATHS))
+def test_string_lists_are_stored_as_json(stores, path_name):
+    """Non-numeric lists in the vendor sections come back as JSON strings.
+
+    Stored as lists they do not survive the writer: a list of dicts is
+    stringified entry by entry into ``repr`` output, and any list of
+    strings reads back as a numpy string array -- whose ``deepcopy``
+    segfaults the whole process on numpy 2.1-2.2 (numpy#28609), killing
+    every consumer that copies the table (``AnnData.copy``,
+    ``polygon_query``, joins). Purely numeric lists stay arrays.
+    """
+    import json
+
+    raw = _read_uns(_table_path(stores, path_name))["raw_metadata"]
+
+    assert isinstance(raw["cvParams"], str), (
+        f"{path_name} stored cvParams as {type(raw['cvParams']).__name__}; "
+        "a non-numeric list must be stored as a JSON string"
+    )
+    assert json.loads(raw["cvParams"]) == [
+        {"name": "MS1 spectrum", "accession": "MS:1000579", "value": True},
+    ]
+    assert _plain(raw["scan_window"]) == [100.0, 1000.0]
+
+
+@pytest.mark.parametrize("path_name", list(WRITE_PATHS))
+def test_uns_contains_no_string_arrays(stores, path_name):
+    """No value anywhere in ``uns`` reads back as a string array.
+
+    The blanket form of the assertion above, over the whole block rather
+    than the known offender: one string array anywhere in ``uns`` is
+    enough to crash a numpy 2.1-2.2 reader on the first table copy, so
+    the contract is their absence, not just cvParams' encoding.
+    """
+
+    def _string_arrays(value, path):
+        if isinstance(value, dict):
+            for k, v in value.items():
+                yield from _string_arrays(v, f"{path}.{k}")
+        elif isinstance(value, np.ndarray) and value.dtype.kind in "TUSO":
+            yield path
+
+    uns = _read_uns(_table_path(stores, path_name))
+    offenders = list(_string_arrays(uns, "uns"))
+    assert not offenders, f"{path_name} stored string arrays at: {offenders}"
 
 
 def test_every_path_stores_the_same_provenance(stores):
