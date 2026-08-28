@@ -2,6 +2,34 @@
 
 <!-- version list -->
 
+## v3.7.3 (2026-08-28)
+
+### Bug Fixes
+
+- Store non-numeric uns lists as JSON so read-back cannot segfault numpy 2.1-2.2
+  ([`ca6f2a7`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/ca6f2a760ac1f3ad1c25edb727f7b4a0b2c4d74b))
+
+### Documentation
+
+- Add validation workflow notebook with Open in Colab badge
+  ([`8d06236`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/8d0623678d549f302222c659dead0495c6af85e8))
+
+- Clarify local (non-Colab) runs of the validation notebook
+  ([`7e623c4`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/7e623c40c43809bf931e2c8a127813d08a70b016))
+
+- Floor numpy at 2.3 in notebook install to dodge string-array deepcopy segfault
+  ([`ca900f5`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/ca900f51c9edd7145901f6b6ce4d139f5509288f))
+
+- Keep Colab numpy untouched, work around numpy 2.1-2.2 StringDType deepcopy segfault in ROI cell
+  ([`6f85aac`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/6f85aac3c676b2129a7de7044e1d6d0927a5db98))
+
+- Make validation notebook run end to end
+  ([`349cc0d`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/349cc0d543aa9e4e56b7ccfebca4d44b32f1ba86))
+
+- Pin pandas below 3 in notebook install to keep Colab runtime alive
+  ([`177ce9a`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/177ce9a81025128ba4249ee1a55e2fae05cd4098))
+
+
 ## v3.7.2 (2026-08-26)
 
 ### Bug Fixes
