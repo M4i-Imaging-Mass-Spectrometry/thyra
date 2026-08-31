@@ -53,6 +53,9 @@ from .extractors import (
 # Core data types
 from .types import ComprehensiveMetadata, EssentialMetadata
 
+# Read-side compatibility for stores written by earlier versions
+from .uns_compat import sanitize_uns_string_arrays
+
 # Base classes - import delayed to avoid circular imports
 
 
@@ -67,6 +70,7 @@ __all__ = [
     # Utility functions
     "get_extractor_for_format",
     "list_supported_formats",
+    "sanitize_uns_string_arrays",
 ]
 
 # Version information for the metadata system

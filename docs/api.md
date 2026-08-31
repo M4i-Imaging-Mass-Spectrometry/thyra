@@ -219,6 +219,52 @@ with ImzMLReader("sample.imzML") as reader:
 
 ---
 
+## Metadata Schema
+
+The versioned, ontology-mapped `uns["msi_metadata"]` block every store
+carries. See [Metadata Schema](metadata-schema.md) for the storage
+contract, the CLI (`thyra validate`, `thyra export-metaspace`), and the
+versioning rules.
+
+```python
+from thyra.metadata.schema import (
+    read_msi_metadata_blocks,
+    to_metaspace,
+    validate_document,
+)
+
+blocks = read_msi_metadata_blocks("output.zarr")
+meta, issues = validate_document(blocks["msi_dataset_z0"])
+submission, warnings = to_metaspace(meta)
+```
+
+::: thyra.metadata.schema.models.MSIMetadata
+    options:
+      show_root_heading: true
+      heading_level: 3
+
+::: thyra.metadata.schema.validate.validate_document
+    options:
+      show_root_heading: true
+      heading_level: 3
+
+::: thyra.metadata.schema.store_io.read_msi_metadata_blocks
+    options:
+      show_root_heading: true
+      heading_level: 3
+
+::: thyra.metadata.schema.metaspace.to_metaspace
+    options:
+      show_root_heading: true
+      heading_level: 3
+
+::: thyra.metadata.schema.builder.build_msi_metadata
+    options:
+      show_root_heading: true
+      heading_level: 3
+
+---
+
 ## Reader Base Class
 
 All format readers (ImzML, Bruker, Waters, PHI) inherit from this base class.

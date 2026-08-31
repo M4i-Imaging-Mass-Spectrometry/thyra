@@ -8,6 +8,9 @@ thyra [OPTIONS] INPUT OUTPUT
 
 **OUTPUT** -- Path for output `.zarr` directory
 
+`thyra` also has two metadata subcommands, `thyra validate` and
+`thyra export-metaspace` -- see [Metadata subcommands](#metadata-subcommands).
+
 !!! tip "Grouped help"
     `thyra --help` lists every option under a category heading -- Conversion,
     Logging, Resampling (advanced), Performance, imzML-specific,
@@ -321,6 +324,61 @@ the number has to come from whoever cut them.
     Without 3D handling each slice is written as its own 2D image and there is
     no z axis to space out. Passing `--z-spacing` on its own is logged as
     ignored rather than silently accepted.
+
+---
+
+## Metadata subcommands
+
+Both take either a converted `.zarr` store or a standalone metadata
+`.json` document. Only the metadata block is read, never the intensity
+data, so both are instant on stores of any size. See
+[Metadata Schema](metadata-schema.md) for the schema itself.
+
+### `thyra validate`
+
+```
+thyra validate PATH [OPTIONS]
+```
+
+Validates the `uns["msi_metadata"]` block (or a JSON document) against
+the schema: structure, schema version, and ontology terms.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--merge PATH` | none | JSON file overlaid onto the metadata before validation |
+| `--json` | off | Machine-readable report on stdout instead of text |
+
+Exit status follows the conversion command's convention: `0` when every
+document conforms (warnings allowed), `1` otherwise, `2` for usage
+errors -- so `thyra validate` can gate a CI pipeline.
+
+```bash
+thyra validate output.zarr
+thyra validate output.zarr --merge sample.json
+thyra validate metadata.json --json
+```
+
+### `thyra export-metaspace`
+
+```
+thyra export-metaspace PATH [OPTIONS]
+```
+
+Writes the [METASPACE](https://metaspace2020.org) submission metadata
+JSON for a dataset. Required fields the store cannot know (organism,
+condition, ...) are emitted empty and reported as warnings on stderr;
+supply them with `--merge` or fill them on the submission form.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--merge PATH` | none | JSON file overlaid onto the metadata before export |
+| `--table NAME` | the only one | Table to export when the store has several |
+| `-o, --output PATH` | `<input>.metaspace.json` | Output file; `-` for stdout |
+
+```bash
+thyra export-metaspace output.zarr --merge sample.json
+thyra export-metaspace output.zarr -o -          # print to stdout
+```
 
 ---
 

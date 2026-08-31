@@ -13,7 +13,7 @@
     ```bash
     git clone https://github.com/M4i-Imaging-Mass-Spectrometry/thyra.git
     cd thyra
-    poetry install
+    uv sync
     ```
 
 !!! note "Requirements"

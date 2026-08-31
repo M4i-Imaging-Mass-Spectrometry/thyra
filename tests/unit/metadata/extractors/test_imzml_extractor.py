@@ -750,3 +750,26 @@ class TestNoFabricatedMassRange:
         with production_parser(path) as parser:
             with pytest.raises(ValueError, match="Could not determine the mass range"):
                 ImzMLMetadataExtractor(parser, path).get_mass_range_for_resampling()
+
+
+class TestRawCvParamAccessions:
+    """cvParams reach raw_metadata with their accessions attached.
+
+    The stored copy is only lossless if the accession travels with the
+    name: the goal is that a converted store is annotated with the same
+    PSI CV terms as the raw file it came from (docs/metadata-schema.md).
+    The name alone cannot be resolved back to the CV concept.
+    """
+
+    def test_cvparams_carry_accessions(self, tmp_path):
+        path = _write_imzml(tmp_path, "accessions", "centroid")
+        with production_parser(path) as parser:
+            raw = ImzMLMetadataExtractor(parser, path).get_comprehensive().raw_metadata
+
+        cv_params = raw["cvParams"]
+        assert cv_params, "no cvParams preserved"
+        for entry in cv_params:
+            assert set(entry) >= {"name", "accession", "value"}
+
+        accessions = {entry["accession"] for entry in cv_params}
+        assert "IMS:1000080" in accessions  # the UUID the writer stamps

@@ -659,6 +659,10 @@ def main(
 
     INPUT: Path to input MSI file or directory
     OUTPUT: Path for output file
+
+    Subcommands (each has its own --help): 'thyra validate PATH'
+    validates MSI metadata against the schema; 'thyra export-metaspace
+    PATH' writes the METASPACE submission JSON.
     """
     # Validate all parameters
     _validate_basic_params(pixel_size, dataset_id)
@@ -746,5 +750,27 @@ def main(
         raise SystemExit(1)
 
 
-if __name__ == "__main__":
+def cli() -> None:
+    """Console-script entry point: dispatch subcommands, else convert.
+
+    ``thyra INPUT OUTPUT`` converts exactly as it always has; the
+    metadata subcommands (``thyra validate``, ``thyra
+    export-metaspace``) are picked off by their first argument before
+    click sees it.  Dispatch is hand-rolled rather than a
+    ``click.Group`` because a group cannot carry the two positional
+    arguments the conversion interface is documented with.
+    """
+    import sys
+
+    from thyra.metadata.schema.cli import METADATA_SUBCOMMANDS
+
+    args = sys.argv[1:]
+    if args and args[0] in METADATA_SUBCOMMANDS:
+        command = METADATA_SUBCOMMANDS[args[0]]
+        command.main(args[1:], prog_name=f"thyra {args[0]}")
+        return
     main()
+
+
+if __name__ == "__main__":
+    cli()

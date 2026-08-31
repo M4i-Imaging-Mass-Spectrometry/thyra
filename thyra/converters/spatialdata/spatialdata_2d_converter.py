@@ -206,20 +206,30 @@ class SpatialData2DConverter(BaseSpatialDataConverter):
         # Calculate TIC for this pixel
         tic_value = float(np.sum(intensities))
 
-        # Update total intensity for average spectrum calculation using sparse indexing
-        # OPTIMIZATION: Use np.add.at for vectorized sparse accumulation
-        np.add.at(data_structures["total_intensity"], mz_indices, intensities)
+        # Update total intensity for average spectrum calculation. The dense
+        # resampling path hands the cached full-axis arange, where a plain
+        # vector add is ~5x cheaper than the scatter np.add.at performs;
+        # sparse indices keep the scatter.
+        total_intensity = data_structures["total_intensity"]
+        is_dense = (
+            mz_indices is self._cached_mass_axis_indices
+            or mz_indices is self._identity_mass_indices
+        ) and intensities.size == total_intensity.size
+        if is_dense:
+            total_intensity += intensities
+        else:
+            np.add.at(total_intensity, mz_indices, intensities)
         data_structures["pixel_count"] += 1
 
         # Per-region accumulation for multi-region datasets
         if "region_total_intensity" in data_structures:
             region_num = self._region_map.get((x, y), -1)
             if region_num in data_structures["region_total_intensity"]:
-                np.add.at(
-                    data_structures["region_total_intensity"][region_num],
-                    mz_indices,
-                    intensities,
-                )
+                region_total = data_structures["region_total_intensity"][region_num]
+                if is_dense:
+                    region_total += intensities
+                else:
+                    np.add.at(region_total, mz_indices, intensities)
                 data_structures["region_pixel_count"][region_num] += 1
 
         # Add data to the appropriate slice

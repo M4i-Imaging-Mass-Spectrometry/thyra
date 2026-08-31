@@ -1,0 +1,573 @@
+{
+  "$defs": {
+    "MSAnalysis": {
+      "additionalProperties": false,
+      "description": "How the data was acquired (METASPACE ``MS_Analysis``).\n\n``pixel_size_um`` is the one field that is always known at\nconversion time (conversion refuses to run without a pixel size),\nso it is the one required field of the section.",
+      "properties": {
+        "analyzer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "MS:1000443",
+            "name": "mass analyzer type"
+          },
+          "default": null,
+          "description": "E.g. 'TOF', 'Orbitrap', 'FTICR'.",
+          "title": "Analyzer"
+        },
+        "analyzer_term": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OntologyTerm"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "PSI-MS mass analyzer type term."
+        },
+        "detector_resolving_power": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResolvingPower"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "MS:1000800",
+            "name": "mass resolving power"
+          },
+          "default": null,
+          "description": "Resolving power at a reference m/z."
+        },
+        "instrument_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "MS:1000031",
+            "name": "instrument model"
+          },
+          "default": null,
+          "description": "Instrument model as reported by the source.",
+          "title": "Instrument Model"
+        },
+        "ionisation_source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "MS:1000008",
+            "name": "ionization type"
+          },
+          "default": null,
+          "description": "E.g. 'MALDI', 'DESI', 'SIMS'.",
+          "title": "Ionisation Source"
+        },
+        "ionisation_source_term": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OntologyTerm"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "PSI-MS ionisation type term."
+        },
+        "pixel_size_um": {
+          "$ref": "#/$defs/PixelSizeUm"
+        },
+        "polarity": {
+          "anyOf": [
+            {
+              "enum": [
+                "positive",
+                "negative"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "MS:1000465",
+            "name": "scan polarity"
+          },
+          "default": null,
+          "description": "Ion polarity mode.",
+          "title": "Polarity"
+        },
+        "polarity_term": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OntologyTerm"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "PSI-MS scan polarity term (MS:1000130 / MS:1000129)."
+        }
+      },
+      "required": [
+        "pixel_size_um"
+      ],
+      "title": "MSAnalysis",
+      "type": "object"
+    },
+    "OntologyTerm": {
+      "additionalProperties": false,
+      "description": "A controlled-vocabulary reference: CURIE accession plus label.",
+      "properties": {
+        "accession": {
+          "description": "CURIE identifier, e.g. 'MS:1000075', 'NCBITaxon:10090', 'UBERON:0002107' or 'CHEBI:90695'.",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*:\\S+$",
+          "title": "Accession",
+          "type": "string"
+        },
+        "name": {
+          "description": "The term's primary label in its ontology.",
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "accession",
+        "name"
+      ],
+      "title": "OntologyTerm",
+      "type": "object"
+    },
+    "PixelSizeUm": {
+      "additionalProperties": false,
+      "description": "In-plane raster pitch in micrometres.",
+      "properties": {
+        "x": {
+          "cv": {
+            "accession": "IMS:1000046",
+            "name": "pixel size (x)"
+          },
+          "description": "Pixel size along x in micrometres.",
+          "exclusiveMinimum": 0,
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "cv": {
+            "accession": "IMS:1000047",
+            "name": "pixel size y"
+          },
+          "description": "Pixel size along y in micrometres.",
+          "exclusiveMinimum": 0,
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "title": "PixelSizeUm",
+      "type": "object"
+    },
+    "ProcessingStep": {
+      "additionalProperties": false,
+      "description": "One processing action between the raw data and this store.\n\nModeled on mzQC provenance: an ordered list of steps, each naming\nthe software that performed it and the parameters it ran with.  The\nconverter records its own steps (conversion, mass axis resampling);\ndownstream tools append theirs (normalisation, peak picking,\nannotation) when they modify the store.",
+      "properties": {
+        "name": {
+          "description": "What was done, e.g. 'conversion', 'mass axis resampling', 'normalisation', 'peak picking', 'annotation'.",
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "parameters": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "description": "The parameters the step ran with.",
+          "title": "Parameters",
+          "type": "object"
+        },
+        "software": {
+          "$ref": "#/$defs/SoftwareRef",
+          "description": "The software that did it."
+        }
+      },
+      "required": [
+        "name",
+        "software"
+      ],
+      "title": "ProcessingStep",
+      "type": "object"
+    },
+    "Provenance": {
+      "additionalProperties": false,
+      "description": "Who wrote the block and from what.\n\nDeliberately small: the store's ``uns[\"essential_metadata\"]`` and\nroot attributes already record dimensions, mass range, spectrum\ntype and conversion timestamp.  This section records only what is\nneeded to interpret the *metadata block itself*, and contains no\ntimestamps so that two conversions of the same input produce an\nidentical block (the uns parity tests rely on this).",
+      "properties": {
+        "pixel_size_source": {
+          "anyOf": [
+            {
+              "enum": [
+                "default",
+                "manual",
+                "automatic"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How the pixel size was determined: read from the source metadata ('automatic'), supplied by the user ('manual'), or the 1.0 um fallback ('default').",
+          "title": "Pixel Size Source"
+        },
+        "source_format": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Detected input format, e.g. 'imzml', 'bruker', 'phi'.",
+          "title": "Source Format"
+        },
+        "source_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Path of the source data at conversion time.",
+          "title": "Source Path"
+        },
+        "thyra_version": {
+          "description": "Thyra version that wrote the block.",
+          "minLength": 1,
+          "title": "Thyra Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "thyra_version"
+      ],
+      "title": "Provenance",
+      "type": "object"
+    },
+    "ResolvingPower": {
+      "additionalProperties": false,
+      "description": "Mass resolving power quoted at a reference m/z.",
+      "properties": {
+        "at_mz": {
+          "description": "The m/z the value is quoted at.",
+          "exclusiveMinimum": 0,
+          "title": "At Mz",
+          "type": "number"
+        },
+        "value": {
+          "description": "Resolving power (FWHM definition).",
+          "exclusiveMinimum": 0,
+          "title": "Value",
+          "type": "number"
+        }
+      },
+      "required": [
+        "value",
+        "at_mz"
+      ],
+      "title": "ResolvingPower",
+      "type": "object"
+    },
+    "SampleInformation": {
+      "additionalProperties": false,
+      "description": "What the sample is (METASPACE ``Sample_Information``).",
+      "properties": {
+        "condition": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "E.g. 'wildtype', 'diseased'.",
+          "title": "Condition"
+        },
+        "organism": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Species, e.g. 'Mus musculus'.",
+          "title": "Organism"
+        },
+        "organism_part": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Organ or organism part, e.g. 'liver'.",
+          "title": "Organism Part"
+        },
+        "organism_part_term": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OntologyTerm"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "UBERON term for the organism part."
+        },
+        "organism_term": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OntologyTerm"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "NCBITaxon term for the organism."
+        },
+        "sample_growth_conditions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "E.g. intervention or treatment.",
+          "title": "Sample Growth Conditions"
+        }
+      },
+      "title": "SampleInformation",
+      "type": "object"
+    },
+    "SamplePreparation": {
+      "additionalProperties": false,
+      "description": "How the sample was prepared (METASPACE ``Sample_Preparation``).",
+      "properties": {
+        "matrix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "MALDI matrix, e.g. '2,5-dihydroxybenzoic acid (DHB)'. 'none' for matrix-free techniques (DESI, SIMS).",
+          "title": "Matrix"
+        },
+        "matrix_application": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Matrix application device or protocol.",
+          "title": "Matrix Application"
+        },
+        "matrix_term": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OntologyTerm"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "CHEBI term for the matrix compound."
+        },
+        "sample_stabilisation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Preservation method, e.g. 'fresh frozen'.",
+          "title": "Sample Stabilisation"
+        },
+        "solvent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Solvent used.",
+          "title": "Solvent"
+        },
+        "tissue_modification": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Chemical modification, e.g. 'derivatised'.",
+          "title": "Tissue Modification"
+        }
+      },
+      "title": "SamplePreparation",
+      "type": "object"
+    },
+    "SoftwareRef": {
+      "additionalProperties": false,
+      "description": "A software agent, the way mzQC records analysis software.",
+      "properties": {
+        "name": {
+          "description": "Software name, e.g. 'thyra'.",
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "uri": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Homepage or repository URL.",
+          "title": "Uri"
+        },
+        "version": {
+          "description": "Software version.",
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "title": "SoftwareRef",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The versioned MSI metadata document.\n\n``sample`` and ``preparation`` cannot be auto-populated from raw\nfiles and default to empty; ``ms_analysis`` and ``provenance`` are\nwritten by the converter for every store.",
+  "properties": {
+    "ms_analysis": {
+      "$ref": "#/$defs/MSAnalysis",
+      "description": "How the data was acquired; auto-populated where possible."
+    },
+    "preparation": {
+      "$ref": "#/$defs/SamplePreparation",
+      "description": "How the sample was prepared; user-supplied."
+    },
+    "processing": {
+      "description": "Ordered processing history, oldest first (mzQC-style).",
+      "items": {
+        "$ref": "#/$defs/ProcessingStep"
+      },
+      "title": "Processing",
+      "type": "array"
+    },
+    "provenance": {
+      "$ref": "#/$defs/Provenance",
+      "description": "Who wrote this block and from what source."
+    },
+    "sample": {
+      "$ref": "#/$defs/SampleInformation",
+      "description": "What the sample is; user-supplied."
+    },
+    "schema_version": {
+      "default": "0.1.0",
+      "description": "Semantic version of the schema this document conforms to.",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ms_analysis",
+    "provenance"
+  ],
+  "title": "MSIMetadata",
+  "type": "object"
+}

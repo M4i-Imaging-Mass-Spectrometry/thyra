@@ -1,0 +1,165 @@
+# Draft LinkML rendering of the Thyra MSI metadata schema.
+#
+# STATUS: groundwork, not yet the source of truth.  The pydantic models
+# in models.py remain authoritative for what Thyra writes and validates.
+# This file exists so the schema can be discussed and evolved in
+# LinkML-native settings (the mzPeak / PSI-MS imaging discussions, the
+# planned thyra-spec repository) and so a later migration to
+# LinkML-as-source changes no field names.  A unit test keeps the class
+# and slot inventory, required flags, CV bindings and enum meanings in
+# step with the pydantic models; edit both together.
+id: https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/metadata-schema
+name: thyra-msi-metadata
+description: >-
+  Versioned, ontology-mapped metadata for mass spectrometry imaging
+  datasets converted to SpatialData.  Stored in
+  table.uns["msi_metadata"]; base fields mirror the METASPACE
+  submission form.
+version: 0.1.0
+prefixes:
+  linkml: https://w3id.org/linkml/
+  MS: http://purl.obolibrary.org/obo/MS_
+  IMS: http://purl.obolibrary.org/obo/IMS_
+  UO: http://purl.obolibrary.org/obo/UO_
+  NCBITaxon: http://purl.obolibrary.org/obo/NCBITaxon_
+  UBERON: http://purl.obolibrary.org/obo/UBERON_
+  CHEBI: http://purl.obolibrary.org/obo/CHEBI_
+default_range: string
+
+enums:
+  PolarityEnum:
+    description: Ion polarity mode.
+    permissible_values:
+      positive:
+        meaning: MS:1000130
+      negative:
+        meaning: MS:1000129
+  PixelSizeSourceEnum:
+    description: How the pixel size was determined.
+    permissible_values:
+      default: {}
+      manual: {}
+      automatic: {}
+
+classes:
+  OntologyTerm:
+    description: A controlled-vocabulary reference (CURIE plus label).
+    attributes:
+      accession:
+        required: true
+      name:
+        required: true
+  PixelSizeUm:
+    description: In-plane raster pitch in micrometres.
+    attributes:
+      x:
+        range: float
+        required: true
+        slot_uri: IMS:1000046
+      y:
+        range: float
+        required: true
+        slot_uri: IMS:1000047
+  ResolvingPower:
+    description: Mass resolving power quoted at a reference m/z.
+    attributes:
+      value:
+        range: float
+        required: true
+      at_mz:
+        range: float
+        required: true
+  SampleInformation:
+    description: What the sample is (METASPACE Sample_Information).
+    attributes:
+      organism: {}
+      organism_term:
+        range: OntologyTerm
+      organism_part: {}
+      organism_part_term:
+        range: OntologyTerm
+      condition: {}
+      sample_growth_conditions: {}
+  SamplePreparation:
+    description: How the sample was prepared (METASPACE Sample_Preparation).
+    attributes:
+      sample_stabilisation: {}
+      tissue_modification: {}
+      matrix: {}
+      matrix_term:
+        range: OntologyTerm
+      matrix_application: {}
+      solvent: {}
+  MSAnalysis:
+    description: How the data was acquired (METASPACE MS_Analysis).
+    attributes:
+      polarity:
+        range: PolarityEnum
+        slot_uri: MS:1000465
+      polarity_term:
+        range: OntologyTerm
+      ionisation_source:
+        slot_uri: MS:1000008
+      ionisation_source_term:
+        range: OntologyTerm
+      analyzer:
+        slot_uri: MS:1000443
+      analyzer_term:
+        range: OntologyTerm
+      instrument_model:
+        slot_uri: MS:1000031
+      detector_resolving_power:
+        range: ResolvingPower
+        slot_uri: MS:1000800
+      pixel_size_um:
+        range: PixelSizeUm
+        required: true
+  SoftwareRef:
+    description: A software agent, the way mzQC records analysis software.
+    attributes:
+      name:
+        required: true
+      version:
+        required: true
+      uri: {}
+  ProcessingStep:
+    description: One processing action between the raw data and this store.
+    attributes:
+      name:
+        required: true
+      software:
+        range: SoftwareRef
+        required: true
+      # Free-form mapping of parameter name to scalar value; the exact
+      # LinkML rendering is one of the questions for the working group.
+      parameters: {}
+  Provenance:
+    description: Who wrote the block and from what.
+    attributes:
+      thyra_version:
+        required: true
+      source_format: {}
+      source_path: {}
+      pixel_size_source:
+        range: PixelSizeSourceEnum
+  MSIMetadata:
+    description: The versioned MSI metadata document.
+    tree_root: true
+    attributes:
+      # Required on disk; the pydantic model fills it on construction.
+      schema_version:
+        required: true
+      sample:
+        range: SampleInformation
+      preparation:
+        range: SamplePreparation
+      ms_analysis:
+        range: MSAnalysis
+        required: true
+      processing:
+        range: ProcessingStep
+        multivalued: true
+        inlined_as_list: true
+      provenance:
+        range: Provenance
+        required: true

@@ -53,6 +53,8 @@ Archive/
 # ...except documentation notebooks, which are published as part of the docs
 # site and must be committed with their outputs.
 !docs/*.ipynb
+# ...and the shared workflow notebooks (e.g. the Colab validation workflow).
+!notebooks/*.ipynb
 
 # Temporary files
 temp_*
@@ -80,3 +82,6 @@ benchmarks/test_*.py
 # Nothing under here has ever been tracked. Anchored for the same reason
 # /scripts/ is.
 /reports/
+
+# Virtual environment (uv creates it in-project by default)
+.venv/

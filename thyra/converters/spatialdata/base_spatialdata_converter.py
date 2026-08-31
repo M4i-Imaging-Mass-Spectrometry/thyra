@@ -46,6 +46,49 @@ def _suppress_upstream_warnings():
         yield
 
 
+def _numeric_only(value: Any) -> bool:
+    """True when a list round-trips through AnnData/zarr as a numeric array."""
+    if isinstance(value, list):
+        return all(_numeric_only(item) for item in value)
+    if isinstance(value, np.ndarray):
+        return value.dtype.kind in "iufb"
+    return isinstance(value, (bool, int, float, np.integer, np.floating, np.bool_))
+
+
+def _json_fallback(obj: Any) -> Any:
+    """Last-resort encoder for values ``json.dumps`` does not know."""
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, np.generic):
+        return obj.item()
+    return str(obj)
+
+
+def _jsonify_string_lists(obj: Any) -> Any:
+    """Replace any list that is not purely numeric with its JSON encoding.
+
+    AnnData/zarr cannot round-trip such lists: a list of dicts is
+    stringified entry by entry into Python ``repr`` strings, and any list
+    of strings comes back as a numpy string array -- whose ``deepcopy``
+    segfaults outright on numpy 2.1-2.2 (numpy#28609). Since every table
+    copy deepcopies ``uns`` (``AnnData.copy``, spatial queries, joins),
+    one such array in ``uns`` kills the reader's process with no
+    traceback. JSON side-steps both: it stores a single scalar string,
+    and hands consumers the actual structure back through
+    ``json.loads`` instead of ``repr`` output.
+
+    Purely numeric lists (nested included) are kept: they become plain
+    numeric arrays, which are safe and more useful as arrays.
+    """
+    if isinstance(obj, dict):
+        return {key: _jsonify_string_lists(value) for key, value in obj.items()}
+    if isinstance(obj, list):
+        if _numeric_only(obj):
+            return obj
+        return json.dumps(obj, default=_json_fallback)
+    return obj
+
+
 def _resolve_config_enum(raw: Any, by_name: Dict[str, Any], key: str) -> Any:
     """Resolve one resampling-config value to its enum member.
 
@@ -215,6 +258,126 @@ def _calc_optical_scale_factors(
     return factors
 
 
+def _nn_map_to_bins(
+    axis: NDArray[np.float64], mzs: NDArray[np.float64]
+) -> NDArray[np.int_]:
+    """Map in-range m/z values to their nearest bin on ``axis``.
+
+    Ties (a peak exactly between two bins) resolve to the right bin,
+    matching the strict ``<`` comparison this code has always used.
+
+    A module-level function rather than a method so the unbound-call test
+    harnesses (a ``SimpleNamespace`` posing as the converter) keep working.
+
+    Args:
+        axis: The target mass axis, ascending.
+        mzs: m/z values, all within ``[axis[0], axis[-1]]``.
+
+    Returns:
+        The nearest-bin index of each m/z value, same length as ``mzs``.
+    """
+    # Find insertion points using vectorized binary search
+    indices = np.searchsorted(axis, mzs)
+
+    # Clip to valid range. Everything reaching here is inside the axis,
+    # so this only pins searchsorted's one-past-the-end result for a
+    # value equal to axis[-1]; it can no longer pull an outside peak in.
+    indices_clipped = np.clip(indices, 0, len(axis) - 1)
+
+    # For non-boundary points, check if left is closer
+    # Only check where we're not at the left edge
+    check_left = indices > 0
+    if np.any(check_left):
+        # Get distances only for points that need checking
+        mz_values = axis[indices_clipped[check_left]]
+        mz_values_left = axis[indices_clipped[check_left] - 1]
+        mz_query = mzs[check_left]
+
+        # Use left if it's closer
+        use_left = np.abs(mz_values_left - mz_query) < np.abs(mz_values - mz_query)
+        indices_clipped[check_left] = np.where(
+            use_left, indices_clipped[check_left] - 1, indices_clipped[check_left]
+        )
+    return indices_clipped
+
+
+def _nn_accumulate(
+    idx: NDArray[np.int_], intensities: NDArray[np.float64]
+) -> Tuple[NDArray[np.int_], NDArray[np.float64]]:
+    """Sum intensities per bin and return the non-zero bins, ascending.
+
+    Two equivalent routes. When ``idx`` is non-decreasing -- true whenever
+    the spectrum's m/z values are ascending, which every format seen so
+    far produces -- equal bins form contiguous runs, so the per-bin sums
+    are ``np.add.reduceat`` over the run starts. That is O(n_peaks),
+    where the ``np.bincount`` fallback is O(n_bins): for a centroid
+    spectrum of hundreds of peaks against an axis of 10^5 bins the
+    difference is roughly 7x per spectrum. Both sum left-to-right over
+    the same float64 values, so the results are bit-identical; the
+    fallback keeps unsorted input correct.
+
+    The kept-bin test is ``!= 0`` rather than ``> 0`` because a bin whose
+    accumulated value is negative is still a measurement: dropping it
+    silently raises the stored TIC above the input's. Baseline-subtracted
+    data can carry negative intensities, though every export seen so far
+    filters them out upstream.
+    """
+    # bincount always promotes its weights to float64; match it so both
+    # accumulation routes return the same dtype and the same rounding.
+    vals = intensities.astype(np.float64, copy=False)
+
+    if idx.size and bool(np.all(idx[1:] >= idx[:-1])):
+        starts = np.concatenate(([0], np.flatnonzero(np.diff(idx)) + 1))
+        if starts.size == idx.size:
+            # Every peak already sits in its own bin (the common case
+            # for both centroid and profile data): nothing to sum.
+            bins = idx
+            sums = vals
+        else:
+            bins = idx[starts]
+            sums = np.add.reduceat(vals, starts)
+        keep = sums != 0
+        return bins[keep].astype(np.int_, copy=False), sums[keep]
+
+    accumulated = np.bincount(idx, weights=vals)
+    nonzero_mask = accumulated != 0
+    nonzero_indices = np.where(nonzero_mask)[0].astype(np.int_)
+    nonzero_values = accumulated[nonzero_mask]
+    return nonzero_indices, nonzero_values.astype(np.float64)
+
+
+class _SharedAxisNNCache:
+    """Precomputed nearest-neighbor mapping for one recurring m/z array.
+
+    Built the first time :meth:`_nearest_neighbor_resample` sees a spectrum,
+    and reused for every later spectrum that carries the same m/z array.
+    ``key`` is a private copy so a caller-side mutation of the original
+    array cannot fool the equality check; ``key_ref`` keeps the original
+    object for the O(1) identity test that readers yielding one shared
+    array (Rapiflex, Waters, PHI) hit every time.
+    """
+
+    __slots__ = (
+        "key",
+        "key_ref",
+        "n_total",
+        "n_dropped",
+        "lo",
+        "hi",
+        "starts",
+        "bins",
+    )
+
+    key: NDArray[np.float64]
+    key_ref: NDArray[np.float64]
+    n_total: int
+    n_dropped: int
+    lo: int
+    hi: int
+    starts: Optional[NDArray[np.int_]]
+    bins: NDArray[np.int_]
+
+
 class BaseSpatialDataConverter(BaseMSIConverter, ABC):
     """Base converter for MSI data to SpatialData format with shared functionality."""
 
@@ -328,6 +491,9 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         self._sparse_format = sparse_format.lower()
         self._include_optical = include_optical
         self._apply_optical_alignment = apply_optical_alignment
+        # Filled by _build_resampled_mass_axis(); consumed by
+        # _processing_provenance().
+        self._resolved_resampling_plan: Optional[Dict[str, Any]] = None
         if self._sparse_format not in ("csc", "csr"):
             raise ValueError(
                 f"sparse_format must be 'csc' or 'csr', got '{sparse_format}'"
@@ -341,6 +507,15 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         # Cache for dense mass axis indices (to avoid repeated np.arange calls)
         self._cached_mass_axis_indices: Optional[NDArray[np.int_]] = None
+
+        # Shared-axis nearest-neighbor cache. Continuous imzML, Rapiflex,
+        # Waters and PHI all hand every spectrum the same m/z array, so the
+        # peak-to-bin mapping is computed once and verified per spectrum by
+        # array equality instead of being re-derived by searchsorted. None
+        # means "not built yet"; False means "tried and the data does not
+        # share an axis, stop checking". See _nearest_neighbor_resample.
+        self._nn_shared_cache: Any = None
+        self._nn_cache_misses: int = 0
 
         # Optical-MSI alignment (computed from FlexImaging Area definitions)
         self._alignment_result: Optional[AreaAlignmentResult] = None
@@ -562,7 +737,84 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         except Exception as e:
             logger.warning("Could not build the full uns provenance block: %s", e)
 
+        self._collect_msi_metadata_block(uns, comp_meta)
+
         return uns
+
+    def _resolved_pixel_size_xy(self) -> Tuple[float, float]:
+        """The in-plane pixel pitch as ``(x_um, y_um)``.
+
+        The converter itself carries a single float (auto-detection
+        keeps the source's x pitch), but the detection info still has
+        the true per-axis values for anisotropic rasters -- the
+        metadata block records those, since it describes the
+        acquisition rather than the rendering.
+        """
+        info = self._pixel_size_detection_info or {}
+        if "detected_x_um" in info and "detected_y_um" in info:
+            return (float(info["detected_x_um"]), float(info["detected_y_um"]))
+        return (float(self.pixel_size_um), float(self.pixel_size_um))
+
+    def _collect_msi_metadata_block(self, uns: Dict[str, Any], comp_meta: Any) -> None:
+        """Add the versioned ``msi_metadata`` schema block.
+
+        Built in its own try so a schema failure cannot take the other
+        provenance sections down with it.  See docs/metadata-schema.md
+        for the storage contract and ``thyra validate`` for the
+        consumer side.
+        """
+        from thyra.metadata.schema import MSI_METADATA_UNS_KEY, build_msi_metadata
+
+        try:
+            info = self._pixel_size_detection_info or {}
+            meta = build_msi_metadata(
+                comp_meta,
+                pixel_size_um=self._resolved_pixel_size_xy(),
+                pixel_size_source=self.pixel_size_source.value,
+                source_format=info.get("source_format"),
+                processing=self._processing_provenance(),
+            )
+            uns[MSI_METADATA_UNS_KEY] = meta.to_uns_dict()
+        except Exception as e:
+            logger.warning("Could not build the msi_metadata block: %s", e)
+
+    def _processing_provenance(self) -> List[Any]:
+        """The processing steps this conversion performed, oldest first.
+
+        Modeled on mzQC provenance.  The list must be identical across
+        every write path for the same input (the uns parity suite
+        compares the block verbatim), so nothing route-specific -- the
+        sparse layout, the streaming/in-memory split -- belongs here.
+        """
+        from thyra import __version__
+        from thyra.metadata.schema import ProcessingStep, SoftwareRef
+
+        thyra_ref = SoftwareRef(name="thyra", version=__version__)
+        steps = [ProcessingStep(name="conversion", software=thyra_ref)]
+
+        config = self._resampling_config
+        if config is not None:
+            parameters: Dict[str, Any] = {}
+            for field_name, value in vars(config).items():
+                if value is None:
+                    continue
+                parameters[field_name] = getattr(value, "value", value)
+            # The resolved plan wins over the requested config: with
+            # "auto" settings the config says nothing about the method
+            # and axis the decision tree actually picked, and the step
+            # must declare what was done, not what was asked for.
+            for field_name, value in (self._resolved_resampling_plan or {}).items():
+                if value is None:
+                    continue
+                parameters[field_name] = getattr(value, "value", value)
+            steps.append(
+                ProcessingStep(
+                    name="mass axis resampling",
+                    software=thyra_ref,
+                    parameters=parameters,
+                )
+            )
+        return steps
 
     def _collect_essential_metadata(self, uns: Dict[str, Any], comp_meta: Any) -> None:
         """Add ``essential_metadata`` (tuples become lists for Zarr)."""
@@ -583,15 +835,24 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         }
 
     def _collect_optional_sections(self, uns: Dict[str, Any], comp_meta: Any) -> None:
-        """Add the vendor sections the reader actually populated."""
+        """Add the vendor sections the reader actually populated.
+
+        Lists that are not purely numeric (imzML ``cvParams``, or any
+        string list a vendor extractor reports) are stored as JSON
+        strings -- see :func:`_jsonify_string_lists` for why letting
+        them reach the writer as lists corrupts them and crashes
+        readers on numpy 2.1-2.2.
+        """
         for key in ("format_specific", "acquisition_params", "instrument_info"):
             value = getattr(comp_meta, key, None)
             if value:
-                uns[key] = self._serialize_for_zarr(value)
+                uns[key] = _jsonify_string_lists(self._serialize_for_zarr(value))
 
         raw_metadata = getattr(comp_meta, "raw_metadata", None)
         if raw_metadata:
-            uns["raw_metadata"] = self._serialize_for_zarr(raw_metadata)
+            uns["raw_metadata"] = _jsonify_string_lists(
+                self._serialize_for_zarr(raw_metadata)
+            )
 
     def _collect_region_info(self, uns: Dict[str, Any]) -> None:
         """Add the acquisition region summary as JSON.
@@ -808,6 +1069,18 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         from ...resampling.common_axis import CommonAxisBuilder
 
         min_mz, max_mz, axis_type, target_bins = self._resolve_resampling_plan()
+
+        # Kept for provenance: the processing step must declare what was
+        # actually done, and with "auto" settings the requested config
+        # says nothing about the method and axis the decision tree
+        # resolved to.  See _processing_provenance().
+        self._resolved_resampling_plan = {
+            "method": getattr(self, "_resampling_method", None),
+            "axis_type": axis_type,
+            "target_bins": target_bins,
+            "min_mz": min_mz,
+            "max_mz": max_mz,
+        }
 
         if hasattr(self, "_manual_axis_type") and self._manual_axis_type is not None:
             logger.info(f"Using manually specified axis type: {axis_type}")
@@ -1171,6 +1444,22 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             raise ValueError("Common mass axis is not initialized")
 
         axis = self._common_mass_axis
+
+        # Shared-axis fast path: when every spectrum carries the same m/z
+        # array (continuous imzML, Rapiflex, Waters, PHI), the peak-to-bin
+        # mapping is a property of the axis pair, not of the spectrum. It is
+        # computed once; each later spectrum only proves its m/z array is
+        # the same one -- an exact array comparison, which is far cheaper
+        # than re-deriving the mapping by binary search per spectrum.
+        # ``False`` means the cache disabled itself (processed-mode data).
+        # getattr rather than a bare read: test harnesses drive this method
+        # unbound on a stub that predates the cache, and they exercise the
+        # generic path below, which is exactly what "no cache" selects.
+        if getattr(self, "_nn_shared_cache", False) is not False:
+            result = self._nn_resample_via_cache(axis, mzs, intensities)
+            if result is not None:
+                return result
+
         in_range = (mzs >= axis[0]) & (mzs <= axis[-1])
         if not in_range.all():
             self._count_out_of_range(int(mzs.size - in_range.sum()), int(mzs.size))
@@ -1179,45 +1468,101 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             if mzs.size == 0:
                 return np.array([], dtype=np.int_), np.array([], dtype=np.float64)
 
-        # Find insertion points using vectorized binary search
-        indices = np.searchsorted(axis, mzs)
+        return _nn_accumulate(_nn_map_to_bins(axis, mzs), intensities)
 
-        # OPTIMIZED: Handle boundary and nearest neighbor in one pass
-        # Clip to valid range. Everything reaching here is inside the axis,
-        # so this only pins searchsorted's one-past-the-end result for a
-        # value equal to axis[-1]; it can no longer pull an outside peak in.
-        indices_clipped = np.clip(indices, 0, len(axis) - 1)
+    def _build_nn_shared_cache(
+        self, axis: NDArray[np.float64], mzs: NDArray[np.float64]
+    ) -> Optional[_SharedAxisNNCache]:
+        """Precompute the nearest-neighbor mapping for one m/z array.
 
-        # For non-boundary points, check if left is closer
-        # Only check where we're not at the left edge
-        check_left = indices > 0
-        if np.any(check_left):
-            # Get distances only for points that need checking
-            mz_values = axis[indices_clipped[check_left]]
-            mz_values_left = axis[indices_clipped[check_left] - 1]
-            mz_query = mzs[check_left]
+        Returns None when the array cannot be cached -- empty, or not
+        ascending, which the contiguous in-range slice below relies on.
+        The mapping itself comes from the same :meth:`_nn_map_to_bins`
+        the generic path uses, so a cache hit and a fresh computation
+        agree bin for bin.
+        """
+        if mzs.size == 0 or not bool(np.all(mzs[1:] >= mzs[:-1])):
+            return None
 
-            # Use left if it's closer
-            use_left = np.abs(mz_values_left - mz_query) < np.abs(mz_values - mz_query)
-            indices_clipped[check_left] = np.where(
-                use_left, indices_clipped[check_left] - 1, indices_clipped[check_left]
-            )
+        # Ascending m/z makes the in-range subset one contiguous slice,
+        # with the same inclusive endpoints as the generic path's mask.
+        lo = int(np.searchsorted(mzs, axis[0], side="left"))
+        hi = int(np.searchsorted(mzs, axis[-1], side="right"))
 
-        # OPTIMIZATION: Use pandas-style groupby or bincount for accumulation
-        # bincount without minlength is fastest
-        accumulated = np.bincount(indices_clipped, weights=intensities)
+        cache = _SharedAxisNNCache()
+        cache.key = mzs.copy()
+        cache.key_ref = mzs
+        cache.n_total = int(mzs.size)
+        cache.n_dropped = int(mzs.size - (hi - lo))
+        cache.lo = lo
+        cache.hi = hi
+        if hi <= lo:
+            cache.starts = None
+            cache.bins = np.array([], dtype=np.int_)
+            return cache
 
-        # Extract non-zero bins for sparse representation. The test is
-        # ``!= 0`` rather than ``> 0`` because a bin whose accumulated value is
-        # negative is still a measurement: dropping it silently raises the
-        # stored TIC above the input's. Baseline-subtracted data can carry
-        # negative intensities, though every export seen so far filters them
-        # out upstream.
-        nonzero_mask = accumulated != 0
-        nonzero_indices = np.where(nonzero_mask)[0].astype(np.int_)
-        nonzero_values = accumulated[nonzero_mask]
+        idx = _nn_map_to_bins(axis, mzs[lo:hi])
+        # Ascending m/z onto an ascending axis gives non-decreasing bins,
+        # so equal bins form contiguous runs.
+        starts = np.concatenate(([0], np.flatnonzero(np.diff(idx)) + 1))
+        if starts.size == idx.size:
+            # Every peak in its own bin: per-spectrum work reduces to a
+            # zero-filter over the raw intensities.
+            cache.starts = None
+            cache.bins = idx.astype(np.int_, copy=False)
+        else:
+            cache.starts = starts
+            cache.bins = idx[starts].astype(np.int_, copy=False)
+        return cache
 
-        return nonzero_indices, nonzero_values.astype(np.float64)
+    def _nn_resample_via_cache(
+        self,
+        axis: NDArray[np.float64],
+        mzs: NDArray[np.float64],
+        intensities: NDArray[np.float64],
+    ) -> Optional[Tuple[NDArray[np.int_], NDArray[np.float64]]]:
+        """Resample through the shared-axis cache, or return None to decline.
+
+        The cache is built from the first spectrum seen. A hit requires the
+        spectrum's m/z array to be the cached one -- same object, or equal
+        element for element -- so a lying reader cannot get a stale mapping;
+        it can only miss. After five consecutive misses the cache disables
+        itself so processed-mode data stops paying for the comparison
+        (its size check is O(1) in the common case anyway).
+        """
+        cache = self._nn_shared_cache
+        if cache is False:
+            return None
+        if cache is None:
+            cache = self._build_nn_shared_cache(axis, mzs)
+            if cache is None:
+                self._nn_shared_cache = False
+                return None
+            self._nn_shared_cache = cache
+
+        if not (
+            mzs is cache.key_ref
+            or (mzs.size == cache.n_total and bool(np.array_equal(mzs, cache.key)))
+        ):
+            self._nn_cache_misses += 1
+            if self._nn_cache_misses > 4:
+                self._nn_shared_cache = False
+            return None
+
+        if cache.n_dropped:
+            self._count_out_of_range(cache.n_dropped, cache.n_total)
+        if cache.hi <= cache.lo:
+            return np.array([], dtype=np.int_), np.array([], dtype=np.float64)
+
+        # Match bincount's float64 promotion so cached and generic results
+        # carry the same rounding.
+        vals = intensities[cache.lo : cache.hi].astype(np.float64, copy=False)
+        if cache.starts is None:
+            sums = vals
+        else:
+            sums = np.add.reduceat(vals, cache.starts)
+        keep = sums != 0
+        return cache.bins[keep], sums[keep]
 
     def _tic_preserving_resample(
         self, mzs: NDArray[np.float64], intensities: NDArray[np.float64]
@@ -1480,11 +1825,20 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             logger.warning("Reader failed to supply mass axis annotations: %s", detail)
             return {}
 
+        from thyra.metadata.schema import MSI_VAR_RESERVED_COLUMNS
+
         validated: Dict[str, Any] = {}
         for name, values in (annotations or {}).items():
             if name == "mz":
                 logger.warning("Ignoring mass axis annotation named 'mz'")
                 continue
+            if name in MSI_VAR_RESERVED_COLUMNS:
+                logger.info(
+                    "Mass axis annotation %r uses a var column name the "
+                    "metadata spec reserves for annotation results; it must "
+                    "carry that meaning (see docs/metadata-schema.md)",
+                    name,
+                )
             if len(values) != n_channels:
                 logger.info(
                     "Dropping mass axis annotation %r: %d values for a "
@@ -1697,6 +2051,8 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 )
         else:
             # Standard physical coordinates (micrometers)
+            from shapely import box as shapely_box_vectorized
+
             x_coords: NDArray[np.float64] = adata.obs["spatial_x"].values
             y_coords: NDArray[np.float64] = adata.obs["spatial_y"].values
             half_pixel_um = self.pixel_size_um / 2
@@ -1704,12 +2060,15 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             # Footprints are flat, on every route including volumes. A
             # slice's depth lives on the TIC image's Scale and in
             # obs["spatial_z"]; see the docstring for why it is not also
-            # put on the geometry.
-            for i in range(len(adata)):
-                x, y = x_coords[i], y_coords[i]
-                x0, y0 = x - half_pixel_um, y - half_pixel_um
-                x1, y1 = x + half_pixel_um, y + half_pixel_um
-                geometries.append(box(x0, y0, x1, y1))
+            # put on the geometry. Built through shapely's vectorised box
+            # constructor -- one C call for the whole table instead of one
+            # Python-level geometry per pixel.
+            geometries = shapely_box_vectorized(
+                x_coords - half_pixel_um,
+                y_coords - half_pixel_um,
+                x_coords + half_pixel_um,
+                y_coords + half_pixel_um,
+            )
 
         # Create GeoDataFrame with appropriate index
         if valid_indices is not None:
@@ -2368,11 +2727,55 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             "produced_by": f"thyra/{thyra_version}",
         }
 
+        # Additive keys; `convention_version` stays 1 for the same
+        # reason as z_spacing_um below.  `raster_to_global_affine` is
+        # the explicit 3x3 row-major affine from TIC raster indices to
+        # "global" (the same mapping the TIC element's transform
+        # expresses), so a consumer that reads only attrs still gets
+        # the full placement.  `coordinate_offsets_px` preserves the
+        # source's raw acquisition-index offsets, which 0-based
+        # normalisation otherwise erases; `stage_offset_um` is their
+        # physical equivalent, written only when "global" is in
+        # micrometers so it cannot be misread in the optical-pixel
+        # variant.
+        if self._tic_to_image_matrix is not None:
+            global_cs["raster_to_global_affine"] = [
+                [float(v) for v in row] for row in self._tic_to_image_matrix
+            ]
+        else:
+            in_plane = float(self.pixel_size_um)
+            global_cs["raster_to_global_affine"] = [
+                [in_plane, 0.0, 0.0],
+                [0.0, in_plane, 0.0],
+                [0.0, 0.0, 1.0],
+            ]
+        offsets = self._source_coordinate_offsets()
+        if offsets is not None:
+            global_cs["coordinate_offsets_px"] = [int(v) for v in offsets]
+            if unit == "micrometer":
+                global_cs["stage_offset_um"] = [
+                    float(offsets[0]) * float(self.pixel_size_um),
+                    float(offsets[1]) * float(self.pixel_size_um),
+                ]
+
         if self._is_volume:
             global_cs["z_spacing_um"] = float(self.z_spacing_um)
             global_cs["z_spacing_source"] = self.z_spacing_source.value
 
         return {"global": global_cs}
+
+    def _source_coordinate_offsets(self) -> Optional[Tuple[int, int, int]]:
+        """The reader's raw coordinate offsets, if it reported any."""
+        try:
+            essential = self.reader.get_essential_metadata()
+        except Exception as e:
+            logger.debug("Could not read coordinate offsets: %s", e)
+            return None
+        offsets = getattr(essential, "coordinate_offsets", None)
+        if offsets is None:
+            return None
+        x, y, z = offsets
+        return (int(x), int(y), int(z))
 
     def _add_comprehensive_sections(
         self, pixel_size_attrs: Dict[str, Any], comprehensive_metadata_obj

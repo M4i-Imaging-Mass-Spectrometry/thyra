@@ -447,12 +447,12 @@ def build_unit_nanometre() -> Path:
 
     The physical pixel is 4.40625 um, declared as 4406.25 nm. pyimzml's
     ``convert_cv_param`` takes no unit argument, so ``imzmldict['pixel size x']``
-    is the bare number 4406.25 and Thyra labels it micrometres -- a 1000x
-    spatial error that ``convert_msi`` reports as success.
+    is the bare number 4406.25 -- which Thyra used to label micrometres, a
+    1000x spatial error that ``convert_msi`` reported as success.
 
     The unit is not lost from the document, only from the dict pyimzml builds:
     it survives on ``metadata.scan_settings[...].cv_params``, which is the path
-    a fix would read.
+    ``ImzMLMetadataExtractor`` now reads to convert the value to micrometres.
     """
     scan_settings = [
         '  <scanSettingsList count="1">',

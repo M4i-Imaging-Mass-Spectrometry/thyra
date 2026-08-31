@@ -8,7 +8,7 @@ extractor contract), so it is a drop-in stand-in for a real reader.
 
 Run as a script for a quick streaming-conversion smoke test:
 
-    poetry run python tests/fixtures/mock_msi_generator.py [--size small|medium|large|huge]
+    uv run python tests/fixtures/mock_msi_generator.py [--size small|medium|large|huge]
 
 Sizes:
     small  : 100x100 pixels, ~10k spectra (quick test, <1s)
@@ -105,7 +105,19 @@ class _MockMetadataExtractor(MetadataExtractor):
             format_specific={"format": "mock"},
             acquisition_params={},
             instrument_info={"instrument": "mock"},
-            raw_metadata={"source": "mock"},
+            raw_metadata={
+                "source": "mock",
+                # The two list shapes the store contract distinguishes:
+                # cvParams is the shape imzML extractors report (a list of
+                # dicts, stored as JSON), scan_window a purely numeric
+                # list (stored as an array). MS:1000579 carries no
+                # polarity/spectrum-type semantics, so the msi_metadata
+                # builder ignores it.
+                "cvParams": [
+                    {"name": "MS1 spectrum", "accession": "MS:1000579", "value": True},
+                ],
+                "scan_window": [100.0, 1000.0],
+            },
         )
 
 
