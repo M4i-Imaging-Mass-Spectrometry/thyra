@@ -2,6 +2,98 @@
 
 <!-- version list -->
 
+## v3.7.3 (2026-08-28)
+
+### Bug Fixes
+
+- Store non-numeric uns lists as JSON so read-back cannot segfault numpy 2.1-2.2
+  ([`ca6f2a7`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/ca6f2a760ac1f3ad1c25edb727f7b4a0b2c4d74b))
+
+### Documentation
+
+- Add validation workflow notebook with Open in Colab badge
+  ([`8d06236`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/8d0623678d549f302222c659dead0495c6af85e8))
+
+- Clarify local (non-Colab) runs of the validation notebook
+  ([`7e623c4`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/7e623c40c43809bf931e2c8a127813d08a70b016))
+
+- Floor numpy at 2.3 in notebook install to dodge string-array deepcopy segfault
+  ([`ca900f5`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/ca900f51c9edd7145901f6b6ce4d139f5509288f))
+
+- Keep Colab numpy untouched, work around numpy 2.1-2.2 StringDType deepcopy segfault in ROI cell
+  ([`6f85aac`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/6f85aac3c676b2129a7de7044e1d6d0927a5db98))
+
+- Make validation notebook run end to end
+  ([`349cc0d`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/349cc0d543aa9e4e56b7ccfebca4d44b32f1ba86))
+
+- Pin pandas below 3 in notebook install to keep Colab runtime alive
+  ([`177ce9a`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/177ce9a81025128ba4249ee1a55e2fae05cd4098))
+
+
+## v3.7.2 (2026-08-26)
+
+### Bug Fixes
+
+- Refuse silent peak drops in _map_mass_to_indices
+  ([`f062233`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f062233b0dc7ab97f684d956bdd6cd1d939e5843))
+
+
+## v3.7.1 (2026-08-26)
+
+### Performance Improvements
+
+- Cut per-spectrum recompute across the conversion hot loops
+  ([`edfd4d1`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/edfd4d15ffc396e59fd3fc0469d7203f246211a6))
+
+
+## v3.7.0 (2026-08-26)
+
+### Features
+
+- Record the resolved resampling plan in processing provenance
+  ([`e7f24c0`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/e7f24c0839ba4f4e0abdfa06837bb186b608d757))
+
+
+## v3.6.0 (2026-08-26)
+
+
+## v3.5.1 (2026-08-26)
+
+### Bug Fixes
+
+- Convert imzML pixel size to micrometres using its declared unit
+  ([`adeb252`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/adeb252ee819827538b3c98e86b6942f77eb589e))
+
+### Build System
+
+- Sync uv.lock with the 3.5.0 version bump
+  ([`9b91660`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/9b916607dc0970ef9e40bc26004bdb7826b06e41))
+
+
+## v3.5.0 (2026-08-25)
+
+### Build System
+
+- Move project metadata to PEP 621 [project] table
+  ([`4410adf`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/4410adf98e81355c221e4d578934e645ce8dad54))
+
+- Swap the build backend from poetry-core to hatchling
+  ([`b6cb013`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/b6cb013a1c2cb810664dfc98079e171a0cc83576))
+
+- Switch dependency management from Poetry to uv
+  ([`dc14d0c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/dc14d0c670db782b791ef2248844daaab291c0e7))
+
+### Documentation
+
+- Update developer commands from poetry to uv
+  ([`9694229`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/969422914891857d7cf77114d761507df7ecf3aa))
+
+### Features
+
+- Recognize Shimadzu imaging formats (.imdx, .kbd) with imzML guidance
+  ([`21b9a56`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/21b9a562e54f99b02ce5310dcee99c3c40ad1103))
+
+
 ## v3.4.0 (2026-08-19)
 
 ### Features

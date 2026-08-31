@@ -219,6 +219,16 @@ plt.title(f"Pixel {pixel_idx}")
 plt.show()
 ```
 
+### var columns
+
+`var` always carries `mz` (numeric, finite, strictly increasing).
+Readers whose native axis is not m/z keep that axis alongside it, and
+annotation tools add `formula`, `adduct`, `annotation_source` and
+`fdr` -- names fixed by the
+[metadata schema](metadata-schema.md#var-column-conventions) so they
+mean the same thing in every store. `thyra validate` checks the `mz`
+contract on every table.
+
 ---
 
 ## Pixel Coordinates
@@ -459,6 +469,61 @@ Beside it, when the source format provides them:
 A section the source format has nothing for is omitted rather than written
 empty, so `"instrument_info" not in uns` means "this format does not carry
 it" rather than "it was carried and lost".
+
+Within these sections, a list that holds anything besides numbers -- imzML
+`cvParams` (a list of objects) is the main case -- is stored as a **JSON
+string**; decode it with `json.loads`:
+
+```python
+import json
+
+cv_params = json.loads(msi_table.uns["raw_metadata"]["cvParams"])
+print(cv_params[0])   # {"name": ..., "accession": "MS:...", "value": ...}
+```
+
+Purely numeric lists stay plain arrays. The JSON encoding exists because
+AnnData/zarr cannot round-trip such lists faithfully (a list of objects
+comes back as `repr` strings), and because a stored list of strings reads
+back as a numpy string array -- and on numpy 2.1-2.2, deepcopying such an
+array segfaults the Python process outright
+([numpy#28609](https://github.com/numpy/numpy/issues/28609), fixed in
+numpy 2.3). Every table copy deepcopies `uns` (`AnnData.copy`,
+`spatialdata.polygon_query`, joins), so a store carrying one would crash
+those readers with no traceback.
+
+!!! note "Stores written by Thyra <= 3.7.2 on numpy 2.1-2.2"
+    Older stores still carry `cvParams` as a string array. On numpy
+    2.1.x-2.2.x (Google Colab ships 2.1.3), convert those arrays to
+    plain lists right after loading, before anything copies the table:
+
+    ```python
+    from thyra.metadata import sanitize_uns_string_arrays
+
+    for table in sdata.tables.values():
+        table.uns = sanitize_uns_string_arrays(table.uns)
+    ```
+
+    Environments on numpy 2.0 or >= 2.3 are unaffected either way.
+
+### Structured metadata: `uns["msi_metadata"]`
+
+The sections above preserve what the source said, in the source's own
+vocabulary. `uns["msi_metadata"]` is the normalised, versioned view of the
+same facts: fixed field names, PSI-MS/NCBITaxon/UBERON/CHEBI ontology
+terms, and a schema a validator can hold it to.
+
+```python
+block = msi_table.uns["msi_metadata"]
+
+print(block["schema_version"])                    # "0.1.0"
+print(block["ms_analysis"]["pixel_size_um"])      # {"x": 20.0, "y": 20.0}
+print(block["provenance"]["source_format"])       # "imzml"
+```
+
+It is written by every converter path identically, validated by
+`thyra validate`, and exported to a METASPACE submission by
+`thyra export-metaspace`. See [Metadata Schema](metadata-schema.md) for
+the full contract.
 
 ---
 

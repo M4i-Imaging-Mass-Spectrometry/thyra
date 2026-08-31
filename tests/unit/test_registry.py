@@ -130,6 +130,22 @@ class TestRegistry:
         with pytest.raises(ValueError, match="Unsupported format"):
             detect_format(unknown_file)
 
+    def test_shimadzu_imdx_recognised_but_in_development(self, tmp_path):
+        """Shimadzu .imdx files get a guidance error, not 'unsupported'."""
+        imdx_file = tmp_path / "test.imdx"
+        imdx_file.touch()
+
+        with pytest.raises(ValueError, match="in development"):
+            detect_format(imdx_file)
+
+    def test_shimadzu_kbd_recognised_but_in_development(self, tmp_path):
+        """Shimadzu .kbd files get a guidance error, not 'unsupported'."""
+        kbd_file = tmp_path / "test.kbd"
+        kbd_file.touch()
+
+        with pytest.raises(ValueError, match="export the dataset as imzML"):
+            detect_format(kbd_file)
+
     def test_missing_ibd_file(self, tmp_path):
         """Test error for ImzML without .ibd file."""
         imzml_file = tmp_path / "test.imzml"

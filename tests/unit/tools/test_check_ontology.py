@@ -18,7 +18,7 @@ class TestCheckOntology:
         # Setup mocks
         mock_validator_instance = mock_validator_class.return_value
         # The 'summary' is overwritten by main() when not in verbose mode.
-        mock_validator_instance.validate_file.return_value = {"unknown_terms": []}
+        mock_validator_instance.validate_file.return_value = {"unknown_list": []}
         mock_ontology.report_unknown_terms.return_value = "Global unknown terms: None"
 
         # Create a dummy imzML file
@@ -50,6 +50,42 @@ class TestCheckOntology:
                 "Global unknown terms: None\n"
             )
             assert expected_output == captured.out
+        finally:
+            sys.argv = original_argv
+
+    @patch("thyra.tools.check_ontology.ONTOLOGY", autospec=True)
+    @patch("thyra.metadata.validator.ImzMLOntologyValidator", autospec=True)
+    @patch("sys.argv")
+    def test_main_file_check_with_unknown_terms(
+        self, mock_argv, mock_validator_class, mock_ontology, capsys, tmp_path
+    ):
+        """A file with unknown terms lists them rather than crashing.
+
+        Regression test: main() used to read `unknown_terms` -- which
+        validate_file reports as a COUNT -- where it needed the
+        `unknown_list` entries, so the first real file with any unknown
+        term died on len() of an int.  The earlier mocks fed a list
+        under the count's key, so the suite agreed with the bug.
+        """
+        mock_validator_instance = mock_validator_class.return_value
+        mock_validator_instance.validate_file.return_value = {
+            "unknown_terms": 1,
+            "unknown_list": [
+                {"accession": "MS:9999999", "name": "mystery", "value": ""}
+            ],
+        }
+        mock_ontology.report_unknown_terms.return_value = "Global unknown terms: Some"
+
+        dummy_imzml = tmp_path / "test.imzML"
+        dummy_imzml.write_text("<mzML/>")
+
+        original_argv = sys.argv.copy()
+        try:
+            sys.argv = ["check_ontology", str(dummy_imzml)]
+            main()
+            captured = capsys.readouterr()
+            assert "Found 1 unknown terms:" in captured.out
+            assert "  - MS:9999999: mystery" in captured.out
         finally:
             sys.argv = original_argv
 
@@ -116,7 +152,10 @@ class TestCheckOntology:
         mock_validator_instance = mock_validator_class.return_value
         validation_result = {
             "summary": "Test summary for JSON",
-            "unknown_terms": ["json_term"],
+            "unknown_terms": 1,
+            "unknown_list": [
+                {"accession": "MS:9999999", "name": "json_term", "value": ""}
+            ],
         }
         mock_validator_instance.validate_file.return_value = validation_result
         mock_ontology.report_unknown_terms.return_value = "Global unknown terms: JSON"
@@ -166,7 +205,7 @@ class TestCheckOntology:
         mock_validator_instance = mock_validator_class.return_value
         mock_validator_instance.validate_file.return_value = {
             "summary": "Verbose summary",
-            "unknown_terms": [],
+            "unknown_list": [],
         }
         mock_ontology.report_unknown_terms.return_value = (
             "Global unknown terms: Verbose"

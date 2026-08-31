@@ -14,6 +14,10 @@ class ImzMLAccessions:
     CONTINUOUS_BINARY = "IMS:1000030"
     PROCESSED_BINARY = "IMS:1000031"
 
+    # Pixel size (imzML ontology)
+    PIXEL_SIZE_X = "IMS:1000046"
+    PIXEL_SIZE_Y = "IMS:1000047"
+
     # Software identifiers
     SCILS_LAB = "MS:1002384"
 

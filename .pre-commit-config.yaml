@@ -59,7 +59,7 @@ repos:
         args: ["--profile", "black"]
 
   # Code linting with stricter rules
-  # Settings live in .flake8 so this hook and `poetry run flake8` cannot drift
+  # Settings live in .flake8 so this hook and `uv run flake8` cannot drift
   # apart. Do not add setting args here. The exclude below mirrors the
   # `exclude` list in .flake8, which flake8 itself ignores for filenames
   # passed explicitly the way pre-commit passes them.

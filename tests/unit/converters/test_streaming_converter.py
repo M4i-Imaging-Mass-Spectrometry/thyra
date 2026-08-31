@@ -88,13 +88,11 @@ class MockMSIReader:
 
         Peaks are drawn from the very axis :meth:`get_common_mass_axis`
         reports, not merely from the same mass RANGE. Without resampling,
-        ``BaseMSIConverter._map_mass_to_indices`` keeps only the peaks
-        landing within 1e-6 Da of a common-axis point and silently drops
-        the rest, so m/z values that just fall inside the range map to
-        nothing: every spectrum arrives empty, the occupancy is empty,
-        and the shapes frame is built from zero pixels. A mock whose two
-        methods describe different mass axes is not a stand-in for any
-        real reader.
+        ``BaseMSIConverter._map_mass_to_indices`` requires every peak to
+        land within 1e-6 Da of a common-axis point and raises for any
+        that do not, so m/z values that just fall inside the range would
+        abort the conversion. A mock whose two methods describe
+        different mass axes is not a stand-in for any real reader.
         """
         n_x, n_y, n_z = self.dimensions
         common_mass_axis = self.get_common_mass_axis()
