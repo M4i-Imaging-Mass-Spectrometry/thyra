@@ -115,9 +115,12 @@ Full documentation: **[M4i-Imaging-Mass-Spectrometry.github.io/thyra](https://M4
 |-------|-----------|--------|
 | ImzML | `.imzML` | Full support |
 | Bruker | `.d` | Full support (timsTOF + Rapiflex) |
-| Waters | `.raw` | Full support |
-| PHI SmartSoft-TOF | `.raw` | Full support |
+| Waters | `.raw` directory | Full support |
+| PHI SmartSoft-TOF | `.raw` file | Full support (nanoTOF, ToF-SIMS) |
 | Shimadzu | `.imdx`, `.kbd` | In development (workaround: imzML export from IMAGEREVEAL MS) |
+
+PHI mosaic, MS/MS and depth-profiling acquisitions are implemented but so far
+tested only against synthetic files -- real data in those modes is very welcome.
 
 Output: **SpatialData/Zarr** -- cloud-ready, efficient, standardized
 
