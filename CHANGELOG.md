@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v3.7.5 (2026-09-01)
+
+### Bug Fixes
+
+- Raise the zarr floor to 3.1.6 so auto-sharding cannot pick 1 KB chunks
+  ([`a86a94f`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a86a94f82dcf0fedbc05c9874346ca0850fa0cdf))
+
+
 ## v3.7.4 (2026-08-31)
 
 
