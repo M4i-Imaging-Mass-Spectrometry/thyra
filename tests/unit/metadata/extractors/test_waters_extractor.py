@@ -235,6 +235,10 @@ class TestWatersMetadataExtractorComprehensive:
         comprehensive = extractor.get_comprehensive()
 
         fs = comprehensive.format_specific
+        # "format" is what DataCharacteristics.from_metadata reads for its
+        # is_waters_raw flag; "data_format" predates it and stays for the
+        # stored format-specific block.
+        assert fs["format"] == "Waters MassLynx raw"
         assert fs["data_format"] == "waters_raw"
         assert fs["is_imaging"] is True
         assert fs["pixel_count_x"] == 3
@@ -242,14 +246,18 @@ class TestWatersMetadataExtractorComprehensive:
         assert fs["ms_functions"] == [0]
 
     def test_instrument_info(self):
-        """Test instrument info reports Waters vendor."""
+        """The key must be "manufacturer" -- the one the detector chain reads.
+
+        This said "vendor" once, which nothing downstream consumed, so the
+        fact that a file was Waters never reached the resampling decision.
+        """
         mock_ml, handle, grid, ft, ms = _make_grid_and_ml()
         extractor = WatersMetadataExtractor(
             mock_ml, handle, Path("/test/data.raw"), grid, ft, ms
         )
         comprehensive = extractor.get_comprehensive()
 
-        assert comprehensive.instrument_info["vendor"] == "Waters"
+        assert comprehensive.instrument_info["manufacturer"] == "Waters"
 
     def test_acquisition_params(self):
         """Test acquisition parameters extraction."""
@@ -357,3 +365,32 @@ class TestNoFabricatedMassRange:
         essential = self._extractor(mock_ml, handle, grid, ft, ms).get_essential()
 
         assert essential.mass_range == pytest.approx((300.0, 400.0))
+
+
+class TestWatersResamplingDetection:
+    """From the extractor's real output to the detector chain's answer.
+
+    Built through ``_resampling_metadata_dict``, the same shaping the preview
+    and the converter use, so what is asserted is the contract the two sides
+    actually meet on. Before ``WatersDetector`` existed, the answer hinged on
+    ``is_raw_spectrum_profile``: centroid landed on ``CentroidImzMLDetector``
+    by accident, profile fell to ``DefaultDetector``'s CONSTANT axis.
+    """
+
+    @pytest.mark.parametrize("is_profile", [True, False])
+    def test_reflector_tof_for_either_representation(self, is_profile):
+        from thyra.preview import _resampling_metadata_dict
+        from thyra.resampling.decision_tree import ResamplingDecisionTree
+        from thyra.resampling.types import AxisType, ResamplingMethod
+
+        mock_ml, handle, grid, ft, ms = _make_grid_and_ml()
+        mock_ml.is_raw_spectrum_profile.return_value = is_profile
+        extractor = WatersMetadataExtractor(
+            mock_ml, handle, Path("/test/data.raw"), grid, ft, ms
+        )
+        comprehensive = extractor.get_comprehensive()
+        metadata = _resampling_metadata_dict(comprehensive.essential, comprehensive)
+
+        tree = ResamplingDecisionTree()
+        assert tree.select_axis_type(metadata) is AxisType.REFLECTOR_TOF
+        assert tree.select_strategy(metadata) is ResamplingMethod.NEAREST_NEIGHBOR

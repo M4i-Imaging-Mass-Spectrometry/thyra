@@ -93,7 +93,7 @@ from the format itself.
 
 | Source | polarity | ionisation source | analyzer | instrument model |
 |--------|----------|-------------------|----------|------------------|
-| imzML | -- | -- | -- | from `instrument model` |
+| imzML | -- | -- | from the `<analyzer>` component cvParam | from the instrumentConfiguration (model term or `MS:1000031` value) |
 | Bruker `.d` | -- | MALDI, when the laser tables are present | TOF (timsTOF-family formats) | from the DB |
 | PHI ToF-SIMS | from the header | SIMS | TOF | platform name |
 | Waters `.raw` | -- | -- | -- | from `_HEADER.TXT` |

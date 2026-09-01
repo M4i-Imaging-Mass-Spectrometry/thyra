@@ -67,7 +67,7 @@ axis), the **axis type** (how bin widths scale with m/z), and the **bin count**.
 - spectrum type -- `centroid spectrum` (`MS:1000127`) or `profile spectrum` (`MS:1000128`)
 - instrument name, instrument type, and manufacturer
 - average peaks per spectrum; above **5000** the data is recorded as high-density profile
-- format flags for Rapiflex and timsTOF
+- format flags for Rapiflex, timsTOF, PHI, and Waters
 
 Spectrum type is whatever the file **declares** -- `MS:1000127` or
 `MS:1000128` -- read from the file description first and then from the rest of
@@ -85,13 +85,17 @@ takes it as an argument (`--project TIMSTOF|TOF|FT`).
 
 The timsTOF flag is a case-insensitive substring match on the instrument name,
 because Bruker names the family many ways (`timsTOF fleX MALDI-2`,
-`timsTOF Pro 2`, `timsTOF SCP`, and so on).
+`timsTOF Pro 2`, `timsTOF SCP`, and so on). The name comes from the Bruker
+`.d`'s `GlobalMetadata` when there is one, and otherwise from the instrument
+model the imzML itself declares -- so a timsTOF exported to imzML rides the
+same match, as long as the export names the instrument (see the info box
+below for the one common exporter that does not).
 
 ### Which detector wins
 
 Detectors are tried in a fixed priority order and the first match wins:
-timsTOF, Rapiflex, FT-ICR, Orbitrap, PHI, generic centroid, then a catch-all
-default. This table is the actual observed behaviour of that chain:
+timsTOF, Rapiflex, FT-ICR, Orbitrap, PHI, Waters, generic centroid, then a
+catch-all default. This table is the actual observed behaviour of that chain:
 
 | Metadata | Detector | Method | Axis type |
 |---|---|---|---|
@@ -99,7 +103,10 @@ default. This table is the actual observed behaviour of that chain:
 | timsTOF, profile high-density | timsTOF | `nearest_neighbor` | `reflector_tof` |
 | Rapiflex, profile | Rapiflex MALDI-TOF | `tic_preserving` | `constant` |
 | Bruker MALDI-TOF | Rapiflex MALDI-TOF | `tic_preserving` | `constant` |
+| imzML declaring an FT-ICR analyzer or model | FT-ICR | `nearest_neighbor` | `fticr` |
+| imzML declaring an Orbitrap analyzer or model | Orbitrap | `nearest_neighbor` | `orbitrap` |
 | PHI SmartSoft-TOF `.raw` | PHI SmartSoft-TOF (ToF-SIMS) | `nearest_neighbor` | `linear_tof` |
+| Waters MassLynx `.raw`, any representation | Waters MassLynx | `nearest_neighbor` | `reflector_tof` |
 | unknown vendor, profile (any density) | Unknown (default) | `nearest_neighbor` | `constant` |
 | unknown, centroid | ImzML Centroid | `nearest_neighbor` | `reflector_tof` |
 | no usable metadata | Unknown (default) | `nearest_neighbor` | `constant` |
@@ -131,25 +138,24 @@ default. This table is the actual observed behaviour of that chain:
     interpolate-then-rescale operator is exact -- see the `!!! danger` box
     below for what it costs off the diagonal.
 
-!!! warning "The Orbitrap and FT-ICR detectors cannot currently fire"
-    Both match on an `instrument_type` of `"Orbitrap"` or `"FT-ICR"`, but no
-    reader populates that key: the only place it is set is the Rapiflex reader,
-    which hardcodes `"MALDI-TOF"`. Neither the imzML nor the Bruker `.d`
-    metadata extractor emits it at all.
+!!! info "How an imzML reaches the Orbitrap and FT-ICR rows"
+    Both detectors match on an `instrument_type` of `"Orbitrap"` or
+    `"FT-ICR"`, which the imzML metadata extractor resolves from the file's
+    own instrumentConfiguration, in declaration-strength order: the
+    `<analyzer>` component cvParam (`MS:1000484` orbitrap, `MS:1000079`
+    FT-ICR) first, then a recognised instrument-model term (the solariX,
+    apex, LTQ FT, and Orbitrap/Exactive/Exploris families), then a
+    family-identifying product name in free-form model text. A file that
+    declares none of the three stays untyped and falls through to the
+    generic rows below -- an unstated analyzer stays unstated.
 
-    Still true: reading the declared `MS:1000127`/`MS:1000128` accession fixed
-    how *spectrum representation* is detected, not how `instrument_type` is
-    populated. Nothing writes `"Orbitrap"` or `"FT-ICR"` into it, so these two
-    detectors remain unreachable. What did change is which row such data lands
-    on: a profile-mode Orbitrap file now correctly reports profile, so it falls
-    to the default row (`constant`) rather than being misread as centroid and
-    given `reflector_tof`.
-
-    So Orbitrap and FT-ICR data does **not** get the `orbitrap` or `fticr`
-    axis automatically -- it falls through to the generic centroid or default
-    row above and gets `reflector_tof` or `constant`. Set
-    `--mass-axis-type orbitrap` or `--mass-axis-type fticr` explicitly if you
-    want the matching physics.
+    One known gap: SCiLS Lab-lineage imzML exports of timsTOF data stamp the
+    generic `MS:1001534 Bruker Daltonics flex series` term rather than a
+    timsTOF model term. That term genuinely covers the axial flex series
+    too, so Thyra does not attribute it to a timsTOF; a centroid export
+    still lands on the right pair via the centroid row, but a profile export
+    falls to the default. `--mass-axis-type` remains the explicit override
+    for files whose metadata is silent or too generic.
 
 !!! note "`tic_preserving` is selected for profile MALDI-TOF, not for high resolution"
     It is easy to assume the high-resolution analysers get the more elaborate

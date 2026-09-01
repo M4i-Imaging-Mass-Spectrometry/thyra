@@ -34,6 +34,7 @@ class DataCharacteristics:
     is_rapiflex_format: bool = False
     is_timstof: bool = False
     is_phi_tofsims: bool = False
+    is_waters_raw: bool = False
 
     @property
     def needs_resampling(self) -> bool:
@@ -123,7 +124,17 @@ class DataCharacteristics:
             instrument_info.get("instrument_type") if instrument_info else None
         )
         manufacturer = instrument_info.get("manufacturer") if instrument_info else None
+        # Bruker .d surfaces the name in GlobalMetadata, which stays
+        # authoritative; an imzML surfaces the declared model term through
+        # instrument_info instead. Folding the two here keeps ``is_timstof``
+        # below the single deciding path for both routes -- a timsTOF fleX
+        # exported to imzML used to lose its identity entirely because only
+        # GlobalMetadata was consulted.
         instrument_name = global_meta.get("InstrumentName") if global_meta else None
+        if not instrument_name and instrument_info:
+            instrument_name = instrument_info.get(
+                "instrument_model"
+            ) or instrument_info.get("instrument_name")
 
         # Format detection
         is_rapiflex = (
@@ -144,6 +155,10 @@ class DataCharacteristics:
         source_format = format_specific.get("format") if format_specific else None
         is_phi_tofsims = bool(source_format and source_format.startswith("PHI "))
 
+        # WatersMetadataExtractor stamps "Waters MassLynx raw"; same prefix
+        # convention as the PHI flag above.
+        is_waters_raw = bool(source_format and source_format.startswith("Waters "))
+
         return cls(
             spectrum_type=spectrum_type,
             total_peaks=total_peaks,
@@ -154,4 +169,5 @@ class DataCharacteristics:
             is_rapiflex_format=is_rapiflex,
             is_timstof=is_timstof,
             is_phi_tofsims=is_phi_tofsims,
+            is_waters_raw=is_waters_raw,
         )
