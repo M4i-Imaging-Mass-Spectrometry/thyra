@@ -33,8 +33,15 @@ logger = logging.getLogger(__name__)
 #: size. Not used to size the grid -- the observed positions are, so that a
 #: dataset whose declared extent disagrees with its own pixels converts to
 #: what it actually contains -- but recorded as provenance.
-IMS_MAX_COUNT_PIXELS_X = "IMS:1000042"
-IMS_MAX_COUNT_PIXELS_Y = "IMS:1000043"
+#:
+#: Mapped to plain names rather than kept as accessions because these become
+#: keys in the store's ``uns``, and zarr turns a dict key into a directory
+#: name. A colon is not a legal path character on Windows, so accession-keyed
+#: provenance makes the whole store unwritable there.
+GRID_EXTENT_TERMS = {
+    "IMS:1000042": "max_count_of_pixels_x",
+    "IMS:1000043": "max_count_of_pixels_y",
+}
 
 
 class MzPeakMetadataExtractor(MetadataExtractor):
@@ -334,9 +341,9 @@ class MzPeakMetadataExtractor(MetadataExtractor):
         parameters = self._scan_settings_parameters()
         declared: Dict[str, Any] = {}
         for parameter in parameters:
-            accession = parameter.get("accession")
-            if accession in (IMS_MAX_COUNT_PIXELS_X, IMS_MAX_COUNT_PIXELS_Y):
-                declared[str(accession)] = parameter.get("value")
+            name = GRID_EXTENT_TERMS.get(str(parameter.get("accession")))
+            if name is not None:
+                declared[name] = parameter.get("value")
         return {
             "scan_settings": parameters,
             "declared_grid_extent": declared or None,
