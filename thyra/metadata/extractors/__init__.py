@@ -30,6 +30,7 @@ Example usage:
 
 from .bruker_extractor import BrukerMetadataExtractor
 from .imzml_extractor import ImzMLMetadataExtractor
+from .mzpeak_extractor import MzPeakMetadataExtractor
 from .phi_extractor import PhiMetadataExtractor
 from .waters_extractor import WatersMetadataExtractor
 
@@ -37,6 +38,7 @@ from .waters_extractor import WatersMetadataExtractor
 __all__ = [
     "BrukerMetadataExtractor",
     "ImzMLMetadataExtractor",
+    "MzPeakMetadataExtractor",
     "PhiMetadataExtractor",
     "WatersMetadataExtractor",
 ]
@@ -49,6 +51,7 @@ FORMAT_EXTRACTORS = {
     "tdf": BrukerMetadataExtractor,
     "waters": WatersMetadataExtractor,
     "phi": PhiMetadataExtractor,
+    "mzpeak": MzPeakMetadataExtractor,
 }
 
 

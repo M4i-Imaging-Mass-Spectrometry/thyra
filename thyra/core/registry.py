@@ -1,6 +1,7 @@
 # thyra/core/registry.py
 import logging
 import re
+import zipfile
 from pathlib import Path
 from threading import RLock
 from typing import Dict, NoReturn, Type
@@ -154,6 +155,8 @@ class MSIRegistry:
         extension = input_path.suffix.lower()
         if extension == ".imzml":
             return "imzml"
+        if extension == ".mzpeak":
+            return self._detect_mzpeak_format(input_path)
         if extension == ".d":
             return self._detect_bruker_d_format(input_path)
         if extension == ".raw":
@@ -174,6 +177,53 @@ class MSIRegistry:
         if bruker_format:
             return bruker_format
         raise ValueError("Bruker .d directory missing analysis " f"files: {input_path}")
+
+    def _detect_mzpeak_format(self, input_path: Path) -> str:
+        """Validate that a ``.mzpeak`` path really is an mzPeak archive.
+
+        Three checks, cheapest first: the extension (already matched by the
+        caller), the ZIP local-file-header magic, and the presence of the
+        index member. The extension alone is not enough -- it is a young
+        format and the name gets attached to loose Parquet directories -- and
+        a file failing here should say so rather than failing later inside
+        pyarrow with a message about a corrupt footer.
+
+        Args:
+            input_path: Path with a ``.mzpeak`` extension.
+
+        Returns:
+            ``"mzpeak"``.
+
+        Raises:
+            ValueError: If the file is not a ZIP or carries no index member.
+        """
+        if input_path.is_dir():
+            raise ValueError(
+                f"mzPeak format requires a .mzpeak archive file, got "
+                f"directory: {input_path}"
+            )
+        try:
+            with input_path.open("rb") as handle:
+                magic = handle.read(4)
+        except (OSError, PermissionError) as exc:
+            raise ValueError(f"Cannot read {input_path}: {exc}") from exc
+
+        if magic != b"PK\x03\x04":
+            raise ValueError(
+                f"Not an mzPeak archive (missing ZIP signature): {input_path}"
+            )
+
+        if not zipfile.is_zipfile(input_path):
+            raise ValueError(
+                f"Not an mzPeak archive (unreadable ZIP container): " f"{input_path}"
+            )
+        with zipfile.ZipFile(input_path) as archive:
+            if "mzpeak_index.json" not in archive.namelist():
+                raise ValueError(
+                    f"Not an mzPeak archive (no mzpeak_index.json member): "
+                    f"{input_path}"
+                )
+        return "mzpeak"
 
     def _detect_raw_format(self, input_path: Path) -> str:
         """Resolve a .raw path to the vendor that wrote it.
@@ -224,6 +274,7 @@ class MSIRegistry:
         """Raise error for unsupported format."""
         available = [
             ".imzml",
+            ".mzpeak (HUPO-PSI, experimental)",
             ".d (timsTOF)",
             "folder (Rapiflex)",
             ".raw directory (Waters)",
