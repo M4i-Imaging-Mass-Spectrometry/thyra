@@ -175,9 +175,9 @@ with a plain path will fail on Windows. Use the same helper.
 
 ```bash
 cd ../Thyra-chunks
-PYTHONPATH=$(pwd) poetry run pytest -q
-poetry run black . && poetry run isort . && poetry run flake8
-poetry run mkdocs build --strict
+uv run pytest -q
+uv run black . && uv run isort . && uv run flake8
+uv run --group docs mkdocs build --strict
 ```
 
 Plus, whichever option you take, a test that fails on `main`:

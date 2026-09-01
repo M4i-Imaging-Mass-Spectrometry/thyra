@@ -256,16 +256,16 @@ whose other packages want pandas 3.
 
 ```bash
 cd ../Thyra-pandas3
-PYTHONPATH=$(pwd) poetry run pytest -q
-PYTHONPATH=$(pwd) poetry run python -c "
+uv run pytest -q
+uv run python -c "
 import pandas as pd; pd.set_option('future.infer_string', True)
 # then run a conversion on each of the three paths
 "
-poetry run black . && poetry run isort . && poetry run flake8
-poetry run mkdocs build --strict
+uv run black . && uv run isort . && uv run flake8
+uv run --group docs mkdocs build --strict
 ```
 
-`PYTHONPATH=$(pwd)` matters — see the note in [README.md](README.md).
+`PYTHONPATH` is no longer needed here -- see the note in [README.md](README.md).
 
 Once merged, delete the superseded branch and worktree:
 

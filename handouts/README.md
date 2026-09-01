@@ -130,8 +130,9 @@ Two things to know about working in a worktree here:
    uv sync
    ```
 
-   The `PYTHONPATH=$(pwd)` prefix that the older handouts still carry is no
-   longer needed, and neither is anything `poetry`.
+   The `PYTHONPATH=$(pwd)` prefix and the `poetry run` commands the older
+   handouts used to carry have been removed from them. Where `poetry` is still
+   named it is describing what was done at the time, not what to run.
 
 2. **Line endings.** Fixed by handout D. Commits no longer fail the
    `mixed-line-ending` hook on the first attempt, and
@@ -156,7 +157,7 @@ Two things to know about working in a worktree here:
   ```bash
   uv run black . && uv run isort . && uv run flake8 && uv run pytest -m "not integration"
   ```
-  Or let the hooks do it: `uv run pre-commit run --all-files`. See
+  Or let the hooks do it on what you staged: `uv run pre-commit run`. See
   [docs/contributing.md](../docs/contributing.md) for the full workflow.
 - `uv run --group docs mkdocs build --strict` must stay clean (`mkdocs` lives
   in the `docs` dependency group, not the default one).
