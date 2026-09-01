@@ -297,29 +297,22 @@ the implementer's.
 
 ## Environment
 
-**The venv trap.** `thyra` is installed into the Poetry venv as an editable
-install pointing at the *main* checkout, so `poetry run python` from a
-worktree imports the wrong tree. `PYTHONPATH` alone is not enough --
-`sys.path[0]` (the script's own directory) beats it. And `poetry run` from a
-worktree resolves to a different, empty venv with no numpy.
+**The venv trap (historical, now gone).** This work was done under Poetry, where
+the venv was shared across worktrees and held `thyra` as an editable install
+pointing at the *main* checkout, so `poetry run python` from a worktree imported
+the wrong tree. `PYTHONPATH` alone was not enough -- `sys.path[0]`, the script's
+own directory, beat it -- and `poetry run` from a worktree resolved to a
+different, empty venv with no numpy. The workaround was to call the venv
+interpreter by absolute path and assert on `thyra.__file__` in every script.
 
-What works:
+uv removed the trap rather than renaming it. It resolves the project root by
+walking up from the working directory, and a worktree has its own
+`pyproject.toml`, so each worktree gets its own `.venv` holding its own source.
+`uv run` syncs that environment before running:
 
-```powershell
-Set-Location <worktree>
-$PY = "C:\Users\P70078823\AppData\Local\pypoetry\Cache\virtualenvs\thyra-tfpMqqFS-py3.13\Scripts\python.exe"
-$env:PYTHONPATH = "<worktree>"
-& $PY <script.py>
-```
-
-Guard every script:
-
-```python
-import sys, pathlib
-sys.path.insert(0, r"<worktree>")
-import thyra
-assert pathlib.Path(thyra.__file__).resolve().is_relative_to(pathlib.Path(r"<worktree>"))
-print("OK importing:", thyra.__file__)
+```bash
+uv run pytest -q
+uv run python <script.py>
 ```
 
 **Real data lives outside the worktree**, at
@@ -348,9 +341,9 @@ run `pre-commit run --all-files`; it rewrites unrelated files.
 ## Verification
 
 ```bash
-PYTHONPATH=$(pwd) poetry run pytest -q
-poetry run black . && poetry run isort . && poetry run flake8
-poetry run mkdocs build --strict
+uv run pytest -q
+uv run black . && uv run isort . && uv run flake8
+uv run --group docs mkdocs build --strict
 ```
 
 Beyond the suite, for anything touching the operators:

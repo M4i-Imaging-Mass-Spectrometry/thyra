@@ -109,8 +109,8 @@ looked like to whoever wrote them.
 ## Verification
 
 ```bash
-PYTHONPATH=$(pwd) poetry run pytest -q
-poetry run black . && poetry run isort . && poetry run flake8
+uv run pytest -q
+uv run black . && uv run isort . && uv run flake8
 ```
 
 A new strategy needs a round-trip test proving that interpolating onto the

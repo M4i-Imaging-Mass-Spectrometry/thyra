@@ -352,25 +352,21 @@ and for which inputs.
 
 ## Environment
 
-**The venv trap.** `thyra` is installed into the Poetry venv as an editable
-install pointing at the *main* checkout, so `poetry run python` from a worktree
-imports the wrong tree. `PYTHONPATH` alone is not enough -- `sys.path[0]` (the
-script's own directory) beats it. What works:
+**The venv trap (historical, now gone).** The numbers above were measured under
+Poetry, where the venv was shared across worktrees and held `thyra` as an
+editable install pointing at the *main* checkout, so `poetry run python` from a
+worktree imported the wrong tree. `PYTHONPATH` alone was not enough --
+`sys.path[0]`, the script's own directory, beat it -- so the workaround was to
+call the venv interpreter by absolute path with `PYTHONPATH` set, and to assert
+on `thyra.__file__` at the top of every standalone script.
 
-```powershell
-Set-Location <worktree>
-$PY = "C:\Users\P70078823\AppData\Local\pypoetry\Cache\virtualenvs\thyra-tfpMqqFS-py3.13\Scripts\python.exe"
-$env:PYTHONPATH = "<worktree>"
-& $PY -m pytest -q
-```
+uv removed the trap rather than renaming it. It resolves the project root by
+walking up from the working directory, and a worktree has its own
+`pyproject.toml`, so each worktree gets its own `.venv` holding its own source.
+`uv run` syncs that environment before running, so from inside the worktree:
 
-Guard every standalone script:
-
-```python
-import sys, pathlib
-sys.path.insert(0, r"<worktree>")
-import thyra
-assert pathlib.Path(thyra.__file__).resolve().is_relative_to(pathlib.Path(r"<worktree>"))
+```bash
+uv run pytest -q
 ```
 
 **Reproducing item 1's violation**, from `C:\Users\P70078823\Desktop\Ousia\backend`:
@@ -407,9 +403,9 @@ commit is not releasable and takes the tag-guard path (see item 3).
 ## Verification
 
 ```bash
-PYTHONPATH=$(pwd) poetry run pytest -q
-poetry run black . && poetry run isort . && poetry run flake8
-poetry run mkdocs build --strict
+uv run pytest -q
+uv run black . && uv run isort . && uv run flake8
+uv run --group docs mkdocs build --strict
 ```
 
 Baseline on `main` at v2.2.3: **1049 passed, 11 skipped, 18 deselected**.

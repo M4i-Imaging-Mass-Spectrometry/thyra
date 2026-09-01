@@ -175,9 +175,9 @@ regression, not a stale test.
 
 ```bash
 cd ../Thyra-perf
-PYTHONPATH=$(pwd) poetry run pytest -q
-poetry run black . && poetry run isort . && poetry run flake8
-poetry run mkdocs build --strict
+uv run pytest -q
+uv run black . && uv run isort . && uv run flake8
+uv run --group docs mkdocs build --strict
 ```
 
 For lead 1, the instrumentation that produced the numbers above is worth

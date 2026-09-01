@@ -1,13 +1,14 @@
 # Parallel workstream handouts
 
-Eight pieces of work, written to be run in parallel in separate git worktrees.
+Ten pieces of work, written to be run in parallel in separate git worktrees.
 Each handout is self-contained: it states what is wrong, the evidence, the
 constraints that must not be broken, and how to verify.
 
 **Most of this has shipped.** Read the State column before picking anything
-up. Three rows still hold live work, and one of them is a decision rather than
-code: C (decide), E (upstream), F (backlog). H's remaining item is blocked
-rather than available -- see below before picking it up.
+up. Five rows still hold live work, and one of them is a decision rather than
+code: C (decide), E (upstream), F (backlog), I and J (both upstream, added
+2026-09-01). H's remaining item is blocked rather than available -- see below
+before picking it up.
 
 Everything here was investigated against `main` at **v1.27.0** on
 Windows 11, Python 3.12.7, with pandas 2.3.2 / anndata 0.12.2 /
@@ -27,6 +28,8 @@ gets written, which is the subject of half these handouts.
 | F | [interpolation-resampling.md](interpolation-resampling.md) | *not created* | `../Thyra-interp` | **backlog** -- a capability gap, not a defect |
 | G | [resampling-scils-alignment.md](resampling-scils-alignment.md) | `fix/resampling-scils-alignment` | `../Thyra-resampling` | **DONE** -- v2.1.0-v2.2.3, item 5 left |
 | H | [loose-ends-after-scils-alignment.md](loose-ends-after-scils-alignment.md) | one per item | `../Thyra-loose` | items 3 and 4 shipped; item 2 is **BLOCKED**; item 1 is not Thyra's |
+| I | [spatialdata-table-sharding.md](spatialdata-table-sharding.md) | *upstream* | *scverse/spatialdata* | **OPEN upstream** -- scverse/spatialdata#1178, design comment posted 2026-09-01, awaiting reply |
+| J | [zarr-4304-rank0-shard-hang.md](zarr-4304-rank0-shard-hang.md) | *upstream* | *zarr-developers/zarr-python* | **OPEN upstream** -- zarr-python#4304 filed 2026-09-01, fix not written |
 
 Handout H is what was found *around* G and deliberately not folded into it.
 Three of its four items are settled, so do not read it front-to-back:
@@ -57,6 +60,13 @@ default paths measure exact. It also corrects F's description of
 Handout E is work in `scverse/spatialdata`, not here. It is listed because
 it is the critical path for Ousia reading Thyra output lazily, and because
 its findings change how B and C should be judged.
+
+Handouts I and J are also upstream rather than here, and they are a pair. I
+exposes table shard configuration in spatialdata so Thyra can stop holding
+`zarr.config` open across a whole `sdata.write`; J is a zarr bug found while
+designing I, and is the reason I's design must never pass `shards` into
+anndata's `dataset_kwargs`. Read I before J. Neither blocks anything in this
+repository: the zarr floor half of the story already shipped in #185.
 
 Handout F is backlog, not a defect: a capability `main` does not have, whose
 only prior art was about to be deleted with a stale branch. It is written up
@@ -107,17 +117,22 @@ git worktree add -b <branch> ../<Thyra-dir> main
 
 Two things to know about working in a worktree here:
 
-1. **The venv is shared.** `thyra` is installed into the Poetry venv as an
-   editable install pointing at the *main* checkout, so
-   `poetry run python` from a worktree still imports the main checkout's
-   code. To exercise worktree code, put the worktree first on the path:
+1. **The venv is per-worktree now.** This used to be a trap. Under Poetry
+   the venv was shared and held `thyra` as an editable install pointing at
+   the *main* checkout, so `poetry run python` from a worktree silently
+   imported main's code -- handout A was verified twice against the wrong
+   tree before that was spotted. uv finds the project root by walking up from
+   the working directory, and a worktree has its own `pyproject.toml`, so
+   `uv run` from a worktree gets that worktree's own `.venv` and its own
+   source. Run this once in a new worktree:
 
    ```bash
-   PYTHONPATH=$(pwd) poetry run pytest
+   uv sync
    ```
 
-   This bit me while verifying handout A: two runs reported identical
-   results because both imported `main`.
+   The `PYTHONPATH=$(pwd)` prefix and the `poetry run` commands the older
+   handouts used to carry have been removed from them. Where `poetry` is still
+   named it is describing what was done at the time, not what to run.
 
 2. **Line endings.** Fixed by handout D. Commits no longer fail the
    `mixed-line-ending` hook on the first attempt, and
@@ -140,9 +155,12 @@ Two things to know about working in a worktree here:
 - No emojis anywhere: code, comments, docstrings, commits, docs.
 - Before every commit:
   ```bash
-  poetry run black . && poetry run isort . && poetry run flake8 && poetry run pytest
+  uv run black . && uv run isort . && uv run flake8 && uv run pytest -m "not integration"
   ```
-- `poetry run mkdocs build --strict` must stay clean.
+  Or let the hooks do it on what you staged: `uv run pre-commit run`. See
+  [docs/contributing.md](../docs/contributing.md) for the full workflow.
+- `uv run --group docs mkdocs build --strict` must stay clean (`mkdocs` lives
+  in the `docs` dependency group, not the default one).
 - Two pre-existing `no-any-return` mypy errors exist in
   `thyra/tools/make_example_data.py:62` and
   `thyra/metadata/extractors/waters_extractor.py:130`. They are not yours

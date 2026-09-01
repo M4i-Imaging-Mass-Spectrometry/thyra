@@ -92,7 +92,7 @@ Be careful with two things:
 ## 2. pydocstyle config drift
 
 ```bash
-poetry run pre-commit run pydocstyle --all-files
+uv run pre-commit run pydocstyle --all-files
 ```
 
 fails with `D104: Missing docstring in public package` on
@@ -115,12 +115,12 @@ Pick one home and strip the duplicate. `pyproject.toml` is probably right,
 matching how mypy and bandit are already configured — but verify the hook
 actually reads it, which is exactly the assumption that turned out to be
 false for flake8's `exclude` list. Test both invocation styles:
-`poetry run pydocstyle thyra` and `pre-commit run pydocstyle --all-files`.
+`uv run pydocstyle thyra` and `uv run pre-commit run pydocstyle --all-files`.
 
 ## 3. bandit on `--all-files`
 
 ```bash
-poetry run pre-commit run bandit --all-files
+uv run pre-commit run bandit --all-files
 ```
 
 fails with `B404` (blacklist: consider possible security implications
@@ -154,7 +154,7 @@ Fix them if cheap so a full mypy run is green.
 
 ## The goal
 
-`poetry run pre-commit run --all-files` should pass cleanly **and
+`uv run pre-commit run --all-files` should pass cleanly **and
 idempotently** on an unmodified checkout, so it can be trusted as a
 pre-push check. Right now it modifies 137 files and fails three hooks.
 
@@ -171,12 +171,12 @@ pre-push check. Right now it modifies 137 files and fails three hooks.
 
 ```bash
 cd ../Thyra-toolchain
-poetry run pre-commit run --all-files   # must pass
-git status --short                       # must be empty
-poetry run pre-commit run --all-files   # must pass again, still empty
-poetry run mypy thyra                   # should be green
-poetry run pytest -q
-poetry run mkdocs build --strict
+uv run pre-commit run --all-files   # must pass
+git status --short                   # must be empty
+uv run pre-commit run --all-files   # must pass again, still empty
+uv run mypy thyra                   # should be green
+uv run pytest -q
+uv run --group docs mkdocs build --strict
 ```
 
 ## While you are here
