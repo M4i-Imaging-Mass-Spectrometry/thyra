@@ -53,12 +53,27 @@ INNER_TILE_EDGE = 512
 # began auto-sharding, so read amplification is unchanged.
 TABLE_SHARD_TARGET_BYTES = 128 * 1024 * 1024
 
-# zarr < 3.1.4 computed the auto chunk with ``max_bytes=1024`` where 1 MiB was
-# meant, so ``shards="auto"`` produced ~1 KB shards -- one file per KB of table.
-# It also predates ``array.target_shard_size_bytes``, making the budget above
-# unenforceable. pyproject pins the floor at 3.1.4 for exactly this reason;
-# this constant is what the regression test checks the floor still buys us.
+# zarr < 3.1.6 computed the auto chunk with ``max_bytes=1024`` where 1 MiB was
+# meant (zarr-python#3603, first released in 3.1.6 -- it landed after both 3.1.4
+# and 3.1.5). zarr < 3.1.4 additionally predates ``array.target_shard_size_bytes``,
+# making the budget above unenforceable, and there ``shards="auto"`` produced
+# ~1 KB SHARDS -- one file per KB of table. pyproject pins the floor at 3.1.6 for
+# both reasons.
+#
+# This constant guards the shard, i.e. the file, so it only ever catches that
+# second, pre-3.1.4 half: on 3.1.4/3.1.5 the budget above still lands large
+# shards and it is the chunk inside them that collapses. MIN_TABLE_CHUNK_BYTES
+# is the half that catches those two.
 MIN_TABLE_SHARD_BYTES = 64 * 1024
+
+# Minimum size for the INNER chunk of a table array -- the unit that sits inside
+# a shard and the unit a random read decompresses. This is the half of the defect
+# a large shard hides: on 3.1.4/3.1.5 the file count looks fine while each file
+# quietly holds ~146,000 separately compressed chunks instead of ~142, and pays
+# for all of them in the shard index. 64 KiB sits well above the ~800 B those
+# versions hand the regression-test fixture and well below the ~200 KB 3.1.6
+# hands it, so the two are never close to the threshold.
+MIN_TABLE_CHUNK_BYTES = 64 * 1024
 
 
 @contextmanager

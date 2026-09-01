@@ -9,11 +9,18 @@ size.
 
 **The MSI table.** Locks the shard size the table's ``X`` arrays land in. This
 half exists because of a real, shipped regression: anndata >= 0.13 writes every
-zarr v3 array with ``shards="auto"``, and zarr < 3.1.4 sized the auto chunk with
-``max_bytes=1024`` where it meant 1 MiB. Nothing in Thyra changed -- a
-dependency bump alone was enough to turn one table into ~400,000 files of
-roughly 1 KB each, and the zarr write into 98% of conversion wall-clock
-(pea.imzML: 434 s of 445 s).
+zarr v3 array with ``shards="auto"``, and zarr < 3.1.6 sized the auto chunk with
+``max_bytes=1024`` where it meant 1 MiB (zarr-python#3603, first released in
+3.1.6). On a zarr that also predates ``array.target_shard_size_bytes`` (< 3.1.4)
+there is no budget to override that chunk, so it sizes the shard too. Nothing in
+Thyra changed -- a dependency bump alone was enough to turn one table into
+~400,000 files of roughly 1 KB each, and the zarr write into 98% of conversion
+wall-clock (pea.imzML: 434 s of 445 s).
+
+The shard, i.e. the file, is only half of it. 3.1.4 and 3.1.5 gained the budget
+knob while keeping the bad ``max_bytes=1024``, so there the file count looks fine
+and it is the chunk *inside* each file that collapses. Both halves are asserted
+below, against ``MIN_TABLE_SHARD_BYTES`` and ``MIN_TABLE_CHUNK_BYTES``.
 
 That failure is invisible to every other test in this suite. The store still
 round-trips, ``read_lazy`` still opens it, and the values are all correct --
@@ -35,6 +42,7 @@ from thyra.converters.spatialdata import _chunking
 from thyra.converters.spatialdata._chunking import (
     IMAGE_CHUNK_EDGE,
     INNER_TILE_EDGE,
+    MIN_TABLE_CHUNK_BYTES,
     MIN_TABLE_SHARD_BYTES,
     TABLE_SHARD_TARGET_BYTES,
     image_chunks,
@@ -163,21 +171,45 @@ class TestConvertedTableGeometry:
         assert file_bytes >= min(array_bytes, MIN_TABLE_SHARD_BYTES), (
             f"X/{member}: {file_bytes} B per file over {array_bytes} B of data "
             f"-> {int(np.ceil(arr.shape[0] / unit)):,} files. Below "
-            f"{MIN_TABLE_SHARD_BYTES} B this is the zarr < 3.1.4 "
-            "auto-shard defect; check the zarr floor in pyproject.toml."
+            f"{MIN_TABLE_SHARD_BYTES} B this is the pre-3.1.4 auto-shard "
+            "collapse (no array.target_shard_size_bytes to override the "
+            "1 KB auto chunk); check the zarr floor in pyproject.toml, "
+            "which is >= 3.1.6."
+        )
+
+    @pytest.mark.parametrize("member", ["data", "indices", "indptr"])
+    def test_x_arrays_are_not_kilobyte_chunked(self, converted_store, member):
+        # The other half of the same defect, and the half the shard assertion
+        # above is blind to: with Thyra's budget held open, zarr 3.1.4/3.1.5
+        # still land a large shard and only the chunk inside it collapses.
+        store, _ = converted_store
+        arr = zarr.open_group(str(store), mode="r")[f"tables/ds_z0/X/{member}"]
+
+        chunk_bytes = arr.chunks[0] * arr.dtype.itemsize
+        array_bytes = arr.shape[0] * arr.dtype.itemsize
+
+        # An array smaller than the floor can only ever be one short chunk.
+        assert chunk_bytes >= min(array_bytes, MIN_TABLE_CHUNK_BYTES), (
+            f"X/{member}: {chunk_bytes} B per chunk over {array_bytes} B of data "
+            f"-> {int(np.ceil(arr.shape[0] / arr.chunks[0])):,} chunks per array, "
+            f"each separately compressed and indexed. Below "
+            f"{MIN_TABLE_CHUNK_BYTES} B this is the zarr < 3.1.6 auto-chunk "
+            "defect (zarr-python#3603); check the zarr floor in pyproject.toml."
         )
 
     def test_data_array_is_large_enough_for_that_to_mean_anything(
         self, converted_store
     ):
-        # Guards the fixture, not the code. The assertion above is
-        # `file_bytes >= min(array_bytes, MIN_TABLE_SHARD_BYTES)`, so it says
-        # nothing at all unless X/data is bigger than the floor -- which it
-        # stops being if the converter ever drops these spectra to a handful of
-        # non-zeros. Today it is ~400 KB.
+        # Guards the fixture, not the code. Both assertions above are
+        # `<bytes> >= min(array_bytes, <floor>)`, so they say nothing at all
+        # unless X/data is bigger than the floor -- which it stops being if the
+        # converter ever drops these spectra to a handful of non-zeros. Today it
+        # is ~400 KB.
         store, _ = converted_store
         data = zarr.open_group(str(store), mode="r")["tables/ds_z0/X/data"]
-        assert data.shape[0] * data.dtype.itemsize > MIN_TABLE_SHARD_BYTES
+        assert data.shape[0] * data.dtype.itemsize > max(
+            MIN_TABLE_SHARD_BYTES, MIN_TABLE_CHUNK_BYTES
+        )
 
     def test_whole_table_stays_in_a_handful_of_files(self, converted_store):
         store, _ = converted_store

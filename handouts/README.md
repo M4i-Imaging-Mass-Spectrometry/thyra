@@ -13,7 +13,7 @@ Everything here was investigated against `main` at **v1.27.0** on
 Windows 11, Python 3.12.7, with pandas 2.3.2 / anndata 0.12.2 /
 spatialdata 0.7.3 / zarr 3.1.3. `main` is **v3.0.0** now, and three of those
 four are below the floors `pyproject.toml` declares today -- anndata
-`>=0.13.2`, spatialdata `>=0.8.0`, zarr `>=3.1.4`. Re-measure before trusting
+`>=0.13.2`, spatialdata `>=0.8.0`, zarr `>=3.1.6`. Re-measure before trusting
 a figure below: the anndata and zarr moves in particular changed how the store
 gets written, which is the subject of half these handouts.
 
