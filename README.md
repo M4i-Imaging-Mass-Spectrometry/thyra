@@ -117,6 +117,7 @@ Full documentation: **[M4i-Imaging-Mass-Spectrometry.github.io/thyra](https://M4
 | Bruker | `.d` | Full support (timsTOF + Rapiflex) |
 | Waters | `.raw` directory | Full support |
 | PHI SmartSoft-TOF | `.raw` file | Full support (nanoTOF, ToF-SIMS) |
+| mzPeak | `.mzpeak` | Experimental (HUPO-PSI v0.9 draft, read-only) |
 | Shimadzu | `.imdx`, `.kbd` | In development (workaround: imzML export from IMAGEREVEAL MS) |
 
 PHI mosaic, MS/MS and depth-profiling acquisitions are implemented but so far
