@@ -117,17 +117,21 @@ git worktree add -b <branch> ../<Thyra-dir> main
 
 Two things to know about working in a worktree here:
 
-1. **The venv is shared.** `thyra` is installed into the Poetry venv as an
-   editable install pointing at the *main* checkout, so
-   `poetry run python` from a worktree still imports the main checkout's
-   code. To exercise worktree code, put the worktree first on the path:
+1. **The venv is per-worktree now.** This used to be a trap. Under Poetry
+   the venv was shared and held `thyra` as an editable install pointing at
+   the *main* checkout, so `poetry run python` from a worktree silently
+   imported main's code -- handout A was verified twice against the wrong
+   tree before that was spotted. uv finds the project root by walking up from
+   the working directory, and a worktree has its own `pyproject.toml`, so
+   `uv run` from a worktree gets that worktree's own `.venv` and its own
+   source. Run this once in a new worktree:
 
    ```bash
-   PYTHONPATH=$(pwd) poetry run pytest
+   uv sync
    ```
 
-   This bit me while verifying handout A: two runs reported identical
-   results because both imported `main`.
+   The `PYTHONPATH=$(pwd)` prefix that the older handouts still carry is no
+   longer needed, and neither is anything `poetry`.
 
 2. **Line endings.** Fixed by handout D. Commits no longer fail the
    `mixed-line-ending` hook on the first attempt, and
@@ -150,9 +154,12 @@ Two things to know about working in a worktree here:
 - No emojis anywhere: code, comments, docstrings, commits, docs.
 - Before every commit:
   ```bash
-  poetry run black . && poetry run isort . && poetry run flake8 && poetry run pytest
+  uv run black . && uv run isort . && uv run flake8 && uv run pytest -m "not integration"
   ```
-- `poetry run mkdocs build --strict` must stay clean.
+  Or let the hooks do it: `uv run pre-commit run --all-files`. See
+  [docs/contributing.md](../docs/contributing.md) for the full workflow.
+- `uv run --group docs mkdocs build --strict` must stay clean (`mkdocs` lives
+  in the `docs` dependency group, not the default one).
 - Two pre-existing `no-any-return` mypy errors exist in
   `thyra/tools/make_example_data.py:62` and
   `thyra/metadata/extractors/waters_extractor.py:130`. They are not yours
