@@ -1,13 +1,14 @@
 # Parallel workstream handouts
 
-Eight pieces of work, written to be run in parallel in separate git worktrees.
+Ten pieces of work, written to be run in parallel in separate git worktrees.
 Each handout is self-contained: it states what is wrong, the evidence, the
 constraints that must not be broken, and how to verify.
 
 **Most of this has shipped.** Read the State column before picking anything
-up. Three rows still hold live work, and one of them is a decision rather than
-code: C (decide), E (upstream), F (backlog). H's remaining item is blocked
-rather than available -- see below before picking it up.
+up. Five rows still hold live work, and one of them is a decision rather than
+code: C (decide), E (upstream), F (backlog), I and J (both upstream, added
+2026-09-01). H's remaining item is blocked rather than available -- see below
+before picking it up.
 
 Everything here was investigated against `main` at **v1.27.0** on
 Windows 11, Python 3.12.7, with pandas 2.3.2 / anndata 0.12.2 /
@@ -27,6 +28,8 @@ gets written, which is the subject of half these handouts.
 | F | [interpolation-resampling.md](interpolation-resampling.md) | *not created* | `../Thyra-interp` | **backlog** -- a capability gap, not a defect |
 | G | [resampling-scils-alignment.md](resampling-scils-alignment.md) | `fix/resampling-scils-alignment` | `../Thyra-resampling` | **DONE** -- v2.1.0-v2.2.3, item 5 left |
 | H | [loose-ends-after-scils-alignment.md](loose-ends-after-scils-alignment.md) | one per item | `../Thyra-loose` | items 3 and 4 shipped; item 2 is **BLOCKED**; item 1 is not Thyra's |
+| I | [spatialdata-table-sharding.md](spatialdata-table-sharding.md) | *upstream* | *scverse/spatialdata* | **OPEN upstream** -- scverse/spatialdata#1178, design comment posted 2026-09-01, awaiting reply |
+| J | [zarr-4304-rank0-shard-hang.md](zarr-4304-rank0-shard-hang.md) | *upstream* | *zarr-developers/zarr-python* | **OPEN upstream** -- zarr-python#4304 filed 2026-09-01, fix not written |
 
 Handout H is what was found *around* G and deliberately not folded into it.
 Three of its four items are settled, so do not read it front-to-back:
@@ -57,6 +60,13 @@ default paths measure exact. It also corrects F's description of
 Handout E is work in `scverse/spatialdata`, not here. It is listed because
 it is the critical path for Ousia reading Thyra output lazily, and because
 its findings change how B and C should be judged.
+
+Handouts I and J are also upstream rather than here, and they are a pair. I
+exposes table shard configuration in spatialdata so Thyra can stop holding
+`zarr.config` open across a whole `sdata.write`; J is a zarr bug found while
+designing I, and is the reason I's design must never pass `shards` into
+anndata's `dataset_kwargs`. Read I before J. Neither blocks anything in this
+repository: the zarr floor half of the story already shipped in #185.
 
 Handout F is backlog, not a defect: a capability `main` does not have, whose
 only prior art was about to be deleted with a stale branch. It is written up
