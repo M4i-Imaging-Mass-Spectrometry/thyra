@@ -16,6 +16,7 @@ from ...resampling.constants import (
     normalize_spectrum_type,
 )
 from ...utils.pyimzml_direct import read_spectrum_mzs_only
+from ..ontology.cache import ONTOLOGY
 from ..types import ComprehensiveMetadata, EssentialMetadata
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,119 @@ UM_PER_UNIT = {
     "UO:0000017": 1.0,  # micrometer
     "UO:0000018": 0.001,  # nanometer
 }
+
+# Analyzer-component terms, in preference order. The first one found under a
+# <componentList><analyzer> is surfaced as ``instrument_info["analyzer"]``, so
+# on a hybrid that declares several analyzers the highest-resolution stage --
+# the one that defines the mass axis of the stored spectra -- wins.
+_ANALYZER_ACCESSIONS = (
+    "MS:1000079",  # fourier transform ion cyclotron resonance mass spectrometer
+    "MS:1000484",  # orbitrap
+    "MS:1000084",  # time-of-flight
+    "MS:1000264",  # ion trap
+)
+
+# The subset of analyzers whose axis-spacing law the resampling detector chain
+# distinguishes. Values are the exact ``instrument_type`` strings
+# ``FTICRDetector`` and ``OrbitrapDetector`` match on -- change both together.
+# TOF is deliberately absent: an imzML declaring a TOF analyzer says nothing
+# about which vendor grid the spectra arrived on, and stamping a TOF type here
+# could arm detectors whose source-grid claims only hold for their own reader.
+_ANALYZER_FAMILIES = {
+    "MS:1000079": "FT-ICR",
+    "MS:1000484": "Orbitrap",
+}
+
+# Instrument-model terms that imply an analyzer family when no analyzer
+# component is declared. The local ontology tables are flat -- no is-a links --
+# so family membership is enumerated rather than walked.
+_FTICR_MODEL_ACCESSIONS = frozenset(
+    {
+        "MS:1000141",  # apex IV
+        "MS:1000142",  # apex Q
+        "MS:1000448",  # LTQ FT
+        "MS:1000557",  # LTQ FT Ultra
+        "MS:1000695",  # apex ultra
+        "MS:1001548",  # Bruker Daltonics solarix series
+        "MS:1001549",  # solariX
+        "MS:1001556",  # Bruker Daltonics apex series
+    }
+)
+
+_ORBITRAP_MODEL_ACCESSIONS = frozenset(
+    {
+        "MS:1000449",  # LTQ Orbitrap
+        "MS:1000555",  # LTQ Orbitrap Discovery
+        "MS:1000556",  # LTQ Orbitrap XL
+        "MS:1000639",  # LTQ Orbitrap XL ETD
+        "MS:1000643",  # MALDI LTQ Orbitrap
+        "MS:1000649",  # Exactive
+        "MS:1001742",  # LTQ Orbitrap Velos
+        "MS:1001910",  # LTQ Orbitrap Elite
+        "MS:1001911",  # Q Exactive
+        "MS:1002416",  # Orbitrap Fusion
+        "MS:1002417",  # Orbitrap Fusion ETD
+        "MS:1002523",  # Q Exactive HF
+        "MS:1002526",  # Exactive Plus
+        "MS:1002634",  # Q Exactive Plus
+        "MS:1002732",  # Orbitrap Fusion Lumos
+        "MS:1002835",  # LTQ Orbitrap Classic
+        "MS:1002877",  # Q Exactive HF-X
+        "MS:1003028",  # Orbitrap Exploris 480
+        "MS:1003029",  # Orbitrap Eclipse
+        "MS:1003094",  # Orbitrap Exploris 240
+        "MS:1003095",  # Orbitrap Exploris 120
+        "MS:1003096",  # LTQ Orbitrap Velos Pro
+        "MS:1003112",  # Orbitrap ID-X
+    }
+)
+
+# timsTOF models carry no family here on purpose: the timsTOF decision is
+# ``DataCharacteristics.is_timstof``, a substring match on the surfaced model
+# name -- the same single path the native .d route goes through. Stamping an
+# ``instrument_type`` as well would create a second, divergable path.
+_TIMSTOF_MODEL_ACCESSIONS = frozenset(
+    {
+        "MS:1003005",  # timsTOF Pro
+        "MS:1003123",  # Bruker Daltonics timsTOF series
+        "MS:1003124",  # timsTOF fleX
+        "MS:1003229",  # timsTOF
+        "MS:1003230",  # timsTOF Pro 2
+        "MS:1003231",  # timsTOF SCP
+    }
+)
+
+_MODEL_FAMILIES: Dict[str, Optional[str]] = {
+    **{acc: "FT-ICR" for acc in _FTICR_MODEL_ACCESSIONS},
+    **{acc: "Orbitrap" for acc in _ORBITRAP_MODEL_ACCESSIONS},
+    **{acc: None for acc in _TIMSTOF_MODEL_ACCESSIONS},
+}
+
+# Last-resort family match, applied to model text the file provides itself:
+# the free-text value of MS:1000031 "instrument model", or the name of a model
+# term newer than the shipped ontology tables. Tokens are vendor product names
+# unambiguous enough that a substring hit identifies the family ("scimaX MRMS",
+# "Orbitrap Astral", "solariX XR" all resolve correctly); generic words like
+# "ft" or "tof" are deliberately not in the list.
+_FAMILY_NAME_TOKENS = (
+    ("solarix", "FT-ICR"),
+    ("scimax", "FT-ICR"),
+    ("mrms", "FT-ICR"),
+    ("ft-icr", "FT-ICR"),
+    ("fticr", "FT-ICR"),
+    ("orbitrap", "Orbitrap"),
+    ("exactive", "Orbitrap"),
+    ("exploris", "Orbitrap"),
+)
+
+
+def _family_from_model_text(text: str) -> Optional[str]:
+    """Resolve an analyzer family from free-form instrument-model text."""
+    lowered = text.lower()
+    for token, family in _FAMILY_NAME_TOKENS:
+        if token in lowered:
+            return family
+    return None
 
 
 class ImzMLMetadataExtractor(MetadataExtractor):
@@ -658,21 +772,152 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         return params
 
     def _extract_instrument_info(self) -> Dict[str, Any]:
-        """Extract instrument information."""
-        instrument = {}
+        """Extract instrument information from the instrumentConfiguration blocks.
 
-        if hasattr(self.parser, "imzmldict") and self.parser.imzmldict:
-            instrument_keys = [
-                "instrument model",
-                "instrument serial number",
-                "software",
-                "software version",
-            ]
-            for key in instrument_keys:
-                if key in self.parser.imzmldict:
-                    instrument[key.replace(" ", "_")] = self.parser.imzmldict[key]
+        This used to read ``imzmldict`` for "instrument model" and friends, but
+        pyimzml's ``__readimzmlmeta`` only ever collects pixel-geometry and
+        laser parameters -- none of those keys can exist, so every store Thyra
+        wrote carried an empty ``instrument_information`` for imzML sources,
+        and neither ``FTICRDetector`` nor ``OrbitrapDetector`` could ever fire
+        on an imzML. The declarations survive on ``parser.metadata``, so they
+        are read from there:
 
-        return instrument
+        - ``instrument_model`` / ``instrument_serial_number`` -- from the
+          instrumentConfiguration's own cvParams, referenceableParamGroup
+          inheritance included (Bruker and SCiLS exports put the model term in
+          a ``CommonInstrumentParams`` group).
+        - ``analyzer`` -- the CV name of the first recognised
+          ``<componentList><analyzer>`` term, which is what
+          ``normalize_analyzer`` in the metadata schema accepts.
+        - ``instrument_type`` -- the exact string the resampling detector
+          chain matches on (``"FT-ICR"`` / ``"Orbitrap"``), when the analyzer
+          or the model resolves to a family the chain distinguishes.  Absent
+          otherwise: an unstated analyzer stays unstated.
+        """
+        info: Dict[str, Any] = {}
+        configs = self._instrument_configurations()
+        if not configs:
+            return info
+
+        model = self._instrument_model(configs)
+        if model:
+            info["instrument_model"] = model
+
+        serial = self._config_param(configs, "MS:1000529")
+        if isinstance(serial, str) and serial.strip():
+            info["instrument_serial_number"] = serial.strip()
+
+        analyzer_accession = self._analyzer_accession(configs)
+        if analyzer_accession is not None:
+            info["analyzer"] = ONTOLOGY.terms[analyzer_accession][0]
+
+        family = self._analyzer_family(configs, analyzer_accession, model)
+        if family is not None:
+            info["instrument_type"] = family
+
+        return info
+
+    def _instrument_configurations(self) -> List[Any]:
+        """The parsed instrumentConfiguration ParamGroups, in document order."""
+        metadata = getattr(self.parser, "metadata", None)
+        configs = getattr(metadata, "instrument_configurations", None)
+        if not isinstance(configs, dict):
+            return []
+        return list(configs.values())
+
+    @staticmethod
+    def _config_param(configs: List[Any], accession: str) -> Any:
+        """The first value any configuration declares for ``accession``."""
+        for config in configs:
+            params = getattr(config, "param_by_accession", None)
+            if isinstance(params, dict) and accession in params:
+                return params[accession]
+        return None
+
+    def _instrument_model(self, configs: List[Any]) -> Optional[str]:
+        """The declared instrument model, from the shape the exporter chose.
+
+        Vendors write the model two ways: generic ``MS:1000031 instrument
+        model`` carrying the name as free text, or the model's own child term
+        as a valueless flag (``MS:1001549 solariX``, ``MS:1003124 timsTOF
+        fleX``).  The explicit value wins; a known model accession resolves
+        through the shipped ontology table; and a term newer than the table is
+        still usable when its *name* identifies a family.
+        """
+        value = self._config_param(configs, "MS:1000031")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+        for config in configs:
+            params = getattr(config, "param_by_accession", None)
+            if not isinstance(params, dict):
+                continue
+            for accession in params:
+                if accession in _MODEL_FAMILIES:
+                    return ONTOLOGY.terms[accession][0]
+
+        for config in configs:
+            params = getattr(config, "param_by_name", None)
+            if not isinstance(params, dict):
+                continue
+            for name, value in params.items():
+                if (
+                    isinstance(name, str)
+                    and value is True
+                    and _family_from_model_text(name) is not None
+                ):
+                    return name
+
+        return None
+
+    @staticmethod
+    def _analyzer_accession(configs: List[Any]) -> Optional[str]:
+        """The highest-priority analyzer term declared on any componentList."""
+        declared: set = set()
+        for config in configs:
+            for component in getattr(config, "components", None) or []:
+                if getattr(component, "type", None) != "analyzer":
+                    continue
+                params = getattr(component, "param_by_accession", None)
+                if isinstance(params, dict):
+                    declared.update(params)
+
+        for accession in _ANALYZER_ACCESSIONS:
+            if accession in declared:
+                return accession
+        return None
+
+    def _analyzer_family(
+        self,
+        configs: List[Any],
+        analyzer_accession: Optional[str],
+        model: Optional[str],
+    ) -> Optional[str]:
+        """Resolve the axis family, preferring the analyzer declaration.
+
+        The analyzer cvParam states the physics outright, so it outranks the
+        model term, which outranks a substring match on free-form model text.
+        A file that declares none of the three resolves to ``None``.
+        """
+        if analyzer_accession in _ANALYZER_FAMILIES:
+            return _ANALYZER_FAMILIES[analyzer_accession]
+        if analyzer_accession is not None:
+            # A recognised analyzer outside the family table (TOF, ion trap)
+            # is a real declaration; do not second-guess it from the model.
+            return None
+
+        for config in configs:
+            params = getattr(config, "param_by_accession", None)
+            if not isinstance(params, dict):
+                continue
+            for accession in params:
+                family = _MODEL_FAMILIES.get(accession)
+                if family is not None:
+                    return family
+
+        if model is not None:
+            return _family_from_model_text(model)
+        return None
 
     def _extract_raw_metadata(self) -> Dict[str, Any]:
         """Extract raw metadata from imzmldict and spectrum cvParams."""

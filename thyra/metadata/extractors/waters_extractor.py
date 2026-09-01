@@ -235,8 +235,16 @@ class WatersMetadataExtractor(MetadataExtractor):
         )
 
     def _extract_waters_specific(self) -> Dict[str, Any]:
-        """Extract Waters format-specific metadata."""
+        """Extract Waters format-specific metadata.
+
+        ``format`` is the key ``DataCharacteristics.from_metadata`` reads for
+        its format flags (``is_waters_raw`` prefix-matches on "Waters ").
+        ``data_format`` predates it and only ever fed the stored
+        format-specific block, so both are kept: renaming it would change
+        stored metadata for no downstream gain.
+        """
         return {
+            "format": "Waters MassLynx raw",
             "data_format": "waters_raw",
             "data_path": str(self._data_path),
             "is_imaging": True,
@@ -280,9 +288,15 @@ class WatersMetadataExtractor(MetadataExtractor):
         return params
 
     def _extract_instrument_info(self) -> Dict[str, Any]:
-        """Extract instrument information."""
+        """Extract instrument information.
+
+        The key is ``manufacturer`` because that is what
+        ``DataCharacteristics.from_metadata`` reads; this used to say
+        ``vendor``, which nothing downstream consumed, so the fact that a
+        file was Waters never reached the resampling detector chain.
+        """
         return {
-            "vendor": "Waters",
+            "manufacturer": "Waters",
             "format": "MassLynx .raw",
         }
 

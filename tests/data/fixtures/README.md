@@ -1,6 +1,6 @@
 # Hand-authored imzML corpus
 
-Four tiny imzML/`.ibd` pairs whose XML was written out literally, character by
+Six tiny imzML/`.ibd` pairs whose XML was written out literally, character by
 character, and whose binary was packed by hand.
 
 Everything else the test suite reads was produced by pyimzml's own
@@ -8,11 +8,11 @@ Everything else the test suite reads was produced by pyimzml's own
 other's mistakes, so that corpus can only ever exercise the shapes the writer
 happens to emit — and its emission profile diverges from real vendor files on
 nine structural points, every one of which is unreachable from a generated
-fixture. These four files close some of that gap.
+fixture. These files close some of that gap.
 
-They are small on purpose: 41,208 bytes of imzML and `.ibd` checked out, and
-6,051 bytes zlib-compressed — the XML is highly repetitive, so what the
-repository actually carries is under 6 KB.
+They are small on purpose: 60,885 bytes of imzML and `.ibd` checked out, and
+9,211 bytes zlib-compressed — the XML is highly repetitive, so what the
+repository actually carries is under 10 KB.
 
 ## The files
 
@@ -22,6 +22,8 @@ repository actually carries is under 6 KB.
 | `unit_nanometre` | `IMS:1000046/47` carrying `UO:0000018` nanometre. pyimzml's `imzmldict` drops the unit, so a 4.40625 um pixel would read as 4406.25 um if the extractor did not fetch the unit from the ParamGroup path. |
 | `two_scansettings` | Two `<scanSettings>` blocks with different pixel sizes. `__readimzmlmeta` resolves each accession by first-match-anywhere, producing a chimera present in neither block. |
 | `two_precision_terms` | One param group declaring both `32-bit float` and `64-bit float`. pyimzml picks by dict insertion order and says nothing. |
+| `solarix_fticr` | A profile solariX MRMS export: model term `MS:1001549` inherited through a `CommonInstrumentParams` referenceableParamGroup, `MS:1000079` FT-ICR analyzer on the componentList. The shape the imzML extractor must resolve to `instrument_type = "FT-ICR"` for `FTICRDetector` to ever fire. |
+| `timstof_flex_export` | A profile timsTOF fleX export: model term `MS:1003124` directly on the instrumentConfiguration. Outside the native `.d` there is no `GlobalMetadata`, so the surfaced model name is the only way `is_timstof` can recognise the instrument. |
 
 Deliberately **not** here: zlib compression and continuous mode. Both are
 reachable through `ImzMLWriter` — `ZlibCompression()` and

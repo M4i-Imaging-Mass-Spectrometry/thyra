@@ -305,19 +305,53 @@ def build_iontof_sparse() -> Path:
 # --------------------------------------------------------------------------
 
 
+# The instrument block the LF fixtures carry unless they are making a point
+# about the instrument. pyimzml dereferences instrumentConfigurationList
+# unconditionally in __readimzmlmeta and raises AttributeError on None, so
+# even a fixture with nothing to say about the instrument has to declare one.
+DEFAULT_INSTRUMENT_LINES = [
+    '  <instrumentConfigurationList count="1">',
+    '    <instrumentConfiguration id="IC1">',
+    '      <componentList count="2">',
+    '        <source order="1"><cvParam cvRef="MS" accession="MS:1000075"'
+    ' name="matrix-assisted laser desorption ionization" value="" /></source>',
+    '        <detector order="2"><cvParam cvRef="MS" accession="MS:1000114"'
+    ' name="microchannel plate detector" value="" /></detector>',
+    "      </componentList>",
+    "    </instrumentConfiguration>",
+    "  </instrumentConfigurationList>",
+]
+
+CENTROID_LINE = (
+    '      <cvParam cvRef="MS" accession="MS:1000127" name="centroid spectrum"'
+    ' value="" />'
+)
+
+PROFILE_LINE = (
+    '      <cvParam cvRef="MS" accession="MS:1000128" name="profile spectrum"'
+    ' value="" />'
+)
+
+
 def _canonical_header(
     uuid_text: str,
     scan_settings_lines: Sequence[str],
     mz_precision_lines: Sequence[str],
     n_spectra: int,
+    spectrum_type_line: str = CENTROID_LINE,
+    instrument_lines: Sequence[str] = tuple(DEFAULT_INSTRUMENT_LINES),
+    extra_param_group_lines: Sequence[str] = (),
 ) -> List[str]:
-    """The parts the three LF fixtures share.
+    """The parts the LF fixtures share.
 
     Deliberately conventional everywhere the fixture is not making a point:
     correct ontology names, ``mzML/@version``, a single 32-bit-float intensity
     declaration. Each fixture varies exactly one thing so a failing assertion
     points at that thing.
     """
+    n_param_groups = 3 + sum(
+        1 for line in extra_param_group_lines if "<referenceableParamGroup id=" in line
+    )
     return [
         '<?xml version="1.0" encoding="utf-8"?>',
         '<mzML xmlns="http://psi.hupo.org/ms/mzml" version="1.1.0">',
@@ -332,8 +366,7 @@ def _canonical_header(
         "  </cvList>",
         "  <fileDescription>",
         "    <fileContent>",
-        '      <cvParam cvRef="MS" accession="MS:1000127" name="centroid spectrum"'
-        ' value="" />',
+        spectrum_type_line,
         '      <cvParam cvRef="IMS" accession="IMS:1000031" name="processed"'
         ' value="" />',
         '      <cvParam cvRef="MS" accession="MS:1000130" name="positive scan"'
@@ -342,7 +375,8 @@ def _canonical_header(
         f' name="universally unique identifier" value="{{{uuid_text}}}" />',
         "    </fileContent>",
         "  </fileDescription>",
-        '  <referenceableParamGroupList count="3">',
+        f'  <referenceableParamGroupList count="{n_param_groups}">',
+        *extra_param_group_lines,
         '    <referenceableParamGroup id="mzArray">',
         '      <cvParam cvRef="MS" accession="MS:1000576" name="no compression"'
         ' value="" />',
@@ -367,8 +401,7 @@ def _canonical_header(
         ' value="" />',
         "    </referenceableParamGroup>",
         '    <referenceableParamGroup id="spectrum1">',
-        '      <cvParam cvRef="MS" accession="MS:1000127" name="centroid spectrum"'
-        ' value="" />',
+        spectrum_type_line,
         '      <cvParam cvRef="MS" accession="MS:1000130" name="positive scan"'
         ' value="" />',
         "    </referenceableParamGroup>",
@@ -380,19 +413,7 @@ def _canonical_header(
         '    <software id="hand-authored" version="1" />',
         "  </softwareList>",
         *scan_settings_lines,
-        # pyimzml dereferences instrumentConfigurationList unconditionally in
-        # __readimzmlmeta and raises AttributeError on None, so even a fixture
-        # with nothing to say about the instrument has to declare one.
-        '  <instrumentConfigurationList count="1">',
-        '    <instrumentConfiguration id="IC1">',
-        '      <componentList count="2">',
-        '        <source order="1"><cvParam cvRef="MS" accession="MS:1000075"'
-        ' name="matrix-assisted laser desorption ionization" value="" /></source>',
-        '        <detector order="2"><cvParam cvRef="MS" accession="MS:1000114"'
-        ' name="microchannel plate detector" value="" /></detector>',
-        "      </componentList>",
-        "    </instrumentConfiguration>",
-        "  </instrumentConfigurationList>",
+        *instrument_lines,
         '  <dataProcessingList count="1">',
         '    <dataProcessing id="export">',
         '      <processingMethod order="1" softwareRef="hand-authored">',
@@ -420,6 +441,9 @@ def _build_lf_fixture(
     uuid_text: str,
     scan_settings_lines: Sequence[str],
     mz_precision_lines: Sequence[str] = tuple(DEFAULT_MZ_PRECISION),
+    spectrum_type_line: str = CENTROID_LINE,
+    instrument_lines: Sequence[str] = tuple(DEFAULT_INSTRUMENT_LINES),
+    extra_param_group_lines: Sequence[str] = (),
 ) -> Path:
     """Pack the .ibd and emit an LF/UTF-8 imzML around it."""
     spectra = _make_spectra(len(DENSE_COORDINATES), np.dtype(np.float64))
@@ -427,7 +451,13 @@ def _build_lf_fixture(
     (FIXTURE_DIR / f"{stem}.ibd").write_bytes(ibd)
 
     lines = _canonical_header(
-        uuid_text, scan_settings_lines, mz_precision_lines, len(DENSE_COORDINATES)
+        uuid_text,
+        scan_settings_lines,
+        mz_precision_lines,
+        len(DENSE_COORDINATES),
+        spectrum_type_line=spectrum_type_line,
+        instrument_lines=instrument_lines,
+        extra_param_group_lines=extra_param_group_lines,
     )
     for i, (coordinate, placement) in enumerate(zip(DENSE_COORDINATES, placements)):
         lines += [
@@ -557,13 +587,125 @@ def build_two_precision_terms() -> Path:
     )
 
 
+# The conventional scan-settings block, shared by the instrument fixtures:
+# a 2x2 grid at 10 um. Neither fixture is making a point about geometry.
+PLAIN_SCAN_SETTINGS = [
+    '  <scanSettingsList count="1">',
+    '    <scanSettings id="scanSettings1">',
+    '      <cvParam cvRef="IMS" accession="IMS:1000042"'
+    ' name="max count of pixels x" value="2" />',
+    '      <cvParam cvRef="IMS" accession="IMS:1000043"'
+    ' name="max count of pixels y" value="2" />',
+    '      <cvParam cvRef="IMS" accession="IMS:1000046" name="pixel size (x)"'
+    ' value="10.0" />',
+    '      <cvParam cvRef="IMS" accession="IMS:1000047" name="pixel size y"'
+    ' value="10.0" />',
+    "    </scanSettings>",
+    "  </scanSettingsList>",
+]
+
+SOLARIX_UUID = "4B3A9D4F-5E1C-4C8D-9F66-3D0D8E5B7744"
+
+
+def build_solarix_fticr() -> Path:
+    """A solariX MRMS export: model term in a referenceableParamGroup, FT-ICR
+    analyzer on the componentList, profile spectra.
+
+    Profile is the branch that used to go wrong. ``FTICRDetector`` matches on
+    an ``instrument_type`` the imzML extractor never produced -- it read
+    pyimzml's ``imzmldict``, which never carries instrument keys -- so a
+    profile FT-ICR imzML fell through to ``DefaultDetector``: a CONSTANT axis
+    at the 0.1 Da default where the physics wants quadratic spacing.
+
+    The model term (MS:1001549 solariX) sits in ``CommonInstrumentParams``
+    rather than on the instrumentConfiguration itself because that is where
+    Bruker-lineage exporters put it, which makes this fixture exercise
+    pyimzml's referenceableParamGroup inheritance -- unreachable from any
+    hand-built metadata dict. The analyzer (MS:1000079) is declared on the
+    componentList the way the mzML schema intends.
+    """
+    instrument_lines = [
+        '  <instrumentConfigurationList count="1">',
+        '    <instrumentConfiguration id="IC1">',
+        '      <referenceableParamGroupRef ref="CommonInstrumentParams" />',
+        '      <componentList count="3">',
+        '        <source order="1"><cvParam cvRef="MS" accession="MS:1000075"'
+        ' name="matrix-assisted laser desorption ionization" value="" /></source>',
+        '        <analyzer order="2"><cvParam cvRef="MS" accession="MS:1000079"'
+        ' name="fourier transform ion cyclotron resonance mass spectrometer"'
+        ' value="" /></analyzer>',
+        '        <detector order="3"><cvParam cvRef="MS" accession="MS:1000624"'
+        ' name="inductive detector" value="" /></detector>',
+        "      </componentList>",
+        "    </instrumentConfiguration>",
+        "  </instrumentConfigurationList>",
+    ]
+    extra_param_groups = [
+        '    <referenceableParamGroup id="CommonInstrumentParams">',
+        '      <cvParam cvRef="MS" accession="MS:1001549" name="solariX"'
+        ' value="" />',
+        '      <cvParam cvRef="MS" accession="MS:1000529"'
+        ' name="instrument serial number" value="217817.00365" />',
+        "    </referenceableParamGroup>",
+    ]
+    return _build_lf_fixture(
+        "solarix_fticr",
+        SOLARIX_UUID,
+        PLAIN_SCAN_SETTINGS,
+        spectrum_type_line=PROFILE_LINE,
+        instrument_lines=instrument_lines,
+        extra_param_group_lines=extra_param_groups,
+    )
+
+
+TIMSTOF_FLEX_UUID = "5C4B0E5A-6F2D-4D9E-8A77-4E1E9F6C8855"
+
+
+def build_timstof_flex_export() -> Path:
+    """A timsTOF fleX export: model term MS:1003124 on the
+    instrumentConfiguration, TOF analyzer, profile spectra.
+
+    The native ``.d`` route recognises a timsTOF by substring on
+    ``GlobalMetadata.InstrumentName``, which only the Bruker extractor writes
+    -- so the same acquisition exported to imzML lost its identity entirely.
+    Profile again pins the branch whose answer changes: unrecognised, this
+    file fell to ``DefaultDetector``'s CONSTANT axis; recognised, it gets the
+    reflector-TOF law the instrument's native route gets.
+    """
+    instrument_lines = [
+        '  <instrumentConfigurationList count="1">',
+        '    <instrumentConfiguration id="IC1">',
+        '      <cvParam cvRef="MS" accession="MS:1003124" name="timsTOF fleX"'
+        ' value="" />',
+        '      <componentList count="3">',
+        '        <source order="1"><cvParam cvRef="MS" accession="MS:1000075"'
+        ' name="matrix-assisted laser desorption ionization" value="" /></source>',
+        '        <analyzer order="2"><cvParam cvRef="MS" accession="MS:1000084"'
+        ' name="time-of-flight" value="" /></analyzer>',
+        '        <detector order="3"><cvParam cvRef="MS" accession="MS:1000114"'
+        ' name="microchannel plate detector" value="" /></detector>',
+        "      </componentList>",
+        "    </instrumentConfiguration>",
+        "  </instrumentConfigurationList>",
+    ]
+    return _build_lf_fixture(
+        "timstof_flex_export",
+        TIMSTOF_FLEX_UUID,
+        PLAIN_SCAN_SETTINGS,
+        spectrum_type_line=PROFILE_LINE,
+        instrument_lines=instrument_lines,
+    )
+
+
 def main() -> None:
-    """Rebuild all four pairs and report their sizes."""
+    """Rebuild all six pairs and report their sizes."""
     for builder in (
         build_iontof_sparse,
         build_unit_nanometre,
         build_two_scansettings,
         build_two_precision_terms,
+        build_solarix_fticr,
+        build_timstof_flex_export,
     ):
         imzml_path = builder()
         ibd_path = imzml_path.with_suffix(".ibd")

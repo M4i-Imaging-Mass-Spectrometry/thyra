@@ -2,7 +2,7 @@
 
 Every other imzML the suite reads was produced by pyimzml's own
 ``ImzMLWriter``, so parser and writer agree on each other's mistakes and nine
-structural features of real vendor files are unreachable. These four pairs were
+structural features of real vendor files are unreachable. These pairs were
 written out literally to break that loop; see the corpus README for what each
 one carries and for the two ways they can be destroyed without a test noticing.
 
@@ -25,7 +25,14 @@ from pyimzml.ImzMLParser import ImzMLParser
 
 from tests.fixtures.imzml_parser import production_parser
 from thyra.convert import convert_msi
+from thyra.preview import preview_msi
 from thyra.readers.imzml.imzml_reader import ImzMLReader
+from thyra.resampling.data_characteristics import DataCharacteristics
+from thyra.resampling.instrument_detectors import (
+    InstrumentDetectorChain,
+    TimsTOFDetector,
+)
+from thyra.resampling.types import AxisType, ResamplingMethod
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXTURE_DIR = REPO_ROOT / "tests" / "data" / "fixtures"
@@ -35,6 +42,8 @@ STEMS = [
     "unit_nanometre",
     "two_scansettings",
     "two_precision_terms",
+    "solarix_fticr",
+    "timstof_flex_export",
 ]
 
 # two_precision_terms declares its precision twice, which _validate_parser_state
@@ -489,6 +498,109 @@ class TestTwoPrecisionTerms:
             assert mzs.dtype == np.float64
             assert mzs[0] == pytest.approx(100.0)
             assert mzs[-1] == pytest.approx(500.0)
+
+
+class TestSolarixFticr:
+    """A solariX MRMS export must reach FTICRDetector from its own cvParams.
+
+    Before the extractor read the instrumentConfiguration blocks, this file's
+    declarations went nowhere: pyimzml's ``imzmldict`` never carries
+    instrument keys, so ``instrument_info`` came back empty and the profile
+    declaration sent the file to ``DefaultDetector`` -- a CONSTANT axis at
+    the 0.1 Da default where FT-ICR physics wants quadratic spacing.
+    """
+
+    def _instrument_info(self):
+        reader = open_reader("solarix_fticr")
+        try:
+            return reader.get_comprehensive_metadata().instrument_info
+        finally:
+            reader.close()
+
+    def test_model_and_serial_survive_param_group_inheritance(self):
+        """MS:1001549 and MS:1000529 sit in CommonInstrumentParams, not on the
+        instrumentConfiguration element -- the shape Bruker-lineage exporters
+        write, reachable only through referenceableParamGroup inheritance."""
+        info = self._instrument_info()
+
+        assert info["instrument_model"] == "solariX"
+        assert info["instrument_serial_number"] == "217817.00365"
+
+    def test_analyzer_component_is_surfaced_by_cv_name(self):
+        """The componentList analyzer term, in the spelling the metadata
+        schema's ``normalize_analyzer`` accepts."""
+        info = self._instrument_info()
+
+        assert (
+            info["analyzer"]
+            == "fourier transform ion cyclotron resonance mass spectrometer"
+        )
+
+    def test_instrument_type_is_the_exact_detector_string(self):
+        """``FTICRDetector`` matches ``"FT-ICR"`` and nothing else."""
+        assert self._instrument_info()["instrument_type"] == "FT-ICR"
+
+    def test_the_file_declares_profile(self):
+        """Profile is the branch whose answer changes; keep the fixture on it."""
+        reader = open_reader("solarix_fticr")
+        try:
+            essential = reader.get_essential_metadata()
+            assert essential.spectrum_type == "profile spectrum"
+        finally:
+            reader.close()
+
+    def test_preview_reports_fticr_and_nearest_neighbor(self):
+        """The whole path, on the exact surface the Ousia wizard reads."""
+        preview = preview_msi(fixture_path("solarix_fticr"))
+
+        assert preview.readable, preview.error
+        assert preview.instrument_type is AxisType.FTICR
+        assert preview.resampling_method is ResamplingMethod.NEAREST_NEIGHBOR
+
+
+class TestTimstofFlexExport:
+    """A timsTOF fleX export must keep its identity outside the native .d.
+
+    ``is_timstof`` is a substring match on the instrument name, and only the
+    Bruker extractor's GlobalMetadata used to feed it -- so the same
+    acquisition exported to imzML was anonymous and its profile spectra fell
+    to ``DefaultDetector``'s CONSTANT axis.
+    """
+
+    def _instrument_info(self):
+        reader = open_reader("timstof_flex_export")
+        try:
+            return reader.get_comprehensive_metadata().instrument_info
+        finally:
+            reader.close()
+
+    def test_model_term_is_surfaced_from_the_configuration(self):
+        """MS:1003124 sits directly on the instrumentConfiguration element."""
+        assert self._instrument_info()["instrument_model"] == "timsTOF fleX"
+
+    def test_no_instrument_type_is_stamped(self):
+        """The timsTOF decision is ``is_timstof``, the same single path the
+        native .d goes through; stamping a type here would create a second."""
+        assert "instrument_type" not in self._instrument_info()
+
+    def test_the_chain_identifies_a_timstof(self):
+        characteristics = DataCharacteristics.from_metadata(
+            {"instrument_info": self._instrument_info()}
+        )
+
+        assert characteristics.is_timstof
+        assert isinstance(
+            InstrumentDetectorChain().detect(characteristics), TimsTOFDetector
+        )
+
+    def test_preview_reports_reflector_tof_and_nearest_neighbor(self):
+        """Profile declaration notwithstanding: the pair is the instrument's,
+        the same answer the native .d route gives."""
+        preview = preview_msi(fixture_path("timstof_flex_export"))
+
+        assert preview.readable, preview.error
+        assert preview.instrument_type is AxisType.REFLECTOR_TOF
+        assert preview.resampling_method is ResamplingMethod.NEAREST_NEIGHBOR
 
 
 def _git(*args: str) -> str:

@@ -298,6 +298,48 @@ class PhiToFSIMSDetector(InstrumentDetector):
         return AxisType.LINEAR_TOF
 
 
+class WatersDetector(InstrumentDetector):
+    """Detector for Waters MassLynx .raw imaging data (SELECT SERIES MRT et al.).
+
+    Without this detector a Waters acquisition's fate hinged on its declared
+    spectrum representation: centroid files happened to land on
+    :class:`CentroidImzMLDetector` -- the right answer, reached by accident on
+    a detector whose name says imzML -- while profile files fell through to
+    :class:`DefaultDetector`. That reported ``CONSTANT``, which downstream
+    pairs with the 0.1 Da default bin width: R = 5,000 at m/z 500, on an
+    instrument built for 100,000+.
+    """
+
+    @property
+    def name(self) -> str:
+        """Return detector name."""
+        return "Waters MassLynx"
+
+    def matches(self, characteristics: DataCharacteristics) -> bool:
+        """Check whether the Waters extractor stamped the MassLynx raw format."""
+        return characteristics.is_waters_raw
+
+    def get_resampling_method(self) -> ResamplingMethod:
+        """Return nearest-neighbour, which bins counts and cannot invent them."""
+        return ResamplingMethod.NEAREST_NEIGHBOR
+
+    def get_axis_type(self) -> AxisType:
+        """Return reflector TOF: bin width proportional to m/z.
+
+        SCiLS Lab 2026b calls the same law Orthogonal TOF (formerly Reflector
+        TOF): bin size proportional to m/z, i.e. constant relative resolution
+        (2026b User Guide, p.75). That is the law for an orthogonal-TOF
+        instrument like the SELECT SERIES MRT.
+        """
+        return AxisType.REFLECTOR_TOF
+
+    # ``source_grid_law`` stays at the inherited ``None`` on purpose: MassLynx
+    # lays out the stored m/z grid, not Thyra, and no law has been measured
+    # for it. Declaring one untested would open ``_gate_tic_preserving`` --
+    # the gate that keeps auto-selection off the interpolating path -- on
+    # data whose grid Thyra has not actually identified.
+
+
 class DefaultDetector(InstrumentDetector):
     """Fallback detector for unknown instruments.
 
@@ -351,6 +393,7 @@ class InstrumentDetectorChain:
             FTICRDetector(),
             OrbitrapDetector(),
             PhiToFSIMSDetector(),
+            WatersDetector(),
             # Generic spectrum type detector
             CentroidImzMLDetector(),
             # Fallback last

@@ -17,6 +17,7 @@ from thyra.resampling.instrument_detectors import (
     PhiToFSIMSDetector,
     RapiflexDetector,
     TimsTOFDetector,
+    WatersDetector,
 )
 from thyra.resampling.types import AxisType, ResamplingMethod
 
@@ -185,6 +186,7 @@ class TestInstrumentDetectorChain:
             "FTICRDetector",
             "OrbitrapDetector",
             "PhiToFSIMSDetector",
+            "WatersDetector",
             "CentroidImzMLDetector",
             "DefaultDetector",
         ]
@@ -275,6 +277,151 @@ class TestPhiToFSIMSDetector:
             is ResamplingMethod.NEAREST_NEIGHBOR
         )
         assert chain.get_axis_type(characteristics) is AxisType.LINEAR_TOF
+
+
+class TestWatersDetector:
+    """Waters MassLynx .raw: the answer must not hinge on the declared
+    representation.
+
+    Before this detector existed, a Waters file's fate was decided by
+    ``_detect_spectrum_type``: centroid landed on ``CentroidImzMLDetector``
+    (the right pair, reached by accident), profile fell to
+    ``DefaultDetector`` -- CONSTANT, which downstream pairs with the 0.1 Da
+    default bin width, R = 5,000 at m/z 500 on an MRT built for 100,000+.
+    """
+
+    WATERS_STAMP = {"format_specific": {"format": "Waters MassLynx raw"}}
+
+    def setup_method(self):
+        self.detector = WatersDetector()
+
+    def test_matches_the_masslynx_format_stamp(self):
+        """WatersMetadataExtractor writes format_specific["format"]."""
+        characteristics = DataCharacteristics.from_metadata(self.WATERS_STAMP)
+        assert characteristics.is_waters_raw
+        assert self.detector.matches(characteristics)
+
+    def test_does_not_match_other_formats(self):
+        for fmt in ("Rapiflex", "imzML", "PHI SmartSoft-TOF raw", ""):
+            characteristics = DataCharacteristics.from_metadata(
+                {"format_specific": {"format": fmt}}
+            )
+            assert not characteristics.is_waters_raw, fmt
+            assert not self.detector.matches(characteristics), fmt
+
+    def test_uses_reflector_tof_and_nearest_neighbor(self):
+        """Constant relative resolution -- SCiLS's Orthogonal TOF law (p.75)."""
+        assert self.detector.get_axis_type() is AxisType.REFLECTOR_TOF
+        assert (
+            self.detector.get_resampling_method() is ResamplingMethod.NEAREST_NEIGHBOR
+        )
+
+    def test_does_not_declare_a_source_grid_law(self):
+        """MassLynx lays out the stored grid, not Thyra; no law is claimed.
+
+        Declaring one untested would open ``_gate_tic_preserving`` on data
+        whose grid Thyra has not actually identified.
+        """
+        assert self.detector.source_grid_law is None
+
+    @pytest.mark.parametrize(
+        "spectrum_type", [SpectrumType.PROFILE, SpectrumType.CENTROID, None]
+    )
+    def test_chain_answers_the_same_for_any_representation(self, spectrum_type):
+        """Profile, centroid, or undeclared: the pair is the instrument's."""
+        chain = InstrumentDetectorChain()
+        characteristics = DataCharacteristics.from_metadata(
+            {
+                **self.WATERS_STAMP,
+                "essential_metadata": {"spectrum_type": spectrum_type},
+            }
+        )
+        assert chain.get_axis_type(characteristics) is AxisType.REFLECTOR_TOF
+        assert (
+            chain.get_resampling_method(characteristics)
+            is ResamplingMethod.NEAREST_NEIGHBOR
+        )
+
+    def test_beats_the_centroid_detector_in_the_chain(self):
+        """A centroid Waters file is identified, not matched by accident."""
+        chain = InstrumentDetectorChain()
+        characteristics = DataCharacteristics.from_metadata(
+            {
+                **self.WATERS_STAMP,
+                "essential_metadata": {"spectrum_type": SpectrumType.CENTROID},
+            }
+        )
+        assert isinstance(chain.detect(characteristics), WatersDetector)
+
+
+class TestAnalyzerFamilyReachability:
+    """FTICRDetector and OrbitrapDetector, reached through from_metadata.
+
+    Both used to be unreachable code: they match on
+    ``instrument_info["instrument_type"]``, and no extractor in the package
+    ever produced ``"FT-ICR"`` or ``"Orbitrap"`` -- the only producer of
+    ``instrument_type`` anywhere was the Rapiflex reader's ``"MALDI-TOF"``.
+    The imzML extractor now emits these exact strings from the file's own
+    cvParams; these tests pin the dict-shaped contract between the two.
+    """
+
+    def setup_method(self):
+        self.tree = ResamplingDecisionTree()
+        self.chain = InstrumentDetectorChain()
+
+    @pytest.mark.parametrize(
+        "spectrum_type", [SpectrumType.PROFILE, SpectrumType.CENTROID, None]
+    )
+    def test_fticr_wins_over_the_spectrum_type_branches(self, spectrum_type):
+        """A declared FT-ICR gets the quadratic axis whatever the representation.
+
+        Profile is the branch that used to go wrong: with no instrument_type
+        arriving, profile FT-ICR fell to DefaultDetector's CONSTANT at the
+        0.1 Da default.
+        """
+        metadata = {
+            "instrument_info": {"instrument_type": "FT-ICR"},
+            "essential_metadata": {"spectrum_type": spectrum_type},
+        }
+        assert self.tree.select_axis_type(metadata) is AxisType.FTICR
+        assert self.tree.select_strategy(metadata) is ResamplingMethod.NEAREST_NEIGHBOR
+
+    @pytest.mark.parametrize(
+        "spectrum_type", [SpectrumType.PROFILE, SpectrumType.CENTROID, None]
+    )
+    def test_orbitrap_wins_over_the_spectrum_type_branches(self, spectrum_type):
+        metadata = {
+            "instrument_info": {"instrument_type": "Orbitrap"},
+            "essential_metadata": {"spectrum_type": spectrum_type},
+        }
+        assert self.tree.select_axis_type(metadata) is AxisType.ORBITRAP
+        assert self.tree.select_strategy(metadata) is ResamplingMethod.NEAREST_NEIGHBOR
+
+    def test_timstof_recognised_from_surfaced_instrument_model(self):
+        """An imzML-derived timsTOF rides the same substring match as the .d.
+
+        The imzML extractor surfaces the declared model term as
+        ``instrument_info["instrument_model"]``; from_metadata folds it into
+        ``instrument_name`` so ``is_timstof`` stays the single deciding path
+        for both routes.
+        """
+        metadata = {
+            "instrument_info": {"instrument_model": "timsTOF fleX"},
+            "essential_metadata": {"spectrum_type": SpectrumType.PROFILE},
+        }
+        characteristics = DataCharacteristics.from_metadata(metadata)
+        assert characteristics.is_timstof
+        assert isinstance(self.chain.detect(characteristics), TimsTOFDetector)
+        assert self.tree.select_axis_type(metadata) is AxisType.REFLECTOR_TOF
+
+    def test_bruker_global_metadata_stays_authoritative(self):
+        """When both sources name an instrument, GlobalMetadata wins."""
+        metadata = {
+            "GlobalMetadata": {"InstrumentName": "timsTOF fleX MALDI-2"},
+            "instrument_info": {"instrument_model": "some other name"},
+        }
+        characteristics = DataCharacteristics.from_metadata(metadata)
+        assert characteristics.instrument_name == "timsTOF fleX MALDI-2"
 
 
 class _TICPreservingDetector(InstrumentDetector):
