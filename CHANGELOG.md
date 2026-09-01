@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v3.8.0 (2026-09-01)
+
+### Features
+
+- **resampling**: Recognise Waters, FT-ICR and exported timsTOF
+  ([`7acb525`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/7acb5255b9fe98fb5f47b93a26b096aa7ad51903))
+
+
 ## v3.7.5 (2026-09-01)
 
 ### Bug Fixes
