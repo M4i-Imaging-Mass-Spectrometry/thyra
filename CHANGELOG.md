@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v3.9.0 (2026-09-01)
+
+### Documentation
+
+- List mzPeak in the supported formats
+  ([`b09769c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/b09769ced215c1d8dba442e2c4744a05fd7076bd))
+
+### Features
+
+- Experimental mzPeak reader
+  ([`4bd6062`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/4bd60621615d1f4a76bb0f5111b8516c5ba156b4))
+
+### Testing
+
+- Cover the mzPeak reader, extractor and imzML parity
+  ([`23304e7`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/23304e79d7e4bd50a73f66e30a09d20d1bcc4f81))
+
+
 ## v3.8.0 (2026-09-01)
 
 ### Features
