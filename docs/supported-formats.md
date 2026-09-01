@@ -1,6 +1,6 @@
 # Supported Formats
 
-Thyra reads five MSI formats and writes all of them into the same
+Thyra reads six MSI formats and writes all of them into the same
 SpatialData/Zarr layout. The input format is detected from the path -- there is
 no format flag on the CLI, and `format_type` in the Python API selects the
 *output* format, not the input.
@@ -12,6 +12,7 @@ no format flag on the CLI, and `format_type` in the Python API selects the
 | **Bruker Rapiflex** | directory | `*.dat` + `*_poslog.txt` | none |
 | **Waters MassLynx** | `.raw` **directory** | `_FUNC*.DAT` files inside | bundled DLL |
 | **PHI SmartSoft-TOF** | `.raw` **file** | `SOFH` magic in first 4 bytes | none |
+| **mzPeak** | `.mzpeak` file | ZIP magic + `mzpeak_index.json` member | none |
 
 ```bash
 thyra sample.imzML       out.zarr   # imzML
@@ -19,6 +20,7 @@ thyra sample.d           out.zarr   # Bruker timsTOF
 thyra rapiflex_folder/   out.zarr   # Bruker Rapiflex
 thyra waters_run.raw/    out.zarr   # Waters (a directory)
 thyra tofsims_run.raw    out.zarr   # PHI (a file)
+thyra sample.mzpeak      out.zarr   # mzPeak (experimental)
 ```
 
 ---
@@ -47,14 +49,14 @@ _FUNC*.DAT files, or a PHI SmartSoft-TOF file beginning with the SOFH magic.
 Not every source carries every kind of metadata. This is what Thyra can
 actually populate from each.
 
-| | imzML | timsTOF | Rapiflex | Waters | PHI |
-|---|---|---|---|---|---|
-| Pixel size from metadata | yes | yes | yes | yes | yes |
-| Optical image | -- | yes | yes | -- | -- |
-| Optical alignment | -- | yes (`.mis`) | -- | -- | -- |
-| Multi-region | -- | yes | -- | -- | mosaic tiles |
-| 3D / multi-slice | yes | yes | -- | -- | -- |
-| Native non-m/z axis kept | -- | -- | -- | -- | flight time |
+| | imzML | timsTOF | Rapiflex | Waters | PHI | mzPeak |
+|---|---|---|---|---|---|---|
+| Pixel size from metadata | yes | yes | yes | yes | yes | sometimes |
+| Optical image | -- | yes | yes | -- | -- | -- |
+| Optical alignment | -- | yes (`.mis`) | -- | -- | -- | -- |
+| Multi-region | -- | yes | -- | -- | mosaic tiles | -- |
+| 3D / multi-slice | yes | yes | -- | -- | -- | -- |
+| Native non-m/z axis kept | -- | -- | -- | -- | flight time | -- |
 
 Anything a format does not supply is simply absent from the output rather than
 guessed at. Pixel size is the one exception worth knowing about: when a source
@@ -133,6 +135,57 @@ please [open an issue](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/is
 
 See [PHI ToF-SIMS Notes](phi-tofsims-notes.md) for the file layout, the
 calibration behaviour, and why the time axis is binned the way it is.
+
+---
+
+## mzPeak (experimental)
+
+A single `.mzpeak` **file**: a ZIP of Parquet members plus an
+`mzpeak_index.json` that maps each member to a role. mzPeak is the HUPO-PSI
+working group's intended successor to mzML/imzML at the raw/archival layer.
+
+Thyra treats it as an **input only** and never writes one. Support is marked
+experimental because the container is a v0.9 draft -- column names, the index
+vocabulary and the placement of file-level metadata have all moved between
+prototype revisions and are expected to move again before v1.0. The reader
+validates what it depends on, so a drifted archive raises a named error rather
+than converting to something plausible but wrong.
+
+```bash
+thyra sample.mzpeak out.zarr
+```
+
+Data is shaped like processed imzML: one m/z per point, per-spectrum axes, and
+no shared-axis concept anywhere in the format. The resampling decision tree
+therefore treats these files exactly as it treats processed imzML.
+
+Three things are refused rather than guessed at:
+
+- The **chunked layout** (`chunk` instead of `point` in the signal member) is a
+  different physical encoding and raises `NotImplementedError` naming the file.
+- **Non-imaging archives** are rejected. Positions are optional in mzPeak --
+  the reference converter only writes them when it happens to see imaging
+  input -- and an archive without them has no pixels for Thyra to place.
+- **Unrecognised layouts** fail with the schema they actually carry.
+
+Two behaviours worth knowing:
+
+- **Pixel size is often absent.** When `IMS:1000046`/`IMS:1000047` are missing
+  the CLI falls back to `--pixel-size` exactly as it does for imzML. Terms are
+  matched on accession rather than name, because the controlled vocabulary
+  spells the two axes inconsistently.
+- **Null-pair padding is dropped.** mzPeak compresses profile spectra by
+  removing interior runs of zero intensity and marking each gap with two rows
+  whose m/z *and* intensity are both null; the reference reader regenerates the
+  missing m/z from a per-spectrum polynomial. Those regenerated values are
+  extrapolations that carry zero intensity, so in a sparse matrix they would
+  only add mass-axis channels that can never hold a value. Thyra omits them and
+  logs how many it dropped. Recorded point counts include the padding, so peak
+  totals are corrected against it.
+
+mzPeak carries no region or ROI identity of any kind, so `get_region_map()`
+returns `None`. Missing pixels are ordinary and are left missing rather than
+densified.
 
 ---
 
