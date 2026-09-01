@@ -12,6 +12,7 @@ import click  # noqa: E402
 
 from thyra import __version__  # noqa: E402
 from thyra.convert import convert_msi  # noqa: E402
+from thyra.core.registry import detect_format  # noqa: E402
 from thyra.utils.logging_config import setup_logging  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -143,14 +144,15 @@ def _validate_input_path(input: Path) -> None:
                 f"found: {ibd_path}"
             )
     elif input.is_dir() and input.suffix.lower() == ".d":
-        if (
-            not (input / "analysis.tsf").exists()
-            and not (input / "analysis.tdf").exists()
-        ):
-            raise click.BadParameter(
-                "Bruker .d directory requires analysis.tsf or "
-                f"analysis.tdf file: {input}"
-            )
+        # Several Bruker formats share the .d extension (timsTOF via
+        # analysis.tsf/.tdf, solariX via peaks.sqlite), so delegate to the
+        # registry's detection rather than duplicating the marker files
+        # here -- its errors also carry the format-specific guidance
+        # (e.g. the imzML-export fallback for a peaks-less solariX .d).
+        try:
+            detect_format(input)
+        except ValueError as e:
+            raise click.BadParameter(str(e)) from e
 
 
 def _validate_output_path(output: Path) -> None:

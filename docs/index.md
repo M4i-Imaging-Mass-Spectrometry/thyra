@@ -30,7 +30,7 @@ The output is a single SpatialData/Zarr directory containing intensity matrices,
 
 | | Feature | Description |
 |---|---------|-------------|
-| **Formats** | Multiple inputs | ImzML, Bruker (.d timsTOF + Rapiflex), Waters (.raw directory), PHI SmartSoft-TOF (.raw file) |
+| **Formats** | Multiple inputs | ImzML, Bruker (.d timsTOF + solariX, Rapiflex), Waters (.raw directory), PHI SmartSoft-TOF (.raw file) |
 | **Output** | SpatialData/Zarr | Cloud-ready, chunked, standardised |
 | **Scale** | Memory efficient | Streaming mode for 100+ GB datasets |
 | **Optics** | Optical alignment | Automatic MSI-to-microscopy registration (Bruker) |
@@ -94,7 +94,7 @@ tic = np.asarray(sdata.images["msi_dataset_z0_tic"])[0]
 | Format | Path | Instruments |
 |--------|------|-------------|
 | ImzML  | `.imzML` file | Any vendor exporting to the open standard |
-| Bruker | `.d` directory | timsTOF fleX, Rapiflex MALDI-TOF |
+| Bruker | `.d` directory | timsTOF fleX, solariX/MRMS FT-ICR, Rapiflex MALDI-TOF |
 | Waters | `.raw` directory | MassLynx imaging (DESI, MALDI) |
 | PHI    | `.raw` file | SmartSoft-TOF nanoTOF (ToF-SIMS) |
 

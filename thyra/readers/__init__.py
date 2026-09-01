@@ -4,12 +4,12 @@
 This package provides reader implementations for different MSI data formats:
 - ImzML: Open format for MSI data
 - mzPeak: HUPO-PSI Parquet-in-ZIP archive (experimental, read-only)
-- Bruker: timsTOF and Rapiflex data
+- Bruker: timsTOF, Rapiflex and solariX data
 - Waters: MassLynx .raw imaging data
 - PHI: SmartSoft-TOF .raw ToF-SIMS data
 
 Reader organization:
-- bruker/: All Bruker formats (timsTOF, Rapiflex)
+- bruker/: All Bruker formats (timsTOF, Rapiflex, solariX)
 - imzml/: ImzML format reader
 - mzpeak/: mzPeak archive reader (pyarrow, lazily imported)
 - waters/: Waters .raw format reader (native DLL via ctypes)
