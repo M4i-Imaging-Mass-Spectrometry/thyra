@@ -139,6 +139,36 @@ the same pair a vendor imzML export of the same data reaches, minus the
 export step. See [Resampling](resampling.md) for why TIC-preserving is
 refused for centroid data.
 
+## Cross-validation against a vendor imzML export
+
+The reader was validated against a SCiLS-lineage centroid imzML export of
+the *same acquisition* (a 7,362-pixel run; the export is a 949-pixel tissue
+ROI crop with re-based coordinates). Registering the ROI onto the reader's
+raster by normalized cross-correlation of TIC images -- testing all four
+axis orientations -- found the identity orientation with a pure translation,
+and every ROI pixel landed on a measured pixel. On that overlap:
+
+- **The peak lists are the same peaks.** Every one of the 949 overlapping
+  pixels has an identical peak count on both sides -- the exporter consumed
+  the same picked peaks this reader decodes, it did not re-pick.
+- **Intensities differ only by the exporter's normalization.** Within each
+  pixel the imzML/native intensity ratio is constant to the last float32
+  digit, and the per-pixel factor times the RMS of the pixel's native peak
+  intensities is one dataset-wide constant: the export applied RMS
+  normalization (the `_rms` in its filename) plus a global scale. Dividing
+  the factor out reproduces the native TICs with a maximum relative error
+  of 2e-7, and the TIC correlation goes to r = 1.000000.
+- **m/z values agree to 0.00 ppm on average.** The signed difference is
+  zero-mean in every 200 Da band -- no calibration difference. Individual
+  peaks deviate by up to ~4 mDa, growing quadratically with m/z (0.06 mDa
+  median at m/z 200, 2.0 mDa at m/z 1200), which is the FT-ICR grid-spacing
+  law: the exporter snapped centroids to its own profile-grid axis. The
+  native reader keeps the full-precision centroids as stored.
+
+So the native route and the vendor-export route see the same data; the
+export adds RMS normalization and axis snapping, and drops the pixels
+outside the drawn ROI.
+
 ## What the native route adds over an imzML export
 
 Everything an export carries, plus metadata no exporter writes: per-pixel
