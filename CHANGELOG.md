@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v3.10.1 (2026-09-02)
+
+### Bug Fixes
+
+- **solarix**: Open peaks.sqlite on UNC paths
+  ([`21f4f3b`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/21f4f3b54ea6a344739959b96799e4199ed7171f))
+
+
 ## v3.10.0 (2026-09-02)
 
 ### Documentation
