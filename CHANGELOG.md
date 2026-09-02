@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v3.10.0 (2026-09-02)
+
+### Documentation
+
+- **handouts**: Add upstream handouts for spatialdata #1178 and zarr #4304
+  ([`f34a5d0`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f34a5d0b0ed8525290a460fe41003434fd386ea8))
+
+- **handouts**: Convert the remaining poetry instructions to uv
+  ([`b3bbf51`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/b3bbf511ab249d87b335d4667db3cbafda4edfab))
+
+- **handouts**: Replace the stale poetry commands with uv
+  ([`d4f1324`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/d4f1324aa3016c42e3a039f65e6b410d2e74223d))
+
+- **solarix**: Record the imzML cross-validation results
+  ([`ee28d33`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/ee28d337987eab4279aaacf8c695b28b525619f7))
+
+### Features
+
+- **readers**: Native solariX .d reader via peaks.sqlite
+  ([`3baa953`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/3baa953ce07f31ffa2701c77a5f6b3ad122e7021))
+
+
 ## v3.9.0 (2026-09-01)
 
 ### Documentation
