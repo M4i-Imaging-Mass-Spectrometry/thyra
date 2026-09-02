@@ -91,7 +91,13 @@ derived from them.
 
 The database is opened strictly read-only through a URI (`mode=ro`), so
 sqlite never creates journal or WAL side files next to it. That matters
-because solariX data commonly lives on read-only network shares.
+because solariX data commonly lives on read-only network shares. One
+consequence of that: a mapped network drive resolves to a UNC path
+(`\\server\share\...`) before the reader sees it, and in a `file:` URI the
+server name would read as an authority, which sqlite rejects. The reader
+therefore writes such paths as `file:////server/share/...` -- empty
+authority, path intact -- which opens where `file://server/share/...`
+does not.
 
 ## Coordinates and sparsity
 

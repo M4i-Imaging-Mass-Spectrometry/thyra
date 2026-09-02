@@ -46,6 +46,23 @@ from ..mis_parser import parse_mis_file
 logger = logging.getLogger(__name__)
 
 
+def _read_only_uri(path: Path) -> str:
+    """The sqlite URI that opens ``path`` strictly read-only.
+
+    A UNC path -- which is what a mapped network drive resolves to on
+    Windows -- starts with ``//server/share``; inside a ``file:`` URI that
+    reads as an authority, which sqlite rejects ("invalid uri authority").
+    Doubling the leading slashes leaves the authority empty and the path
+    intact, so ``file:////server/share/...`` opens where
+    ``file://server/share/...`` does not. Drive-letter and POSIX paths
+    are unaffected.
+    """
+    posix = path.as_posix()
+    if posix.startswith("//"):
+        posix = "//" + posix
+    return f"file:{quote(posix)}?mode=ro"
+
+
 @register_reader("solarix")
 class SolarixReader(BrukerBaseMSIReader):
     """Reader for Bruker solariX imaging ``.d`` directories.
@@ -159,7 +176,7 @@ class SolarixReader(BrukerBaseMSIReader):
         journal/WAL side files next to the database, which matters when the
         data sits on a read-only network share.
         """
-        uri = f"file:{quote(self._peaks_path.as_posix())}?mode=ro"
+        uri = _read_only_uri(self._peaks_path)
         try:
             return sqlite3.connect(uri, uri=True)
         except sqlite3.Error as exc:
