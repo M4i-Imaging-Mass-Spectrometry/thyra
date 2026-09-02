@@ -32,6 +32,7 @@ from .bruker_extractor import BrukerMetadataExtractor
 from .imzml_extractor import ImzMLMetadataExtractor
 from .mzpeak_extractor import MzPeakMetadataExtractor
 from .phi_extractor import PhiMetadataExtractor
+from .solarix_extractor import SolarixMetadataExtractor
 from .waters_extractor import WatersMetadataExtractor
 
 # Public API
@@ -40,6 +41,7 @@ __all__ = [
     "ImzMLMetadataExtractor",
     "MzPeakMetadataExtractor",
     "PhiMetadataExtractor",
+    "SolarixMetadataExtractor",
     "WatersMetadataExtractor",
 ]
 
@@ -49,6 +51,7 @@ FORMAT_EXTRACTORS = {
     "bruker": BrukerMetadataExtractor,
     "tsf": BrukerMetadataExtractor,
     "tdf": BrukerMetadataExtractor,
+    "solarix": SolarixMetadataExtractor,
     "waters": WatersMetadataExtractor,
     "phi": PhiMetadataExtractor,
     "mzpeak": MzPeakMetadataExtractor,

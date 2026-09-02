@@ -114,7 +114,7 @@ Full documentation: **[M4i-Imaging-Mass-Spectrometry.github.io/thyra](https://M4
 | Input | Extension | Status |
 |-------|-----------|--------|
 | ImzML | `.imzML` | Full support |
-| Bruker | `.d` | Full support (timsTOF + Rapiflex) |
+| Bruker | `.d` | Full support (timsTOF + solariX + Rapiflex) |
 | Waters | `.raw` directory | Full support |
 | PHI SmartSoft-TOF | `.raw` file | Full support (nanoTOF, ToF-SIMS) |
 | mzPeak | `.mzpeak` | Experimental (HUPO-PSI v0.9 draft, read-only) |

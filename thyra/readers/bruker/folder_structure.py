@@ -8,6 +8,7 @@ without requiring any SDK dependencies.
 Supported formats:
 - timsTOF: .d folders containing analysis.tdf or analysis.tsf
 - Rapiflex: Folders with .dat, _poslog.txt, and _info.txt files
+- solariX: .d folders containing peaks.sqlite and ImagingInfo.xml
 """
 
 import logging
@@ -24,6 +25,7 @@ class BrukerFormat(Enum):
 
     TIMSTOF = "timstof"
     RAPIFLEX = "rapiflex"
+    SOLARIX = "solarix"
     UNKNOWN = "unknown"
 
 
@@ -82,6 +84,15 @@ class BrukerFolderStructure:
         "tsf_bin": "analysis.tsf_bin",
     }
 
+    # File patterns for solariX (FT-ICR / MRMS) format. Detection keys on
+    # the processed peak store plus the per-scan index; ``ser`` (the raw
+    # transient block) marks the solariX family but is never read.
+    SOLARIX_PATTERNS = {
+        "peaks": "peaks.sqlite",
+        "imaging_info": "ImagingInfo.xml",
+        "ser": "ser",
+    }
+
     # Common optical image patterns
     OPTICAL_IMAGE_PATTERNS = ["*.tif", "*.tiff", "*.TIF", "*.TIFF"]
 
@@ -137,10 +148,12 @@ class BrukerFolderStructure:
 
     def _detect_format(self) -> Tuple["BrukerFormat", Path]:
         """Detect the Bruker format and return (format, data_path)."""
-        # Check if this is a .d folder (timsTOF)
+        # Check if this is a .d folder (timsTOF or solariX)
         if self.path.suffix.lower() == ".d":
             if self._is_timstof_folder(self.path):
                 return BrukerFormat.TIMSTOF, self.path
+            if self._is_solarix_folder(self.path):
+                return BrukerFormat.SOLARIX, self.path
 
         # Check if this folder contains Rapiflex data
         if self._is_rapiflex_folder(self.path):
@@ -151,6 +164,8 @@ class BrukerFolderStructure:
         for d_folder in d_folders:
             if self._is_timstof_folder(d_folder):
                 return BrukerFormat.TIMSTOF, d_folder
+            if self._is_solarix_folder(d_folder):
+                return BrukerFormat.SOLARIX, d_folder
 
         # Check subfolders for Rapiflex
         for subdir in self.path.iterdir():
@@ -168,6 +183,40 @@ class BrukerFolderStructure:
         has_tsf = (path / self.TIMSTOF_PATTERNS["tsf"]).exists()
 
         return has_tdf or has_tsf
+
+    def _is_solarix_folder(self, path: Path) -> bool:
+        """Check if path is a solariX imaging .d folder.
+
+        Requires BOTH the processed peak store and the per-scan index.
+        FlexImaging pre-scan directories (``fid`` + ``analysis.baf``) carry
+        neither and must fall through to UNKNOWN.
+        """
+        if not path.is_dir():
+            return False
+
+        has_peaks = (path / self.SOLARIX_PATTERNS["peaks"]).exists()
+        has_imaging_info = (path / self.SOLARIX_PATTERNS["imaging_info"]).exists()
+
+        return has_peaks and has_imaging_info
+
+    @classmethod
+    def is_solarix_without_peaks(cls, path: Path) -> bool:
+        """Check if path is a solariX-family .d that lacks processed peaks.
+
+        A ``.d`` holding raw transients (``ser``) and ``ImagingInfo.xml``
+        but no ``peaks.sqlite`` is a solariX acquisition Thyra cannot read
+        natively; callers use this to name the imzML-export fallback instead
+        of reporting a generic detection failure.
+        """
+        path = Path(path)
+        if not path.is_dir():
+            return False
+
+        has_ser = (path / cls.SOLARIX_PATTERNS["ser"]).exists()
+        has_imaging_info = (path / cls.SOLARIX_PATTERNS["imaging_info"]).exists()
+        has_peaks = (path / cls.SOLARIX_PATTERNS["peaks"]).exists()
+
+        return has_ser and has_imaging_info and not has_peaks
 
     def _is_rapiflex_folder(self, path: Path) -> bool:
         """Check if path is a Rapiflex data folder."""
@@ -279,6 +328,17 @@ class BrukerFolderStructure:
                 file_path = data_path / pattern
                 if file_path.exists():
                     metadata[name] = file_path
+
+        elif fmt == BrukerFormat.SOLARIX:
+            # solariX metadata files inside the .d
+            for name, pattern in self.SOLARIX_PATTERNS.items():
+                file_path = data_path / pattern
+                if file_path.exists():
+                    metadata[name] = file_path
+            # Acquisition method (XML) inside the *.m method directory
+            method_files = sorted(data_path.glob("*.m/apexAcquisition.method"))
+            if method_files:
+                metadata["method"] = method_files[0]
 
         return metadata
 

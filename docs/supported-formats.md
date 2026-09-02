@@ -1,6 +1,6 @@
 # Supported Formats
 
-Thyra reads six MSI formats and writes all of them into the same
+Thyra reads seven MSI formats and writes all of them into the same
 SpatialData/Zarr layout. The input format is detected from the path -- there is
 no format flag on the CLI, and `format_type` in the Python API selects the
 *output* format, not the input.
@@ -9,6 +9,7 @@ no format flag on the CLI, and `format_type` in the Python API selects the
 |---|---|---|---|
 | **imzML** | `.imzML` file + `.ibd` | extension, `.ibd` must exist | none |
 | **Bruker timsTOF** | `.d` directory | `analysis.tsf` or `analysis.tdf` | bundled DLL |
+| **Bruker solariX** | `.d` directory | `peaks.sqlite` + `ImagingInfo.xml` | none |
 | **Bruker Rapiflex** | directory | `*.dat` + `*_poslog.txt` | none |
 | **Waters MassLynx** | `.raw` **directory** | `_FUNC*.DAT` files inside | bundled DLL |
 | **PHI SmartSoft-TOF** | `.raw` **file** | `SOFH` magic in first 4 bytes | none |
@@ -16,12 +17,16 @@ no format flag on the CLI, and `format_type` in the Python API selects the
 
 ```bash
 thyra sample.imzML       out.zarr   # imzML
-thyra sample.d           out.zarr   # Bruker timsTOF
+thyra sample.d           out.zarr   # Bruker timsTOF or solariX (see below)
 thyra rapiflex_folder/   out.zarr   # Bruker Rapiflex
 thyra waters_run.raw/    out.zarr   # Waters (a directory)
 thyra tofsims_run.raw    out.zarr   # PHI (a file)
 thyra sample.mzpeak      out.zarr   # mzPeak (experimental)
 ```
+
+Two Bruker instrument families share the `.d` extension and are told apart by
+what the directory contains: timsTOF writes `analysis.tsf`/`analysis.tdf`,
+solariX (FT-ICR / MRMS) writes `peaks.sqlite` alongside `ImagingInfo.xml`.
 
 ---
 
@@ -49,14 +54,14 @@ _FUNC*.DAT files, or a PHI SmartSoft-TOF file beginning with the SOFH magic.
 Not every source carries every kind of metadata. This is what Thyra can
 actually populate from each.
 
-| | imzML | timsTOF | Rapiflex | Waters | PHI | mzPeak |
-|---|---|---|---|---|---|---|
-| Pixel size from metadata | yes | yes | yes | yes | yes | sometimes |
-| Optical image | -- | yes | yes | -- | -- | -- |
-| Optical alignment | -- | yes (`.mis`) | -- | -- | -- | -- |
-| Multi-region | -- | yes | -- | -- | mosaic tiles | -- |
-| 3D / multi-slice | yes | yes | -- | -- | -- | -- |
-| Native non-m/z axis kept | -- | -- | -- | -- | flight time | -- |
+| | imzML | timsTOF | solariX | Rapiflex | Waters | PHI | mzPeak |
+|---|---|---|---|---|---|---|---|
+| Pixel size from metadata | yes | yes | yes (`.mis`) | yes | yes | yes | sometimes |
+| Optical image | -- | yes | -- | yes | -- | -- | -- |
+| Optical alignment | -- | yes (`.mis`) | -- | -- | -- | -- | -- |
+| Multi-region | -- | yes | recorded | -- | -- | mosaic tiles | -- |
+| 3D / multi-slice | yes | yes | -- | -- | -- | -- | -- |
+| Native non-m/z axis kept | -- | -- | -- | -- | -- | flight time | -- |
 
 Anything a format does not supply is simply absent from the output rather than
 guessed at. Pixel size is the one exception worth knowing about: when a source
@@ -88,6 +93,26 @@ mobility). Reading goes through Bruker's `timsdata` library, which is bundled
 for Windows and Linux. This is the richest source Thyra handles: it carries
 optical microscopy images, FlexImaging `.mis` teaching points for MSI-to-optical
 registration, and per-pixel region annotations for multi-region slides.
+
+## Bruker solariX
+
+`.d` directories from solariX / MRMS (FT-ICR) instruments running ftmsControl,
+detected by `peaks.sqlite` together with `ImagingInfo.xml`. Thyra reads the
+processed peak store the acquisition software writes into every imaging `.d`:
+centroided, calibrated per-pixel peak lists with stage-raster coordinates and
+the instrument identity. **No vendor SDK** and no FT processing are involved --
+the raw transient block (`ser`) and the `.mcf` containers are never touched.
+See [solariX Notes](solarix-notes.md) for the verified layout, what the reader
+refuses, and the pixel-size story.
+
+Two things to know up front:
+
+- The pixel size lives **only** in the flexImaging `.mis` file next to the
+  `.d` (same stem). Without it, pass `--pixel-size` explicitly -- Thyra never
+  guesses.
+- A solariX-family `.d` that carries raw transients but no `peaks.sqlite`
+  cannot be read natively; the error says so and names the imzML export
+  fallback (DataAnalysis, SCiLS Lab, or flexImaging).
 
 ## Bruker Rapiflex
 

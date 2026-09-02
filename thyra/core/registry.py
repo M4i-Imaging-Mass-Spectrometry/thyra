@@ -71,25 +71,29 @@ class MSIRegistry:
         """Detect Bruker data format using BrukerFolderStructure.
 
         Uses the unified BrukerFolderStructure to detect whether the path
-        contains timsTOF or Rapiflex data.
+        contains timsTOF, Rapiflex, or solariX data.
 
         Args:
             path: Path to check
 
         Returns:
             Format name ('bruker' for timsTOF, 'rapiflex' for Rapiflex,
-            or empty string if not a Bruker format)
+            'solarix' for solariX, or empty string if not a Bruker format)
         """
         BrukerFolderStructure, BrukerFormat = _get_bruker_folder_structure()
 
         try:
             detected_format = BrukerFolderStructure.detect_format(path)
-            if detected_format == BrukerFormat.TIMSTOF:
-                return "bruker"
-            elif detected_format == BrukerFormat.RAPIFLEX:
-                return "rapiflex"
         except Exception:  # nosec B110 - intentionally ignore detection errors
-            pass  # Format detection failure means this is not a Bruker format
+            # Format detection failure means this is not a Bruker format
+            return ""
+
+        if detected_format == BrukerFormat.TIMSTOF:
+            return "bruker"
+        elif detected_format == BrukerFormat.RAPIFLEX:
+            return "rapiflex"
+        elif detected_format == BrukerFormat.SOLARIX:
+            return "solarix"
 
         return ""
 
@@ -139,6 +143,7 @@ class MSIRegistry:
         Supports:
         - .imzml files (ImzML format)
         - .d directories (Bruker timsTOF)
+        - .d directories (Bruker solariX / MRMS, via peaks.sqlite)
         - Folders with .dat + _poslog.txt (Bruker Rapiflex)
         - .raw directories (Waters MassLynx)
         - .raw files (PHI SmartSoft-TOF ToF-SIMS)
@@ -176,6 +181,15 @@ class MSIRegistry:
         bruker_format = self._detect_bruker_format(input_path)
         if bruker_format:
             return bruker_format
+        BrukerFolderStructure, _ = _get_bruker_folder_structure()
+        if BrukerFolderStructure.is_solarix_without_peaks(input_path):
+            raise ValueError(
+                f"solariX .d directory without peaks.sqlite: {input_path}. "
+                "The acquisition holds raw transients (ser) but no processed "
+                "peak store, which is what Thyra reads. Export the dataset "
+                "as imzML from the Bruker software (DataAnalysis, SCiLS Lab, "
+                "or flexImaging) and convert the imzML file instead."
+            )
         raise ValueError("Bruker .d directory missing analysis " f"files: {input_path}")
 
     def _detect_mzpeak_format(self, input_path: Path) -> str:
@@ -276,6 +290,7 @@ class MSIRegistry:
             ".imzml",
             ".mzpeak (HUPO-PSI, experimental)",
             ".d (timsTOF)",
+            ".d (solariX/MRMS)",
             "folder (Rapiflex)",
             ".raw directory (Waters)",
             ".raw file (PHI SmartSoft-TOF)",
@@ -364,7 +379,8 @@ def detect_format(input_path: Path) -> str:
         input_path: Path to MSI data file or directory
 
     Returns:
-        Format name ('imzml', 'bruker', 'rapiflex', 'waters', or 'phi')
+        Format name ('imzml', 'bruker', 'rapiflex', 'solarix', 'waters',
+        or 'phi')
     """
     return _registry.detect_format(input_path)
 

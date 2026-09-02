@@ -104,6 +104,7 @@ catch-all default. This table is the actual observed behaviour of that chain:
 | Rapiflex, profile | Rapiflex MALDI-TOF | `tic_preserving` | `constant` |
 | Bruker MALDI-TOF | Rapiflex MALDI-TOF | `tic_preserving` | `constant` |
 | imzML declaring an FT-ICR analyzer or model | FT-ICR | `nearest_neighbor` | `fticr` |
+| solariX `.d` (native, peaks.sqlite) | FT-ICR | `nearest_neighbor` | `fticr` |
 | imzML declaring an Orbitrap analyzer or model | Orbitrap | `nearest_neighbor` | `orbitrap` |
 | PHI SmartSoft-TOF `.raw` | PHI SmartSoft-TOF (ToF-SIMS) | `nearest_neighbor` | `linear_tof` |
 | Waters MassLynx `.raw`, any representation | Waters MassLynx | `nearest_neighbor` | `reflector_tof` |
@@ -148,6 +149,11 @@ catch-all default. This table is the actual observed behaviour of that chain:
     family-identifying product name in free-form model text. A file that
     declares none of the three stays untyped and falls through to the
     generic rows below -- an unstated analyzer stays unstated.
+
+    The native solariX `.d` route needs none of this: its extractor stamps
+    `instrument_type = "FT-ICR"` directly from the instrument identity in
+    `peaks.sqlite`, so the same FT-ICR row is reached without an export
+    step (see [Supported Formats](supported-formats.md#bruker-solarix)).
 
     One known gap: SCiLS Lab-lineage imzML exports of timsTOF data stamp the
     generic `MS:1001534 Bruker Daltonics flex series` term rather than a
