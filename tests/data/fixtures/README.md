@@ -1,7 +1,7 @@
 # Hand-authored imzML corpus
 
-Six tiny imzML/`.ibd` pairs whose XML was written out literally, character by
-character, and whose binary was packed by hand.
+Eight tiny imzML/`.ibd` pairs whose XML was written out literally, character
+by character, and whose binary was packed by hand.
 
 Everything else the test suite reads was produced by pyimzml's own
 `ImzMLWriter`. A parser and a writer from the same codebase agree on each
@@ -24,6 +24,8 @@ repository actually carries is under 10 KB.
 | `two_precision_terms` | One param group declaring both `32-bit float` and `64-bit float`. pyimzml picks by dict insertion order and says nothing. |
 | `solarix_fticr` | A profile solariX MRMS export: model term `MS:1001549` inherited through a `CommonInstrumentParams` referenceableParamGroup, `MS:1000079` FT-ICR analyzer on the componentList. The shape the imzML extractor must resolve to `instrument_type = "FT-ICR"` for `FTICRDetector` to ever fire. |
 | `timstof_flex_export` | A profile timsTOF fleX export: model term `MS:1003124` directly on the instrumentConfiguration. Outside the native `.d` there is no `GlobalMetadata`, so the surfaced model name is the only way `is_timstof` can recognise the instrument. |
+| `mobility_continuous` | A TIMSImaging-style export with a **third binary array**: `mobilityArray` bound to `MS:1003006` (unit `MS:1002814`), continuous mode, one shared feature list with m/z repeated where mobility splits a feature, mobility copied per spectrum as the pyimzML fork writes it. Upstream pyimzml ignores the array; the shared m/z block is not strictly increasing. |
+| `mobility_processed` | The same convention in processed mode, TIMSCONVERT-style: a per-pixel (m/z, mobility) point cloud with one m/z at two mobilities. No shared feature axis; the repeats must sum into one bin. |
 
 Deliberately **not** here: zlib compression and continuous mode. Both are
 reachable through `ImzMLWriter` — `ZlibCompression()` and
@@ -73,8 +75,12 @@ before `TestCommittedBytes` existed neither failed a single test.
    `exclude: ^tests/data/fixtures/[^/]+\.(imzML|ibd)$`, scoped to the two
    byte-exact extensions so this README and `build_fixtures.py` stay covered.
 
-`.gitignore` also needs the negations: `*imzML` and `*ibd` are unanchored, so
-without `!tests/data/fixtures/*.imzML` these files cannot be added at all.
+`.gitignore` also needs the negations: `*.imzML` and `*.ibd` ignore every file
+with those extensions, so without `!tests/data/fixtures/*.imzML` these files
+cannot be added at all. The patterns carry the dot on purpose: the bare
+`*imzML` that preceded them also matched the *directory* `thyra/readers/imzml`
+on case-insensitive checkouts, which silently kept new modules there out of
+every commit.
 
 **If you change a fixture, verify the blob, not the file on disk:**
 

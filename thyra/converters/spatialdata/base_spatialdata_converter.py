@@ -395,6 +395,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         sparse_format: str = "csc",
         include_optical: bool = True,
         apply_optical_alignment: bool = True,
+        write_mobility_table: bool = True,
         **kwargs: Any,
     ) -> None:
         """Initialize the base SpatialData converter.
@@ -419,6 +420,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             sparse_format: Sparse matrix format ('csc' or 'csr', default: 'csc')
             include_optical: Whether to include optical images in output
                 (default: True)
+            write_mobility_table: When the reader shares one set of
+                (m/z, mobility) feature pairs across pixels, also write
+                them as a mobility-resolved sibling table
+                (``{table}_mobility``) beside the summed MSI table
+                (default: True). Never changes the MSI table itself.
             apply_optical_alignment: If True (default) and the MSI source
                 has FlexImaging Area metadata, compute an alignment that
                 places MSI raster coordinates in optical-image pixel
@@ -494,6 +500,12 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # Filled by _build_resampled_mass_axis(); consumed by
         # _processing_provenance().
         self._resolved_resampling_plan: Optional[Dict[str, Any]] = None
+
+        # The mobility-resolved sibling table (see mobility_table.py): whether
+        # to write one, and -- once a finalize step has decided for its slice
+        # -- the element key it gets, so the MSI table's uns can name it.
+        self._write_mobility_table = bool(write_mobility_table)
+        self._mobility_table_key: Optional[str] = None
         if self._sparse_format not in ("csc", "csr"):
             raise ValueError(
                 f"sparse_format must be 'csc' or 'csr', got '{sparse_format}'"
@@ -738,8 +750,87 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             logger.warning("Could not build the full uns provenance block: %s", e)
 
         self._collect_msi_metadata_block(uns, comp_meta)
+        self._collect_mobility_axis(uns)
 
         return uns
+
+    def _collect_mobility_axis(self, uns: Dict[str, Any]) -> None:
+        """Add ``mobility_axis`` when the source has a mobility dimension.
+
+        Written on the summed MSI table so a consumer can tell "summed over
+        mobility" from "never had any", and so it can find the
+        mobility-resolved sibling (``resolved_table``) when one was written.
+        Kept out of the ``msi_metadata`` schema block: that block is
+        versioned, this one carries arrays.
+        """
+        try:
+            if not getattr(self.reader, "has_ion_mobility", False):
+                return
+            axis = self.reader.get_mobility_axis()
+        except Exception as e:  # pragma: no cover - reader-defined
+            logger.warning("Could not describe the mobility axis: %s", e)
+            return
+        if axis is None:
+            return
+        block = axis.to_uns()
+        if self._mobility_table_key is not None:
+            block["resolved_table"] = self._mobility_table_key
+        uns["mobility_axis"] = _jsonify_string_lists(self._serialize_for_zarr(block))
+
+    def _plan_mobility_table(self, table_key: str) -> Optional[str]:
+        """The key of the mobility table this slice gets, or ``None``.
+
+        Decided before the MSI table's ``uns`` is built so the two agree.
+        """
+        if not self._write_mobility_table:
+            return None
+        try:
+            if not (
+                getattr(self.reader, "has_ion_mobility", False)
+                and self.reader.has_shared_mobility_axis
+            ):
+                return None
+        except Exception as e:  # pragma: no cover - reader-defined
+            logger.warning("Could not inspect the mobility axis: %s", e)
+            return None
+        from .mobility_table import mobility_table_key
+
+        return mobility_table_key(table_key)
+
+    def _attach_mobility_table(
+        self,
+        data_structures: Dict[str, Any],
+        table_key: str,
+        region_key: str,
+        obs: pd.DataFrame,
+        z_value: Optional[int] = None,
+    ) -> None:
+        """Build the mobility-resolved sibling of ``table_key`` and add it.
+
+        No-op unless :meth:`_plan_mobility_table` named one for this slice.
+        A failure here is logged and leaves the summed table untouched: the
+        sibling is additive, and a store without it is still complete.
+        """
+        key = self._mobility_table_key
+        if key is None or self._common_mass_axis is None:
+            return
+        from .mobility_table import build_mobility_table
+
+        try:
+            table = build_mobility_table(
+                self.reader,
+                obs,
+                self._common_mass_axis,
+                table_key,
+                region_key,
+                self.build_uns_metadata(),
+                z_value=z_value,
+            )
+        except Exception as e:
+            logger.error("Could not build the mobility-resolved table: %s", e)
+            return
+        if table is not None:
+            data_structures["tables"][key] = table
 
     def _resolved_pixel_size_xy(self) -> Tuple[float, float]:
         """The in-plane pixel pitch as ``(x_um, y_um)``.
@@ -1288,6 +1379,33 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 f"{len(self._common_mass_axis)} unique m/z values"
             )
 
+    @staticmethod
+    def _coalesce_duplicate_bins(
+        indices: NDArray[np.int_], intensities: NDArray[np.float64]
+    ) -> Tuple[NDArray[np.int_], NDArray[np.float64]]:
+        """Sum intensities that landed on the same axis bin within one spectrum.
+
+        Without resampling every m/z maps to its own axis entry, so this is
+        the identity for ordinary data. A spectrum that repeats an m/z value
+        -- an ion mobility export lists a feature once per mobility -- maps
+        two entries to one column, and writing both would leave a
+        duplicate ``(row, col)`` in the sparse matrix: the in-memory route
+        sums those on conversion, the streaming route wrote them as two
+        entries in one column. Summing here makes every route agree.
+        """
+        if indices.size < 2:
+            return indices, intensities
+        diffs = np.diff(indices)
+        if bool(np.all(diffs > 0)):
+            return indices, intensities
+        unique, inverse = np.unique(indices, return_inverse=True)
+        summed = np.bincount(
+            np.asarray(inverse).ravel(),
+            weights=np.asarray(intensities, dtype=np.float64),
+            minlength=unique.size,
+        )
+        return unique.astype(indices.dtype, copy=False), summed
+
     def _map_mass_to_indices(self, mzs: NDArray[np.float64]) -> NDArray[np.int_]:
         """Override mass mapping to handle resampling with interpolation."""
         if self._common_mass_axis is None:
@@ -1362,6 +1480,9 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         else:
             # Use standard processing for non-resampled data
             mz_indices = self._map_mass_to_indices(mzs)
+            mz_indices, intensities = self._coalesce_duplicate_bins(
+                mz_indices, intensities
+            )
             logger.debug(
                 f"Mapped to {len(mz_indices)} indices, "
                 f"intensity sum: {np.sum(intensities):.2e}"

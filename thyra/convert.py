@@ -328,6 +328,10 @@ def convert_msi(
             - tdf_spectrum: "vendor_centroid" | "scan_sum" - For Bruker
               TDF (TIMS) data, how a frame's mobility scans are collapsed
               into one spectrum per pixel (default "vendor_centroid").
+        **kwargs: Forwarded to the converter. ``write_mobility_table``
+            (default True) writes the mobility-resolved sibling table when
+            the source shares one set of (m/z, mobility) features across
+            pixels, e.g. an imzML export with a mobility array.
             - max_mass_axis_length: int - For processed-mode imzML
               converted with --no-resample, give up once the raw
               mass axis exceeds this many unique m/z values. This

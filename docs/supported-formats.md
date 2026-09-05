@@ -83,6 +83,17 @@ The open interchange format, read through
 An `.imzML` without its `.ibd` beside it is rejected up front, because the XML
 holds only offsets and the binary holds the data.
 
+**Ion mobility.** imzML defines two binary arrays, but TIMSCONVERT and
+TIMSImaging add a third for mobility, declared through a param group bound to
+`MS:1003006` (mean inverse reduced ion mobility array, unit `MS:1002814`).
+Thyra reads it. The MSI table is summed over mobility as always -- a shared
+m/z block that repeats a value where mobility splits a feature collapses to
+one column -- and, for a continuous export (one shared feature list), the
+`(m/z, mobility)` pairs are also written as a mobility-resolved sibling
+table; see [Output Format](output-format.md#ion-mobility). A processed export
+(per-pixel point cloud) gets the summed table only. A mobility array declared
+with zlib compression is refused like the other two.
+
 See [imzML Parser Notes](imzml-parser-notes.md) for the hazards Thyra works
 around in the underlying library.
 

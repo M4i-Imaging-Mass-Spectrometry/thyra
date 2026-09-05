@@ -383,6 +383,8 @@ class GroupedCommand(click.Command):
             "--resample",
             "--include-optical",
             "--no-optical",
+            "--mobility-table",
+            "--no-mobility-table",
         ],
         "Logging": ["--log-level", "-v", "--log-file"],
         "Resampling (advanced)": [
@@ -490,6 +492,16 @@ class GroupedCommand(click.Command):
     "--resample/--no-resample",
     default=True,
     help="Mass axis resampling (default: enabled)",
+)
+@click.option(
+    "--mobility-table/--no-mobility-table",
+    default=True,
+    help=(
+        "When the source shares one set of (m/z, ion mobility) features across "
+        "pixels (an imzML export with a mobility array), also write them as a "
+        "mobility-resolved sibling table next to the summed MSI table "
+        "(default: enabled)"
+    ),
 )
 @click.option(
     "--include-optical/--no-optical",
@@ -670,6 +682,7 @@ def main(
     spectrum_type: str,
     sparse_format: str,
     include_optical: bool,
+    mobility_table: bool,
     intensity_threshold: Optional[float],
     tdf_spectrum: Optional[str],
     streaming: str,
@@ -760,6 +773,7 @@ def main(
         include_optical=include_optical,
         streaming=_parse_streaming_option(streaming),
         region=region,
+        write_mobility_table=mobility_table,
     )
 
     ok = _handle_post_conversion(success, output)

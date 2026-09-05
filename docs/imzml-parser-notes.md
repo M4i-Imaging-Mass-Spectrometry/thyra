@@ -216,6 +216,33 @@ The behaviour is pinned by
 assertions now state the correct conversion — including the refusal — rather
 than characterise the error.
 
+### A typed cvParam with no `value` aborts the metadata parse
+
+`pyimzml.ontology.ontology.convert_xml_value` converts each cvParam value to
+the type its ontology entry declares. It catches `ValueError` (an empty
+`value=""` on a float-typed term becomes `None`) but not `TypeError`, so a
+term with **no `value` attribute at all** raises `float(None)` out of
+`ImzMLParser.__init__`, before any spectrum is read.
+
+That is what the pyimzML fork behind TIMSCONVERT and TIMSImaging writes for
+the ion mobility array it adds: a `mobilityArray` param group whose
+`MS:1003006 mean inverse reduced ion mobility array` term carries a unit and
+no value, and pyimzml types `MS:1003006` as `xsd:float`. Upstream pyimzml
+therefore cannot open any of those exports:
+
+```
+TypeError: float() argument must be a string or a real number, not 'NoneType'
+```
+
+Thyra installs a patch as narrow as the defect before building a parser
+(`thyra/readers/imzml/_pyimzml_compat.py`): a missing value on a typed term
+converts to `None`, the same result an empty value already produces. Nothing
+else changes. `tests/data/fixtures/mobility_continuous.imzML` reproduces the
+layout, and the reader then goes on to read the third array itself, since
+`__iter_read_spectrum_meta` matches only the m/z and intensity group ids and
+ignores every other `binaryDataArray` -- see
+[Output Format: Ion mobility](output-format.md#ion-mobility).
+
 ---
 
 ## The fixtures behind this page

@@ -25,6 +25,7 @@ from scipy import sparse
 from tqdm import tqdm
 
 from ...resampling import ResamplingMethod
+from ._chunking import table_write_config
 from .base_spatialdata_converter import (
     SPATIALDATA_AVAILABLE,
     BaseSpatialDataConverter,
@@ -791,9 +792,11 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             Tuple of (mz_indices, resampled_intensities) with zeros filtered out
         """
         if not self._resampling_config:
-            # No resampling - map m/z values to indices directly
+            # No resampling - map m/z values to indices directly. Entries
+            # that share a bin (a repeated m/z) are summed so the CSC never
+            # carries two values at one (row, col).
             mz_indices = self._map_mass_to_indices(mzs)
-            return mz_indices, intensities
+            return self._coalesce_duplicate_bins(mz_indices, intensities)
 
         # Optimized nearest-neighbor path; the route is resolved once in
         # __init__ because this runs once per spectrum per pass.
@@ -986,6 +989,9 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 if avg_per_region is not None:
                     adata.uns["average_spectrum_per_region"] = avg_per_region
 
+                # Decide on the mobility sibling first so uns can name it.
+                self._mobility_table_key = self._plan_mobility_table(slice_id)
+
                 # Add MSI metadata to .uns
                 self._add_metadata_to_uns(adata)
 
@@ -1010,6 +1016,9 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 # Add to tables and create shapes
                 data_structures["tables"][slice_id] = table
                 data_structures["shapes"][region_key] = self._create_pixel_shapes(adata)
+                self._attach_mobility_table(
+                    data_structures, slice_id, region_key, adata.obs, z_value=0
+                )
 
                 # Create TIC image for this slice
                 tic_values = slice_data["tic_values"]
@@ -1536,6 +1545,9 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             raise ValueError("Dimensions not initialized")
         n_x, n_y, _ = self._dimensions
         n_rows = int(kept_grid.size)
+        # Decide on the mobility sibling before uns is written, so the
+        # table's uns can name it (see _collect_mobility_axis).
+        self._mobility_table_key = self._plan_mobility_table(slice_id)
 
         # Clean output directory
         if self.output_path.exists():
@@ -1896,6 +1908,24 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             "tables": {},
         }
 
+        # The mobility-resolved sibling, when the source shares a feature
+        # axis. Its obs mirrors the hand-written table's rows: one per
+        # kept grid position, indexed by the grid index as a string.
+        if self._mobility_table_key is not None:
+            kept = np.asarray(kept_grid, dtype=np.int64)
+            obs = pd.DataFrame(
+                {
+                    "x": kept % n_x,
+                    "y": kept // n_x,
+                    "region": np.full(kept.size, region_key),
+                },
+                index=kept.astype(str),
+            )
+            obs.index.name = "instance_id"
+            self._attach_mobility_table(
+                data_structures, slice_id, region_key, obs, z_value=0
+            )
+
         # Load optical images through the COO converter's path so they get
         # the same multi-scale pyramid + chunked layout and identical
         # transforms.  Honours self._include_optical internally.
@@ -1913,12 +1943,16 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             sdata = SpatialData(
                 images=data_structures["images"],
                 shapes=data_structures["shapes"],
+                tables=data_structures["tables"],
             )
             sdata.path = Path(self.output_path)
-            element_names = list(data_structures["images"].keys()) + list(
-                data_structures["shapes"].keys()
+            element_names = (
+                list(data_structures["images"].keys())
+                + list(data_structures["shapes"].keys())
+                + list(data_structures["tables"].keys())
             )
-            sdata.write_element(element_names, overwrite=True)
+            with table_write_config():
+                sdata.write_element(element_names, overwrite=True)
 
         n_optical = len(data_structures["images"]) - 1
         logger.info(
