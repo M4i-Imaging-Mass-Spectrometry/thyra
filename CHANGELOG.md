@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v3.12.0 (2026-09-05)
+
+### Features
+
+- **imzml**: Read the ion mobility array and write the mobility-resolved table
+  ([`6e610ec`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/6e610ecb9036c7eb305659db3849841f5f50e70e))
+
+
 ## v3.11.0 (2026-09-05)
 
 ### Bug Fixes
