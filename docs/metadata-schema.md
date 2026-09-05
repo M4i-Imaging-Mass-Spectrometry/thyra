@@ -28,7 +28,7 @@ import spatialdata as sd
 sdata = sd.read_zarr("output.zarr")
 block = sdata.tables["msi_dataset_z0"].uns["msi_metadata"]
 
-print(block["schema_version"])                       # "0.1.0"
+print(block["schema_version"])                       # "0.2.0"
 print(block["ms_analysis"]["pixel_size_um"])         # {"x": 20.0, "y": 20.0}
 print(block["ms_analysis"]["ionisation_source"])     # "MALDI"
 print(block["ms_analysis"]["ionisation_source_term"])
@@ -63,6 +63,7 @@ you -- see [Completing the metadata](#completing-the-metadata).
 | | `instrument_model` | text | -- |
 | | `detector_resolving_power` | `{value, at_mz}` | -- |
 | | `pixel_size_um` | `{x, y}`, **required** | -- |
+| | `ion_mobility` | `{present, separation, separation_term, unit_term, range_lower, range_upper, num_scans}` | PSI-MS (`MS:1002815` / `MS:1002476`, unit `MS:1002814`) |
 | `processing` | list of `{name, software {name, version, uri}, parameters}` | ordered steps, oldest first | -- |
 | `provenance` | `thyra_version` | text, required | -- |
 | | `source_format` | `"imzml"`, `"bruker"`, ... | -- |
@@ -95,6 +96,13 @@ from the format itself.
 |--------|----------|-------------------|----------|------------------|
 | imzML | -- | -- | from the `<analyzer>` component cvParam | from the instrumentConfiguration (model term or `MS:1000031` value) |
 | Bruker `.d` | -- | MALDI, when the laser tables are present | TOF (timsTOF-family formats) | from the DB |
+
+Bruker `.d` also fills `ion_mobility`: `present: true` for a TDF acquisition
+(TIMS engaged), with the acquired 1/K0 range and the ramp length in scans,
+and `present: false` for TSF. Other formats leave the field unset, which
+means "not reported", not "no mobility". The MSI table is always summed over
+the ramp; how it was summed is the `tdf_spectrum` parameter of the
+`conversion` processing step (see [Supported Formats](supported-formats.md#bruker-timstof)).
 | PHI ToF-SIMS | from the header | SIMS | TOF | platform name |
 | Waters `.raw` | -- | -- | -- | from `_HEADER.TXT` |
 
@@ -231,7 +239,7 @@ table of a store.
   minors.
 
 The JSON Schema rendering is committed at
-`thyra/metadata/schema/msi_metadata_schema_v0_1.json` and ships in the
+`thyra/metadata/schema/msi_metadata_schema_v0_2.json` and ships in the
 wheel, so non-Python consumers can validate documents without importing
 Thyra:
 
@@ -241,7 +249,7 @@ import json
 
 schema = json.loads(
     resources.files("thyra.metadata.schema")
-    .joinpath("msi_metadata_schema_v0_1.json")
+    .joinpath("msi_metadata_schema_v0_2.json")
     .read_text()
 )
 ```

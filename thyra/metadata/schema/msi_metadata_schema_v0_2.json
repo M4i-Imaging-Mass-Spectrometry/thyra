@@ -1,5 +1,102 @@
 {
   "$defs": {
+    "IonMobility": {
+      "additionalProperties": false,
+      "description": "Whether, and how, the acquisition separated ions by mobility.\n\nWritten so a consumer can tell a spectrum that was *summed over* a\nmobility ramp (Bruker TDF, TIMS engaged) from one that never had a\nmobility dimension (TSF, imzML, most other sources).  The MSI table\nThyra writes collapses the ramp; the fields here describe what was\ncollapsed.  Mobility is a spectral coordinate, never a spatial one,\nso nothing about it appears in the store's coordinate systems.",
+      "properties": {
+        "num_scans": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Mobility scans per frame (the TIMS ramp length); the largest when frames differ.",
+          "title": "Num Scans"
+        },
+        "present": {
+          "description": "True when the source carries a mobility dimension, e.g. a Bruker TDF acquisition with TIMS engaged.",
+          "title": "Present",
+          "type": "boolean"
+        },
+        "range_lower": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Lower bound of the acquired mobility range.",
+          "title": "Range Lower"
+        },
+        "range_upper": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Upper bound of the acquired mobility range.",
+          "title": "Range Upper"
+        },
+        "separation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "MS:1002892",
+            "name": "ion mobility attribute"
+          },
+          "default": null,
+          "description": "The mobility quantity the instrument records, e.g. 'inverse reduced ion mobility' (TIMS) or 'ion mobility drift time'.",
+          "title": "Separation"
+        },
+        "separation_term": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OntologyTerm"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "PSI-MS term for the quantity: MS:1002815 (inverse reduced ion mobility) or MS:1002476 (ion mobility drift time)."
+        },
+        "unit_term": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OntologyTerm"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Unit of range_lower and range_upper, e.g. MS:1002814 volt-second per square centimeter for 1/K0."
+        }
+      },
+      "required": [
+        "present"
+      ],
+      "title": "IonMobility",
+      "type": "object"
+    },
     "MSAnalysis": {
       "additionalProperties": false,
       "description": "How the data was acquired (METASPACE ``MS_Analysis``).\n\n``pixel_size_um`` is the one field that is always known at\nconversion time (conversion refuses to run without a pixel size),\nso it is the one required field of the section.",
@@ -65,6 +162,18 @@
           "default": null,
           "description": "Instrument model as reported by the source.",
           "title": "Instrument Model"
+        },
+        "ion_mobility": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IonMobility"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Whether the source separated ions by mobility and, if so, over what range; the MSI table is summed over that dimension."
         },
         "ionisation_source": {
           "anyOf": [
@@ -557,7 +666,7 @@
       "description": "What the sample is; user-supplied."
     },
     "schema_version": {
-      "default": "0.1.0",
+      "default": "0.2.0",
       "description": "Semantic version of the schema this document conforms to.",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
       "title": "Schema Version",

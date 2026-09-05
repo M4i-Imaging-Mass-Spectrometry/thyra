@@ -790,7 +790,24 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         from thyra.metadata.schema import ProcessingStep, SoftwareRef
 
         thyra_ref = SoftwareRef(name="thyra", version=__version__)
-        steps = [ProcessingStep(name="conversion", software=thyra_ref)]
+        conversion_parameters: Dict[str, Any] = {}
+        # A TDF frame's mobility ramp is collapsed into one spectrum, and
+        # the two correct ways to do that differ in TIC by up to a fifth
+        # (vendor centroid vs. lossless scan sum), so the store must say
+        # which one it holds.
+        tdf_spectrum = getattr(self.reader, "tdf_spectrum", None)
+        if (
+            tdf_spectrum is not None
+            and getattr(self.reader, "file_type", None) == "tdf"
+        ):
+            conversion_parameters["tdf_spectrum"] = str(tdf_spectrum)
+        steps = [
+            ProcessingStep(
+                name="conversion",
+                software=thyra_ref,
+                parameters=conversion_parameters,
+            )
+        ]
 
         config = self._resampling_config
         if config is not None:

@@ -85,6 +85,7 @@ class TestCvBindings:
             "MS:1000443",  # mass analyzer type
             "MS:1000031",  # instrument model
             "MS:1000800",  # mass resolving power
+            "MS:1002892",  # ion mobility attribute
         }
 
     def test_every_binding_resolves_in_the_local_tables(self):

@@ -342,25 +342,63 @@ class BrukerMetadataExtractor(MetadataExtractor):
 
     def _extract_bruker_specific(self) -> Dict[str, Any]:
         """Extract Bruker format-specific metadata."""
+        is_tdf = self._is_tdf_format()
+        stem = "analysis.tdf" if is_tdf else "analysis.tsf"
         format_specific: Dict[str, Any] = {
-            "bruker_format": ("bruker_tdf" if self._is_tdf_format() else "bruker_tsf"),
-            "data_format": ("bruker_tdf" if self._is_tdf_format() else "bruker_tsf"),
+            "bruker_format": ("bruker_tdf" if is_tdf else "bruker_tsf"),
+            "data_format": ("bruker_tdf" if is_tdf else "bruker_tsf"),
             "data_path": str(self.data_path),
-            "database_path": str(self.data_path / "analysis.tsf"),
+            "database_path": str(self.data_path / stem),
+            "binary_file": str(self.data_path / f"{stem}_bin"),
             "is_maldi": self._is_maldi_dataset(),
+            "ion_mobility": self._extract_ion_mobility(),
         }
-
-        # Add file type detection
-        if (self.data_path / "analysis.tdf").exists():
-            format_specific["binary_file"] = str(self.data_path / "analysis.tdf")
-        elif (self.data_path / "analysis.tsf").exists():
-            format_specific["binary_file"] = str(self.data_path / "analysis.tsf")
 
         # Add calibration metadata if available
         if self.calibration_metadata:
             format_specific["calibration"] = self.calibration_metadata
 
         return format_specific
+
+    def _extract_ion_mobility(self) -> Dict[str, Any]:
+        """Describe the mobility dimension of the acquisition.
+
+        A TDF file is a TIMS acquisition: every frame carries ``NumScans``
+        mobility scans, each mapping onto an inverse reduced ion mobility
+        (1/K0, PSI-MS ``MS:1002815``) through the file's calibration, and
+        ``GlobalMetadata`` records the acquired 1/K0 range. A TSF file has
+        no mobility dimension at all. The block says which, so a consumer
+        can tell "summed over mobility" from "never had any".
+        """
+        if not self._is_tdf_format():
+            return {"present": False}
+
+        info: Dict[str, Any] = {
+            "present": True,
+            "separation": "inverse reduced ion mobility",
+            "separation_accession": "MS:1002815",
+            "unit": "volt-second per square centimeter",
+            "unit_accession": "MS:1002814",
+        }
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("SELECT MIN(NumScans), MAX(NumScans) FROM Frames")
+            row = cursor.fetchone()
+            if row and row[0] is not None:
+                info["num_scans_min"] = int(row[0])
+                info["num_scans_max"] = int(row[1])
+            cursor.execute(
+                "SELECT Key, Value FROM GlobalMetadata WHERE Key IN "
+                "('OneOverK0AcqRangeLower', 'OneOverK0AcqRangeUpper')"
+            )
+            bounds = {key: float(value) for key, value in cursor.fetchall()}
+            lower = bounds.get("OneOverK0AcqRangeLower")
+            upper = bounds.get("OneOverK0AcqRangeUpper")
+            if lower is not None and upper is not None:
+                info["one_over_k0_range"] = [lower, upper]
+        except (sqlite3.OperationalError, TypeError, ValueError) as e:
+            logger.debug(f"Could not read the mobility range: {e}")
+        return info
 
     def _extract_acquisition_params(self) -> Dict[str, Any]:
         """Extract acquisition parameters from database."""

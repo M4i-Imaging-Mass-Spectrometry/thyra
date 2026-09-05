@@ -33,7 +33,8 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # The schema version this code implements and writes.
-MSI_METADATA_SCHEMA_VERSION = "0.1.0"
+# 0.2.0: added the optional ``ms_analysis.ion_mobility`` block (additive).
+MSI_METADATA_SCHEMA_VERSION = "0.2.0"
 
 # Where the block lives inside a converted store:
 # ``table.uns["msi_metadata"]``.  This location is a stable contract
@@ -42,7 +43,7 @@ MSI_METADATA_SCHEMA_VERSION = "0.1.0"
 MSI_METADATA_UNS_KEY = "msi_metadata"
 
 # The committed JSON Schema artifact for this schema version.
-SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_1.json"
+SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_2.json"
 
 # Fixed var column conventions for the MSI table.  ``mz`` is required
 # and written by every converter; the remaining names are reserved for
@@ -205,6 +206,80 @@ class SamplePreparation(_SchemaModel):
     solvent: Optional[str] = Field(default=None, description="Solvent used.")
 
 
+class IonMobility(_SchemaModel):
+    """Whether, and how, the acquisition separated ions by mobility.
+
+    Written so a consumer can tell a spectrum that was *summed over* a
+    mobility ramp (Bruker TDF, TIMS engaged) from one that never had a
+    mobility dimension (TSF, imzML, most other sources).  The MSI table
+    Thyra writes collapses the ramp; the fields here describe what was
+    collapsed.  Mobility is a spectral coordinate, never a spatial one,
+    so nothing about it appears in the store's coordinate systems.
+    """
+
+    present: bool = Field(
+        description=(
+            "True when the source carries a mobility dimension, e.g. a Bruker "
+            "TDF acquisition with TIMS engaged."
+        ),
+    )
+    separation: Optional[str] = Field(
+        default=None,
+        description=(
+            "The mobility quantity the instrument records, e.g. 'inverse "
+            "reduced ion mobility' (TIMS) or 'ion mobility drift time'."
+        ),
+        json_schema_extra=_cv("MS:1002892", "ion mobility attribute"),
+    )
+    separation_term: Optional[OntologyTerm] = Field(
+        default=None,
+        description=(
+            "PSI-MS term for the quantity: MS:1002815 (inverse reduced ion "
+            "mobility) or MS:1002476 (ion mobility drift time)."
+        ),
+    )
+    unit_term: Optional[OntologyTerm] = Field(
+        default=None,
+        description=(
+            "Unit of range_lower and range_upper, e.g. MS:1002814 "
+            "volt-second per square centimeter for 1/K0."
+        ),
+    )
+    range_lower: Optional[float] = Field(
+        default=None, description="Lower bound of the acquired mobility range."
+    )
+    range_upper: Optional[float] = Field(
+        default=None, description="Upper bound of the acquired mobility range."
+    )
+    num_scans: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Mobility scans per frame (the TIMS ramp length); the largest "
+            "when frames differ."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _absent_means_empty(self) -> "IonMobility":
+        """A source without mobility cannot describe a mobility axis."""
+        if not self.present and any(
+            value is not None
+            for value in (
+                self.separation,
+                self.separation_term,
+                self.unit_term,
+                self.range_lower,
+                self.range_upper,
+                self.num_scans,
+            )
+        ):
+            raise ValueError(
+                "ion_mobility.present is False but mobility axis fields are set"
+            )
+        return self
+
+
 class MSAnalysis(_SchemaModel):
     """How the data was acquired (METASPACE ``MS_Analysis``).
 
@@ -250,6 +325,13 @@ class MSAnalysis(_SchemaModel):
     )
     pixel_size_um: PixelSizeUm = Field(
         description="In-plane raster pitch in micrometres."
+    )
+    ion_mobility: Optional[IonMobility] = Field(
+        default=None,
+        description=(
+            "Whether the source separated ions by mobility and, if so, over "
+            "what range; the MSI table is summed over that dimension."
+        ),
     )
 
     @model_validator(mode="after")

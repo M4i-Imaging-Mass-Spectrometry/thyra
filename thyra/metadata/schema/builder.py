@@ -12,8 +12,20 @@ import logging
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 from ..types import ComprehensiveMetadata
-from .models import MSAnalysis, MSIMetadata, PixelSizeUm, ProcessingStep, Provenance
-from .vocab import normalize_analyzer, normalize_ionisation_source, normalize_polarity
+from .models import (
+    IonMobility,
+    MSAnalysis,
+    MSIMetadata,
+    PixelSizeUm,
+    ProcessingStep,
+    Provenance,
+)
+from .vocab import (
+    normalize_analyzer,
+    normalize_ionisation_source,
+    normalize_polarity,
+    term_from_accession,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -111,10 +123,61 @@ def _build_ms_analysis(
     if instrument_model is not None:
         fields["instrument_model"] = instrument_model
 
+    ion_mobility = _build_ion_mobility(format_specific.get("ion_mobility"))
+    if ion_mobility is not None:
+        fields["ion_mobility"] = ion_mobility
+
     return MSAnalysis(
         pixel_size_um=PixelSizeUm(x=pixel_size_um[0], y=pixel_size_um[1]),
         **fields,
     )
+
+
+def _optional_term(accession: Any) -> Optional[Any]:
+    """The ontology term for an accession the extractor reported, if resolvable."""
+    if not isinstance(accession, str) or not accession:
+        return None
+    try:
+        return term_from_accession(accession)
+    except KeyError:
+        logger.debug("Mobility accession %s is not in the local ontology", accession)
+        return None
+
+
+def _build_ion_mobility(reported: Any) -> Optional[IonMobility]:
+    """The mobility block from what a reader's extractor reported.
+
+    Only the Bruker extractor reports one today (``present`` True for TDF,
+    False for TSF); readers that say nothing leave the field unset, which
+    is honest -- "not reported" is not the same as "no mobility".
+    """
+    if not isinstance(reported, dict) or "present" not in reported:
+        return None
+    present = bool(reported["present"])
+    if not present:
+        return IonMobility(present=False)
+
+    fields: Dict[str, Any] = {"present": True}
+    separation = reported.get("separation")
+    if isinstance(separation, str) and separation.strip():
+        fields["separation"] = separation.strip()
+    separation_term = _optional_term(reported.get("separation_accession"))
+    if separation_term is not None:
+        fields["separation_term"] = separation_term
+    unit_term = _optional_term(reported.get("unit_accession"))
+    if unit_term is not None:
+        fields["unit_term"] = unit_term
+    mobility_range = reported.get("one_over_k0_range") or reported.get("range")
+    if isinstance(mobility_range, (list, tuple)) and len(mobility_range) == 2:
+        try:
+            fields["range_lower"] = float(mobility_range[0])
+            fields["range_upper"] = float(mobility_range[1])
+        except (TypeError, ValueError):
+            pass
+    num_scans = reported.get("num_scans_max", reported.get("num_scans"))
+    if isinstance(num_scans, (int, float)) and num_scans >= 1:
+        fields["num_scans"] = int(num_scans)
+    return IonMobility(**fields)
 
 
 def build_msi_metadata(
