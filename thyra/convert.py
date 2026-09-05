@@ -332,6 +332,10 @@ def convert_msi(
             (default True) writes the mobility-resolved sibling table when
             the source shares one set of (m/z, mobility) features across
             pixels, e.g. an imzML export with a mobility array.
+            ``mobility_heatmap`` (default True) stores the mean
+            mass-mobility frame on the summed table as
+            ``uns["mobility_heatmap"]`` whenever the source has an ion
+            mobility dimension (Bruker TDF, imzML with a mobility array).
             - max_mass_axis_length: int - For processed-mode imzML
               converted with --no-resample, give up once the raw
               mass axis exceeds this many unique m/z values. This

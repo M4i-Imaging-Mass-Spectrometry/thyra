@@ -396,6 +396,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         include_optical: bool = True,
         apply_optical_alignment: bool = True,
         write_mobility_table: bool = True,
+        mobility_heatmap: bool = True,
         **kwargs: Any,
     ) -> None:
         """Initialize the base SpatialData converter.
@@ -425,6 +426,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 them as a mobility-resolved sibling table
                 (``{table}_mobility``) beside the summed MSI table
                 (default: True). Never changes the MSI table itself.
+            mobility_heatmap: When the reader has an ion mobility
+                dimension, accumulate the mean mass-mobility frame from
+                the raw scan read and store it on the summed table as
+                ``uns["mobility_heatmap"]`` (default: True). Costs one
+                extra pass over the source; see ``mobility_heatmap.py``.
             apply_optical_alignment: If True (default) and the MSI source
                 has FlexImaging Area metadata, compute an alignment that
                 places MSI raster coordinates in optical-image pixel
@@ -506,6 +512,13 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # -- the element key it gets, so the MSI table's uns can name it.
         self._write_mobility_table = bool(write_mobility_table)
         self._mobility_table_key: Optional[str] = None
+        # The mass-mobility heatmap (see mobility_heatmap.py): built once
+        # per conversion, on first demand, and shared by every uns block
+        # that asks for it. ``_built`` distinguishes "not yet" from
+        # "tried, nothing to write".
+        self._mobility_heatmap_enabled = bool(mobility_heatmap)
+        self._mobility_heatmap_block: Optional[Dict[str, Any]] = None
+        self._mobility_heatmap_built = False
         if self._sparse_format not in ("csc", "csr"):
             raise ValueError(
                 f"sparse_format must be 'csc' or 'csr', got '{sparse_format}'"
@@ -751,6 +764,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         self._collect_msi_metadata_block(uns, comp_meta)
         self._collect_mobility_axis(uns)
+        self._collect_mobility_heatmap(uns)
 
         return uns
 
@@ -776,6 +790,55 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         if self._mobility_table_key is not None:
             block["resolved_table"] = self._mobility_table_key
         uns["mobility_axis"] = _jsonify_string_lists(self._serialize_for_zarr(block))
+
+    def _collect_mobility_heatmap(self, uns: Dict[str, Any]) -> None:
+        """Add ``mobility_heatmap`` when the source has a mobility dimension.
+
+        The mean (m/z, mobility) frame of the whole dataset, the surface
+        a consumer looks at to decide whether mobility separates anything
+        before asking for a mobility-resolved table. Arrays, not lists,
+        and plain-name keys; nothing in it is per pixel.
+        """
+        block = self._ensure_mobility_heatmap()
+        if block is not None:
+            uns["mobility_heatmap"] = block
+
+    def _ensure_mobility_heatmap(self) -> Optional[Dict[str, Any]]:
+        """Build the heatmap the first time it is asked for; cache the result.
+
+        Needs the common mass axis, so it can only run after
+        ``_initialize_conversion``. A failure is logged and leaves the
+        summed table untouched: the block is additive, and a store
+        without it is still complete.
+        """
+        if self._mobility_heatmap_built:
+            return self._mobility_heatmap_block
+        self._mobility_heatmap_built = True
+        if not self._mobility_heatmap_enabled:
+            return None
+        try:
+            if not getattr(self.reader, "has_ion_mobility", False):
+                return None
+        except Exception as e:  # pragma: no cover - reader-defined
+            logger.warning("Could not inspect the mobility axis: %s", e)
+            return None
+        if self._common_mass_axis is None:
+            logger.warning(
+                "No mass-mobility heatmap: the common mass axis is not built yet"
+            )
+            return None
+        from .mobility_heatmap import build_mobility_heatmap
+
+        try:
+            self._mobility_heatmap_block = build_mobility_heatmap(
+                self.reader,
+                self._common_mass_axis,
+                n_spectra=self._get_total_spectra_count(),
+            )
+        except Exception as e:
+            logger.error("Could not build the mass-mobility heatmap: %s", e)
+            self._mobility_heatmap_block = None
+        return self._mobility_heatmap_block
 
     def _plan_mobility_table(self, table_key: str) -> Optional[str]:
         """The key of the mobility table this slice gets, or ``None``.
@@ -816,6 +879,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             return
         from .mobility_table import build_mobility_table
 
+        # The sibling carries the same provenance as the summed table,
+        # minus the heatmap: that block is the summed table's navigator
+        # over the very data the sibling holds resolved.
+        sibling_uns = self.build_uns_metadata()
+        sibling_uns.pop("mobility_heatmap", None)
         try:
             table = build_mobility_table(
                 self.reader,
@@ -823,7 +891,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 self._common_mass_axis,
                 table_key,
                 region_key,
-                self.build_uns_metadata(),
+                sibling_uns,
                 z_value=z_value,
             )
         except Exception as e:
@@ -864,6 +932,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 pixel_size_source=self.pixel_size_source.value,
                 source_format=info.get("source_format"),
                 processing=self._processing_provenance(),
+                mobility_resolved_table=self._mobility_table_key,
             )
             uns[MSI_METADATA_UNS_KEY] = meta.to_uns_dict()
         except Exception as e:

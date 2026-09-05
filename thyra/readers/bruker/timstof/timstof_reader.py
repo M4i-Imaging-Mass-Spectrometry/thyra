@@ -14,7 +14,6 @@ from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
 import numpy as np
 from numpy.typing import NDArray
-from tqdm import tqdm
 
 # Set OpenMP thread limit before any SDK imports to control Bruker DLL
 # threading
@@ -30,6 +29,11 @@ else:
     )
 
 from ....core.base_extractor import MetadataExtractor
+from ....core.mobility import (
+    INVERSE_REDUCED_MOBILITY_ACCESSION,
+    MOBILITY_KIND_NAMES,
+    MobilityAxis,
+)
 from ....core.registry import register_reader
 from ....metadata.extractors.bruker_extractor import BrukerMetadataExtractor
 from ....utils.bruker_exceptions import DataError, FileFormatError, SDKError
@@ -47,6 +51,11 @@ logger = logging.getLogger(__name__)
 # session logs.  Keys are the resolved data_path strings; entries
 # never get cleared (process lifetime is short enough).
 _NO_CALIBRATION_WARNED: set = set()
+
+# The unit of 1/K0 as PSI-MS names it; the same strings the Bruker
+# metadata extractor reports, so the store and the schema block agree.
+_ONE_OVER_K0_UNIT_ACCESSION = "MS:1002814"
+_ONE_OVER_K0_UNIT_NAME = "volt-second per square centimeter"
 
 
 def build_raw_mass_axis(
@@ -298,6 +307,8 @@ class BrukerReader(BrukerBaseMSIReader):
         self._common_mass_axis: Optional[np.ndarray] = None
         self._frame_count: Optional[int] = None
         self._coordinate_offsets: Optional[Tuple[int, int, int]] = None
+        self._mobility_axis: Optional[MobilityAxis] = None
+        self._mobility_scan_overflow_warned: bool = False
         self._closed: bool = False  # Track if resources have been closed
 
         # Preload the per-frame NumPeaks (buffer sizing) and, for TDF, the
@@ -848,10 +859,35 @@ class BrukerReader(BrukerBaseMSIReader):
     ]:
         """Raw spectrum iteration without batching.
 
-        When region filtering is active, only frames belonging to the
-        selected region are iterated.
+        One summed spectrum per frame, over the frames
+        :meth:`_iter_frames` selects. A frame whose read fails is logged
+        and skipped; a frame that reads empty is skipped silently.
         """
-        # Determine which frames to iterate
+        for frame_id, coords in self._iter_frames():
+            try:
+                mzs, intensities = self._read_frame_spectrum(frame_id)
+                # Apply intensity threshold filtering if configured
+                mzs, intensities = self._apply_intensity_filter(mzs, intensities)
+            except Exception as e:
+                logger.warning(f"Error reading spectrum for frame {frame_id}: {e}")
+                continue
+            if mzs.size > 0 and intensities.size > 0:
+                yield coords, mzs, intensities
+
+    def _iter_frames(
+        self,
+    ) -> Generator[Tuple[int, Tuple[int, int, int]], None, None]:
+        """The frames to read, in order, each with its normalised coordinates.
+
+        The one frame loop behind both :meth:`iter_spectra` and
+        :meth:`iter_mobility_spectra`: the region filter, the source of
+        frame ids (``MaldiFrameInfo`` when present, else ``1..N`` -- ids
+        are the 1-based ``Frames.Id`` throughout and are never
+        renumbered) and the coordinate normalisation live here so the two
+        iterations cannot drift apart. A frame without coordinates is
+        skipped with a warning. The progress callback fires once per
+        frame handed out.
+        """
         if self._region_frame_ids is not None:
             frame_ids: Any = sorted(self._region_frame_ids)
             total = len(frame_ids)
@@ -867,43 +903,208 @@ class BrukerReader(BrukerBaseMSIReader):
                 frame_ids = range(1, total + 1)
 
         coordinate_offsets = self._get_coordinate_offsets()
+        for frame_id in frame_ids:
+            coords = self._get_frame_coordinates_cached(frame_id, coordinate_offsets)
+            if coords is None:
+                logger.warning(f"No coordinates found for frame {frame_id}")
+                continue
+            yield frame_id, coords
+            if self.progress_callback:
+                self.progress_callback(frame_id, total)
 
-        # Setup progress tracking
-        with tqdm(
-            total=total,
-            desc="Reading spectra",
-            unit="spectrum",
-            disable=True,  # Disable to avoid double progress with converter
-        ) as pbar:
-            for frame_id in frame_ids:
-                try:
-                    # Get normalized coordinates using persistent connection
-                    coords = self._get_frame_coordinates_cached(
-                        frame_id, coordinate_offsets
-                    )
-                    if coords is None:
-                        logger.warning(f"No coordinates found for frame {frame_id}")
-                        pbar.update(1)
-                        continue
+    # ------------------------------------------------------------------
+    # Ion mobility (TDF only)
+    #
+    # A TDF frame's scans are its mobility dimension: scan number maps
+    # onto 1/K0 through the file's TimsCalibration, identically for every
+    # frame, with 1/K0 decreasing as the scan number grows. Mobility is a
+    # coordinate on a feature, never on a pixel -- nothing here touches
+    # coordinates, and iter_spectra keeps yielding the summed spectrum.
+    # ------------------------------------------------------------------
 
-                    mzs, intensities = self._read_frame_spectrum(frame_id)
+    @property
+    def has_ion_mobility(self) -> bool:
+        """True for TDF (TIMS engaged); a TSF file has no mobility dimension."""
+        return self.file_type == "tdf"
 
-                    # Apply intensity threshold filtering if configured
-                    mzs, intensities = self._apply_intensity_filter(mzs, intensities)
+    def get_mobility_axis(self) -> Optional[MobilityAxis]:
+        """The per-scan 1/K0 axis of a TDF file, or ``None`` for TSF.
 
-                    if mzs.size > 0 and intensities.size > 0:
-                        yield coords, mzs, intensities
+        ``values[s]`` is the 1/K0 of scan ``s`` from the SDK's own
+        calibration (never a linear model: the mapping is non-linear by
+        up to 0.3%), for the longest ramp in the file. The declared
+        acquisition range and the ``TimsCalibration`` row travel with it
+        for provenance. Read once and cached; the calibration is one row
+        per file. Without the SDK (``metadata_only``) the axis is
+        described but carries no values.
+        """
+        if self.file_type != "tdf":
+            return None
+        if self._mobility_axis is None:
+            self._mobility_axis = self._build_mobility_axis()
+        return self._mobility_axis
 
-                    pbar.update(1)
+    def _build_mobility_axis(self) -> MobilityAxis:
+        n_scans, frame_id = self._mobility_ramp()
+        values: Optional[NDArray[np.float64]] = None
+        if getattr(self, "sdk", None) is not None and self.handle:
+            values = self.sdk.scannum_to_oneoverk0(
+                self.handle, frame_id, np.arange(n_scans, dtype=np.float64)
+            )
+        else:
+            logger.info(
+                "Mobility axis described without per-scan values: the Bruker "
+                "library is not loaded (metadata-only mode)"
+            )
+        return MobilityAxis(
+            kind_accession=INVERSE_REDUCED_MOBILITY_ACCESSION,
+            kind_name=MOBILITY_KIND_NAMES[INVERSE_REDUCED_MOBILITY_ACCESSION],
+            unit_accession=_ONE_OVER_K0_UNIT_ACCESSION,
+            unit_name=_ONE_OVER_K0_UNIT_NAME,
+            values=values,
+            acq_range=self._one_over_k0_acq_range(),
+            calibration=self._tims_calibration(),
+            source="bruker_tdf",
+        )
 
-                    # Progress callback
-                    if self.progress_callback:
-                        self.progress_callback(frame_id, total)
+    def _mobility_ramp(self) -> Tuple[int, int]:
+        """``(longest NumScans in the file, a frame id to calibrate against)``."""
+        row = self.conn.execute("SELECT MAX(NumScans), MIN(Id) FROM Frames").fetchone()
+        if row is None or row[0] is None:
+            raise DataError("The Frames table carries no NumScans; not a TIMS file")
+        return int(row[0]), int(row[1])
 
-                except Exception as e:
-                    logger.warning(f"Error reading spectrum for frame {frame_id}: {e}")
-                    pbar.update(1)
+    def _one_over_k0_acq_range(self) -> Optional[Tuple[float, float]]:
+        """The acquired 1/K0 range from ``GlobalMetadata``, when declared."""
+        try:
+            rows = self.conn.execute(
+                "SELECT Key, Value FROM GlobalMetadata WHERE Key IN "
+                "('OneOverK0AcqRangeLower', 'OneOverK0AcqRangeUpper')"
+            ).fetchall()
+            bounds = {key: float(value) for key, value in rows}
+        except (sqlite3.OperationalError, TypeError, ValueError) as e:
+            logger.debug(f"Could not read the 1/K0 acquisition range: {e}")
+            return None
+        lower = bounds.get("OneOverK0AcqRangeLower")
+        upper = bounds.get("OneOverK0AcqRangeUpper")
+        if lower is None or upper is None:
+            return None
+        return (lower, upper)
+
+    def _tims_calibration(self) -> Optional[Dict[str, Any]]:
+        """The ``TimsCalibration`` row as ``{model_type, coefficients}``.
+
+        Provenance only: nothing in Thyra evaluates the model, the SDK
+        does. Coefficients keep their column order (``C0``, ``C1``, ...);
+        a NULL becomes NaN so positions are preserved.
+        """
+        try:
+            cursor = self.conn.execute("SELECT * FROM TimsCalibration ORDER BY Id")
+            row = cursor.fetchone()
+        except sqlite3.OperationalError as e:
+            logger.debug(f"No TimsCalibration table: {e}")
+            return None
+        if row is None:
+            return None
+        columns = [description[0] for description in cursor.description]
+        by_name = dict(zip(columns, row))
+        coefficients = [
+            float("nan") if by_name[name] is None else float(by_name[name])
+            for name in columns
+            if name.startswith("C") and name[1:].isdigit()
+        ]
+        calibration: Dict[str, Any] = {"coefficients": coefficients}
+        if by_name.get("ModelType") is not None:
+            calibration["model_type"] = int(by_name["ModelType"])
+        return calibration
+
+    def iter_mobility_spectra(self, batch_size: Optional[int] = None) -> Generator[
+        Tuple[
+            Tuple[int, int, int],
+            NDArray[np.float64],
+            NDArray[np.float64],
+            NDArray[np.float64],
+        ],
+        None,
+        None,
+    ]:
+        """Every ``(m/z, 1/K0, intensity)`` point of each TDF frame, unbinned.
+
+        One ``tims_read_scans_v2`` over the full ramp per frame (the frame
+        id passed as-is), ``tims_index_to_mz`` on the frame's unique
+        digitizer indices only, and the scan number of each pair turned
+        into 1/K0 through :meth:`get_mobility_axis` -- so the mobility
+        value of a point is exactly ``values[scan]``. Points come out
+        ordered by scan, then by index; the three arrays are parallel.
+        Same frames, same order and same coordinates as
+        :meth:`iter_spectra`, which keeps yielding the summed spectrum.
+
+        Args:
+            batch_size: Ignored, maintained for interface compatibility.
+
+        Raises:
+            NotImplementedError: On a TSF file, which has no mobility.
+            SDKError: When the Bruker library is not loaded.
+        """
+        if self.file_type != "tdf":
+            raise NotImplementedError(
+                "Only a TDF (TIMS engaged) acquisition carries an ion mobility "
+                "dimension; this is a TSF file"
+            )
+        if getattr(self, "sdk", None) is None or not self.handle:
+            raise SDKError(
+                "Reading mobility spectra needs the Bruker library; the reader "
+                "was opened in metadata-only mode"
+            )
+        axis = self.get_mobility_axis()
+        if axis is None or axis.values is None:
+            raise SDKError("The per-scan 1/K0 axis is not available")
+        values = axis.values
+        n_axis = int(values.size)
+
+        for frame_id, coords in self._iter_frames():
+            try:
+                indices, raw_intensities, scans = self.sdk.read_tdf_scans(
+                    self.handle,
+                    frame_id,
+                    0,
+                    self._frame_num_scans(frame_id),
+                    self._num_peaks_cache.get(frame_id),
+                )
+                if indices.size == 0:
                     continue
+                unique_indices, inverse = np.unique(indices, return_inverse=True)
+                unique_mz = self.sdk.index_to_mz(
+                    self.handle, frame_id, unique_indices.astype(np.float64)
+                )
+                mzs = unique_mz[np.asarray(inverse).ravel()]
+                if (
+                    int(scans.max()) >= n_axis
+                    and not self._mobility_scan_overflow_warned
+                ):
+                    self._mobility_scan_overflow_warned = True
+                    logger.warning(
+                        "Frame %d has scan numbers beyond the %d-scan mobility "
+                        "axis; they are clipped to the last scan's 1/K0",
+                        frame_id,
+                        n_axis,
+                    )
+                mobility = np.take(values, scans, mode="clip")
+                intensities = raw_intensities.astype(np.float64)
+            except Exception as e:
+                logger.warning(
+                    f"Error reading mobility scans for frame {frame_id}: {e}"
+                )
+                continue
+            if self._intensity_threshold is not None:
+                keep = intensities >= self._intensity_threshold
+                mzs, mobility, intensities = (
+                    mzs[keep],
+                    mobility[keep],
+                    intensities[keep],
+                )
+            if mzs.size > 0:
+                yield coords, mzs, mobility, intensities
 
     def _get_maldi_frame_ids(self) -> Optional[List[int]]:
         """Get sorted frame IDs from MaldiFrameInfo table.

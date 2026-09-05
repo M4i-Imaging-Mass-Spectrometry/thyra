@@ -20,6 +20,15 @@ In every Thyra-produced zarr,
 
 If you only remember one thing, remember that.
 
+One thing the contract deliberately does **not** cover: ion mobility. A
+TIMS acquisition has a third measured dimension, but it is a coordinate on a
+*feature* -- like m/z, it says what was measured, not where. Thyra never
+writes mobility into a coordinate system, a transform, `obs`, or a z axis; it
+lives in `var` (on a mobility-resolved table) and in the summed table's
+`uns["mobility_axis"]` / `uns["mobility_heatmap"]`, see
+[Output Format](output-format.md#ion-mobility). Anything that reads
+`coordinate_systems` can ignore mobility entirely.
+
 ---
 
 ## The schema

@@ -4,7 +4,12 @@ import pytest
 from pydantic import ValidationError
 
 from thyra.metadata.schema import build_msi_metadata
-from thyra.metadata.schema.models import IonMobility, MSIMetadata
+from thyra.metadata.schema.models import (
+    MSI_METADATA_SCHEMA_VERSION,
+    IonMobility,
+    MobilityGrid,
+    MSIMetadata,
+)
 from thyra.metadata.schema.validate import validate_document
 from thyra.metadata.types import ComprehensiveMetadata, EssentialMetadata
 
@@ -53,6 +58,31 @@ class TestModel:
         with pytest.raises(ValidationError):
             IonMobility(present=True, num_scans=0)
 
+    def test_absent_mobility_names_no_resolved_table(self):
+        with pytest.raises(ValidationError, match="present is False"):
+            IonMobility(present=False, resolved_table="x_z0_mobility")
+
+    def test_grid_needs_extent(self):
+        with pytest.raises(ValidationError, match="upper"):
+            MobilityGrid(law="linear", lower=1.2, upper=1.0, n_channels=256)
+        with pytest.raises(ValidationError):
+            MobilityGrid(law="linear", lower=1.0, upper=1.2, n_channels=0)
+
+    def test_grid_round_trips(self):
+        block = IonMobility(
+            present=True,
+            resolved_table="x_z0_mobility",
+            grid=MobilityGrid(law="linear", lower=1.0, upper=1.29, n_channels=256),
+        )
+        dumped = block.model_dump(mode="json", exclude_none=True)
+        assert dumped["grid"] == {
+            "law": "linear",
+            "lower": 1.0,
+            "upper": 1.29,
+            "n_channels": 256,
+        }
+        assert IonMobility.model_validate(dumped) == block
+
 
 class TestBuilder:
     def test_tdf_report_becomes_a_full_block(self):
@@ -95,6 +125,42 @@ class TestBuilder:
         assert block.ms_analysis.ion_mobility.separation_term is None
         assert block.ms_analysis.ion_mobility.present is True
 
+    def test_resolved_table_is_named_and_the_grid_stays_unset(self):
+        block = build_msi_metadata(
+            _comprehensive({"ion_mobility": TDF_REPORT}),
+            pixel_size_um=(20.0, 20.0),
+            source_format="bruker",
+            mobility_resolved_table="tims_z0_mobility",
+        )
+        mobility = block.ms_analysis.ion_mobility
+        assert mobility.resolved_table == "tims_z0_mobility"
+        assert mobility.grid is None
+        assert mobility.num_scans == 240
+
+    def test_without_a_table_nothing_is_named(self):
+        block = build_msi_metadata(
+            _comprehensive({"ion_mobility": TDF_REPORT}),
+            pixel_size_um=(20.0, 20.0),
+            source_format="bruker",
+        )
+        assert block.ms_analysis.ion_mobility.resolved_table is None
+        assert (
+            "resolved_table" not in block.to_uns_dict()["ms_analysis"]["ion_mobility"]
+        )
+
+    def test_a_written_table_proves_the_dimension(self):
+        # A reader that reported nothing still gets a present block when
+        # the converter wrote a resolved table beside the summed one.
+        block = build_msi_metadata(
+            _comprehensive({}),
+            pixel_size_um=(20.0, 20.0),
+            source_format="imzml",
+            mobility_resolved_table="mob_z0_mobility",
+        )
+        mobility = block.ms_analysis.ion_mobility
+        assert mobility.present is True
+        assert mobility.resolved_table == "mob_z0_mobility"
+
     def test_built_block_round_trips_and_validates(self):
         block = build_msi_metadata(
             _comprehensive({"ion_mobility": TDF_REPORT}),
@@ -102,7 +168,7 @@ class TestBuilder:
             source_format="bruker",
         )
         as_uns = block.to_uns_dict()
-        assert as_uns["schema_version"] == "0.2.0"
+        assert as_uns["schema_version"] == MSI_METADATA_SCHEMA_VERSION == "0.3.0"
         assert as_uns["ms_analysis"]["ion_mobility"]["num_scans"] == 240
         restored = MSIMetadata.model_validate(as_uns)
         assert restored.ms_analysis.ion_mobility == block.ms_analysis.ion_mobility

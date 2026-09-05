@@ -34,7 +34,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # The schema version this code implements and writes.
 # 0.2.0: added the optional ``ms_analysis.ion_mobility`` block (additive).
-MSI_METADATA_SCHEMA_VERSION = "0.2.0"
+# 0.3.0: ``ion_mobility`` gained ``resolved_table`` and ``grid`` (additive).
+MSI_METADATA_SCHEMA_VERSION = "0.3.0"
 
 # Where the block lives inside a converted store:
 # ``table.uns["msi_metadata"]``.  This location is a stable contract
@@ -43,7 +44,7 @@ MSI_METADATA_SCHEMA_VERSION = "0.2.0"
 MSI_METADATA_UNS_KEY = "msi_metadata"
 
 # The committed JSON Schema artifact for this schema version.
-SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_2.json"
+SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_3.json"
 
 # Fixed var column conventions for the MSI table.  ``mz`` is required
 # and written by every converter; the remaining names are reserved for
@@ -214,6 +215,34 @@ class SamplePreparation(_SchemaModel):
     solvent: Optional[str] = Field(default=None, description="Solvent used.")
 
 
+class MobilityGrid(_SchemaModel):
+    """The common mobility grid a mobility-resolved table was binned onto.
+
+    Describes the channels of a grid table (pixels x (m/z, mobility)
+    built from per-pixel mobility sources): the law the channel edges
+    follow, the range they span and how many there are. Absent until
+    such a table is written; the store's ``uns["mobility_heatmap"]`` uses
+    the same channel count and edges so the two align by index.
+    """
+
+    law: str = Field(
+        min_length=1,
+        description=(
+            "How channel edges are spaced across the range, e.g. 'linear' "
+            "(equal width in the axis unit)."
+        ),
+    )
+    lower: float = Field(description="Lower edge of the first channel.")
+    upper: float = Field(description="Upper edge of the last channel.")
+    n_channels: int = Field(ge=1, description="Number of mobility channels.")
+
+    @model_validator(mode="after")
+    def _range_has_extent(self) -> "MobilityGrid":
+        if not self.upper > self.lower:
+            raise ValueError("mobility grid upper must exceed lower")
+        return self
+
+
 class IonMobility(_SchemaModel):
     """Whether, and how, the acquisition separated ions by mobility.
 
@@ -267,6 +296,21 @@ class IonMobility(_SchemaModel):
             "when frames differ."
         ),
     )
+    resolved_table: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Element key of the mobility-resolved sibling table (pixels x "
+            "(m/z, mobility)) written beside this summed table, when one was."
+        ),
+    )
+    grid: Optional[MobilityGrid] = Field(
+        default=None,
+        description=(
+            "The common mobility grid the resolved table was binned onto, "
+            "when it was built from per-pixel mobility values."
+        ),
+    )
 
     @model_validator(mode="after")
     def _absent_means_empty(self) -> "IonMobility":
@@ -280,6 +324,8 @@ class IonMobility(_SchemaModel):
                 self.range_lower,
                 self.range_upper,
                 self.num_scans,
+                self.resolved_table,
+                self.grid,
             )
         ):
             raise ValueError(
