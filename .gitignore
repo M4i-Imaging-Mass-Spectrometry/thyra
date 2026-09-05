@@ -42,6 +42,9 @@ Archive/
 !tests/data/fixtures/*.imzML
 !tests/data/fixtures/*.ibd
 *.d
+# The hand-written TDF fixture is the one .d directory that belongs in the
+# repository (tests/data/fixtures/build_tdf_fixture.py documents why).
+!tests/data/fixtures/synthetic_tims.d/
 *.mis
 *.slx
 *.tiff

@@ -264,12 +264,15 @@ def _build_reader_options(
     use_recalibrated: bool,
     intensity_threshold: Optional[float],
     spectrum_type: str = "auto",
+    tdf_spectrum: Optional[str] = None,
 ) -> dict[str, bool | float | str]:
     """Build reader options dictionary from CLI parameters.
 
     ``spectrum_type="auto"`` is the CLI's way of saying "no override", so it is
     omitted entirely rather than forwarded -- readers take ``None``/absent to
-    mean detect, and ``"auto"`` is not a representation.
+    mean detect, and ``"auto"`` is not a representation. ``tdf_spectrum`` is
+    likewise only forwarded when given: it is a Bruker TDF option, and a
+    reader for any other format would reject an unexpected keyword.
     """
     options: dict[str, bool | float | str] = {
         "use_recalibrated_state": use_recalibrated
@@ -278,6 +281,8 @@ def _build_reader_options(
         options["intensity_threshold"] = intensity_threshold
     if spectrum_type != "auto":
         options["spectrum_type"] = spectrum_type
+    if tdf_spectrum is not None:
+        options["tdf_spectrum"] = tdf_spectrum
     return options
 
 
@@ -397,6 +402,7 @@ class GroupedCommand(click.Command):
             "--no-recalibrated",
             "--interactive-calibration",
             "--intensity-threshold",
+            "--tdf-spectrum",
         ],
         "Other": ["--dataset-id", "--handle-3d", "--z-spacing"],
         "General": ["--version", "--help"],
@@ -606,6 +612,17 @@ class GroupedCommand(click.Command):
     default=None,
     help="Minimum intensity filter (useful for continuous mode data)",
 )
+@click.option(
+    "--tdf-spectrum",
+    type=click.Choice(["vendor_centroid", "scan_sum"]),
+    default=None,
+    help=(
+        "How a TDF (TIMS) frame's mobility scans are collapsed into one "
+        "spectrum per pixel: vendor_centroid (default) is Bruker's frame-level "
+        "peak picker over the full ramp, matching TSF line spectra; scan_sum "
+        "sums every scan and keeps all of the ion current. TDF only."
+    ),
+)
 # -- Other --
 @click.option(
     "--dataset-id",
@@ -654,6 +671,7 @@ def main(
     sparse_format: str,
     include_optical: bool,
     intensity_threshold: Optional[float],
+    tdf_spectrum: Optional[str],
     streaming: str,
     region: Optional[str],
 ):
@@ -724,7 +742,7 @@ def main(
 
     # Build reader options for format-specific settings
     reader_options = _build_reader_options(
-        use_recalibrated, intensity_threshold, spectrum_type
+        use_recalibrated, intensity_threshold, spectrum_type, tdf_spectrum
     )
 
     # Perform conversion

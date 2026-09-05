@@ -325,6 +325,9 @@ def convert_msi(
               to include. Default: None (no filtering).
             - use_recalibrated_state: bool - For Bruker data,
               use active/recalibrated calibration (default True).
+            - tdf_spectrum: "vendor_centroid" | "scan_sum" - For Bruker
+              TDF (TIMS) data, how a frame's mobility scans are collapsed
+              into one spectrum per pixel (default "vendor_centroid").
             - max_mass_axis_length: int - For processed-mode imzML
               converted with --no-resample, give up once the raw
               mass axis exceeds this many unique m/z values. This

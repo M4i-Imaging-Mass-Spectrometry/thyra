@@ -88,11 +88,30 @@ around in the underlying library.
 
 ## Bruker timsTOF
 
-`.d` directories containing `analysis.tsf` (TOF) or `analysis.tdf` (with ion
-mobility). Reading goes through Bruker's `timsdata` library, which is bundled
+`.d` directories containing `analysis.tsf` (TOF only) or `analysis.tdf` (TIMS
+engaged). Reading goes through Bruker's `timsdata` library, which is bundled
 for Windows and Linux. This is the richest source Thyra handles: it carries
 optical microscopy images, FlexImaging `.mis` teaching points for MSI-to-optical
 registration, and per-pixel region annotations for multi-region slides.
+
+A TDF frame is one pixel whose scans are the ion mobility dimension. Thyra
+reads **every scan of the ramp** and collapses them into the one spectrum per
+pixel the MSI table holds; mobility-resolved output is a separate, later
+feature. Two collapses are available through `--tdf-spectrum`:
+
+- `vendor_centroid` (default): Bruker's frame-level peak picker over the full
+  ramp, the same one behind the TSF line spectrum and SCiLS Lab's import. It
+  merges neighbouring digitizer bins and drops single-count noise, which on
+  real imaging frames keeps roughly 80 to 90 percent of the raw ion current.
+- `scan_sum`: every scan summed per digitizer index. Lossless, three to four
+  times as many points per frame, and exactly the mobility marginal of the
+  per-scan data.
+
+The choice is recorded in the store's processing provenance
+(`msi_metadata.processing[0].parameters.tdf_spectrum`), and the acquisition's
+mobility range and ramp length are recorded in
+`msi_metadata.ms_analysis.ion_mobility`, so a consumer can tell a summed-over-
+mobility spectrum from one that never had a mobility dimension.
 
 ## Bruker solariX
 

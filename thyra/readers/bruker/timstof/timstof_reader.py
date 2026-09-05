@@ -37,7 +37,7 @@ from ..base_bruker_reader import BrukerBaseMSIReader
 from ..folder_structure import BrukerFolderStructure, BrukerFormat
 from ..mis_parser import parse_mis_file
 from .sdk.dll_manager import DLLManager
-from .sdk.sdk_functions import SDKFunctions
+from .sdk.sdk_functions import DEFAULT_TDF_SPECTRUM, TDF_SPECTRUM_MODES, SDKFunctions
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +206,7 @@ class BrukerReader(BrukerBaseMSIReader):
         progress_callback: Optional[Callable[[int, int], None]] = None,
         region: Optional[Union[int, str]] = None,
         metadata_only: bool = False,
+        tdf_spectrum: str = DEFAULT_TDF_SPECTRUM,
         **kwargs,
     ):
         """Initialize the Bruker reader.
@@ -234,6 +235,14 @@ class BrukerReader(BrukerBaseMSIReader):
                 will raise SDKError because the SDK handle is None.
                 Used by ``thyra.preview_msi`` so the Import Wizard's
                 step 2 doesn't need the Bruker SDK to be installed.
+            tdf_spectrum: How a TDF (TIMS engaged) frame's mobility scans
+                are collapsed into the one spectrum yielded per pixel.
+                ``"vendor_centroid"`` (default) is Bruker's frame-level
+                centroid extraction over the full ramp, the same peak
+                picker behind the TSF line spectrum; ``"scan_sum"`` sums
+                every scan per digitizer index and keeps all of the ion
+                current. Ignored for TSF. See
+                :mod:`thyra.readers.bruker.timstof.sdk.sdk_functions`.
             **kwargs: Additional arguments
         """
         super().__init__(data_path, **kwargs)
@@ -241,6 +250,12 @@ class BrukerReader(BrukerBaseMSIReader):
         self.progress_callback = progress_callback
         self._requested_region = region
         self._metadata_only = bool(metadata_only)
+        if tdf_spectrum not in TDF_SPECTRUM_MODES:
+            raise ValueError(
+                f"tdf_spectrum must be one of {TDF_SPECTRUM_MODES}, "
+                f"got {tdf_spectrum!r}"
+            )
+        self.tdf_spectrum = tdf_spectrum
 
         # Validate and setup paths
         self._validate_data_path()
@@ -285,9 +300,11 @@ class BrukerReader(BrukerBaseMSIReader):
         self._coordinate_offsets: Optional[Tuple[int, int, int]] = None
         self._closed: bool = False  # Track if resources have been closed
 
-        # Preload NumPeaks cache for buffer size optimization.  Skipped
-        # in metadata-only mode because the cache is only consulted
-        # during spectrum iteration, which metadata-only mode forbids.
+        # Preload the per-frame NumPeaks (buffer sizing) and, for TDF, the
+        # NumScans every read needs.  Skipped in metadata-only mode because
+        # both are only consulted during spectrum iteration, which
+        # metadata-only mode forbids.
+        self._num_scans_cache: Dict[int, int] = {}
         if not self._metadata_only:
             self._num_peaks_cache: Dict[int, int] = self._preload_frame_num_peaks()
         else:
@@ -491,7 +508,9 @@ class BrukerReader(BrukerBaseMSIReader):
             )
 
             # Initialize SDK functions
-            self.sdk = SDKFunctions(self.dll_manager, self.file_type)
+            self.sdk = SDKFunctions(
+                self.dll_manager, self.file_type, tdf_spectrum=self.tdf_spectrum
+            )
 
             # Open the data file
             self.handle = self.sdk.open_file(
@@ -867,15 +886,7 @@ class BrukerReader(BrukerBaseMSIReader):
                         pbar.update(1)
                         continue
 
-                    # OPTIMIZATION: Get buffer size hint from NumPeaks cache
-                    buffer_size_hint = self._num_peaks_cache.get(frame_id)
-
-                    # Read spectrum with optimization (or fallback if no hint)
-                    mzs, intensities = self.sdk.read_spectrum(
-                        self.handle,
-                        frame_id,
-                        buffer_size_hint=buffer_size_hint,
-                    )
+                    mzs, intensities = self._read_frame_spectrum(frame_id)
 
                     # Apply intensity threshold filtering if configured
                     mzs, intensities = self._apply_intensity_filter(mzs, intensities)
@@ -1037,13 +1048,7 @@ class BrukerReader(BrukerBaseMSIReader):
             return None
 
         try:
-            # Get buffer size hint from cache
-            buffer_size_hint = self._num_peaks_cache.get(frame_id)
-
-            # Read spectrum
-            mzs, intensities = self.sdk.read_spectrum(
-                self.handle, frame_id, buffer_size_hint=buffer_size_hint
-            )
+            mzs, intensities = self._read_frame_spectrum(frame_id)
 
             # Apply intensity threshold filtering if configured
             mzs, intensities = self._apply_intensity_filter(mzs, intensities)
@@ -1056,30 +1061,75 @@ class BrukerReader(BrukerBaseMSIReader):
             logger.warning(f"Error reading spectrum for frame {frame_id}: {e}")
             return None
 
+    def _read_frame_spectrum(
+        self, frame_id: int
+    ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Read one frame through the SDK with the hints it needs.
+
+        The frame id is the 1-based ``Frames.Id`` and is handed to the SDK
+        unchanged. ``NumPeaks`` sizes the buffer; for TDF the frame's
+        ``NumScans`` is required so the whole mobility ramp is read.
+        """
+        buffer_size_hint = self._num_peaks_cache.get(frame_id)
+        num_scans = self._frame_num_scans(frame_id) if self.file_type == "tdf" else None
+        mzs, intensities = self.sdk.read_spectrum(
+            self.handle,
+            frame_id,
+            buffer_size_hint=buffer_size_hint,
+            num_scans=num_scans,
+        )
+        return mzs, intensities
+
+    def _frame_num_scans(self, frame_id: int) -> int:
+        """``Frames.NumScans`` for one frame, from the preload or the database."""
+        cached = self._num_scans_cache.get(frame_id)
+        if cached is not None:
+            return cached
+        row = self.conn.execute(
+            "SELECT NumScans FROM Frames WHERE Id = ?", (frame_id,)
+        ).fetchone()
+        if row is None or row[0] is None:
+            raise DataError(
+                f"Frame {frame_id} has no NumScans entry in the Frames table"
+            )
+        num_scans = int(row[0])
+        self._num_scans_cache[frame_id] = num_scans
+        return num_scans
+
     def _preload_frame_num_peaks(self) -> Dict[int, int]:
-        """Preload NumPeaks values for relevant frames at initialization.
+        """Preload per-frame NumPeaks (and NumScans for TDF) at initialization.
 
-        This optimization avoids the busy wait loop in SDK by providing
-        exact buffer sizes for spectrum reading, reducing CPU usage from 100%
-        to normal levels.
+        NumPeaks gives the SDK an exact buffer size, which avoids the
+        retry loop that used to pin a core. For TDF it counts the
+        ``(index, scan)`` pairs across the whole mobility ramp -- on real
+        imaging runs routinely above 65,535 per frame -- and is only an
+        upper bound on the summed spectrum's length, so it must not be
+        treated as a peak count (see :meth:`get_peak_counts_per_pixel`).
 
-        When region filtering is active, only caches peaks for frames in
-        the selected region.
+        For TDF the same query also fills ``_num_scans_cache``: every
+        frame read needs its ``NumScans`` to cover the full ramp.
+
+        When region filtering is active, only frames in the selected
+        region are cached.
 
         Returns:
-            Dictionary mapping frame_id -> num_peaks (validated to be <= 65535)
+            Dictionary mapping frame_id -> NumPeaks for frames with peaks.
         """
+        is_tdf = self.file_type == "tdf"
+        query = (
+            "SELECT Id, NumPeaks, NumScans FROM Frames ORDER BY Id"
+            if is_tdf
+            else "SELECT Id, NumPeaks, NULL FROM Frames ORDER BY Id"
+        )
         try:
             with sqlite3.connect(str(self.db_path)) as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT Id, NumPeaks FROM Frames ORDER BY Id")
+                cursor.execute(query)
 
-                # Use uint16 equivalent for memory efficiency (max 65,535
-                # peaks)
-                num_peaks_cache = {}
-                invalid_count = 0
+                num_peaks_cache: Dict[int, int] = {}
+                empty_count = 0
 
-                for frame_id, num_peaks in cursor.fetchall():
+                for frame_id, num_peaks, num_scans in cursor.fetchall():
                     # Skip frames not in selected region
                     if (
                         self._region_frame_ids is not None
@@ -1087,30 +1137,31 @@ class BrukerReader(BrukerBaseMSIReader):
                     ):
                         continue
 
-                    if num_peaks is not None and 0 < num_peaks <= 65535:
-                        num_peaks_cache[frame_id] = int(num_peaks)
+                    if is_tdf and num_scans is not None:
+                        self._num_scans_cache[int(frame_id)] = int(num_scans)
+
+                    if num_peaks is not None and num_peaks > 0:
+                        num_peaks_cache[int(frame_id)] = int(num_peaks)
                     else:
-                        invalid_count += 1
-                        if invalid_count <= 5:  # Log first few invalid values
-                            logger.debug(
-                                f"Invalid NumPeaks value {num_peaks} for "
-                                f"frame {frame_id}"
-                            )
+                        empty_count += 1
 
-                if invalid_count > 5:
+                if empty_count:
                     logger.debug(
-                        f"... and {invalid_count - 5} more invalid NumPeaks " f"values"
+                        f"{empty_count} frames report no peaks; they are read "
+                        "without a buffer hint"
                     )
-
-                memory_mb = len(num_peaks_cache) * 2 / (1024 * 1024)  # uint16 = 2 bytes
                 logger.debug(
-                    f"Cached NumPeaks for {len(num_peaks_cache)} frames "
-                    f"({memory_mb:.1f}MB)"
+                    f"Cached NumPeaks for {len(num_peaks_cache)} frames"
+                    + (
+                        f" and NumScans for {len(self._num_scans_cache)}"
+                        if is_tdf
+                        else ""
+                    )
                 )
                 return num_peaks_cache
 
         except Exception as e:
-            logger.warning(f"Failed to preload NumPeaks cache: {e}")
+            logger.warning(f"Failed to preload frame info: {e}")
             logger.info("Will use fallback retry logic for spectrum reading")
             return {}  # Empty cache triggers fallback behavior
 
@@ -1390,7 +1441,14 @@ class BrukerReader(BrukerBaseMSIReader):
             return 0
 
         total = sum(self._num_peaks_cache.values())
-        logger.info(f"Total peak count from NumPeaks cache: {total:,}")
+        if self.file_type == "tdf":
+            logger.info(
+                f"Total (index, scan) pairs from NumPeaks cache: {total:,}; an "
+                "upper bound on the summed spectra, since TDF NumPeaks counts "
+                "every mobility scan separately"
+            )
+        else:
+            logger.info(f"Total peak count from NumPeaks cache: {total:,}")
         return total
 
     def get_peak_counts_per_pixel(self) -> Optional[np.ndarray]:
@@ -1403,8 +1461,18 @@ class BrukerReader(BrukerBaseMSIReader):
         Returns:
             Array of size n_pixels where arr[pixel_idx] = peak_count.
             pixel_idx = z * (n_x * n_y) + y * n_x + x
-            Returns None if NumPeaks cache not available.
+            Returns None if NumPeaks cache not available, and always for
+            TDF: there ``NumPeaks`` counts ``(index, scan)`` pairs across
+            the mobility ramp, which exceeds the summed spectrum's length
+            by a factor the database does not record, so the streaming
+            converter has to measure instead.
         """
+        if self.file_type == "tdf":
+            logger.debug(
+                "TDF NumPeaks counts mobility scans separately; per-pixel peak "
+                "counts are left to the converter to measure"
+            )
+            return None
         if not self._num_peaks_cache:
             logger.warning("NumPeaks cache not available")
             return None
