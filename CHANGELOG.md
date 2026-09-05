@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v3.11.0 (2026-09-05)
+
+### Bug Fixes
+
+- **bruker**: Load the bundled Linux library under its shipped name
+  ([`7077e71`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/7077e71bdf212bc8a4d47771be1bda85881139e3))
+
+- **bruker**: Read every TIMS scan of the right frame
+  ([`76749d7`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/76749d7cbb112940010e37719ed5dc7c8db2dec9))
+
+### Features
+
+- **metadata**: Record the mobility dimension and how TDF frames were summed
+  ([`89070dd`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/89070dda674c4d521b16a24a4043268a04dc0d24))
+
+
 ## v3.10.1 (2026-09-02)
 
 ### Bug Fixes
