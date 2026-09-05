@@ -31,8 +31,12 @@ htmlcov/
 *zarr/
 *.prof
 Archive/
-*imzML
-*ibd
+# Extension patterns keep their dot on purpose. A bare `*imzML` also matches a
+# *directory* called imzml on case-insensitive checkouts (core.ignorecase, the
+# Windows default), which silently kept every new module under
+# thyra/readers/imzml out of the index.
+*.imzML
+*.ibd
 # ...except the hand-authored corpus, which is the one place imzML/.ibd bytes
 # are deliberately tracked. They are tiny (a few KB each) and they are the only
 # imzML in the tree that pyimzml's own writer did not produce, so they are the

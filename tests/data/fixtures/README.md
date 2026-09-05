@@ -75,8 +75,12 @@ before `TestCommittedBytes` existed neither failed a single test.
    `exclude: ^tests/data/fixtures/[^/]+\.(imzML|ibd)$`, scoped to the two
    byte-exact extensions so this README and `build_fixtures.py` stay covered.
 
-`.gitignore` also needs the negations: `*imzML` and `*ibd` are unanchored, so
-without `!tests/data/fixtures/*.imzML` these files cannot be added at all.
+`.gitignore` also needs the negations: `*.imzML` and `*.ibd` ignore every file
+with those extensions, so without `!tests/data/fixtures/*.imzML` these files
+cannot be added at all. The patterns carry the dot on purpose: the bare
+`*imzML` that preceded them also matched the *directory* `thyra/readers/imzml`
+on case-insensitive checkouts, which silently kept new modules there out of
+every commit.
 
 **If you change a fixture, verify the blob, not the file on disk:**
 

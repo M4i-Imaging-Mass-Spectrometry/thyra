@@ -723,7 +723,7 @@ class TestCommittedBytes:
     @pytest.mark.parametrize("stem", STEMS)
     @pytest.mark.parametrize("suffix", ["imzML", "ibd"])
     def test_gitignore_still_admits_the_corpus(self, stem, suffix):
-        """``*imzML`` and ``*ibd`` are unanchored; the negations are what allow these.
+        """``*.imzML`` and ``*.ibd`` ignore every such file; the negations admit these.
 
         ``test_the_corpus_is_actually_tracked`` cannot see this. Once a file is
         in the index .gitignore no longer applies to it, so deleting the
@@ -732,15 +732,27 @@ class TestCommittedBytes:
         """
         assert not _is_ignored(f"tests/data/fixtures/{stem}.{suffix}")
 
-    def test_the_unanchored_ignore_rules_are_still_live(self):
+    def test_the_ignore_rules_are_still_live(self):
         """The control: the same names one directory up are still ignored.
 
         Without it the test above would pass just as happily if somebody had
-        deleted ``*imzML`` and ``*ibd`` from .gitignore outright, which is a
+        deleted ``*.imzML`` and ``*.ibd`` from .gitignore outright, which is a
         different repository from the one it means to describe.
         """
         assert _is_ignored("tests/data/scratch.imzML")
         assert _is_ignored("tests/data/scratch.ibd")
+
+    def test_the_ignore_rules_do_not_swallow_the_imzml_package(self):
+        """A pattern without the dot also matches a *directory* named ``imzml``.
+
+        With ``core.ignorecase`` (the Windows default) the bare ``*imzML``
+        matched ``thyra/readers/imzml`` itself, so every new module in that
+        package was ignored: ``git add`` skipped it without a word, the local
+        suite kept passing on the untracked file, and CI failed on the import.
+        The patterns carry the dot so only files with the extension qualify.
+        """
+        assert not _is_ignored("thyra/readers/imzml/a_new_module.py")
+        assert not _is_ignored("thyra/readers/imzml/_a_private_module.py")
 
 
 class TestProductionResolvesTheIbdExplicitly:
