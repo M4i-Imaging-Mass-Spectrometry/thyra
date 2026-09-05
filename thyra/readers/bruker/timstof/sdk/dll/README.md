@@ -11,7 +11,7 @@ v1.2.0 and support both `tims_*` (TDF/timsTOF) and `tsf_*` (TSF/MALDI)
 functions.
 
 - Windows: `timsdata.dll`
-- Linux: `timsdata.so` (rename to `libtimsdata.so` if needed)
+- Linux: `timsdata.so` (the loader accepts this name and `libtimsdata.so`)
 
 ## License and Attribution
 
