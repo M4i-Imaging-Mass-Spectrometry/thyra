@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v3.13.0 (2026-09-05)
+
+### Features
+
+- **mobility**: TDF mobility axis, mass-mobility heatmap and CCS
+  ([`471320f`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/471320f90cfda84e0ab7b291512646825f7d14e9))
+
+### Refactoring
+
+- **metadata**: Split the ion mobility block builder below the complexity threshold
+  ([`bfeba4e`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/bfeba4e569729d48d8d72c565bcb8c434653d514))
+
+
 ## v3.12.0 (2026-09-05)
 
 ### Features
