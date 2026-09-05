@@ -40,6 +40,21 @@ Reproducible byte for byte, so a clean run leaves `git status` clean. No test
 invokes it; the committed bytes are the fixture. The script is provenance —
 read it to find out why a given cvParam is worded the way it is.
 
+## `synthetic_tims.d`: a hand-written Bruker TDF acquisition
+
+Six pixels on a 3 x 2 raster, 240 TIMS scans per frame, three planted ions
+per pixel with a Gaussian mobility profile plus seeded noise. Everything in it
+is invented; the schema, block layout and calibration model types are those
+of a real TDF 3.7 file so that Bruker's own `timsdata` library opens it, reads
+every scan, converts indices to m/z and scans to 1/K0, and runs its centroid
+extraction on it. `synthetic_tims_expected.json` records what was written,
+pair by pair, so `tests/integration/test_bruker_tdf_synthetic.py` can check
+the reader against ground truth through the real SDK.
+
+Built by `build_tdf_fixture.py` (needs `zstandard`); the module docstring
+documents the frame-block layout and the SDK's intensity scaling that the
+fixture sidesteps by declaring a 100 ms accumulation time.
+
 ## Two ways these files get destroyed
 
 Neither leaves a mark on the worktree file that a reader would notice, and

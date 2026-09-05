@@ -33,3 +33,7 @@
 # this exemption goes unnoticed.
 tests/data/fixtures/*.imzML -text
 tests/data/fixtures/*.ibd binary
+
+# The hand-written Bruker TDF acquisition (build_tdf_fixture.py): a SQLite
+# database and a zstd-compressed frame store, both binary.
+tests/data/fixtures/synthetic_tims.d/* binary

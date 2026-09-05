@@ -15,7 +15,7 @@ description: >-
   datasets converted to SpatialData.  Stored in
   table.uns["msi_metadata"]; base fields mirror the METASPACE
   submission form.
-version: 0.1.0
+version: 0.2.0
 prefixes:
   linkml: https://w3id.org/linkml/
   MS: http://purl.obolibrary.org/obo/MS_
@@ -114,6 +114,28 @@ classes:
       pixel_size_um:
         range: PixelSizeUm
         required: true
+      ion_mobility:
+        range: IonMobility
+  IonMobility:
+    description: >-
+      Whether, and how, the acquisition separated ions by mobility; the
+      MSI table is summed over that dimension.
+    attributes:
+      present:
+        range: boolean
+        required: true
+      separation:
+        slot_uri: MS:1002892
+      separation_term:
+        range: OntologyTerm
+      unit_term:
+        range: OntologyTerm
+      range_lower:
+        range: float
+      range_upper:
+        range: float
+      num_scans:
+        range: integer
   SoftwareRef:
     description: A software agent, the way mzQC records analysis software.
     attributes:

@@ -259,6 +259,7 @@ These options only apply when converting Bruker `.d` directories.
 | `--use-recalibrated / --no-recalibrated` | enabled | Use recalibrated m/z state |
 | `--interactive-calibration` | off | Display available calibration states |
 | `--intensity-threshold FLOAT` | none | Minimum intensity filter |
+| `--tdf-spectrum {vendor_centroid,scan_sum}` | `vendor_centroid` | How a TDF (TIMS) frame's mobility scans collapse into one spectrum per pixel |
 
 ### Examples
 
@@ -271,7 +272,17 @@ thyra data.d output.zarr --interactive-calibration
 
 # Filter low-intensity signals (useful for continuous-mode Bruker data)
 thyra data.d output.zarr --intensity-threshold 100
+
+# TIMS data: keep every ion count instead of Bruker's centroided spectrum
+thyra tims_data.d output.zarr --tdf-spectrum scan_sum
 ```
+
+!!! note "TDF: the mobility ramp is summed, not sliced"
+    Every scan of a TIMS frame is read. `vendor_centroid` is Bruker's own
+    frame-level peak picker over the full ramp (parity with TSF line spectra
+    and SCiLS Lab); `scan_sum` sums every scan per digitizer index and keeps
+    all of the ion current, at three to four times the points. See
+    [Supported Formats](supported-formats.md#bruker-timstof).
 
 !!! warning "Intensity threshold"
     The `--intensity-threshold` option drops all peaks below the given value

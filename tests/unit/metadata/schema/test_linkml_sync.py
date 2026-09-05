@@ -29,6 +29,7 @@ _MODEL_CLASSES = {
     "SampleInformation": models.SampleInformation,
     "SamplePreparation": models.SamplePreparation,
     "MSAnalysis": models.MSAnalysis,
+    "IonMobility": models.IonMobility,
     "SoftwareRef": models.SoftwareRef,
     "ProcessingStep": models.ProcessingStep,
     "Provenance": models.Provenance,

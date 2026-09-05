@@ -129,9 +129,13 @@ def _get_linux_paths(lib_name: str, data_directory: Optional[Path]) -> List[Path
     """Get Linux-specific SO search paths."""
     paths = []
 
-    # Repository DLL folder (HIGHEST PRIORITY)
-    repository_dll_folder = Path(__file__).parent / "dll" / lib_name
-    paths.append(repository_dll_folder)
+    # Repository DLL folder (HIGHEST PRIORITY). The bundled build ships as
+    # ``timsdata.so`` (its upstream name) while the conventional name is
+    # ``libtimsdata.so``; accept both so the vendored library loads without
+    # a rename, which is what the CI integration lane relies on.
+    repository_dll_folder = Path(__file__).parent / "dll"
+    paths.append(repository_dll_folder / lib_name)
+    paths.append(repository_dll_folder / "timsdata.so")
     logger.debug(f"Checking repository DLL folder: {repository_dll_folder}")
 
     # Standard library paths
