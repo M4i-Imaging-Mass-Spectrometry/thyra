@@ -170,15 +170,28 @@ def _build_ion_mobility(
     fields: Dict[str, Any] = {"present": True}
     if resolved_table:
         fields["resolved_table"] = resolved_table
+    fields.update(_mobility_axis_fields(reported))
+    return IonMobility(**fields)
+
+
+def _mobility_axis_fields(reported: Dict[str, Any]) -> Dict[str, Any]:
+    """The axis description an extractor reported, in the block's field names.
+
+    Everything is optional and checked for shape rather than trusted: an
+    unresolvable accession is dropped, never invented, and a malformed
+    range or scan count is ignored.
+    """
+    fields: Dict[str, Any] = {}
     separation = reported.get("separation")
     if isinstance(separation, str) and separation.strip():
         fields["separation"] = separation.strip()
-    separation_term = _optional_term(reported.get("separation_accession"))
-    if separation_term is not None:
-        fields["separation_term"] = separation_term
-    unit_term = _optional_term(reported.get("unit_accession"))
-    if unit_term is not None:
-        fields["unit_term"] = unit_term
+    for field, source in (
+        ("separation_term", "separation_accession"),
+        ("unit_term", "unit_accession"),
+    ):
+        term = _optional_term(reported.get(source))
+        if term is not None:
+            fields[field] = term
     mobility_range = reported.get("one_over_k0_range") or reported.get("range")
     if isinstance(mobility_range, (list, tuple)) and len(mobility_range) == 2:
         try:
@@ -189,7 +202,7 @@ def _build_ion_mobility(
     num_scans = reported.get("num_scans_max", reported.get("num_scans"))
     if isinstance(num_scans, (int, float)) and num_scans >= 1:
         fields["num_scans"] = int(num_scans)
-    return IonMobility(**fields)
+    return fields
 
 
 def build_msi_metadata(
