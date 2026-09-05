@@ -89,6 +89,7 @@ def _build_ms_analysis(
     raw_metadata: Dict[str, Any],
     pixel_size_um: Tuple[float, float],
     source_format: Optional[str],
+    mobility_resolved_table: Optional[str] = None,
 ) -> MSAnalysis:
     """Assemble the acquisition section from what the extractors report."""
     fields: Dict[str, Any] = {}
@@ -123,7 +124,9 @@ def _build_ms_analysis(
     if instrument_model is not None:
         fields["instrument_model"] = instrument_model
 
-    ion_mobility = _build_ion_mobility(format_specific.get("ion_mobility"))
+    ion_mobility = _build_ion_mobility(
+        format_specific.get("ion_mobility"), mobility_resolved_table
+    )
     if ion_mobility is not None:
         fields["ion_mobility"] = ion_mobility
 
@@ -144,29 +147,51 @@ def _optional_term(accession: Any) -> Optional[Any]:
         return None
 
 
-def _build_ion_mobility(reported: Any) -> Optional[IonMobility]:
+def _build_ion_mobility(
+    reported: Any, resolved_table: Optional[str] = None
+) -> Optional[IonMobility]:
     """The mobility block from what a reader's extractor reported.
 
-    Only the Bruker extractor reports one today (``present`` True for TDF,
-    False for TSF); readers that say nothing leave the field unset, which
-    is honest -- "not reported" is not the same as "no mobility".
+    The Bruker and imzML extractors report one (``present`` True for TDF
+    and for an imzML with a mobility array, False for TSF); readers that
+    say nothing leave the field unset, which is honest -- "not reported"
+    is not the same as "no mobility". A resolved table written beside
+    the summed one is named here whatever the extractor said, since its
+    existence proves the dimension.
     """
     if not isinstance(reported, dict) or "present" not in reported:
+        if resolved_table:
+            return IonMobility(present=True, resolved_table=resolved_table)
         return None
     present = bool(reported["present"])
-    if not present:
+    if not present and not resolved_table:
         return IonMobility(present=False)
 
     fields: Dict[str, Any] = {"present": True}
+    if resolved_table:
+        fields["resolved_table"] = resolved_table
+    fields.update(_mobility_axis_fields(reported))
+    return IonMobility(**fields)
+
+
+def _mobility_axis_fields(reported: Dict[str, Any]) -> Dict[str, Any]:
+    """The axis description an extractor reported, in the block's field names.
+
+    Everything is optional and checked for shape rather than trusted: an
+    unresolvable accession is dropped, never invented, and a malformed
+    range or scan count is ignored.
+    """
+    fields: Dict[str, Any] = {}
     separation = reported.get("separation")
     if isinstance(separation, str) and separation.strip():
         fields["separation"] = separation.strip()
-    separation_term = _optional_term(reported.get("separation_accession"))
-    if separation_term is not None:
-        fields["separation_term"] = separation_term
-    unit_term = _optional_term(reported.get("unit_accession"))
-    if unit_term is not None:
-        fields["unit_term"] = unit_term
+    for field, source in (
+        ("separation_term", "separation_accession"),
+        ("unit_term", "unit_accession"),
+    ):
+        term = _optional_term(reported.get(source))
+        if term is not None:
+            fields[field] = term
     mobility_range = reported.get("one_over_k0_range") or reported.get("range")
     if isinstance(mobility_range, (list, tuple)) and len(mobility_range) == 2:
         try:
@@ -177,7 +202,7 @@ def _build_ion_mobility(reported: Any) -> Optional[IonMobility]:
     num_scans = reported.get("num_scans_max", reported.get("num_scans"))
     if isinstance(num_scans, (int, float)) and num_scans >= 1:
         fields["num_scans"] = int(num_scans)
-    return IonMobility(**fields)
+    return fields
 
 
 def build_msi_metadata(
@@ -187,6 +212,7 @@ def build_msi_metadata(
     pixel_size_source: Optional[str] = None,
     source_format: Optional[str] = None,
     processing: Optional[List[ProcessingStep]] = None,
+    mobility_resolved_table: Optional[str] = None,
 ) -> MSIMetadata:
     """Build an :class:`MSIMetadata` document from extracted metadata.
 
@@ -203,6 +229,8 @@ def build_msi_metadata(
             ``"bruker"``, ...), when known.
         processing: Ordered processing steps performed so far, oldest
             first (see :class:`ProcessingStep`).
+        mobility_resolved_table: Element key of the mobility-resolved
+            sibling table written beside the summed table, when one was.
 
     Returns:
         The populated document.  Fields the source does not report are
@@ -232,6 +260,7 @@ def build_msi_metadata(
             raw_metadata,
             pixel_size_um,
             source_format,
+            mobility_resolved_table,
         ),
         processing=list(processing or []),
         provenance=Provenance(

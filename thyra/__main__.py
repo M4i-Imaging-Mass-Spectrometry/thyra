@@ -385,6 +385,8 @@ class GroupedCommand(click.Command):
             "--no-optical",
             "--mobility-table",
             "--no-mobility-table",
+            "--mobility-heatmap",
+            "--no-mobility-heatmap",
         ],
         "Logging": ["--log-level", "-v", "--log-file"],
         "Resampling (advanced)": [
@@ -501,6 +503,16 @@ class GroupedCommand(click.Command):
         "pixels (an imzML export with a mobility array), also write them as a "
         "mobility-resolved sibling table next to the summed MSI table "
         "(default: enabled)"
+    ),
+)
+@click.option(
+    "--mobility-heatmap/--no-mobility-heatmap",
+    default=True,
+    help=(
+        "When the source has an ion mobility dimension (Bruker TDF with TIMS "
+        "engaged, an imzML export with a mobility array), store the mean "
+        "mass-mobility frame on the summed table as uns['mobility_heatmap'] "
+        "(default: enabled; one extra pass over the source)"
     ),
 )
 @click.option(
@@ -683,6 +695,7 @@ def main(
     sparse_format: str,
     include_optical: bool,
     mobility_table: bool,
+    mobility_heatmap: bool,
     intensity_threshold: Optional[float],
     tdf_spectrum: Optional[str],
     streaming: str,
@@ -774,6 +787,7 @@ def main(
         streaming=_parse_streaming_option(streaming),
         region=region,
         write_mobility_table=mobility_table,
+        mobility_heatmap=mobility_heatmap,
     )
 
     ok = _handle_post_conversion(success, output)

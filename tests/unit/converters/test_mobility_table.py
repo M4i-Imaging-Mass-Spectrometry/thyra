@@ -129,8 +129,22 @@ class TestContinuousExport:
         np.testing.assert_array_equal(
             np.asarray(axis["values"]), [0.95, 1.10, 1.02, 1.35, 1.20]
         )
+        assert axis["n_scans"] == 5
+        np.testing.assert_array_equal(np.asarray(axis["acq_range"]), [0.95, 1.35])
+
+        # The heatmap sits on the summed table only: the sibling holds the
+        # very data it summarises.
+        heatmap = sdata.tables["mob_z0"].uns["mobility_heatmap"]
+        counts = np.asarray(heatmap["counts"])
+        assert counts.shape == (3, 256) and counts.dtype == np.float32
+        np.testing.assert_allclose(
+            counts.sum(axis=1),
+            np.asarray(sdata.tables["mob_z0"].uns["average_spectrum"]),
+            rtol=1e-6,
+        )
 
         mob_uns = sdata.tables["mob_z0_mobility"].uns
+        assert "mobility_heatmap" not in mob_uns
         feature_axis = mob_uns["feature_axis"]
         assert json.loads(feature_axis["dims"]) == ["mz", "mobility"]
         assert feature_axis["summed_table"] == "mob_z0"
@@ -142,6 +156,8 @@ class TestContinuousExport:
             mobility = block["ms_analysis"]["ion_mobility"]
             assert mobility["present"] is True
             assert mobility["separation_term"]["accession"] == "MS:1002815"
+            assert mobility["resolved_table"] == "mob_z0_mobility"
+            assert "grid" not in mobility
 
     def test_store_validates_under_both_var_contracts(self, tmp_path, streaming):
         out, _ = _convert(CONTINUOUS, tmp_path, streaming=streaming)
@@ -205,6 +221,8 @@ class TestProcessedExport:
         assert axis_block["type_accession"] == "MS:1002815"
         assert "values" not in axis_block
         assert "resolved_table" not in axis_block
+        # Per-pixel mobility with no shared axis gives no range to bin over.
+        assert "mobility_heatmap" not in summed.uns
         block = read_msi_metadata_blocks(out)["mob_z0"]
         assert block["ms_analysis"]["ion_mobility"]["present"] is True
         assert check_store_var_conventions(out) == {"mob_z0": []}

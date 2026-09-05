@@ -689,6 +689,19 @@ class SDKFunctions:
 
         return self._convert("tims_index_to_mz", handle, frame_id, indices)
 
+    def index_to_mz(
+        self, handle: int, frame_id: int, indices: np.ndarray
+    ) -> NDArray[np.float64]:
+        """Convert digitizer (mass) indices of a frame to m/z.
+
+        The public face of the conversion the spectrum readers use
+        internally; a mobility-aware consumer that reads raw scans needs
+        it too, on the frame's unique indices rather than on every pair.
+        """
+        return np.asarray(
+            self._convert_indices_to_mz(handle, frame_id, indices), dtype=np.float64
+        )
+
     def scannum_to_oneoverk0(
         self, handle: int, frame_id: int, scan_numbers: np.ndarray
     ) -> NDArray[np.float64]:

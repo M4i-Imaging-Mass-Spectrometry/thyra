@@ -237,12 +237,65 @@ what was measured there. Two things follow.
 
 The MSI table above is always **summed over mobility**. When the source had
 a mobility dimension (Bruker TDF with TIMS engaged, or an imzML export that
-carries a mobility array), the table's `uns["mobility_axis"]` says so and
-describes the axis -- its PSI-MS quantity (`MS:1002815` inverse reduced ion
-mobility or `MS:1002476` drift time), unit, range and, when shared across
-pixels, its values -- and `uns["msi_metadata"]["ms_analysis"]["ion_mobility"]`
-carries the schema-level summary. A source without mobility writes neither,
-so a consumer can tell "summed over mobility" from "never had any".
+carries a mobility array), the table's `uns` gains two blocks, and
+`uns["msi_metadata"]["ms_analysis"]["ion_mobility"]` carries the schema-level
+summary. A source without mobility writes none of them, so a consumer can
+tell "summed over mobility" from "never had any".
+
+**`uns["mobility_axis"]`** describes the axis the table was summed over.
+Plain-name keys (never a CV accession: a colon is not a legal zarr key on
+Windows), numpy arrays rather than lists:
+
+| key | value |
+|---|---|
+| `present` | `True` |
+| `type_name`, `type_accession` | the quantity: `inverse reduced ion mobility` / `MS:1002815` (TIMS), or drift time / `MS:1002476` |
+| `unit_name`, `unit_accession` | e.g. `volt-second per square centimeter` / `MS:1002814` for 1/K0 |
+| `n_scans` | length of `values` (the TIMS ramp length on a Bruker source) |
+| `values` | `float64[n_scans]`: the native axis when it is shared across pixels -- the 1/K0 of every TIMS scan (from the vendor calibration, decreasing with scan number) or of every feature of a continuous imzML export; absent when mobility is per pixel |
+| `acq_range` | `float64[2]`, `[lower, upper]`: the acquired range as declared, else the span of `values` |
+| `calibration` | `{model_type, coefficients}`: the vendor `TimsCalibration` row, provenance only |
+| `source` | `"bruker_tdf"` or `"imzml"` |
+| `resolved_table` | element key of the mobility-resolved sibling table, when one was written |
+
+**`uns["mobility_heatmap"]`** is the dataset's mean mass-mobility frame: the
+raw `(m/z, mobility, intensity)` points of every pixel, binned and averaged
+over pixels, accumulated from the raw scan read during conversion. It is the
+discovery surface -- look at it to see whether mobility separates anything
+before asking for a mobility-resolved table -- and what a viewer's mobility
+panel draws.
+
+| key | value |
+|---|---|
+| `mz_edges` | `float64[m + 1]`: bin edges on the common m/z axis, which is coarsened by an integer factor to about 4,000 bins (`m` is the axis length itself when it is shorter) |
+| `mobility_edges` | `float64[k + 1]`, **`k = 256`**: equal-width bins in the axis unit, ascending, spanning the axis `values` |
+| `counts` | `float32[m, k]`: mean intensity per bin over pixels |
+
+`k = 256` is fixed on purpose: the opt-in mobility grid table (a later
+feature) defaults to the same 256 channels over the same edges, so a box drawn
+on the heatmap maps onto grid channels by integer index in both directions.
+The m/z binning is the converter's own nearest-bin rule, coarsened, so under a
+lossless summed spectrum (`--tdf-spectrum scan_sum`) the heatmap summed over
+mobility, `counts.sum(axis=1)`, equals `uns["average_spectrum"]` coarsened to
+`mz_edges`. Under the default `vendor_centroid` it does not: the centroid keeps
+80 to 90 percent of the ion current and merges bins, while the heatmap is
+built from every raw point. On a Bruker source the heatmap costs one extra
+library call per frame (about a millisecond); `--no-mobility-heatmap` skips
+it.
+
+```python
+heat = table.uns["mobility_heatmap"]
+counts = np.asarray(heat["counts"])              # (m, 256)
+mz_centres = np.asarray(heat["mz_edges"])
+mz_centres = (mz_centres[:-1] + mz_centres[1:]) / 2
+k0_centres = np.asarray(heat["mobility_edges"])
+k0_centres = (k0_centres[:-1] + k0_centres[1:]) / 2
+plt.pcolormesh(k0_centres, mz_centres, np.log1p(counts))
+plt.xlabel("1/K0 (V s cm^-2)"); plt.ylabel("m/z")
+```
+
+Both blocks are summaries of the whole dataset. Nothing in them is per pixel,
+and nothing in them enters `obs` or a coordinate system.
 
 When every pixel shares one set of `(m/z, mobility)` feature pairs -- a
 continuous imzML export with a mobility array, as TIMSCONVERT and

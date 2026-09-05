@@ -107,7 +107,7 @@ registration, and per-pixel region annotations for multi-region slides.
 
 A TDF frame is one pixel whose scans are the ion mobility dimension. Thyra
 reads **every scan of the ramp** and collapses them into the one spectrum per
-pixel the MSI table holds; mobility-resolved output is a separate, later
+pixel the MSI table holds; a mobility-resolved table is a separate, later
 feature. Two collapses are available through `--tdf-spectrum`:
 
 - `vendor_centroid` (default): Bruker's frame-level peak picker over the full
@@ -123,6 +123,18 @@ The choice is recorded in the store's processing provenance
 mobility range and ramp length are recorded in
 `msi_metadata.ms_analysis.ion_mobility`, so a consumer can tell a summed-over-
 mobility spectrum from one that never had a mobility dimension.
+
+The mobility dimension itself is not thrown away. The summed table carries
+`uns["mobility_axis"]` -- the 1/K0 of every scan from the vendor calibration,
+the declared range and the `TimsCalibration` row -- and `uns["mobility_heatmap"]`,
+the dataset's mean mass-mobility frame (about 4,000 m/z bins by 256 mobility
+channels) accumulated from the raw scan read of every frame. The heatmap is
+where to look to see whether mobility separates anything; it costs one extra
+library call per frame, about a millisecond, and `--no-mobility-heatmap`
+skips it. Under `scan_sum` the heatmap summed over mobility is exactly the
+stored mean spectrum; under `vendor_centroid` the two differ by what the
+centroid discards. See [Output Format](output-format.md#ion-mobility). A TSF
+file has no mobility dimension and gets none of this.
 
 ## Bruker solariX
 

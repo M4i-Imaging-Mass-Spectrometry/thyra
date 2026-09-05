@@ -63,7 +63,7 @@ you -- see [Completing the metadata](#completing-the-metadata).
 | | `instrument_model` | text | -- |
 | | `detector_resolving_power` | `{value, at_mz}` | -- |
 | | `pixel_size_um` | `{x, y}`, **required** | -- |
-| | `ion_mobility` | `{present, separation, separation_term, unit_term, range_lower, range_upper, num_scans}` | PSI-MS (`MS:1002815` / `MS:1002476`, unit `MS:1002814`) |
+| | `ion_mobility` | `{present, separation, separation_term, unit_term, range_lower, range_upper, num_scans, resolved_table, grid}` | PSI-MS (`MS:1002815` / `MS:1002476`, unit `MS:1002814`) |
 | `processing` | list of `{name, software {name, version, uri}, parameters}` | ordered steps, oldest first | -- |
 | `provenance` | `thyra_version` | text, required | -- |
 | | `source_format` | `"imzml"`, `"bruker"`, ... | -- |
@@ -103,6 +103,14 @@ and `present: false` for TSF. Other formats leave the field unset, which
 means "not reported", not "no mobility". The MSI table is always summed over
 the ramp; how it was summed is the `tdf_spectrum` parameter of the
 `conversion` processing step (see [Supported Formats](supported-formats.md#bruker-timstof)).
+`resolved_table` names the mobility-resolved sibling table when one was
+written beside the summed table, and `grid` (`{law, lower, upper,
+n_channels}`) describes the common mobility grid such a table was binned onto
+when it was built from per-pixel mobility values; both are unset otherwise.
+The arrays that describe the axis itself and the mass-mobility heatmap live
+outside this block, in `uns["mobility_axis"]` and `uns["mobility_heatmap"]`
+(see [Output Format](output-format.md#ion-mobility)): this block is versioned
+and carries no arrays.
 | PHI ToF-SIMS | from the header | SIMS | TOF | platform name |
 | Waters `.raw` | -- | -- | -- | from `_HEADER.TXT` |
 
@@ -241,8 +249,11 @@ table of a store.
   different major version, accepts older minors, and warns on newer
   minors.
 
+Versions so far: 0.1.0 (initial), 0.2.0 (`ms_analysis.ion_mobility`
+added), 0.3.0 (`ion_mobility.resolved_table` and `ion_mobility.grid` added).
+
 The JSON Schema rendering is committed at
-`thyra/metadata/schema/msi_metadata_schema_v0_2.json` and ships in the
+`thyra/metadata/schema/msi_metadata_schema_v0_3.json` and ships in the
 wheel, so non-Python consumers can validate documents without importing
 Thyra:
 
@@ -252,7 +263,7 @@ import json
 
 schema = json.loads(
     resources.files("thyra.metadata.schema")
-    .joinpath("msi_metadata_schema_v0_2.json")
+    .joinpath("msi_metadata_schema_v0_3.json")
     .read_text()
 )
 ```

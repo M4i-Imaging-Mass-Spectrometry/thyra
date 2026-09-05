@@ -4,6 +4,18 @@
       "additionalProperties": false,
       "description": "Whether, and how, the acquisition separated ions by mobility.\n\nWritten so a consumer can tell a spectrum that was *summed over* a\nmobility ramp (Bruker TDF, TIMS engaged) from one that never had a\nmobility dimension (TSF, imzML, most other sources).  The MSI table\nThyra writes collapses the ramp; the fields here describe what was\ncollapsed.  Mobility is a spectral coordinate, never a spatial one,\nso nothing about it appears in the store's coordinate systems.",
       "properties": {
+        "grid": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MobilityGrid"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The common mobility grid the resolved table was binned onto, when it was built from per-pixel mobility values."
+        },
         "num_scans": {
           "anyOf": [
             {
@@ -48,6 +60,20 @@
           "default": null,
           "description": "Upper bound of the acquired mobility range.",
           "title": "Range Upper"
+        },
+        "resolved_table": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Element key of the mobility-resolved sibling table (pixels x (m/z, mobility)) written beside this summed table, when one was.",
+          "title": "Resolved Table"
         },
         "separation": {
           "anyOf": [
@@ -245,6 +271,42 @@
         "pixel_size_um"
       ],
       "title": "MSAnalysis",
+      "type": "object"
+    },
+    "MobilityGrid": {
+      "additionalProperties": false,
+      "description": "The common mobility grid a mobility-resolved table was binned onto.\n\nDescribes the channels of a grid table (pixels x (m/z, mobility)\nbuilt from per-pixel mobility sources): the law the channel edges\nfollow, the range they span and how many there are. Absent until\nsuch a table is written; the store's ``uns[\"mobility_heatmap\"]`` uses\nthe same channel count and edges so the two align by index.",
+      "properties": {
+        "law": {
+          "description": "How channel edges are spaced across the range, e.g. 'linear' (equal width in the axis unit).",
+          "minLength": 1,
+          "title": "Law",
+          "type": "string"
+        },
+        "lower": {
+          "description": "Lower edge of the first channel.",
+          "title": "Lower",
+          "type": "number"
+        },
+        "n_channels": {
+          "description": "Number of mobility channels.",
+          "minimum": 1,
+          "title": "N Channels",
+          "type": "integer"
+        },
+        "upper": {
+          "description": "Upper edge of the last channel.",
+          "title": "Upper",
+          "type": "number"
+        }
+      },
+      "required": [
+        "law",
+        "lower",
+        "upper",
+        "n_channels"
+      ],
+      "title": "MobilityGrid",
       "type": "object"
     },
     "OntologyTerm": {
@@ -666,7 +728,7 @@
       "description": "What the sample is; user-supplied."
     },
     "schema_version": {
-      "default": "0.2.0",
+      "default": "0.3.0",
       "description": "Semantic version of the schema this document conforms to.",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
       "title": "Schema Version",

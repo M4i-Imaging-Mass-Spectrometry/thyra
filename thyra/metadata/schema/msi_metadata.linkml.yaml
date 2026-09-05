@@ -15,7 +15,7 @@ description: >-
   datasets converted to SpatialData.  Stored in
   table.uns["msi_metadata"]; base fields mirror the METASPACE
   submission form.
-version: 0.2.0
+version: 0.3.0
 prefixes:
   linkml: https://w3id.org/linkml/
   MS: http://purl.obolibrary.org/obo/MS_
@@ -136,6 +136,25 @@ classes:
         range: float
       num_scans:
         range: integer
+      resolved_table: {}
+      grid:
+        range: MobilityGrid
+  MobilityGrid:
+    description: >-
+      The common mobility grid a mobility-resolved table was binned onto;
+      the heatmap on the summed table shares its channels.
+    attributes:
+      law:
+        required: true
+      lower:
+        range: float
+        required: true
+      upper:
+        range: float
+        required: true
+      n_channels:
+        range: integer
+        required: true
   SoftwareRef:
     description: A software agent, the way mzQC records analysis software.
     attributes:
