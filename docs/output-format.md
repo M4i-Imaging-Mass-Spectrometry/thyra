@@ -229,6 +229,52 @@ annotation tools add `formula`, `adduct`, `annotation_source` and
 mean the same thing in every store. `thyra validate` checks the `mz`
 contract on every table.
 
+### Ion mobility
+
+Mobility is a **feature coordinate**, next to m/z. It never enters `obs`, a
+coordinate system or a transform: those say where a pixel is, mobility says
+what was measured there. Two things follow.
+
+The MSI table above is always **summed over mobility**. When the source had
+a mobility dimension (Bruker TDF with TIMS engaged, or an imzML export that
+carries a mobility array), the table's `uns["mobility_axis"]` says so and
+describes the axis -- its PSI-MS quantity (`MS:1002815` inverse reduced ion
+mobility or `MS:1002476` drift time), unit, range and, when shared across
+pixels, its values -- and `uns["msi_metadata"]["ms_analysis"]["ion_mobility"]`
+carries the schema-level summary. A source without mobility writes neither,
+so a consumer can tell "summed over mobility" from "never had any".
+
+When every pixel shares one set of `(m/z, mobility)` feature pairs -- a
+continuous imzML export with a mobility array, as TIMSCONVERT and
+TIMSImaging write -- Thyra also writes a **mobility-resolved sibling
+table**, `{table}_mobility`, unless `--no-mobility-table` is given:
+
+| | MSI table `{id}_z0` | mobility table `{id}_z0_mobility` |
+|---|---|---|
+| rows | pixels | the same pixels, same `obs`, same `region` |
+| `var["mz"]` | strictly increasing, unique | **non-decreasing with duplicates** |
+| `var["mobility"]` | absent | the feature's 1/K0 (or drift time) |
+| sort | by `mz` | lexicographic `(mz, mobility)` |
+| also | | `mz_index` (column on the MSI axis), `mobility_index` (rank of the mobility value), `uns["feature_axis"]`, `uns["mobility_axis"]` |
+
+Two isomers at one m/z that separate in mobility are one column in the MSI
+table and two in the mobility table. The `(mz, mobility)` sort means an m/z
+window is one contiguous column block whose mobility-summed image equals the
+MSI table's, and a mobility window is a mask inside that block.
+
+**Consumers must discriminate on `"mobility" in var.columns`**, never on the
+element name: the mobility table is not a second MSI dataset, and code that
+assumes a unique, strictly increasing `var["mz"]` must not be pointed at it.
+`thyra validate` applies the pair contract (non-decreasing `mz`, unique
+sorted pairs) to tables carrying `mobility` and the strict contract to all
+others.
+
+A source whose mobility values differ per pixel (a processed imzML export,
+the raw point cloud) has no shared feature axis; it gets the summed table
+only, with coincident m/z within a pixel summed into one bin. A
+mobility-resolved table for that case needs a common mobility grid, which
+is a later feature.
+
 ---
 
 ## Pixel Coordinates

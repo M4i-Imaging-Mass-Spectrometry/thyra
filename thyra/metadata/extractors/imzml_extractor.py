@@ -708,9 +708,41 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             "uuid": self._extract_uuid(),
             "spectrum_count": len(self.parser.coordinates),
             "scan_settings": {},
+            "ion_mobility": self._extract_ion_mobility(),
         }
 
         return format_specific
+
+    def _extract_ion_mobility(self) -> Dict[str, Any]:
+        """Whether the file declares a third, ion mobility, binary array.
+
+        Reported from the referenceableParamGroups alone -- no spectrum is
+        read here -- so this says what the file *declares* (the array term,
+        its quantity and unit), not whether every pixel shares one axis;
+        the reader settles that when it reads.
+        """
+        from ...core.mobility import classify_mobility_array
+        from ...readers.imzml.mobility_array import detect_mobility_array
+
+        spec = detect_mobility_array(getattr(self.parser, "metadata", None))
+        if spec is None:
+            return {"present": False}
+        kind_accession, kind_name = classify_mobility_array(
+            spec.array_accession, spec.unit_accession
+        )
+        report: Dict[str, Any] = {
+            "present": True,
+            "array_accession": spec.array_accession,
+            "array_name": spec.array_name,
+        }
+        if kind_name is not None:
+            report["separation"] = kind_name
+            report["separation_accession"] = kind_accession
+        if spec.unit_name is not None:
+            report["unit"] = spec.unit_name
+        if spec.unit_accession is not None:
+            report["unit_accession"] = spec.unit_accession
+        return report
 
     def _extract_uuid(self) -> Optional[str]:
         """Read the ``IMS:1000080`` binary-file UUID from the file description.

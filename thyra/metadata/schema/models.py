@@ -53,11 +53,19 @@ SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_2.json"
 MSI_VAR_REQUIRED_COLUMNS = ("mz",)
 MSI_VAR_RESERVED_COLUMNS = (
     "mz",
+    "mobility",
+    "mz_index",
+    "mobility_index",
     "formula",
     "adduct",
     "annotation_source",
     "fdr",
 )
+
+# The column that marks a mobility-resolved table (pixels x (m/z, mobility)
+# features). The MSI table never carries it; a table that does has a
+# non-decreasing ``mz`` with duplicates, validated by the pair instead.
+MSI_VAR_MOBILITY_COLUMN = "mobility"
 
 # Imaging concepts this schema needs that have no PSI CV term yet.
 # These are the candidate terms to raise in the mzPeak / PSI-MS imaging

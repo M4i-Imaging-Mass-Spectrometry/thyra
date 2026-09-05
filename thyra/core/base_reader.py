@@ -11,6 +11,7 @@ from ..metadata.types import ComprehensiveMetadata, EssentialMetadata
 
 if TYPE_CHECKING:
     from .base_extractor import MetadataExtractor
+    from .mobility import MobilityAxis
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +237,74 @@ class BaseMSIReader(ABC):
             Mapping of column name to per-channel values, or None.
         """
         return None
+
+    # ------------------------------------------------------------------
+    # Ion mobility
+    #
+    # Mobility is a second coordinate on a feature, next to m/z. It never
+    # enters obs, a coordinate system or a transform. ``iter_spectra`` keeps
+    # yielding the mobility-summed spectrum, so nothing downstream learns
+    # about mobility unless it asks through the methods below.
+    # ------------------------------------------------------------------
+
+    @property
+    def has_ion_mobility(self) -> bool:
+        """Whether the source carries a mobility dimension at all."""
+        return False
+
+    @property
+    def has_shared_mobility_axis(self) -> bool:
+        """Whether every pixel carries the same (m/z, mobility) feature pairs.
+
+        True for a continuous imzML export whose mobility array is the same
+        for every spectrum (TIMSImaging, TIMSCONVERT in continuous mode):
+        the pairs are then a feature list the converter can write as a
+        mobility-resolved table directly. False when each pixel has its
+        own mobility values, which need a common mobility grid first.
+        """
+        return False
+
+    def get_mobility_axis(self) -> Optional["MobilityAxis"]:
+        """Describe the mobility dimension, or ``None`` when there is none."""
+        return None
+
+    def get_shared_mobility_features(
+        self,
+    ) -> Optional[Tuple[NDArray[np.float64], NDArray[np.float64]]]:
+        """The shared ``(mz, mobility)`` feature pairs, when the axis is shared.
+
+        Both arrays have one entry per feature, in the source's order;
+        duplicate m/z values are expected -- that is what mobility splits.
+        ``None`` when :attr:`has_shared_mobility_axis` is False.
+        """
+        return None
+
+    def iter_mobility_spectra(self, batch_size: Optional[int] = None) -> Generator[
+        Tuple[
+            Tuple[int, int, int],
+            NDArray[np.float64],
+            NDArray[np.float64],
+            NDArray[np.float64],
+        ],
+        None,
+        None,
+    ]:
+        """Iterate through spectra with their per-point mobility values.
+
+        Yields ``((x, y, z), mzs, mobilities, intensities)`` per pixel: the
+        raw (m/z, mobility) point cloud, unbinned, with the three arrays
+        parallel. Readers whose source has no mobility dimension do not
+        implement this.
+
+        Args:
+            batch_size: Optional batch size hint, as for :meth:`iter_spectra`.
+
+        Raises:
+            NotImplementedError: If the reader exposes no mobility dimension.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not expose an ion mobility dimension"
+        )
 
     def get_region_map(self) -> Optional[dict]:
         """Get per-pixel region mapping for multi-region datasets.

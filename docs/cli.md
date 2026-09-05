@@ -47,6 +47,7 @@ thyra input.imzML output.zarr && python analyse.py output.zarr
 | `--region TEXT` | all | Convert one region, by `.mis` Area Name or by DB RegionNumber |
 | `--resample / --no-resample` | enabled | Mass axis resampling |
 | `--include-optical / --no-optical` | enabled | Include optical images in output |
+| `--mobility-table / --no-mobility-table` | enabled | Also write the mobility-resolved sibling table when the source shares one set of (m/z, ion mobility) features across pixels (see [Output Format](output-format.md#ion-mobility)) |
 
 ### Examples
 

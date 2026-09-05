@@ -201,7 +201,10 @@ consumer can rely on one spelling:
 
 | Column | Written by | Meaning |
 |--------|-----------|---------|
-| `mz` | every converter, **required** | The common mass axis. Numeric, finite, strictly increasing. |
+| `mz` | every converter, **required** | The common mass axis. Numeric, finite, strictly increasing -- except on a mobility-resolved table, where it is non-decreasing and the `(mz, mobility)` pair is unique and sorted. |
+| `mobility` | the converter, on mobility-resolved tables only | The feature's ion mobility (1/K0 or drift time; see `uns["mobility_axis"]`). Its presence is what marks the table as mobility-resolved. |
+| `mz_index` | the converter, on mobility-resolved tables only | Column of the feature's m/z on the summed MSI table's axis |
+| `mobility_index` | the converter, on mobility-resolved tables only | Rank of the feature's mobility among the table's distinct mobility values |
 | `formula` | annotation tools | Molecular formula of the annotation |
 | `adduct` | annotation tools | Adduct, e.g. `+H`, `-H`, `+Na` |
 | `annotation_source` | annotation tools | Tool/database that produced the annotation |

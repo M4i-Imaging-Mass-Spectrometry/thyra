@@ -24,7 +24,12 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from pydantic import ValidationError
 
 from ..ontology.cache import ONTOLOGY
-from .models import MSI_METADATA_SCHEMA_VERSION, MSIMetadata, OntologyTerm
+from .models import (
+    MSI_METADATA_SCHEMA_VERSION,
+    MSI_VAR_MOBILITY_COLUMN,
+    MSIMetadata,
+    OntologyTerm,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -280,12 +285,73 @@ def check_store_var_conventions(
                     f"'mz' must be numeric, found dtype {mz.dtype}",
                 )
             )
-        elif mz.size and not bool(np.isfinite(mz).all()):
+            continue
+        if mz.size and not bool(np.isfinite(mz).all()):
             issues.append(
                 ValidationIssue("error", "var.mz", "'mz' contains non-finite values")
             )
+            continue
+
+        if MSI_VAR_MOBILITY_COLUMN in var_group:
+            _check_mobility_var(var_group, mz, issues)
         elif mz.size > 1 and not bool((np.diff(mz) > 0).all()):
             issues.append(
                 ValidationIssue("error", "var.mz", "'mz' is not strictly increasing")
             )
     return results
+
+
+def _check_mobility_var(var_group: Any, mz: Any, issues: List[ValidationIssue]) -> None:
+    """The contract of a mobility-resolved table's ``var``.
+
+    Features are ``(mz, mobility)`` pairs: ``mz`` is non-decreasing (an m/z
+    split by mobility repeats), the pairs are unique, and the rows are in
+    lexicographic ``(mz, mobility)`` order so an m/z window is one
+    contiguous column block.
+    """
+    import numpy as np
+
+    mobility = np.asarray(var_group[MSI_VAR_MOBILITY_COLUMN])
+    if not np.issubdtype(mobility.dtype, np.number):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "var.mobility",
+                f"'mobility' must be numeric, found dtype {mobility.dtype}",
+            )
+        )
+        return
+    if mobility.size != mz.size:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "var.mobility",
+                f"'mobility' has {mobility.size} values for {mz.size} m/z values",
+            )
+        )
+        return
+    if mobility.size and not bool(np.isfinite(mobility).all()):
+        issues.append(
+            ValidationIssue(
+                "error", "var.mobility", "'mobility' contains non-finite values"
+            )
+        )
+        return
+    if mz.size < 2:
+        return
+    if not bool((np.diff(mz) >= 0).all()):
+        issues.append(
+            ValidationIssue(
+                "error", "var.mz", "'mz' is not non-decreasing on a mobility table"
+            )
+        )
+        return
+    same_mz = np.diff(mz) == 0
+    if bool((np.diff(mobility)[same_mz] <= 0).any()):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "var.mobility",
+                "(mz, mobility) pairs are not unique and sorted lexicographically",
+            )
+        )

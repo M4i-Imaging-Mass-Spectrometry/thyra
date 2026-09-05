@@ -333,6 +333,15 @@ PROFILE_LINE = (
 )
 
 
+PROCESSED_MODE_LINE = (
+    '      <cvParam cvRef="IMS" accession="IMS:1000031" name="processed"' ' value="" />'
+)
+CONTINUOUS_MODE_LINE = (
+    '      <cvParam cvRef="IMS" accession="IMS:1000030" name="continuous"'
+    ' value="" />'
+)
+
+
 def _canonical_header(
     uuid_text: str,
     scan_settings_lines: Sequence[str],
@@ -341,6 +350,7 @@ def _canonical_header(
     spectrum_type_line: str = CENTROID_LINE,
     instrument_lines: Sequence[str] = tuple(DEFAULT_INSTRUMENT_LINES),
     extra_param_group_lines: Sequence[str] = (),
+    file_mode_line: str = PROCESSED_MODE_LINE,
 ) -> List[str]:
     """The parts the LF fixtures share.
 
@@ -367,8 +377,7 @@ def _canonical_header(
         "  <fileDescription>",
         "    <fileContent>",
         spectrum_type_line,
-        '      <cvParam cvRef="IMS" accession="IMS:1000031" name="processed"'
-        ' value="" />',
+        file_mode_line,
         '      <cvParam cvRef="MS" accession="MS:1000130" name="positive scan"'
         ' value="" />',
         f'      <cvParam cvRef="IMS" accession="IMS:1000080"'
@@ -697,8 +706,212 @@ def build_timstof_flex_export() -> Path:
     )
 
 
+# ---------------------------------------------------------------------------
+# imzML with a third binary array: ion mobility
+#
+# TIMSCONVERT and TIMSImaging write mobility as a third binaryDataArray per
+# spectrum, declared through a "mobilityArray" referenceableParamGroup that
+# binds MS:1003006 (mean inverse reduced ion mobility array) with the unit
+# MS:1002814 (volt-second per square centimeter). Upstream pyimzml ignores the
+# array entirely, so a reader that leans on it drops the mobility dimension
+# without a word. Two fixtures reproduce the convention: a continuous export
+# (TIMSImaging: one shared feature list, m/z repeated where mobility splits
+# a feature) and a processed export (TIMSCONVERT: a per-pixel point cloud).
+# ---------------------------------------------------------------------------
+
+MOBILITY_PARAM_GROUP_LINES = [
+    '    <referenceableParamGroup id="mobilityArray">',
+    '      <cvParam cvRef="MS" accession="MS:1000576" name="no compression"'
+    ' value="" />',
+    '      <cvParam cvRef="MS" accession="MS:1003006"'
+    ' name="mean inverse reduced ion mobility array" unitCvRef="MS"'
+    ' unitAccession="MS:1002814" unitName="volt-second per square centimeter" />',
+    '      <cvParam cvRef="MS" accession="MS:1000523" name="64-bit float"'
+    ' value="" />',
+    '      <cvParam cvRef="IMS" accession="IMS:1000101" name="external data"'
+    ' value="true" />',
+    "    </referenceableParamGroup>",
+]
+
+TIMSTOF_INSTRUMENT_LINES = [
+    '  <instrumentConfigurationList count="1">',
+    '    <instrumentConfiguration id="IC1">',
+    '      <cvParam cvRef="MS" accession="MS:1003124" name="timsTOF fleX"'
+    ' value="" />',
+    '      <componentList count="3">',
+    '        <source order="1"><cvParam cvRef="MS" accession="MS:1000075"'
+    ' name="matrix-assisted laser desorption ionization" value="" /></source>',
+    '        <analyzer order="2"><cvParam cvRef="MS" accession="MS:1000084"'
+    ' name="time-of-flight" value="" /></analyzer>',
+    '        <detector order="3"><cvParam cvRef="MS" accession="MS:1000114"'
+    ' name="microchannel plate detector" value="" /></detector>',
+    "      </componentList>",
+    "    </instrumentConfiguration>",
+    "  </instrumentConfigurationList>",
+]
+
+# The continuous feature list: five (m/z, 1/K0) features, two m/z values
+# repeated because mobility splits them. Sorted by m/z as TIMSImaging sorts;
+# the 600.25 pair is deliberately mobility-descending to make the reader sort.
+MOBILITY_FEATURE_MZ = np.array([300.0, 300.0, 450.5, 600.25, 600.25])
+MOBILITY_FEATURE_K0 = np.array([0.95, 1.10, 1.02, 1.35, 1.20])
+# Per pixel intensities, one row per DENSE_COORDINATES entry; the zero on the
+# last pixel checks that absent features stay absent in the sparse table.
+MOBILITY_CONTINUOUS_INTENSITIES = np.array(
+    [
+        [10.0, 1.0, 5.0, 2.0, 20.0],
+        [11.0, 2.0, 6.0, 3.0, 21.0],
+        [12.0, 3.0, 7.0, 4.0, 22.0],
+        [13.0, 4.0, 8.0, 0.0, 23.0],
+    ]
+)
+
+
+def _spectrum_xml_with_mobility(
+    index: int,
+    coordinate: Coordinate,
+    mz_placement: Tuple[int, int],
+    intensity_placement: Tuple[int, int],
+    mobility_placement: Tuple[int, int],
+    itemsize: int = 8,
+) -> List[str]:
+    """One ``<spectrum>`` with three binary arrays, the third the mobility."""
+    x, y = coordinate
+
+    def array(group: str, offset: int, length: int) -> List[str]:
+        return [
+            '<binaryDataArray encodedLength="0">'
+            f'<referenceableParamGroupRef ref="{group}" />',
+            f'<cvParam cvRef="IMS" accession="IMS:1000103"'
+            f' name="external array length" value="{length}" />',
+            f'<cvParam cvRef="IMS" accession="IMS:1000102" name="external offset"'
+            f' value="{offset}" />',
+            f'<cvParam cvRef="IMS" accession="IMS:1000104"'
+            f' name="external encoded length" value="{length * itemsize}" />',
+            "</binaryDataArray>",
+        ]
+
+    return [
+        f'<spectrum id="Scan={index + 1}" defaultArrayLength="0" index="{index}">'
+        '<referenceableParamGroupRef ref="spectrum1" />',
+        '<scanList count="1"><cvParam cvRef="MS" accession="MS:1000795"'
+        ' name="no combination" value="" />',
+        '<scan><referenceableParamGroupRef ref="scan1" />',
+        f'<cvParam cvRef="IMS" accession="IMS:1000050" name="position x"'
+        f' value="{x}" />',
+        f'<cvParam cvRef="IMS" accession="IMS:1000051" name="position y"'
+        f' value="{y}" />',
+        "</scan>",
+        "</scanList>",
+        '<binaryDataArrayList count="3">',
+        *array("mzArray", *mz_placement),
+        *array("intensityArray", *intensity_placement),
+        *array("mobilityArray", *mobility_placement),
+        "</binaryDataArrayList>",
+        "</spectrum>",
+    ]
+
+
+def _build_mobility_fixture(
+    stem: str,
+    uuid_text: str,
+    spectra: Sequence[Tuple[np.ndarray, np.ndarray, np.ndarray]],
+    shared_mz: bool,
+) -> Path:
+    """Pack (mz, intensity, mobility) per pixel and emit the imzML around it.
+
+    With ``shared_mz`` the m/z block is written once and every spectrum
+    references it (continuous mode), while intensity and mobility are written
+    per spectrum -- exactly the layout the pyimzML fork both TIMS tools use
+    produces, mobility copies included. Otherwise every array is per spectrum
+    (processed mode).
+    """
+    blob = bytearray(uuid_module.UUID(uuid_text).bytes)
+    placements = []
+    shared_mz_placement = None
+    for mzs, intensities, mobility in spectra:
+        if shared_mz and shared_mz_placement is not None:
+            mz_placement = shared_mz_placement
+        else:
+            mz_placement = (len(blob), int(mzs.size))
+            blob += mzs.astype(np.float64).tobytes()
+            if shared_mz:
+                shared_mz_placement = mz_placement
+        intensity_placement = (len(blob), int(intensities.size))
+        blob += intensities.astype(np.float64).tobytes()
+        mobility_placement = (len(blob), int(mobility.size))
+        blob += mobility.astype(np.float64).tobytes()
+        placements.append((mz_placement, intensity_placement, mobility_placement))
+    (FIXTURE_DIR / f"{stem}.ibd").write_bytes(bytes(blob))
+
+    lines = _canonical_header(
+        uuid_text,
+        PLAIN_SCAN_SETTINGS,
+        DEFAULT_MZ_PRECISION,
+        len(spectra),
+        spectrum_type_line=CENTROID_LINE,
+        instrument_lines=TIMSTOF_INSTRUMENT_LINES,
+        extra_param_group_lines=MOBILITY_PARAM_GROUP_LINES,
+        file_mode_line=CONTINUOUS_MODE_LINE if shared_mz else PROCESSED_MODE_LINE,
+    )
+    for i, (coordinate, placement) in enumerate(zip(DENSE_COORDINATES, placements)):
+        lines += [
+            "      " + line
+            for line in _spectrum_xml_with_mobility(i, coordinate, *placement)
+        ]
+    lines += ["    </spectrumList>", "  </run>", "</mzML>"]
+    return _write(stem, lines, newline=b"\n", encoding="utf-8")
+
+
+MOBILITY_CONTINUOUS_UUID = "6D5C1F6B-7A3E-4EAF-9B88-5F2FA07D9966"
+
+
+def build_mobility_continuous() -> Path:
+    """A TIMSImaging-style export: continuous, one shared (m/z, 1/K0) feature
+    list, mobility written per spectrum, m/z repeated where mobility splits
+    a feature.
+
+    The shared m/z block is not strictly increasing, which the MSI table's
+    axis contract forbids: the reader must collapse the repeats into one
+    column (summing over mobility) and keep them apart only in the
+    mobility-resolved table.
+    """
+    spectra = [
+        (MOBILITY_FEATURE_MZ, row, MOBILITY_FEATURE_K0)
+        for row in MOBILITY_CONTINUOUS_INTENSITIES
+    ]
+    return _build_mobility_fixture(
+        "mobility_continuous", MOBILITY_CONTINUOUS_UUID, spectra, shared_mz=True
+    )
+
+
+MOBILITY_PROCESSED_UUID = "7E6D2A7C-8B4F-4FB0-8C99-603FB18EAA77"
+
+
+def mobility_processed_spectrum(i: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Pixel ``i`` of the processed fixture: a raw (m/z, 1/K0) point cloud
+    whose first m/z appears at two mobilities."""
+    mzs = np.array([100.0 + i, 100.0 + i, 250.5 + i, 400.0 + i])
+    mobility = np.array([0.8, 1.1, 0.9, 1.0])
+    intensities = np.array([10.0, 20.0, 30.0, 40.0]) * (i + 1)
+    return mzs, intensities, mobility
+
+
+def build_mobility_processed() -> Path:
+    """A TIMSCONVERT-style export: processed, every pixel its own m/z values
+    with a mobility per point, the same m/z listed twice at two mobilities.
+
+    No shared feature axis exists here, so only the summed MSI table can be
+    written; the repeated m/z within a pixel must be summed into one bin.
+    """
+    spectra = [mobility_processed_spectrum(i) for i in range(len(DENSE_COORDINATES))]
+    return _build_mobility_fixture(
+        "mobility_processed", MOBILITY_PROCESSED_UUID, spectra, shared_mz=False
+    )
+
+
 def main() -> None:
-    """Rebuild all six pairs and report their sizes."""
+    """Rebuild all eight pairs and report their sizes."""
     for builder in (
         build_iontof_sparse,
         build_unit_nanometre,
@@ -706,6 +919,8 @@ def main() -> None:
         build_two_precision_terms,
         build_solarix_fticr,
         build_timstof_flex_export,
+        build_mobility_continuous,
+        build_mobility_processed,
     ):
         imzml_path = builder()
         ibd_path = imzml_path.with_suffix(".ibd")

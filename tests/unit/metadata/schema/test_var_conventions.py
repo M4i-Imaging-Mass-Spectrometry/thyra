@@ -59,6 +59,52 @@ class TestCheckStoreVarConventions:
             check_store_var_conventions(tmp_path / "plain.zarr")
 
 
+def _store_with_pairs(tmp_path, mz, mobility):
+    root = zarr.open_group(str(tmp_path / "store.zarr"), mode="a")
+    var = root.create_group("tables").create_group("t").create_group("var")
+    var.create_array("mz", data=np.asarray(mz, dtype=np.float64))
+    var.create_array("mobility", data=np.asarray(mobility, dtype=np.float64))
+    return tmp_path / "store.zarr"
+
+
+class TestMobilityTableVar:
+    """A table carrying ``mobility`` is validated on the (mz, mobility) pair."""
+
+    def test_sorted_unique_pairs_pass(self, tmp_path):
+        store = _store_with_pairs(tmp_path, [300.0, 300.0, 450.5], [0.95, 1.1, 1.02])
+        assert check_store_var_conventions(store) == {"t": []}
+
+    def test_repeated_mz_is_legal_here(self, tmp_path):
+        store = _store_with_pairs(tmp_path, [300.0, 300.0], [0.9, 1.0])
+        assert check_store_var_conventions(store)["t"] == []
+
+    def test_duplicate_pair_is_an_error(self, tmp_path):
+        store = _store_with_pairs(tmp_path, [300.0, 300.0], [0.95, 0.95])
+        assert "not unique and sorted" in _messages(
+            check_store_var_conventions(store)["t"]
+        )
+
+    def test_unsorted_mobility_within_an_mz_is_an_error(self, tmp_path):
+        store = _store_with_pairs(tmp_path, [300.0, 300.0], [1.1, 0.95])
+        assert "not unique and sorted" in _messages(
+            check_store_var_conventions(store)["t"]
+        )
+
+    def test_decreasing_mz_is_an_error(self, tmp_path):
+        store = _store_with_pairs(tmp_path, [450.5, 300.0], [1.0, 1.0])
+        assert "non-decreasing" in _messages(check_store_var_conventions(store)["t"])
+
+    def test_length_mismatch_is_an_error(self, tmp_path):
+        store = _store_with_pairs(tmp_path, [300.0, 450.5], [1.0])
+        assert "has 1 values for 2" in _messages(
+            check_store_var_conventions(store)["t"]
+        )
+
+    def test_non_finite_mobility_is_an_error(self, tmp_path):
+        store = _store_with_pairs(tmp_path, [300.0, 450.5], [1.0, np.nan])
+        assert "non-finite" in _messages(check_store_var_conventions(store)["t"])
+
+
 class TestReservedColumnNames:
     def test_spec_reserves_the_annotation_columns(self):
         from thyra.metadata.schema import (
@@ -69,6 +115,9 @@ class TestReservedColumnNames:
         assert MSI_VAR_REQUIRED_COLUMNS == ("mz",)
         assert set(MSI_VAR_RESERVED_COLUMNS) == {
             "mz",
+            "mobility",
+            "mz_index",
+            "mobility_index",
             "formula",
             "adduct",
             "annotation_source",

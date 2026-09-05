@@ -226,6 +226,9 @@ class SpatialData3DConverter(BaseSpatialDataConverter):
                     per_region[str(r)] = total / max(count, 1)
                 adata.uns["average_spectrum_per_region"] = per_region
 
+            # Decide on the mobility sibling first so uns can name it.
+            self._mobility_table_key = self._plan_mobility_table(self.dataset_id)
+
             # Add MSI metadata to .uns. The 2D and streaming paths have
             # always done this; the 3D one never did, so a volume came
             # out with no record of where it came from at all.
@@ -252,6 +255,9 @@ class SpatialData3DConverter(BaseSpatialDataConverter):
             # Add to tables and create shapes
             data_structures["tables"][self.dataset_id] = table
             data_structures["shapes"][region_key] = self._create_pixel_shapes(adata)
+            self._attach_mobility_table(
+                data_structures, self.dataset_id, region_key, adata.obs
+            )
 
             # Create TIC image
             self._create_tic_image(data_structures)

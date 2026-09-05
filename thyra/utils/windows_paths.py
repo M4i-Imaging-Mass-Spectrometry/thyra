@@ -3,11 +3,12 @@ r"""Extended-length path support for Zarr stores on Windows.
 Windows caps a normal path at 260 characters including the terminating
 NUL, so 259 usable. A Zarr store is a directory tree and the limit applies
 to each key inside it, not to the path the user typed. Thyra's deepest key
-is a metadata document about 95 characters below the store root::
+is a metadata document about 134 characters below the store root::
 
-    <out>.zarr\tables\<dataset_id>_z0\uns\<section>\<key>\zarr.<32-hex>.partial
+    <out>.zarr\tables\<dataset_id>_z0_mobility\uns\msi_metadata\ms_analysis
+        \ion_mobility\separation_term\accession\zarr.<32-hex>.partial
 
-so an output path of roughly 165 characters is already enough to push the
+so an output path of roughly 120 characters is already enough to push the
 deepest key past the limit. It surfaces as::
 
     Error saving SpatialData: [Errno 2] No such file or directory:
@@ -42,12 +43,18 @@ logger = logging.getLogger(__name__)
 WINDOWS_MAX_PATH = 259
 
 #: Characters Thyra needs below the store root for its deepest key, not
-#: counting the dataset id. Measured at 95 for the longest section/key
-#: pair Thyra emits (``raw_metadata\\max count of pixels x``) plus the
-#: ``zarr.<32-hex>.partial`` name Zarr writes through. Metadata key names
-#: come from the source file and can be longer, so this carries headroom
-#: above the observed worst case.
-DEEPEST_KEY_RESERVE = 128
+#: counting the dataset id. Measured at 134 for the deepest key Thyra emits
+#: today, on the mobility-resolved sibling table::
+#:
+#:     \tables\<id>_z0_mobility\uns\msi_metadata\ms_analysis\ion_mobility
+#:         \separation_term\accession\zarr.<32-hex>.partial
+#:
+#: (the ``_mobility`` suffix and the ``ion_mobility`` block each added a
+#: level over the 95 this was first measured at, on
+#: ``raw_metadata\\max count of pixels x``). Metadata key names come from
+#: the source file and can be longer, so this carries headroom above the
+#: observed worst case.
+DEEPEST_KEY_RESERVE = 160
 
 _EXTENDED_PREFIX = "\\\\?\\"
 

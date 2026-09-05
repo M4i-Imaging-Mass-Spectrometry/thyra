@@ -16,10 +16,17 @@ from tqdm import tqdm
 
 from ...core.base_extractor import MetadataExtractor
 from ...core.base_reader import BaseMSIReader
+from ...core.mobility import MobilityAxis, classify_mobility_array
 from ...core.registry import register_reader
 from ...metadata.extractors.imzml_extractor import ImzMLMetadataExtractor
 from ...resampling.constants import normalize_spectrum_type
 from ...utils.pyimzml_direct import read_spectrum_mzs_only
+from ._pyimzml_compat import ensure_lenient_cv_param_values
+from .mobility_array import (
+    MobilityArraySpec,
+    collect_array_offsets,
+    detect_mobility_array,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -557,6 +564,16 @@ class ImzMLReader(BaseMSIReader):
         self._continuous_mzs: Optional[NDArray[np.float64]] = None
         self._continuous_uniform: bool = False
 
+        # The third binary array, when the file has one (see mobility_array.py).
+        # Offsets are collected on first use; the shared array is decoded once
+        # when every spectrum carries the same one.
+        self._mobility: Optional[MobilityArraySpec] = None
+        self._mobility_offsets: Optional[
+            Tuple[NDArray[np.int64], NDArray[np.int64], NDArray[np.int64]]
+        ] = None
+        self._mobility_shared: Optional[NDArray[np.float64]] = None
+        self._mobility_uniform: Optional[bool] = None
+
         # Store path but don't initialize parser yet - wait for first use
         if data_path is not None:
             self.filepath = data_path
@@ -645,6 +662,10 @@ class ImzMLReader(BaseMSIReader):
             # it pyimzml resolves the .ibd itself, by a rule that is worse than
             # this one on case, on directories and on partial downloads.
             # docs/imzml-parser-notes.md has both, with the measurements.
+            # A third hazard, and the reason the ion mobility exports of
+            # TIMSCONVERT and TIMSImaging could not be opened at all: see
+            # _pyimzml_compat.
+            ensure_lenient_cv_param_values()
             self.parser = ImzMLParser(
                 filename=str(imzml_path),
                 parse_lib="ElementTree",
@@ -679,6 +700,22 @@ class ImzMLReader(BaseMSIReader):
             self._cache_all_coordinates()
 
         try:
+            # The mobility array is found first so the .ibd extent check
+            # below can account for it like the other two arrays.
+            self._mobility = detect_mobility_array(self.parser.metadata)
+            if self._mobility is not None:
+                if self._mobility.compressed:
+                    raise ValueError(
+                        f"{imzml_path} declares zlib compression on its ion "
+                        f"mobility array ({self._mobility.array_accession}); "
+                        "compressed binary arrays are not supported"
+                    )
+                logger.info(
+                    "imzML carries an ion mobility array: %s (%s), unit %s",
+                    self._mobility.array_name,
+                    self._mobility.array_accession,
+                    self._mobility.unit_accession or "undeclared",
+                )
             self._validate_parser_state()
         except Exception:
             self.close()
@@ -950,17 +987,36 @@ class ImzMLReader(BaseMSIReader):
             return
         ibd_size = self.ibd_path.stat().st_size
 
-        max_end = 0
-        for label, offsets, lengths, precision in (
-            ("m/z", arrays.mz_offsets, arrays.mz_lengths, parser.mzPrecision),
+        declared = [
+            (
+                "m/z",
+                arrays.mz_offsets,
+                arrays.mz_lengths,
+                parser.sizeDict[parser.mzPrecision],
+            ),
             (
                 "intensity",
                 arrays.int_offsets,
                 arrays.int_lengths,
-                parser.intensityPrecision,
+                parser.sizeDict[parser.intensityPrecision],
             ),
-        ):
-            end = offsets + lengths * parser.sizeDict[precision]
+        ]
+        if self._mobility is not None:
+            # The third array is subject to the same check; without it a
+            # mobility export always looked like it had trailing bytes.
+            mob_offsets, mob_lengths, _ = self._ensure_mobility_offsets()
+            declared.append(
+                (
+                    "ion mobility",
+                    mob_offsets,
+                    mob_lengths,
+                    self._mobility.dtype.itemsize,
+                )
+            )
+
+        max_end = 0
+        for label, offsets, lengths, itemsize in declared:
+            end = offsets + lengths * itemsize
             max_end = max(max_end, int(end.max()))
             past = np.flatnonzero(end > ibd_size)
             if past.size:
@@ -1068,8 +1124,11 @@ class ImzMLReader(BaseMSIReader):
                 if self._continuous_mzs is not None:
                     # Iteration already decoded the shared block; reuse the
                     # object so axis and yielded m/z stay identity-equal
-                    # whichever is asked for first.
-                    self._common_mass_axis = self._continuous_mzs
+                    # whichever is asked for first (unless the block has
+                    # duplicates, in which case the axis is its unique form).
+                    self._common_mass_axis = self._deduplicated_shared_axis(
+                        self._continuous_mzs
+                    )
                 else:
                     spectrum_data = parser.getspectrum(0)
                     if spectrum_data is None or len(spectrum_data) < 1:
@@ -1079,7 +1138,7 @@ class ImzMLReader(BaseMSIReader):
                     if mzs.size == 0:
                         raise ValueError("First spectrum contains no m/z values")
 
-                    self._common_mass_axis = mzs
+                    self._common_mass_axis = self._deduplicated_shared_axis(mzs)
                     if self._continuous_uniform:
                         self._continuous_mzs = mzs
             else:
@@ -1358,6 +1417,246 @@ class ImzMLReader(BaseMSIReader):
                 yield from self._iter_spectra_batch(
                     parser, total_spectra, batch_size, pbar
                 )
+
+    def _deduplicated_shared_axis(
+        self, mzs: NDArray[np.float64]
+    ) -> NDArray[np.float64]:
+        """The common axis a shared m/z block defines: its sorted unique values.
+
+        A continuous file may legally repeat an m/z value -- an export with
+        ion mobility lists a feature once per mobility at which it was
+        found, so two isomers at one m/z are two entries. The MSI table's
+        axis is strictly increasing by contract, so the duplicates collapse
+        into one column there and their intensities are summed over
+        mobility; the mobility-resolved table keeps them apart.
+        """
+        if mzs.size < 2 or bool(np.all(np.diff(mzs) > 0)):
+            return mzs
+        axis = np.unique(mzs)
+        n_dup = int(mzs.size - axis.size)
+        if self._mobility is not None:
+            logger.info(
+                "Shared m/z block repeats %d value(s), split by ion mobility; the "
+                "MSI table sums them per m/z and the mobility table keeps them apart",
+                n_dup,
+            )
+        else:
+            logger.warning(
+                "Shared m/z block is not strictly increasing (%d repeated or "
+                "unordered value(s)); the common axis is its sorted unique form "
+                "and coincident intensities are summed",
+                n_dup,
+            )
+        return axis
+
+    # ------------------------------------------------------------------
+    # Ion mobility: the third binary array
+    # ------------------------------------------------------------------
+
+    @property
+    def has_ion_mobility(self) -> bool:
+        """Whether the file declares a mobility array beside m/z and intensity."""
+        self._ensure_parser_initialized()
+        return self._mobility is not None
+
+    @property
+    def has_shared_mobility_axis(self) -> bool:
+        """Whether every spectrum carries the same (m/z, mobility) pairs.
+
+        Requires continuous mode (one m/z block for the file) and a mobility
+        array that is the same for every spectrum -- checked on the array
+        contents, not assumed from the mode, because the writer both TIMS
+        tools use stores a mobility copy per spectrum even in continuous mode.
+        """
+        if not self.has_ion_mobility or not self.is_continuous:
+            return False
+        return self._mobility_axis_is_shared()
+
+    def _ensure_mobility_offsets(
+        self,
+    ) -> Tuple[NDArray[np.int64], NDArray[np.int64], NDArray[np.int64]]:
+        """Collect the mobility array's per-spectrum offsets once."""
+        if self._mobility_offsets is not None:
+            return self._mobility_offsets
+        if self._mobility is None or self.imzml_path is None:
+            raise ValueError("This imzML declares no ion mobility array")
+        parser = cast(ImzMLParser, self.parser)
+        n_spectra = len(parser.coordinates)
+        offsets, lengths, encoded = collect_array_offsets(
+            self.imzml_path, self._mobility.group_id, n_spectra
+        )
+        missing = int(np.count_nonzero(offsets < 0))
+        if missing:
+            raise ValueError(
+                f"{missing} of {n_spectra} spectra reference no ion mobility array "
+                f"although the file declares one ({self._mobility.group_id})"
+            )
+        mz_lengths = np.fromiter(parser.mzLengths, dtype=np.int64, count=n_spectra)
+        mismatch = np.flatnonzero(lengths != mz_lengths)
+        if mismatch.size:
+            first = int(mismatch[0])
+            raise ValueError(
+                f"Spectrum {first} declares {int(lengths[first])} ion mobility "
+                f"values for {int(mz_lengths[first])} m/z values; the arrays "
+                "must be parallel"
+            )
+        self._mobility_offsets = (offsets, lengths, encoded)
+        return self._mobility_offsets
+
+    def _read_mobility_array(self, idx: int) -> NDArray[np.float64]:
+        """Decode one spectrum's mobility array from the .ibd."""
+        offsets, lengths, _ = self._ensure_mobility_offsets()
+        spec = cast(MobilityArraySpec, self._mobility)
+        parser = cast(ImzMLParser, self.parser)
+        m = parser.m
+        m.seek(int(offsets[idx]))
+        data = m.read(int(lengths[idx]) * spec.dtype.itemsize)
+        values = np.frombuffer(data, dtype=spec.dtype)
+        if values.size != int(lengths[idx]):
+            raise ValueError(
+                f"Spectrum {idx}: ion mobility array truncated in the .ibd "
+                f"({values.size} of {int(lengths[idx])} values)"
+            )
+        return values.astype(np.float64, copy=False)
+
+    def _mobility_axis_is_shared(self) -> bool:
+        """Decide once whether one mobility array describes every spectrum.
+
+        Every spectrum must declare the same length, and the arrays of a
+        spread of spectra (first, last and up to 64 in between) must be
+        byte-identical to the first. Cheap on the feature-list files this
+        exists for, and honest: a mismatch means per-pixel mobility.
+        """
+        if self._mobility_uniform is not None:
+            return self._mobility_uniform
+        offsets, lengths, _ = self._ensure_mobility_offsets()
+        n = int(lengths.size)
+        uniform = bool(n > 0 and np.all(lengths == lengths[0]))
+        if uniform:
+            first = self._read_mobility_array(0)
+            probes = np.unique(
+                np.concatenate(
+                    [
+                        np.linspace(0, n - 1, num=min(n, 64), dtype=np.int64),
+                        [n - 1],
+                    ]
+                )
+            )
+            for idx in probes.tolist():
+                if idx == 0 or int(offsets[idx]) == int(offsets[0]):
+                    continue
+                if not np.array_equal(self._read_mobility_array(idx), first):
+                    uniform = False
+                    break
+            if uniform:
+                self._mobility_shared = first
+        self._mobility_uniform = uniform
+        if not uniform:
+            logger.info(
+                "Ion mobility values differ between spectra; the mobility "
+                "dimension is per pixel and no shared feature axis exists"
+            )
+        return uniform
+
+    def get_mobility_axis(self) -> Optional[MobilityAxis]:
+        """Describe the mobility array, with the shared values when shared."""
+        if not self.has_ion_mobility:
+            return None
+        spec = cast(MobilityArraySpec, self._mobility)
+        kind_accession, kind_name = classify_mobility_array(
+            spec.array_accession, spec.unit_accession
+        )
+        values = None
+        if self.is_continuous and self._mobility_axis_is_shared():
+            values = self._mobility_shared
+        return MobilityAxis(
+            kind_accession=kind_accession,
+            kind_name=kind_name,
+            unit_accession=spec.unit_accession,
+            unit_name=spec.unit_name,
+            array_accession=spec.array_accession,
+            values=values,
+            source="imzml",
+        )
+
+    def get_shared_mobility_features(
+        self,
+    ) -> Optional[Tuple[NDArray[np.float64], NDArray[np.float64]]]:
+        """The shared ``(mz, mobility)`` pairs of a continuous mobility export."""
+        if not self.has_shared_mobility_axis:
+            return None
+        parser = cast(ImzMLParser, self.parser)
+        if self._continuous_mzs is not None:
+            mzs = self._continuous_mzs
+        else:
+            mzs = cast(NDArray[np.float64], parser.getspectrum(0)[0])
+            if self._continuous_uniform:
+                self._continuous_mzs = mzs
+        mobility = cast(NDArray[np.float64], self._mobility_shared)
+        if mzs.size != mobility.size:
+            raise ValueError(
+                f"Shared m/z block has {mzs.size} values but the shared mobility "
+                f"array has {mobility.size}"
+            )
+        return np.asarray(mzs, dtype=np.float64), mobility
+
+    def iter_mobility_spectra(self, batch_size: Optional[int] = None) -> Generator[
+        Tuple[
+            Tuple[int, int, int],
+            NDArray[np.float64],
+            NDArray[np.float64],
+            NDArray[np.float64],
+        ],
+        None,
+        None,
+    ]:
+        """Iterate spectra as ``(coords, mz, mobility, intensity)`` point clouds.
+
+        The three arrays are parallel; the intensity threshold, when set,
+        masks all three together so they stay parallel.
+        """
+        self._ensure_parser_initialized()
+        if self._mobility is None:
+            raise NotImplementedError(
+                f"{self.imzml_path} declares no ion mobility array"
+            )
+        parser = cast(ImzMLParser, self.parser)
+        total_spectra = len(parser.coordinates)
+        shared = (
+            self._mobility_shared
+            if self.is_continuous and self._mobility_axis_is_shared()
+            else None
+        )
+        with tqdm(
+            total=total_spectra,
+            desc="Reading mobility spectra",
+            unit="spectrum",
+            disable=getattr(self, "_quiet_mode", False),
+        ) as pbar:
+            for idx in range(total_spectra):
+                try:
+                    coords = self._get_spectrum_coordinates(parser, idx)
+                    mzs, intensities = self._read_spectrum_arrays(parser, idx)
+                    mobility = (
+                        shared if shared is not None else self._read_mobility_array(idx)
+                    )
+                    if mobility.size != mzs.size:
+                        raise ValueError(
+                            f"{mobility.size} mobility values for {mzs.size} m/z values"
+                        )
+                    if self._intensity_threshold is not None:
+                        keep = intensities >= self._intensity_threshold
+                        mzs, mobility, intensities = (
+                            mzs[keep],
+                            mobility[keep],
+                            intensities[keep],
+                        )
+                    if mzs.size > 0:
+                        yield coords, mzs, mobility, intensities
+                except Exception as e:
+                    logger.warning(f"Error processing mobility spectrum {idx}: {e}")
+                finally:
+                    pbar.update(1)
 
     def read(self) -> Dict[str, Any]:
         """Read the entire imzML file and return a structured data dictionary.
