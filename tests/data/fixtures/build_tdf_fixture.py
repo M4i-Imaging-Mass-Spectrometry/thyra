@@ -56,6 +56,7 @@ import json
 import shutil
 import sqlite3
 import struct
+import sys
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -434,7 +435,11 @@ def build() -> None:
     # directory raises PermissionError on Windows, and an rmtree that fails
     # halfway (WinError 5/32, the class an open reader handle produces) would
     # leave behind the same half-deleted fixture this guards against. Two
-    # renames leave either the old tree or the new one, never a fragment.
+    # renames leave either the old tree or the new one and never a fragment --
+    # but only because the second one puts the original back when it fails. The
+    # window between them, with the original moved aside and the replacement
+    # not yet in place, is the one spot where the cleanup below would otherwise
+    # leave no fixture at all; see the `except` around that second rename.
     rng = np.random.default_rng(7)
     frames = [make_frame(k, rng) for k in range(len(GRID))]
 
@@ -452,7 +457,31 @@ def build() -> None:
             )
             retired.rmdir()
             OUT_DIR.replace(retired)
-        staging.replace(OUT_DIR)
+        try:
+            staging.replace(OUT_DIR)
+        except BaseException:
+            # The swap failed with the original already moved aside, which is
+            # the one window where the cleanup below is destructive rather than
+            # tidy: `staging` and `retired` are both still set, so the `finally`
+            # would delete the half-built tree AND the committed acquisition,
+            # leaving no fixture at all. That is strictly worse than the
+            # half-written directory this whole dance exists to prevent.
+            #
+            # Put the original back first, and clear `retired` either way so the
+            # cleanup can never reach it. If even the restore fails, the tree is
+            # still intact under its temporary name and saying where is far more
+            # useful than deleting it.
+            if retired is not None:
+                try:
+                    retired.replace(OUT_DIR)
+                except BaseException:
+                    print(
+                        f"COULD NOT RESTORE THE FIXTURE. It is intact at "
+                        f"{retired}; move it back to {OUT_DIR} by hand.",
+                        file=sys.stderr,
+                    )
+                retired = None
+            raise
         staging = None
     finally:
         if staging is not None:

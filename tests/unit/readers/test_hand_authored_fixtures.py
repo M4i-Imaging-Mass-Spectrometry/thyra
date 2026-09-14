@@ -964,6 +964,31 @@ def _fail_with_the_connection_open(module: ModuleType, monkeypatch) -> None:
     monkeypatch.setattr(module, "DDL", [*module.DDL, "CREATE TABLE Broken (oops"])
 
 
+def _fail_the_swap_into_place(module: ModuleType, monkeypatch) -> None:
+    """Break the rename that moves staging in, and nothing else.
+
+    Both injections above fire inside ``_write_fixture``, i.e. before the
+    committed tree has been touched at all, so neither one reaches the window
+    the cleanup has to be careful in: the original renamed aside and the
+    replacement not yet in place.
+
+    Keyed on the staging directory's own ``mkdtemp`` prefix rather than on a
+    call count, because the restoring rename runs immediately after this one
+    and MUST be allowed to succeed -- a counter that fails "the second
+    ``Path.replace``" would fail it too and test the wrong half. Patching the
+    method on ``pathlib.Path`` rather than a name on the copied module is what
+    reaches ``OUT_DIR``, which the module bound before any patch could apply.
+    """
+    real_replace = Path.replace
+
+    def replace(self, target):
+        if self.name.startswith(".synthetic_tims-build-"):
+            raise PermissionError(5, "injected: the swap into place fails")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", replace)
+
+
 class TestTdfBuildScript:
     """Running the build script must not be able to damage what it rebuilds.
 
@@ -1033,6 +1058,37 @@ class TestTdfBuildScript:
         with pytest.raises(expected):
             module.build()
 
+        assert _fixture_bytes(tmp_path) == before
+        assert list(tmp_path.glob(".synthetic_tims-*")) == []
+
+    def test_a_failed_swap_puts_the_committed_tree_back(self, tmp_path, monkeypatch):
+        """The one window where the cleanup itself was the destructive act.
+
+        ``build()`` renames the committed acquisition aside and then renames
+        staging over it. If that second rename raised, ``staging`` and
+        ``retired`` were both still set, so the ``finally`` deleted the
+        half-built tree AND the acquisition that had just been moved out of the
+        way -- leaving no fixture at all, which is strictly worse than the
+        half-written directory the staging dance exists to prevent.
+
+        The two cases above cannot see it: both fail before the first rename,
+        where ``retired`` is still None and deleting staging is the right thing
+        to do.
+
+        ``is_dir`` is asserted before the bytes because it is the assertion that
+        distinguishes the two behaviours; without it the pre-fix tree fails with
+        a ``FileNotFoundError`` out of ``_fixture_bytes``, which reads as a
+        broken test rather than as a deleted fixture.
+        """
+        pytest.importorskip("zstandard")
+        module = _load_the_build_script(tmp_path)
+        before = _fixture_bytes(tmp_path)
+        _fail_the_swap_into_place(module, monkeypatch)
+
+        with pytest.raises(PermissionError):
+            module.build()
+
+        assert (tmp_path / TDF_DIR_NAME).is_dir()
         assert _fixture_bytes(tmp_path) == before
         assert list(tmp_path.glob(".synthetic_tims-*")) == []
 
