@@ -17,6 +17,42 @@ TEST_DIR = Path(__file__).parent.resolve()
 # Test data directory
 DATA_DIR = TEST_DIR / "data"
 
+# The two lanes, as directories. Membership is decided from these and from
+# nothing else -- see pytest_collection_modifyitems below.
+UNIT_DIR = TEST_DIR / "unit"
+INTEGRATION_DIR = TEST_DIR / "integration"
+
+
+def pytest_collection_modifyitems(config, items):
+    """Stamp each test's lane marker from the directory it lives in.
+
+    ``-m integration`` used to mean "the files somebody remembered to
+    decorate", which is not the same set as ``tests/integration/``: 14 of
+    that directory's 65 tests carried no marker, so the lane CI presents as
+    the integration lane silently skipped every end-to-end CLI test. The
+    inverse held too -- 14 tests under ``tests/unit/`` claimed the
+    integration lane by decorator.
+
+    Stamping by location makes the two agree by construction, and makes a
+    misfiled test the only way to get it wrong -- which
+    ``tests/unit/test_lane_markers.py`` then catches. The hook only adds:
+    an explicit marker on an item is left alone. It runs before ``-m``
+    deselection, so the stamp is honoured by the same run that applies it.
+
+    Args:
+        config: The pytest config (unused; part of the hook signature).
+        items: The collected items, modified in place.
+    """
+    for item in items:
+        raw = getattr(item, "path", None)
+        if raw is None:
+            continue
+        path = Path(raw).resolve()
+        if path.is_relative_to(INTEGRATION_DIR):
+            item.add_marker(pytest.mark.integration)
+        elif path.is_relative_to(UNIT_DIR):
+            item.add_marker(pytest.mark.unit)
+
 
 @pytest.fixture
 def thyra_logs():

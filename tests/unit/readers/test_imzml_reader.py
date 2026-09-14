@@ -320,10 +320,12 @@ class TestCrlfUnindentedImzML:
         buffer libxml2 already had, so the parse survives and proves nothing.
         The exact threshold moves with heap layout, so this may not reproduce
         on every platform -- but it can only ever under-report, never fail on
-        correct code, since ElementTree does not go near libxml2. Deliberately
-        NOT marked integration: CI runs -m "not integration", and this is the
-        only test that exercises the actual defect. Costs ~2s and a ~33 MB
-        temporary file.
+        correct code, since ElementTree does not go near libxml2.
+        Deliberately kept under tests/unit/, which is what puts it in the
+        default lane now that conftest.py stamps the lane from the
+        directory: CI's default run is -m "not integration", and this is
+        the only test that exercises the actual defect. Costs ~2s and a
+        ~33 MB temporary file.
         """
         imzml_path = write_crlf_unindented_imzml(temp_dir, 16000)
 

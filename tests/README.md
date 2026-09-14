@@ -8,19 +8,29 @@ The tests are organized as follows:
 
 - `unit/`: Fast tests for individual components
   - Core functionality (registry, base classes)
-  - Readers (imzML and Bruker)
-  - Converters (SpatialData)
-  - Utility functions
+  - Readers (imzML, Bruker, mzPeak, Waters, PHI, solariX)
+  - Converter behaviour driven through mocks and small in-memory inputs
+  - Metadata, resampling, the mass axis, utilities, and the repo's own
+    tooling (`unit/tools/`)
 
 - `integration/`: End-to-end tests for the full conversion workflow
-  - imzML format conversion tests
-  - Bruker format conversion tests
+  - imzML and mzPeak format conversion tests
+  - Bruker format conversion tests, synthetic and real-acquisition
   - Command-line interface tests
+  - The streaming/CSC converter, whose tests write a real `.zarr` each
 
 - `data/`: Test data for running the tests
   - Contains minimal test data for both imzML and Bruker formats
 
-- `conftest.py`: Common fixtures for all tests
+- `conftest.py`: Common fixtures for all tests, and the hook that decides
+  which lane a test belongs to
+
+**A test's lane comes from its directory, not from a marker.** `conftest.py`
+stamps `unit` on everything collected under `unit/` and `integration` on
+everything under `integration/`, so `-m integration` means exactly that
+directory and cannot miss a file somebody forgot to decorate. Do not
+hand-write a `@pytest.mark.unit` or `@pytest.mark.integration`; to move a test
+between lanes, move the file.
 
 ## Running the Tests
 
@@ -77,11 +87,15 @@ THYRA_MZPEAK_REFERENCE_ARCHIVE=/path/to/reference.mzpeak \
 
 ### Running All Tests
 
-To run both unit and integration tests:
+To run both lanes in one go, clear the `-m` expression that `addopts` supplies:
 
 ```bash
-pytest -m "unit or integration"
+pytest -m ""
 ```
+
+`-m "unit or integration"` is the same set, because every test file lives
+under one of the two directories and so carries one of the two stamps. It used
+to collect 86 of 2,690 tests; it now collects all of them.
 
 ### Running Specific Test Files
 

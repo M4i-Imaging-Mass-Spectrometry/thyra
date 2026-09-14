@@ -127,7 +127,9 @@ uv run bandit -r thyra/
 - Place unit tests in `tests/unit/`
 - Place integration tests in `tests/integration/`
 - Use descriptive test names: `test_should_convert_imzml_when_valid_file_provided`
-- Mark tests appropriately: `@pytest.mark.unit` or `@pytest.mark.integration`
+- Do not hand-write a `unit` or `integration` marker. `tests/conftest.py`
+  stamps one on every collected test from the directory it lives in, so the
+  directory you chose above is the whole of the decision
 
 ## Pull Request Process
 

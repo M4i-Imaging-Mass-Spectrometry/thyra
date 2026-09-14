@@ -280,9 +280,14 @@ testpaths = ["tests"]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
+# Neither marker is ever hand-written. tests/conftest.py stamps one on every
+# collected item from the directory it lives in, so the lane a test runs in is
+# decided by where the file sits and by nothing else. Both stay declared here
+# because a mark pytest does not know about raises PytestUnknownMarkWarning,
+# and because `pytest --markers` is where a contributor looks for the rule.
 markers = [
-    "unit: marks tests as unit tests (fast, no external dependencies)",
-    "integration: marks tests as integration tests (may be slow, may require external dependencies)"
+    "unit: applied automatically to everything under tests/unit/ (fast, no external dependencies)",
+    "integration: applied automatically to everything under tests/integration/ (may be slow, may require external dependencies)"
 ]
 addopts = "-v --tb=short -m \"not integration\""
 filterwarnings = [

@@ -29,7 +29,6 @@ import tomllib
 from pathlib import Path
 from typing import Any, Dict, List
 
-import pytest
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -78,7 +77,6 @@ def _bare_requirement_name(dependency: str) -> str:
     return name.strip().lower()
 
 
-@pytest.mark.unit
 def test_exactly_one_job_runs_every_pre_commit_hook() -> None:
     """A job must run `pre-commit run --all-files`.
 
@@ -93,7 +91,6 @@ def test_exactly_one_job_runs_every_pre_commit_hook() -> None:
     )
 
 
-@pytest.mark.unit
 def test_the_lint_step_narrows_the_hook_set_in_no_way() -> None:
     """The gate must run the whole config, not a named subset of it.
 
@@ -113,7 +110,6 @@ def test_the_lint_step_narrows_the_hook_set_in_no_way() -> None:
     assert not named, f"the lint step narrows the gate to {named}"
 
 
-@pytest.mark.unit
 def test_trigger_block_covers_prs_and_main() -> None:
     """The lint job inherits tests.yml's triggers; they must stay as they are.
 
@@ -135,7 +131,6 @@ def test_trigger_block_covers_prs_and_main() -> None:
     assert triggers["push"]["branches"] == ["main"]
 
 
-@pytest.mark.unit
 def test_every_additional_dependency_is_version_pinned() -> None:
     """Hook `additional_dependencies` must pin with `==`, bar the self-extra.
 
@@ -162,7 +157,6 @@ def test_every_additional_dependency_is_version_pinned() -> None:
     assert not unpinned, f"unpinned hook dependencies: {unpinned}"
 
 
-@pytest.mark.unit
 def test_the_six_tools_and_the_path_guards_are_all_hooks() -> None:
     """The tools the gate exists to run must still be in the config.
 
@@ -185,7 +179,6 @@ def test_the_six_tools_and_the_path_guards_are_all_hooks() -> None:
     assert expected <= declared_ids, f"missing hooks: {sorted(expected - declared_ids)}"
 
 
-@pytest.mark.unit
 def test_the_black_hook_runs_the_black_the_lockfile_resolves() -> None:
     """The hook's black and `uv run black .`'s black must be one version.
 

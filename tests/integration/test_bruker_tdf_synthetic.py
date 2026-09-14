@@ -34,8 +34,6 @@ from thyra.core.mobility import ccs_from_one_over_k0, mason_schamp_ccs
 from thyra.readers.bruker.timstof.timstof_reader import BrukerReader
 from thyra.utils.bruker_exceptions import SDKError
 
-pytestmark = pytest.mark.integration
-
 FIXTURE = Path(__file__).resolve().parents[1] / "data" / "fixtures" / "synthetic_tims.d"
 EXPECTED = FIXTURE.with_name("synthetic_tims_expected.json")
 

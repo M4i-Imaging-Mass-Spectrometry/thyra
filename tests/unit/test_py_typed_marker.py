@@ -26,7 +26,6 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
-import pytest
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -37,7 +36,6 @@ _TESTS_WORKFLOW = _REPO_ROOT / ".github" / "workflows" / "tests.yml"
 _CLASSIFIER = "Typing :: Typed"
 
 
-@pytest.mark.unit
 def test_classifier_and_marker_agree() -> None:
     """The declared classifier and the shipped marker must say the same thing.
 
@@ -63,7 +61,6 @@ def test_classifier_and_marker_agree() -> None:
     )
 
 
-@pytest.mark.unit
 def test_the_marker_is_the_half_that_was_kept() -> None:
     """Of the two honest fixes, this repository ships the marker.
 
@@ -88,7 +85,6 @@ def test_the_marker_is_the_half_that_was_kept() -> None:
     )
 
 
-@pytest.mark.unit
 def test_the_installed_distribution_is_checked_in_ci() -> None:
     """One CI step must read the marker out of the INSTALLED distribution.
 

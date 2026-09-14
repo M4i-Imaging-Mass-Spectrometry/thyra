@@ -144,14 +144,25 @@ jobs:
 
   # The integration lane, which `addopts` in pyproject.toml deselects from every
   # default `pytest` run. It is its own job rather than one more step in `test`
-  # so that it appears as a separately named check: the lane sat with 15 of its
-  # 18 tests failing precisely because no job anywhere ran it, and a step buried
-  # in another job would be just as easy to lose again.
+  # so that it appears as a separately named check. The reason is historical
+  # and worth keeping: back when the lane ran nowhere at all it sat with 15 of
+  # its 18 tests failing, precisely because no job anywhere ran it, and a step
+  # buried in another job would be just as easy to lose again. Those figures
+  # describe that moment, not this lane's size today.
   #
-  # Most of these cover the streaming/CSC converter, which writes the Zarr store
-  # a downstream consumer opens with anndata.experimental.read_lazy(), so both
-  # operating systems are worth the runner time -- the atomic-write and path
-  # behaviour under test differs between them.
+  # `-m integration` is not a set somebody maintains by hand. tests/conftest.py
+  # stamps the marker on every item collected under tests/integration/, so this
+  # job runs that directory and a file added there joins the lane with no edit
+  # anywhere -- which is what closed the gap where 14 of the directory's tests,
+  # every end-to-end CLI test among them, were silently deselected here and ran
+  # in the `test` job instead.
+  #
+  # Both operating systems are worth the runner time because most of this
+  # lane's wall clock is tests that write a real Zarr store and read it back --
+  # the streaming/CSC converter file above all, whose output a downstream
+  # consumer opens with anndata.experimental.read_lazy(). Atomic-write and path
+  # behaviour differ between the two, and that is the part a single runner
+  # would not see.
   integration:
     runs-on: ${{ matrix.os }}
     strategy:

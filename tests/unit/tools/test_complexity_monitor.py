@@ -100,7 +100,6 @@ def stacked_repo(tmp_path):
     return clone
 
 
-@pytest.mark.unit
 def test_stacked_pr_diffs_against_its_own_base_not_main(
     stacked_repo, monkeypatch
 ) -> None:
@@ -117,7 +116,6 @@ def test_stacked_pr_diffs_against_its_own_base_not_main(
     )
 
 
-@pytest.mark.unit
 def test_pr_against_main_reports_only_its_own_changes(
     stacked_repo, monkeypatch
 ) -> None:
@@ -134,7 +132,6 @@ def test_pr_against_main_reports_only_its_own_changes(
     ]
 
 
-@pytest.mark.unit
 def test_falls_back_to_a_local_branch_when_there_is_no_remote(
     tmp_path, monkeypatch
 ) -> None:
@@ -155,7 +152,6 @@ def test_falls_back_to_a_local_branch_when_there_is_no_remote(
     assert [p.as_posix() for p in changed.files] == ["thyra/feature.py"]
 
 
-@pytest.mark.unit
 def test_shallow_checkout_raises_instead_of_returning_nothing(
     tmp_path, monkeypatch
 ) -> None:
@@ -176,7 +172,6 @@ def test_shallow_checkout_raises_instead_of_returning_nothing(
     assert "fetch-depth: 0" in message, "the message should name the fix"
 
 
-@pytest.mark.unit
 def test_a_missing_base_ref_never_falls_back_to_main(tmp_path, monkeypatch) -> None:
     """An unresolvable stacked base must fail, not quietly become main.
 
@@ -197,7 +192,6 @@ def test_a_missing_base_ref_never_falls_back_to_main(tmp_path, monkeypatch) -> N
         monitor.get_changed_files()
 
 
-@pytest.mark.unit
 def test_no_changed_python_files_is_an_empty_list_not_a_failure(
     tmp_path, monkeypatch
 ) -> None:
@@ -217,7 +211,6 @@ def test_no_changed_python_files_is_an_empty_list_not_a_failure(
     assert changed.files == []
 
 
-@pytest.mark.unit
 def test_deleted_files_are_dropped(tmp_path, monkeypatch) -> None:
     """A file removed by the PR is in the diff but cannot be analysed."""
     repo = tmp_path / "deletion"
@@ -235,7 +228,6 @@ def test_deleted_files_are_dropped(tmp_path, monkeypatch) -> None:
     assert monitor.get_changed_files().files == []
 
 
-@pytest.mark.unit
 def test_main_exits_two_and_analyzes_nothing_when_the_base_is_missing(
     tmp_path, monkeypatch, capsys
 ) -> None:
@@ -264,7 +256,6 @@ def test_main_exits_two_and_analyzes_nothing_when_the_base_is_missing(
     assert "analyzing all files" not in captured.out.lower()
 
 
-@pytest.mark.unit
 def test_main_reports_the_base_ref_it_used(stacked_repo, monkeypatch, capsys) -> None:
     """The log must say what fast mode compared against, so it can be checked."""
     monkeypatch.chdir(stacked_repo)
@@ -305,7 +296,6 @@ def tree_with_one_tangled_function(tmp_path):
     return tmp_path
 
 
-@pytest.mark.unit
 def test_quiet_still_lists_the_violations(
     tree_with_one_tangled_function, monkeypatch, capsys
 ) -> None:
@@ -331,7 +321,6 @@ def test_quiet_still_lists_the_violations(
     assert "Complexity threshold" not in out
 
 
-@pytest.mark.unit
 def test_quiet_prints_nothing_when_there_are_no_violations(
     tree_with_one_tangled_function, monkeypatch, capsys
 ) -> None:
@@ -349,7 +338,6 @@ def test_quiet_prints_nothing_when_there_are_no_violations(
     assert capsys.readouterr().out == ""
 
 
-@pytest.mark.unit
 def test_the_summary_and_the_listing_both_print_without_quiet(
     tree_with_one_tangled_function, monkeypatch, capsys
 ) -> None:
@@ -371,7 +359,6 @@ def test_the_summary_and_the_listing_both_print_without_quiet(
     assert "tangled (4)" in out
 
 
-@pytest.mark.unit
 def test_the_workflow_debug_invocation_says_something_on_a_clean_tree(
     tree_with_one_tangled_function, monkeypatch, capsys
 ) -> None:
@@ -395,7 +382,6 @@ def test_the_workflow_debug_invocation_says_something_on_a_clean_tree(
     assert "Analyzed 1 files" in out
 
 
-@pytest.mark.unit
 def test_base_ref_candidates_do_not_include_main_when_a_base_is_known(
     monkeypatch,
 ) -> None:
@@ -458,7 +444,6 @@ def tree_with_one_good_and_one_broken_file(tmp_path):
     return tmp_path
 
 
-@pytest.mark.unit
 def test_a_byte_order_mark_does_not_exempt_a_file(
     tree_with_a_bom_prefixed_function, monkeypatch, capsys
 ) -> None:
@@ -482,7 +467,6 @@ def test_a_byte_order_mark_does_not_exempt_a_file(
     assert "tangled (4)" in out
 
 
-@pytest.mark.unit
 def test_an_unparseable_file_raises_instead_of_returning_no_functions(
     tmp_path,
 ) -> None:
@@ -503,7 +487,6 @@ def test_an_unparseable_file_raises_instead_of_returning_no_functions(
     assert excinfo.value.__cause__ is not None, "the parse error should be chained"
 
 
-@pytest.mark.unit
 def test_a_file_that_cannot_be_opened_is_reported_the_same_way(tmp_path) -> None:
     """An unreadable path is a gate that did not run, like an unparseable one.
 
@@ -515,7 +498,6 @@ def test_a_file_that_cannot_be_opened_is_reported_the_same_way(tmp_path) -> None
         monitor.analyze_file(tmp_path / "does_not_exist.py")
 
 
-@pytest.mark.unit
 def test_a_deeply_nested_lambda_chain_does_not_escape_as_a_traceback(
     tmp_path,
 ) -> None:
@@ -537,7 +519,6 @@ def test_a_deeply_nested_lambda_chain_does_not_escape_as_a_traceback(
         monitor.analyze_file(deep)
 
 
-@pytest.mark.unit
 def test_main_exits_three_and_names_the_file_it_could_not_parse(
     tree_with_one_good_and_one_broken_file, monkeypatch, capsys
 ) -> None:
@@ -561,7 +542,6 @@ def test_main_exits_three_and_names_the_file_it_could_not_parse(
     assert "did not cover" in err
 
 
-@pytest.mark.unit
 def test_the_analysed_count_excludes_a_file_that_could_not_be_parsed(
     tree_with_one_good_and_one_broken_file, monkeypatch, capsys
 ) -> None:
@@ -583,7 +563,6 @@ def test_the_analysed_count_excludes_a_file_that_could_not_be_parsed(
     assert "Analyzed 2 files" not in out, "an unparseable file is not an analysed one"
 
 
-@pytest.mark.unit
 def test_unreadable_files_survive_quiet(
     tree_with_one_good_and_one_broken_file, monkeypatch, capsys
 ) -> None:
@@ -603,7 +582,6 @@ def test_unreadable_files_survive_quiet(
     assert captured.out == "", "the summary is still what --quiet is for"
 
 
-@pytest.mark.unit
 def test_the_report_is_still_written_when_a_file_could_not_be_parsed(
     tree_with_one_good_and_one_broken_file, monkeypatch
 ) -> None:
@@ -635,7 +613,6 @@ def test_the_report_is_still_written_when_a_file_could_not_be_parsed(
     assert "broken.py" in saved["unreadable_files"][0]
 
 
-@pytest.mark.unit
 def test_the_report_records_what_was_analysed_and_what_was_not() -> None:
     """Both keys are part of the report's contract: the PR comment reads them.
 
@@ -650,7 +627,6 @@ def test_the_report_records_what_was_analysed_and_what_was_not() -> None:
     assert report["unreadable_files"] == ["thyra/broken.py: invalid syntax"]
 
 
-@pytest.mark.unit
 def test_the_unreadable_exit_code_is_its_own_number() -> None:
     """complexity-monitoring.yml branches on the literal 3, so pin it here.
 
@@ -661,7 +637,6 @@ def test_the_unreadable_exit_code_is_its_own_number() -> None:
     assert monitor.EXIT_UNREADABLE_FILES != monitor.EXIT_CHANGED_FILES_UNKNOWN
 
 
-@pytest.mark.unit
 def test_the_headroom_line_names_the_function_holding_the_margin(
     tree_with_one_tangled_function, monkeypatch, capsys
 ) -> None:
@@ -683,7 +658,6 @@ def test_the_headroom_line_names_the_function_holding_the_margin(
     assert "at 4, 1 below the limit of 5" in out
 
 
-@pytest.mark.unit
 def test_no_tracked_source_file_carries_a_byte_order_mark() -> None:
     """No BOM may enter the tree, whatever .pre-commit-config.yaml is doing.
 
