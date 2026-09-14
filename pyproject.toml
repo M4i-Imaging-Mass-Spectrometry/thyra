@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "thyra"
-version = "3.23.2"
+version = "3.23.3"
 description = "A modern Python library for converting Mass Spectrometry Imaging (MSI) data into SpatialData/Zarr format - your portal to spatial omics"
 authors = [{ name = "Theodoros Visvikis", email = "t.visvikis@maastrichtuniversity.nl" }]
 maintainers = [{ name = "Theodoros Visvikis", email = "t.visvikis@maastrichtuniversity.nl" }]
@@ -176,6 +176,20 @@ dependencies = [
     # test_optical_image_streaming.py and on real FlexImaging exports).
     "tifffile>=2026.5.2",             # tested 2026.8.23
     "xarray>=2024.10.0",
+    # Same category as tifffile and xarray above: imported directly by
+    # converters/spatialdata/optical_image.py, and arriving transitively
+    # today (scikit-image, a hard requirement of ome-zarr, requires
+    # pillow>=10.1). It reads the optical images FlexImaging exports that
+    # are not TIFF -- a Rapiflex .mis names a .jpg, and .png and .bmp occur
+    # too -- and tifffile reads none of those. Pillow rather than imagecodecs,
+    # which is already here and does decode all three, because `Image.open`
+    # parses the header and stops: the streaming design needs the shape and
+    # dtype BEFORE the store is written and the pixels only after, and
+    # imagecodecs offers no way to learn the first without doing the second.
+    # Floor is scikit-image's own, which is also comfortably above the 9.5
+    # that `Image.has_transparency_data` needs; no upper bound, nothing here
+    # has tested one.
+    "pillow>=10.1",                   # tested 12.3.0
 ]
 
 [project.urls]

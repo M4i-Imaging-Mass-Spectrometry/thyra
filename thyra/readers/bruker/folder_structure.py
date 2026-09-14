@@ -12,15 +12,35 @@ Supported formats:
 """
 
 import logging
+import os
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import List, Optional, Tuple
 
 from ...errors import ConversionRefused
-from .mis_parser import find_mis_file_for_d_folder
+from .mis_parser import find_mis_file_for_d_folder, parse_mis_file
 
 logger = logging.getLogger(__name__)
+
+
+def _identity(path: Path) -> str:
+    """A key that is the same for two spellings of one file.
+
+    The folders optical discovery searches overlap -- a ``.d``'s parent is
+    usually the analyzed root -- so the same image arrives twice under
+    different-looking paths and has to be recognised.
+
+    ``abspath`` and ``normcase``, not ``Path.resolve()``: this is string
+    work that cannot fail, where ``resolve()`` opens the file to read its
+    real name back, which on this platform is exactly the call that trips
+    over a path past the 259-character ceiling (see
+    ``docs/getting-started.md``). Discovery must not be able to abort a
+    conversion over a bystander image. The cost is that two paths reaching
+    one file through different links stay distinct; the store then carries
+    the image twice, which is a great deal better than not converting.
+    """
+    return os.path.normcase(os.path.abspath(path))
 
 
 class BrukerFormat(Enum):
@@ -40,7 +60,9 @@ class BrukerFolderInfo:
         path: Root path of the Bruker data
         format: Detected Bruker format
         data_path: Path to the main data (e.g., .d folder or data folder)
-        optical_images: List of optical image paths (TIFFs)
+        optical_images: Optical image paths, the one the .mis names first
+        primary_optical_image: The image the .mis ``<ImageFile>`` names, if
+            it was named and found. Always the head of ``optical_images``.
         teaching_points_file: Path to teaching points file (e.g., .mis)
         metadata_files: Dictionary of metadata file paths
     """
@@ -49,6 +71,7 @@ class BrukerFolderInfo:
     format: BrukerFormat
     data_path: Path
     optical_images: List[Path] = field(default_factory=list)
+    primary_optical_image: Optional[Path] = None
     teaching_points_file: Optional[Path] = None
     metadata_files: dict = field(default_factory=dict)
 
@@ -96,8 +119,19 @@ class BrukerFolderStructure:
         "ser": "ser",
     }
 
-    # Common optical image patterns
-    OPTICAL_IMAGE_PATTERNS = ["*.tif", "*.tiff", "*.TIF", "*.TIFF"]
+    # Optical image suffixes Thyra reads, lowercase. Order is not
+    # significant: matching is a membership test, and the images a folder
+    # yields are sorted by path.
+    #
+    # These are what FlexImaging actually writes, not what Thyra would like
+    # to read. TIFF is the common export, but an acquisition's .mis may name
+    # a .jpg -- a real Rapiflex slide does -- and .png and .bmp turn up as
+    # well. Filtering on `Path.suffix.lower()` rather than globbing one
+    # pattern per spelling is deliberate: a glob list has to carry `*.tif`,
+    # `*.TIF`, `*.Tif`, ... to be case-insensitive on Linux, and on Windows,
+    # where globs already ignore case, every one of those patterns returns
+    # the same file again.
+    OPTICAL_IMAGE_SUFFIXES = (".tif", ".tiff", ".jpg", ".jpeg", ".png", ".bmp")
 
     def __init__(self, path: Path):
         """Initialize folder structure analyzer.
@@ -131,11 +165,13 @@ class BrukerFolderStructure:
         # First, detect the format
         fmt, data_path = self._detect_format()
 
-        # Find optical images
-        optical_images = self._find_optical_images(data_path)
-
-        # Find teaching points file
+        # Find teaching points file. Before the optical images, because the
+        # .mis is what names the one that matters.
         teaching_points_file = self._find_teaching_points_file(data_path)
+
+        # Find optical images
+        primary_optical = self._find_mis_optical_image(data_path, teaching_points_file)
+        optical_images = self._find_optical_images(data_path, primary_optical)
 
         # Find other metadata files
         metadata_files = self._find_metadata_files(data_path, fmt)
@@ -145,6 +181,7 @@ class BrukerFolderStructure:
             format=fmt,
             data_path=data_path,
             optical_images=optical_images,
+            primary_optical_image=primary_optical,
             teaching_points_file=teaching_points_file,
             metadata_files=metadata_files,
         )
@@ -235,37 +272,112 @@ class BrukerFolderStructure:
 
         return has_dat and has_poslog and has_info
 
-    def _find_optical_images(self, data_path: Path) -> List[Path]:
-        """Find optical TIFF images in the folder structure.
-
-        Searches both the data folder and its parent for optical images.
-
-        Args:
-            data_path: Path to the data folder
-
-        Returns:
-            List of paths to TIFF files
-        """
-        optical_images = []
-
-        # Search paths: data folder, parent folder, and common subdirs
+    def _search_paths(self, data_path: Path) -> List[Path]:
+        """Folders an optical image may sit in, nearest the data first."""
         search_paths = [data_path]
         if data_path != self.path:
             search_paths.append(self.path)
         if data_path.parent != data_path:
             search_paths.append(data_path.parent)
+        return [p for p in search_paths if p.exists()]
 
-        for search_path in search_paths:
-            if not search_path.exists():
-                continue
+    def _find_mis_optical_image(
+        self, data_path: Path, mis_file: Optional[Path]
+    ) -> Optional[Path]:
+        """Resolve the optical image the .mis names, if it names one.
 
-            for pattern in self.OPTICAL_IMAGE_PATTERNS:
-                for tiff_path in search_path.glob(pattern):
-                    if tiff_path not in optical_images:
-                        optical_images.append(tiff_path)
-                        logger.debug(f"Found optical image: {tiff_path}")
+        FlexImaging records the alignment image twice. ``<ImageFile>`` is a
+        bare filename, relative to the acquisition; ``<OriginalImage>`` is an
+        absolute path on the machine that acquired the data, drive letter and
+        all, and is provenance only -- it will not exist anywhere else, so it
+        is never opened here. Only ``<ImageFile>`` is resolved, and only
+        against the folders the acquisition itself occupies; its directory
+        part, if it somehow has one, is dropped for the same reason.
 
-        return sorted(optical_images)
+        This is what makes the right image win when a folder holds several --
+        a real Rapiflex acquisition ships a slide overview and two more
+        ``.jpg`` files alongside the one the .mis names.
+
+        Args:
+            data_path: Path to the data folder
+            mis_file: The .mis found for this data folder, or None
+
+        Returns:
+            Path to the named image, or None when there is no .mis, it names
+            no image, or the named file is not next to the data.
+        """
+        if mis_file is None:
+            return None
+
+        # parse_mis_file refuses a document that declares XML entities. Let
+        # that travel: every Bruker reader parses the same file from its own
+        # __init__ and would raise first, so this is only reachable for a
+        # caller that went to the folder structure directly -- and the answer
+        # it gives has to be the same one.
+        image_file = parse_mis_file(mis_file).get("ImageFile", "")
+        if not image_file:
+            return None
+
+        # PureWindowsPath, not Path: on Linux a backslash is an ordinary
+        # filename character, so Path("img\\scan.jpg").name is the whole
+        # string and the lookup silently misses. .mis files are written by
+        # Windows software and spell paths the Windows way wherever Thyra
+        # runs.
+        name = PureWindowsPath(str(image_file).strip()).name
+        if not name:
+            return None
+
+        for search_path in self._search_paths(data_path):
+            candidate = search_path / name
+            if candidate.is_file():
+                logger.debug(f"Optical image named by {mis_file.name}: {candidate}")
+                return candidate
+
+        logger.warning(
+            f"{mis_file.name} names optical image '{image_file}', which is not "
+            f"in the acquisition folder; no image gets the alignment's "
+            f"coordinate space, and any others found are carried as they are"
+        )
+        return None
+
+    def _find_optical_images(
+        self, data_path: Path, primary: Optional[Path] = None
+    ) -> List[Path]:
+        """Find optical images in the folder structure.
+
+        Searches the data folder, the analyzed root and the data folder's
+        parent, keeping any file whose suffix is in
+        :data:`OPTICAL_IMAGE_SUFFIXES`.
+
+        Args:
+            data_path: Path to the data folder
+            primary: The image the .mis names, from
+                :meth:`_find_mis_optical_image`. It is returned first, and
+                is included even when the search would not have reached it.
+
+        Returns:
+            Paths to optical images: ``primary`` first if there is one, then
+            everything else in sorted order.
+        """
+        optical_images: List[Path] = []
+        seen = set()
+        if primary is not None:
+            optical_images.append(primary)
+            seen.add(_identity(primary))
+
+        found: List[Path] = []
+        for search_path in self._search_paths(data_path):
+            for candidate in search_path.glob("*"):
+                if candidate.suffix.lower() not in self.OPTICAL_IMAGE_SUFFIXES:
+                    continue
+                identity = _identity(candidate)
+                if identity in seen or not candidate.is_file():
+                    continue
+                seen.add(identity)
+                found.append(candidate)
+                logger.debug(f"Found optical image: {candidate}")
+
+        return optical_images + sorted(found)
 
     def _find_teaching_points_file(self, data_path: Path) -> Optional[Path]:
         """Find the teaching points / alignment file.
