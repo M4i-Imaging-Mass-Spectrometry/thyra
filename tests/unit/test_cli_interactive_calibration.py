@@ -27,6 +27,7 @@ looks like -- no real Bruker calibration file is committed.
 from __future__ import annotations
 
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
@@ -106,10 +107,35 @@ class TestTheStatesAreRead:
 
 class TestTheDisplay:
     def _output(self, data_path: Path, use_recalibrated: bool = True) -> str:
+        """Everything the display writes to stdout, read inside the block.
+
+        Read *after* the ``with`` instead and this helper only works on
+        click >= 8.3.2. Before that, ``isolation()``'s ``_NamedTextIOWrapper``
+        inherited ``TextIOWrapper.__del__``, which closes the buffer it wraps;
+        restoring ``sys.stdout`` on the way out of the block drops the last
+        reference to the wrapper, CPython collects it there and then, and the
+        ``BytesIO`` is closed before ``getvalue()`` is reached. 8.3.2 added a
+        no-op ``close()`` to stop that. This project declares ``click>=8.1,
+        <9``, so every release from 8.1 through 8.3.1 is supported and closes
+        the buffer -- measured on 8.1.8, 8.2.0, 8.2.1, 8.3.0 and 8.3.1, against
+        8.3.2 and 8.4.2 (what the lockfile resolves, which is why CI never saw
+        this) where it stays open.
+
+        The five tests whose subject prints got away with it: ``click.echo``
+        files the wrapper in click's ``_default_text_stdout`` cache, a
+        ``WeakKeyDictionary`` that stores each stream as its own value and so
+        strongly references its own key. Only the prints-nothing case, which
+        never calls ``echo``, was left holding a closed buffer.
+
+        The flush is for a future writer that is not ``click.echo`` -- ``echo``
+        flushes itself, a bare ``print`` does not, and unflushed text sits in
+        the wrapper rather than in the ``BytesIO`` being read.
+        """
         runner = CliRunner()
         with runner.isolation() as streams:
             _display_calibration_info(data_path, use_recalibrated)
-        return streams[0].getvalue().decode()
+            sys.stdout.flush()
+            return streams[0].getvalue().decode()
 
     def test_it_prints_something_at_all(self, tmp_path):
         assert "Calibration Information" in self._output(_make_d(tmp_path))

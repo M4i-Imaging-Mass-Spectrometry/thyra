@@ -63,14 +63,24 @@ dependencies = [
     # dask ever drops or vendors click, `pip install thyra` yields an install
     # whose entry point dies with `ImportError: No module named 'click'` on the
     # first run, at __main__.py's import line, before any command executes.
-    # The floor matches dask's own and the version the lockfile resolves. The
-    # ceiling is `<9` because GroupedCommand subclasses click.Command and
-    # overrides format_help(): a major release is free to change that. Verified
-    # --help (including the grouped sections), --version and the Choice/IntRange
-    # validators render identically on 8.1.8 (the lockfile, held there by
-    # python-semantic-release's dev-only `<8.2` cap) and on 8.4.2, which is what
-    # a plain `pip install thyra` resolves today and the lockfile never exercises.
-    "click>=8.1, <9",                 # tested 8.1.8 and 8.4.2
+    # The floor matches dask's own. The ceiling is `<9` because GroupedCommand
+    # subclasses click.Command and overrides format_help(): a major release is
+    # free to change that. Verified that --help (including the grouped
+    # sections), --version, the Choice errors and the IntRange prompt -- with
+    # its out-of-range and not-an-integer retries -- render identically, byte
+    # for byte across the whole captured surface, on three points of the range:
+    # 8.1.8 (the floor), 8.4.2 (what uv.lock resolves) and 8.5.0 (the newest
+    # release, and with no cap anywhere in the runtime graph, what a plain
+    # `pip install thyra` takes).
+    #
+    # Those three are not interchangeable, and the lock sits on the safe side
+    # of the one boundary that matters so far: below click 8.3.2,
+    # `CliRunner.isolation()` closes the buffer it yields the moment the block
+    # exits, so a test that reads it afterwards fails on everything from 8.1 to
+    # 8.3.1 and passes on what CI resolves. That cost a test on main -- see
+    # tests/unit/test_cli_interactive_calibration.py. Green CI is evidence
+    # about 8.4.2 and about nothing else in the declared range.
+    "click>=8.1, <9",                 # verified 8.1.8, 8.4.2 and 8.5.0
     # Secure XML parsing for the shared Bruker `.mis` parser, which every
     # Bruker path goes through: the Rapiflex, timsTOF and solariX readers and
     # BrukerMetadataExtractor. `mis_parser` imports it unconditionally and has
@@ -263,9 +273,12 @@ dev = [
     "flake8>=6.0.0",
     "mypy>=1.0.0",
     "pydocstyle>=6.3.0",
-    # Its `click <8.2` cap is what holds the lockfile's click at 8.1.8; the
-    # published bound in [project] is `<9` and is tested beyond that cap --
-    # see the click comment above.
+    # This once capped `click <8.2`, and the note here said that dev-only cap
+    # was what held the lockfile's click at 8.1.8. Both halves are stale:
+    # 10.6.1, the locked version, requires `click>=8.1.0,<9.0.0`, and uv.lock
+    # resolves click 8.4.2. So the lockfile no longer exercises the floor of
+    # the `>=8.1, <9` range [project] publishes -- see the click comment above
+    # for which versions were verified by hand instead.
     "python-semantic-release",
     "python-dotenv>=1.1.1,<2",
     "pre-commit>=3.0.0",
