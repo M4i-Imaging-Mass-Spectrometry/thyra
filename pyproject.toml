@@ -376,6 +376,31 @@ skips = ["B101", "B601", "B603", "B607"]  # Allow assert statements, shell usage
 
 [tool.mypy]
 python_version = "3.12"
+# Analyse as Windows, whatever the host is.
+#
+# Without this the lint job's verdict depends on which runner picked it up, and
+# that is not a gate. The hook passed on a developer's Windows machine for the
+# whole life of this repository and failed on its first ubuntu run with eight
+# errors, all of them artefacts of the host rather than the code: `winreg` and
+# `ctypes.windll` do not exist off Windows, so `winreg.OpenKey`,
+# `HKEY_LOCAL_MACHINE`, `QueryValueEx` and `ctypes.windll` read as missing
+# attributes; `dll_manager`'s two loaders degrade to `Any` and trip
+# `warn_return_any`; and the bodies after `if sys.platform != "win32": return`
+# read as unreachable, which `warn_unreachable` reports.
+#
+# Every one of those is guarded at runtime -- `import winreg` sits inside a
+# `try/except ImportError`, the `windll` access behind
+# `platform.system() == "Windows"` -- so the code is correct on both platforms
+# and only the analysis was host-dependent.
+#
+# The cost, stated plainly: the non-Windows side of those guards is no longer
+# type-checked. That is three early-return statements
+# (`utils/windows_paths.py` twice, `utils/zarr_atomic_write.py` once), each one
+# line. Pinning the substantial platform -- the MAX_PATH handling and the SDK
+# loader are Windows-specific and are where the types matter -- buys
+# determinism at that price. Revisit if non-Windows-specific code ever grows
+# past a guard clause.
+platform = "win32"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false  # Set to true once types are added
