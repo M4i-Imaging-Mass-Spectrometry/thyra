@@ -3593,10 +3593,20 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         align -- no Area definitions, no positions -- and then the primary
         image is never named even though the .mis names it. The Bruker
         readers resolve it during folder discovery regardless, so ask them.
+
+        Asked for with ``getattr`` even though ``BaseMSIReader`` defines it,
+        because a reader here is whatever satisfies the interface and not
+        necessarily a subclass: this project's own
+        ``tests/unit/converters/test_streaming_converter.py`` passes in a
+        plain class that implements the methods and inherits nothing. This
+        method is optional and arrived after those readers were written, so
+        not having it has to mean "no designated image", not a crash in the
+        middle of a conversion.
         """
         if self._primary_optical_filename:
             return
-        primary = self.reader.get_primary_optical_image_path()
+        resolve = getattr(self.reader, "get_primary_optical_image_path", None)
+        primary = resolve() if callable(resolve) else None
         if primary is not None:
             self._primary_optical_filename = Path(primary).stem.lower()
             logger.info(f"Primary alignment image from .mis: {primary.name}")
