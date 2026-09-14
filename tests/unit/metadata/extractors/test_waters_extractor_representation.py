@@ -59,15 +59,15 @@ class TestDeliveredRepresentation:
         ).get_essential()
         assert essential.spectrum_type == SpectrumType.CENTROID
 
-    def test_centroid_file_has_no_trace_to_give(self, caplog):
+    def test_centroid_file_has_no_trace_to_give(self, thyra_logs):
         mock_ml, handle, grid, ft, ms = _make_grid_and_ml()
         mock_ml.is_raw_spectrum_profile.return_value = False
-        with caplog.at_level(logging.WARNING):
+        with thyra_logs("thyra.metadata", logging.WARNING) as records:
             essential = _extractor(
                 mock_ml, handle, grid, ft, ms, use_centroid=False
             ).get_essential()
         assert essential.spectrum_type == SpectrumType.CENTROID
-        assert "no profile trace to read" in caplog.text
+        assert "no profile trace to read" in records.text
 
     def test_default_is_centroid_for_callers_that_predate_the_argument(self):
         mock_ml, handle, grid, ft, ms = _make_grid_and_ml()
@@ -91,14 +91,14 @@ class TestAxisMassRange:
         assert essential.mass_range[0] == pytest.approx(100.0)
         assert essential.mass_range[1] == pytest.approx(1000.0)
 
-    def test_stored_span_when_a_value_falls_outside_the_range(self, caplog):
+    def test_stored_span_when_a_value_falls_outside_the_range(self, thyra_logs):
         """A range that would drop measured data is not used."""
         mock_ml, handle, grid, ft, ms = _make_grid_and_ml(n_peaks=10)
         mock_ml.get_acquisition_range.return_value = (200.0, 1000.0)
-        with caplog.at_level(logging.WARNING):
+        with thyra_logs("thyra.metadata", logging.WARNING) as records:
             essential = _extractor(mock_ml, handle, grid, ft, ms).get_essential()
         assert essential.mass_range[0] == pytest.approx(100.0)
-        assert "outside the acquisition range" in caplog.text
+        assert "outside the acquisition range" in records.text
 
     def test_union_over_ms_functions(self):
         mock_ml, handle, grid, ft, ms = _make_grid_and_ml(n_peaks=10)

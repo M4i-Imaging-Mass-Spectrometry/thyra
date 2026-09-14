@@ -1491,9 +1491,14 @@ required checks.**
 semantic-release pushes the version commit, not *what* that push is.
 
 **What has changed since the measurement, and what it means.** The check list
-has grown from seven contexts to eleven -- four `integration (os, py)` jobs
-joined the seven the issue lists -- which makes the rule stricter, not more
-reachable. More to the point, the risk the issue was opened for is already
+has grown from the seven contexts the issue lists to twelve: four
+`test (os, py)`, one `lint`, four `integration (os, py)`, two
+`clean-venv-install (py)` and one `complexity-check`. Only `tests.yml` and
+`complexity-monitoring.yml` run on a pull request at all -- `docs.yml` is
+`push: [main]` plus `workflow_dispatch`, and `release.yml` has no PR trigger
+-- so those five jobs are the whole list. Every addition makes the rule
+stricter, not more reachable. More to the point, the risk the issue was
+opened for is already
 closed by a different mechanism: `release.yml` waits for the **Tests**
 workflow on the exact commit it is about to release, and refuses to release
 when that run is absent, incomplete, or not successful. Required checks would
@@ -1508,3 +1513,140 @@ own release flow, so this is a reversal, not a detail); a deploy key as a
 where the 422's wording hints the Actions app may be an acceptable actor --
 untested, because it needs `gh auth refresh -s admin:org`, which is
 interactive.
+
+---
+
+## D19. Lint can veto a release
+
+**Status:** Implemented (2026-09-14), issue #291.
+
+**Decision.** The `lint` job -- `pre-commit run --all-files`, which is black,
+isort, flake8, mypy, bandit, pydocstyle and the repo-local path guards -- is a
+job inside `tests.yml`, the workflow named **Tests**. `release.yml` polls for a
+completed, successful run of that workflow on the exact SHA it is about to
+release and fails closed. So a red lint on `main` stops a publish, and that is
+intended rather than incidental.
+
+**Why it is a decision and not a placement.** `release.yml`'s own comment says
+the gate is on tests *specifically*, and gives the reason: waiting on "every
+check for this commit" would let an **advisory** workflow veto a release, and
+`complexity-monitoring.yml` is exactly such a workflow. Putting lint inside
+`tests.yml` hands lint the veto that comment was written to withhold from
+complexity monitoring. The two are not the same kind of check. Complexity is a
+number that a legitimate refactor can move; a lint failure is a file that does
+not meet the rules this repository has written down, including the two guards
+that keep colleague names and lab-share layouts out of a **public**
+repository. Refusing to publish from it is the right answer.
+
+**The alternative, and why not.** A separate `lint.yml` with the same `on:`
+block would enforce lint on pull requests and leave the release gate untouched.
+It was not taken: it buys a second workflow file, a second cache key and a
+second place for the trigger block to drift, to preserve a distinction between
+"blocks the merge" and "blocks the publish" that nobody wants for this check.
+
+**The cost, accepted.** A failure with no bearing on the code can now block a
+release: pre-commit clones each hook's repository, so a GitHub outage or a
+deleted hook tag turns into a red **Tests** run, and that SHA stays unreleasable
+until a new commit lands. The window is small -- releases are batched and cut
+deliberately (`gh workflow run release.yml`), not on every merge -- and a
+blocked release is not a lost one, since the commits stay on `main` and the
+next run releases them together.
+
+**Known limit, and what would reverse this.** If a hook-repo failure ever
+actually blocks a release, the answer is to split `lint.yml` out with the same
+`on:` block. It is **not** to weaken `release.yml`'s gate: that gate is the only
+thing standing between a red commit and PyPI, and it fails closed on purpose.
+
+---
+
+## D20. The PHI target axis follows measured peak width, fitted at its narrow edge
+
+**Status:** Implemented (2026-09-14).
+
+**Decision.** `PhiToFSIMSDetector` asks for `AxisType.TOF` with the measured
+pair `A = 0.454`, `B = 0.0284`, laid at the usual three bins per peak width.
+It keeps `nearest_neighbor`, and keeps reporting `linear_tof` as its
+`source_grid_law`. The two are deliberately different laws.
+
+**Why the source law is not the target law.** `PhiMassAxis` steps at a
+constant flight time, so the detector's *channels* are spaced as `sqrt(m/z)`.
+That is a fact about the digitiser and is what `source_grid_law` reports. The
+*peaks* do not follow it: measured over 311 isolated peaks from twelve
+acquisitions, resolving power climbs from about 2,200 at m/z 10 and levels off
+near 4,250 above m/z 60. A rise then a plateau is neither single-term limit --
+`linear_tof` has R climbing as `sqrt(m)` without end, `reflector_tof` has it
+flat from the start -- and it is exactly the knee `sqrt(A m + B m^2)`
+describes. Only peak width has any business setting a bin width.
+
+**What the old answer cost, measured 2026-09-14** on a 512x512 negative-mode
+nanoTOF acquisition against the instrument software's own `.bif6` peak-image
+export:
+
+| | `--no-resample` | old `linear_tof` default | this decision |
+|---|---|---|---|
+| bins | 863,670 | 86,204 | 103,070 |
+| store | 65.8 MB | 46.5 MB | 51.6 MB |
+| TIC vs the vendor export | exact, 262,144/262,144 px | exact | exact |
+| per-peak recovery | 97.9-103.6% | 88.6-113.1% | 92.8-105.1% |
+| worst correlation | 0.9509 | 0.9024 | 0.9695 |
+| bins in the 6 mDa window at m/z 27 | 12 | 1 | 3 |
+
+Inheriting the generic `linear_tof` width of 17 mDa at m/z 300 put 42% of the
+corpus's peaks under two bins per peak width and one single bin inside the
+window that acquisition's own peak list uses to separate C15N- from 13CN-,
+6.3 mDa apart. **No total-ion check could see any of it**: nearest-neighbour
+conserves counts, so the total ion image is bit-exact against the vendor's
+export on all three axes. Only windowed numbers move, and on the old axis they
+moved in both directions at once -- 113.1% for one ion and 88.6% for another --
+which is the signature of one bin per peak.
+
+**Why the fit is a 5th-percentile quantile regression, not least squares.**
+This is the part worth arguing with. Least squares runs the law through the
+middle of the corpus, so half of every acquisition's peaks are narrower than it
+predicts; on this corpus a least-squares pair leaves 12% of the 311 measured
+peaks under two bins per width and 70% under three. The two errors are not
+symmetric. A peak
+**broader** than the law gets more bins than it needs, which costs store and
+nothing else. A peak **narrower** than the law is the one case that loses
+shape, and that is the defect being fixed. So the pair is placed at the narrow
+edge: quantile regression at `q = 0.05` on `FWHM^2 = A m + B m^2`, which puts
+94% of measured peaks at three bins per width or better and none below two, for
+20% more bins than the least-squares pair. The old `linear_tof` default left
+87% under three bins and 42% under two. (Every figure here counts each of the
+311 peaks once; weighting one vote per acquisition instead gives 54%, 4% and
+83% / 35%, with the same ordering.)
+
+**Why one law for an instrument whose tune varies.** Resolving power varies by
+a factor of three between acquisitions in the corpus, and a C60 primary beam
+resolves about five times worse again (R 280-1,200 against 1,700-7,100 for
+Bi3). The header does not distinguish these reliably -- `AcqPulseWidth` is 16.0
+on both the sharpest and among the broadest files measured -- so a
+mode-switching detector would be guessing. One law, placed at the sharp end,
+converts every acquisition correctly; a poorly resolved one is simply
+oversampled. This matches how the MRT and timsTOF pairs were derived.
+
+**Why `get_reference_width` stays `None`.** A `tof` axis is sized in bins per
+peak width, so the law and `DEFAULT_BINS_PER_FWHM` already fix the bin width at
+every m/z. Declaring a width as well would be a second spelling of the same
+quantity, and `_reference_params` answers for a `tof` axis before it ever
+consults a detector's width -- it would be dead code. Same reasoning as
+`WatersMRTCentroidDetector`.
+
+**Why resampling stays on by default.** `--no-resample` was the other
+candidate, and on the *old* axis it was the better store. On this one it is
+not: the resampled store is 22% smaller, has 8.4x fewer columns, opens about
+1.8x faster (0.61 s against 1.08 s, medians of four alternating warm reads --
+the first cold read of the native store took 3.0 s, which is not a fair
+comparison and is not the number used here), and comes out better correlated
+with the vendor's peak images than the unresampled one. Its remaining recovery
+spread is window-edge quantisation -- the vendor's windows span 3 to 10 bins
+and their edges fall mid-bin, and the windows with the fewest bins are exactly
+the ones with the worst recovery -- rather than lost peak shape. `--no-resample`
+stays the way to get `var["tof_us"]` and the raw channel grid.
+
+**The known limit.** The corpus is one instrument. Every acquisition came from
+the same nanoTOF, so the pair describes that instrument's range of tunes and
+not the model line. A second instrument would be worth measuring before
+treating these two numbers as a nanoTOF constant. The high-mass end rests on
+few peaks -- 8 above m/z 200, all from polystyrene standards -- so `B` is
+anchored mostly by the m/z 60-200 plateau.

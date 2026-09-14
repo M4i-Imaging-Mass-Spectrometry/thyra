@@ -8,6 +8,7 @@ from thyra.resampling.constants import SpectrumType
 from thyra.resampling.data_characteristics import DataCharacteristics
 from thyra.resampling.decision_tree import ResamplingDecisionTree
 from thyra.resampling.instrument_detectors import (
+    PHI_NANOTOF_LAW,
     CentroidImzMLDetector,
     DefaultDetector,
     FTICRDetector,
@@ -261,13 +262,34 @@ class TestPhiToFSIMSDetector:
             self.detector.get_resampling_method() is ResamplingMethod.NEAREST_NEIGHBOR
         )
 
-    def test_uses_linear_tof_axis(self):
-        """PhiMassAxis steps at a constant flight time, so spacing ~ sqrt(m)."""
-        assert self.detector.get_axis_type() is AxisType.LINEAR_TOF
+    def test_uses_the_two_term_tof_axis(self):
+        """Bins track the measured peak width, not the digitiser's grid."""
+        assert self.detector.get_axis_type() is AxisType.TOF
 
-    def test_declares_its_source_grid_law(self):
-        """An undeclared law cannot clear the TIC-preserving gate."""
+    def test_declares_the_measured_width_law(self):
+        """An AxisType.TOF detector must supply the pair, or bins cannot be laid."""
+        characteristics = DataCharacteristics.from_metadata(
+            {"format_specific": {"format": "PHI SmartSoft-TOF raw"}}
+        )
+        assert self.detector.get_tof_law(characteristics) == PHI_NANOTOF_LAW
+
+    def test_declares_no_reference_width(self):
+        """A TOF axis is sized in bins per peak width; a width would collide."""
+        characteristics = DataCharacteristics.from_metadata(
+            {"format_specific": {"format": "PHI SmartSoft-TOF raw"}}
+        )
+        assert self.detector.get_reference_width(characteristics) is None
+
+    def test_source_grid_law_stays_linear_tof(self):
+        """The digitiser's grid and the peak width follow different laws.
+
+        ``PhiMassAxis`` steps at a constant flight time, so its channels are
+        spaced as ``sqrt(m/z)``. The peaks are not: measured resolving power
+        levels off above m/z 60 instead of climbing. Only the second law has
+        any business setting a bin width, which is why these two differ.
+        """
         assert self.detector.source_grid_law is AxisType.LINEAR_TOF
+        assert self.detector.source_grid_law is not self.detector.get_axis_type()
 
     def test_chain_selects_nearest_neighbor_for_phi(self):
         """The whole chain, not just the detector in isolation."""
@@ -279,7 +301,8 @@ class TestPhiToFSIMSDetector:
             chain.get_resampling_method(characteristics)
             is ResamplingMethod.NEAREST_NEIGHBOR
         )
-        assert chain.get_axis_type(characteristics) is AxisType.LINEAR_TOF
+        assert chain.get_axis_type(characteristics) is AxisType.TOF
+        assert chain.get_tof_law(characteristics) == PHI_NANOTOF_LAW
 
 
 class TestWatersDetector:
@@ -458,14 +481,16 @@ class TestWatersProfileDetector:
         assert reference == 1000.0
         assert width == pytest.approx(0.0158)
 
-    def test_unknown_spacing_falls_back_to_the_mrt_width_with_a_warning(self, caplog):
+    def test_unknown_spacing_falls_back_to_the_mrt_width_with_a_warning(
+        self, thyra_logs
+    ):
         import logging
 
         characteristics = self._characteristics(is_mrt=False)
-        with caplog.at_level(logging.WARNING):
+        with thyra_logs("thyra.resampling", logging.WARNING) as records:
             width = self.detector.get_reference_width(characteristics)
         assert width == (0.0013, 1000.0)
-        assert "predict its sample spacing" in caplog.text
+        assert "predict its sample spacing" in records.text
 
     def test_decision_tree_exposes_the_width(self):
         tree = ResamplingDecisionTree()

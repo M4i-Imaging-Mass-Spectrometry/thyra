@@ -28,36 +28,30 @@ class TestCalibrationMetadataReading:
             cursor = conn.cursor()
 
             # Create CalibrationState table
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE TABLE CalibrationState (
                     Id INTEGER PRIMARY KEY,
                     Key TEXT,
                     DateTime TEXT,
                     Source TEXT
                 )
-            """
-            )
+            """)
 
             # Insert a single calibration state
-            cursor.execute(
-                """
+            cursor.execute("""
                 INSERT INTO CalibrationState (Id, Key, DateTime, Source)
                 VALUES (1, 'test-uuid-123', '2025-01-01T12:00:00.000+00:00', 'timsTOF')
-            """
-            )
+            """)
 
             # Create CalibrationInfo table (empty for basic test)
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE TABLE CalibrationInfo (
                     Id INTEGER PRIMARY KEY,
                     CalibrationState INTEGER,
                     KeyName TEXT,
                     Value TEXT
                 )
-            """
-            )
+            """)
 
             conn.commit()
             conn.close()
@@ -101,52 +95,42 @@ class TestCalibrationMetadataReading:
             conn = sqlite3.connect(cal_db)
             cursor = conn.cursor()
 
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE TABLE CalibrationState (
                     Id INTEGER PRIMARY KEY,
                     Key TEXT,
                     DateTime TEXT,
                     Source TEXT
                 )
-            """
-            )
+            """)
 
             # Insert multiple calibration states (original + recalibrations)
-            cursor.execute(
-                """
+            cursor.execute("""
                 INSERT INTO CalibrationState (Id, Key, DateTime, Source) VALUES
                 (1, 'original-uuid', '2025-01-01T10:00:00.000+00:00', 'timsTOF'),
                 (2, 'recal-uuid-1', '2025-02-01T14:00:00.000+00:00', 'DataAnalysis'),
                 (3, 'recal-uuid-2', '2025-03-01T16:00:00.000+00:00', 'DataAnalysis')
-            """
-            )
+            """)
 
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE TABLE CalibrationInfo (
                     Id INTEGER PRIMARY KEY,
                     CalibrationState INTEGER,
                     KeyName TEXT,
                     Value TEXT
                 )
-            """
-            )
+            """)
 
             # Add software version for active state
-            cursor.execute(
-                """
+            cursor.execute("""
                 INSERT INTO CalibrationInfo (CalibrationState, KeyName, Value)
                 VALUES (3, 'CalibrationSoftwareVersion', '6.1')
-            """
-            )
+            """)
 
-            cursor.execute(
-                """
+            cursor.execute("""
                 INSERT INTO CalibrationInfo (CalibrationState, KeyName, Value)
                 VALUES (3, 'CalibrationUser', 'demo_user')
-            """
-            )
+            """)
 
             conn.commit()
             conn.close()

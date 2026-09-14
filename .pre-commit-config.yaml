@@ -1,6 +1,7 @@
 # Pre-commit hooks configuration
 #
-# The three whitespace hooks skip the imzML and .ibd files under
+# The four hooks that rewrite bytes in place -- the three whitespace ones and
+# fix-byte-order-marker -- skip the imzML and .ibd files under
 # tests/data/fixtures/, which are byte-exact fixtures rather than source.
 # mixed-line-ending --fix=lf strips the 174 CRLFs that iontof_sparse.imzML
 # exists to prove a real IONTOF export carries -- measured, 11,593 bytes become
@@ -80,11 +81,32 @@ repos:
         exclude: ^tests/data/fixtures/([^/]+\.(imzML|ibd)|synthetic_tims\.d/.*)$
       - id: end-of-file-fixer
         exclude: ^tests/data/fixtures/([^/]+\.(imzML|ibd)|synthetic_tims\.d/.*)$
+      # A UTF-8 BOM is a Windows editor default, and ast.parse rejects the
+      # U+FEFF it produces. That is how a BOM on line 1 of
+      # thyra/metadata/extractors/mzpeak_extractor.py exempted 14 functions
+      # from the CI complexity gate for as long as it sat there, with only a
+      # warning nobody read. The gate now reports such a file instead of
+      # skipping it; this is the half that keeps one from arriving.
+      #
+      # Carries the fixture exclude for the same reason its three siblings
+      # above and below do -- it is the fourth in-place byte rewriter from
+      # this repo, and the header at the top of this file explains what moving
+      # a fixture's bytes costs.
+      - id: fix-byte-order-marker
+        exclude: ^tests/data/fixtures/([^/]+\.(imzML|ibd)|synthetic_tims\.d/.*)$
       - id: check-yaml
       - id: check-toml
       - id: check-json
+      # --enforce-all because the CI lane runs --all-files. Without it the
+      # hook intersects its file list with `git diff --staged --diff-filter=A`,
+      # and a CI checkout stages nothing, so it would report Passed having
+      # weighed zero files -- a hook present in the log and absent from the
+      # gate. Measured against the whole tracked tree: the only four files over
+      # 1000 kB are the vendor binaries the exclude below already names, so
+      # enforcing on every file rather than only on added ones is green today
+      # and on a local commit still only weighs what is staged.
       - id: check-added-large-files
-        args: [--maxkb=1000]
+        args: [--maxkb=1000, --enforce-all]
         exclude: >-
           (?x)^(
             thyra/readers/bruker/timstof/sdk/dll/|
@@ -99,8 +121,18 @@ repos:
         exclude: ^tests/data/fixtures/([^/]+\.(imzML|ibd)|synthetic_tims\.d/.*)$
 
   # Python code formatting
+  #
+  # This `rev` must stay equal to the black uv.lock resolves, and a test
+  # asserts it (tests/unit/tools/test_ci_workflows.py). They had drifted: the
+  # rev was 24.4.2 while `black>=23.0.0` in the dev group locked to 26.5.1, so
+  # the `uv run black .` docs/contributing.md tells a contributor to run
+  # reformatted five files the hook considered already formatted. That costs
+  # nothing while the hook is advisory and is a contradiction the moment CI
+  # runs it: doing exactly what CONTRIBUTING says would produce a red PR.
+  # Raising the rev and reformatting is what closed it -- the post-24 style
+  # that hugs a parenthesised string is the whole of that diff.
   - repo: https://github.com/psf/black
-    rev: 24.4.2
+    rev: 26.5.1
     hooks:
       - id: black
         language_version: python3
@@ -124,15 +156,56 @@ repos:
         exclude: ^(scripts/|thyra/metadata/ontology/_)
 
   # Type checking
+  #
+  # The stubs are pinned, and a test asserts that every
+  # `additional_dependencies` entry in this file is. An unpinned extra is free
+  # to resolve whatever is newest when a hook env happens to be built, so the
+  # same commit can pass on one machine and fail on another -- tolerable while
+  # the hooks were advisory, not once CI runs them. This config is unusually
+  # sensitive to a stub bump besides: `warn_unused_ignores` and
+  # `warn_unreachable` (pyproject.toml) let a new stub both raise a fresh error
+  # and invalidate an existing `# type: ignore` in one step.
+  #
+  # uv.lock is the source for these two versions. Nothing keeps them in step
+  # with it: there is no .github/dependabot.yml, and `pre-commit autoupdate`
+  # moves `rev` only and never looks at additional_dependencies. Re-read them
+  # off uv.lock by hand when this hook is next touched.
+  #
+  # click is deliberately absent. Adding it makes this hook report
+  # `thyra/__main__.py:1181: error: Statement is unreachable`, because
+  # click 8.5's `Command.main()` overload for the default
+  # `standalone_mode=True` returns `NoReturn` and
+  # thyra/metadata/schema/cli.py:275 types METADATA_SUBCOMMANDS as
+  # `Dict[str, click.Command]`, so the `return` after the dispatch is dead to
+  # mypy under `warn_unreachable`. --ignore-missing-imports makes click Any
+  # instead, and the hand-rolled dispatch keeps working either way.
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.10.1
     hooks:
       - id: mypy
         args: [--ignore-missing-imports, --no-strict-optional]
-        additional_dependencies: [types-requests, types-PyYAML]
+        additional_dependencies:
+          - types-requests==2.33.0.20260712
+          - types-PyYAML==6.0.12.20260815
         exclude: ^(tests/|docs/)
 
   # Security scanning
+  #
+  # `bandit[toml]` is the one additional dependency here that is deliberately
+  # NOT pinned, and the test that requires the others to be pinned exempts it
+  # by the rule that makes it safe: the entry names this hook's OWN package, so
+  # `rev` above already pins it and the extra adds nothing but the extra's
+  # dependencies. Pinning it anyway is not merely redundant, it does not
+  # install -- measured:
+  #
+  #   ERROR: Cannot install bandit 0.0.0 (from ~/.cache/pre-commit/repo.../)
+  #   and bandit==1.7.9 because these package versions have conflicting
+  #   dependencies.
+  #
+  # pre-commit builds the env with `pip install . bandit[toml]==...` from its
+  # clone of this repository, and that clone's own metadata reports 0.0.0, so
+  # any `==` here contradicts the very checkout it is meant to describe. The
+  # version bandit scans with is the `rev`, never the dev group's bandit.
   - repo: https://github.com/PyCQA/bandit
     rev: 1.7.9
     hooks:

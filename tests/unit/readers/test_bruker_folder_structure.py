@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from thyra.errors import ConversionRefused
 from thyra.readers.bruker.folder_structure import (
     BrukerFolderInfo,
     BrukerFolderStructure,
@@ -248,7 +249,7 @@ class TestBrukerFolderStructure:
         # The glob still finds what is actually there.
         assert [p.name for p in info.optical_images] == ["sample_0000.jpg"]
 
-    def test_mis_names_an_image_that_is_not_there(self, tmp_path, caplog):
+    def test_mis_names_an_image_that_is_not_there(self, tmp_path, thyra_logs):
         """Named but missing: say so, and fall back to whatever is present."""
         import logging
 
@@ -256,12 +257,15 @@ class TestBrukerFolderStructure:
         (data_dir / "slide_overview.jpg").touch()
         _write_mis(data_dir / "sample.mis", image_file="sample_0000.jpg")
 
-        with caplog.at_level(logging.WARNING):
+        # Not caplog: setup_logging sets propagate = False on the `thyra`
+        # logger process-wide, so once any test in the session has invoked the
+        # CLI, caplog's root handler stops seeing Thyra records entirely.
+        with thyra_logs("thyra", logging.WARNING) as records:
             info = BrukerFolderStructure(data_dir).analyze()
 
         assert info.primary_optical_image is None
         assert [p.name for p in info.optical_images] == ["slide_overview.jpg"]
-        assert any("sample_0000.jpg" in record.message for record in caplog.records)
+        assert any("sample_0000.jpg" in record.getMessage() for record in records)
 
     def test_mis_image_file_with_a_windows_directory_part(self, tmp_path):
         """Only the filename is used, wherever Thyra runs."""
@@ -324,7 +328,7 @@ class TestBrukerFolderStructure:
         nonexistent = tmp_path / "nonexistent"
 
         folder = BrukerFolderStructure(nonexistent)
-        with pytest.raises(ValueError, match="does not exist"):
+        with pytest.raises(ConversionRefused, match="does not exist"):
             folder.analyze()
 
     def test_classmethod_detect_format(self, tmp_path):

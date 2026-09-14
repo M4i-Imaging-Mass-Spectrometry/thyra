@@ -136,6 +136,9 @@ uv run pre-commit install
 uv run pytest
 ```
 
+The same hooks run in CI on every pull request, so the install above decides
+where a lint failure surfaces, not whether it does.
+
 ## Contributing
 
 See [CONTRIBUTING.md](docs/contributing.md) for guidelines.

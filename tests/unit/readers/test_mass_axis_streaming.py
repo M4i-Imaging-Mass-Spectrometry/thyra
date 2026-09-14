@@ -34,6 +34,7 @@ from thyra.core import mass_axis as mod
 from thyra.core.mass_axis import dedupe_sorted as _dedupe_sorted
 from thyra.core.mass_axis import filter_absent as _filter_absent
 from thyra.core.mass_axis import merge_disjoint as _merge_disjoint
+from thyra.errors import ConversionRefused
 from thyra.readers.imzml.imzml_reader import ImzMLReader
 
 # Batch sizes small enough to force many folds, plus the real one.
@@ -149,11 +150,11 @@ class TestEmptyAndDegenerate:
         _assert_bit_identical(_build(runs), _reference(runs))
 
     def test_all_spectra_empty_raises(self, batch):
-        with pytest.raises(ValueError, match="No spectra found"):
+        with pytest.raises(ConversionRefused, match="No spectra found"):
             _build([[], [], []])
 
     def test_zero_spectra_raises(self, batch):
-        with pytest.raises(ValueError, match="No spectra found"):
+        with pytest.raises(ConversionRefused, match="No spectra found"):
             _build([])
 
 
@@ -222,12 +223,12 @@ class TestMaxMassAxisLength:
 
     def test_raises_when_exceeded(self, batch):
         runs = [[float(i)] for i in range(100)]
-        with pytest.raises(ValueError, match="exceeded"):
+        with pytest.raises(ConversionRefused, match="exceeded"):
             _build(runs, max_len=10)
 
     def test_message_names_the_limit_and_the_count(self, batch):
         runs = [[float(i)] for i in range(100)]
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(ConversionRefused) as exc:
             _build(runs, max_len=10)
         text = str(exc.value)
         assert "10" in text
@@ -242,7 +243,7 @@ class TestMaxMassAxisLength:
         during the merge would have been logged as a warning and ignored.
         """
         runs = [[float(i)] for i in range(100)]
-        with pytest.raises(ValueError):
+        with pytest.raises(ConversionRefused):
             _build(runs, max_len=5)
 
     def test_generous_limit_does_not_raise(self, batch):
@@ -290,13 +291,13 @@ class TestDefaultMaxMassAxisLength:
 class TestPerSpectrumErrors:
     """A failing spectrum is warned about, not fatal."""
 
-    def test_failing_spectra_are_skipped(self, batch, caplog):
+    def test_failing_spectra_are_skipped(self, batch):
         runs = [[1.0], [2.0], [3.0], [4.0]]
         got = _build(runs, raise_on=(1, 2))
         assert np.array_equal(got, np.array([1.0, 4.0]))
 
     def test_all_spectra_failing_raises(self, batch):
-        with pytest.raises(ValueError, match="No spectra found"):
+        with pytest.raises(ConversionRefused, match="No spectra found"):
             _build([[1.0], [2.0]], raise_on=(0, 1))
 
 
@@ -325,7 +326,7 @@ class TestFuzz:
             runs.append(np.sort(vals))
 
         if not any(r.size for r in runs):
-            with pytest.raises(ValueError):
+            with pytest.raises(ConversionRefused):
                 _build(runs)
             return
 

@@ -624,7 +624,7 @@ def _tof_plan(converter: Any) -> Tuple[float, float, float]:
             raise ConversionRefused(
                 "A 'tof' mass axis needs the width law's coefficients: pass "
                 "--tof-law A B, or convert a run whose instrument declares "
-                "them (SELECT SERIES MRT centroid, timsTOF)."
+                "them (SELECT SERIES MRT centroid, timsTOF, PHI nanoTOF)."
             )
         a, b = law
     generator = TOFAxisGenerator(float(a), float(b))
@@ -1098,6 +1098,12 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # Primary optical image filename from .mis <ImageFile> and its dimensions
         self._primary_optical_filename: Optional[str] = None
         self._primary_optical_dims: Optional[Tuple[int, int]] = None  # (width, height)
+        # What the store will say about its optical images: which element
+        # each file became, and which of those elements is the alignment
+        # image. Filled as the images are declared, read when the root
+        # attrs are composed. See _create_optical_images_attr.
+        self._optical_image_sources: Dict[str, str] = {}
+        self._primary_optical_element: Optional[str] = None
         # Optical images declared to SpatialData as placeholders whose pixels
         # still have to be streamed into the store once it is written. See
         # optical_image.py and _stream_pending_optical_pixels().
@@ -3793,10 +3799,6 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 self.dataset_id: transform,
                 "global": transform,
             },
-            attrs={
-                "source_file": image_path.name,
-                "original_path": str(image_path),
-            },
         )
         # Keyed by element name, as the images dict is: a second file that
         # maps to the same name replaces the first, the way the dict
@@ -3809,6 +3811,16 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             )
         data_structures["images"][image_name] = streamed.placeholder()
         self._pending_optical_images[image_name] = streamed
+        # Which file this element came from, and whether it is the one the
+        # alignment is stated against. Neither is recoverable from the
+        # store otherwise: the element name drops the extension and
+        # rewrites the stem (_0000 -> highres, and a stem over 30
+        # characters is truncated), and the alignment image is only
+        # distinguishable by its transform, and only when the alignment
+        # was applied. Recorded here, written by the root attrs.
+        self._optical_image_sources[image_name] = image_path.name
+        if is_primary:
+            self._primary_optical_element = image_name
 
         pyramid_desc = (
             f", {len(scale_factors)} pyramid level{'s' if len(scale_factors) != 1 else ''}"
@@ -3850,9 +3862,63 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                     f"dropping '{image.name}' from the store"
                 )
                 image.discard(self.output_path)
+                self._forget_optical_image(image.name)
                 continue
             streamed += 1
         return streamed
+
+    def _forget_optical_image(self, name: str) -> None:
+        """Take a dropped optical image back out of the store's root attrs.
+
+        The root attrs were composed and written by the ``SpatialData``
+        write that carried the placeholders, so an image
+        :meth:`_stream_pending_optical_pixels` then drops is still named in
+        them. Metadata naming an element that is not in the store is worse
+        than none -- a consumer that trusts it gets a KeyError where it
+        would otherwise have fallen back -- so the store is corrected
+        before ``zarr.consolidate_metadata`` runs, which copies whatever is
+        here into the consolidated document.
+
+        Args:
+            name: Element name of the image whose pixels could not be read.
+        """
+        self._optical_image_sources.pop(name, None)
+        was_alignment = self._primary_optical_element == name
+        if was_alignment:
+            self._primary_optical_element = None
+        try:
+            root = zarr.open_group(
+                str(self.output_path), mode="r+", use_consolidated=False
+            )
+            optical = root.attrs.get("optical_images")
+            if isinstance(optical, dict):
+                remaining = self._create_optical_images_attr()
+                if remaining is None:
+                    del root.attrs["optical_images"]
+                else:
+                    root.attrs["optical_images"] = remaining
+            if was_alignment:
+                self._clear_reference_element(root)
+        except Exception as e:  # pragma: no cover - a store we just wrote
+            logger.warning(
+                f"Could not unrecord the dropped optical image '{name}' from "
+                f"the store's attrs: {e}"
+            )
+
+    @staticmethod
+    def _clear_reference_element(root: Any) -> None:
+        """Null ``coordinate_systems.global.reference_element`` in ``root``.
+
+        Reassigns the whole attr: a zarr attribute is a value, so mutating
+        the dict a read returns changes nothing on disk.
+        """
+        systems = root.attrs.get("coordinate_systems")
+        if not isinstance(systems, dict) or not isinstance(systems.get("global"), dict):
+            return
+        root.attrs["coordinate_systems"] = {
+            **systems,
+            "global": {**systems["global"], "reference_element": None},
+        }
 
     def _generate_optical_image_name(self, image_path: Path) -> str:
         """Generate a clean name for an optical image layer.
@@ -4047,7 +4113,49 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             "dimensions_xyz": list(self._dimensions),
         }
 
+        optical = self._create_optical_images_attr()
+        if optical is not None:
+            pixel_size_attrs["optical_images"] = optical
+
         return pixel_size_attrs
+
+    def _create_optical_images_attr(self) -> Optional[Dict[str, Any]]:
+        """What each optical element in this store came from, and which aligns.
+
+        Two facts the store could not state before:
+
+        * **Which file.** The element name is derived, not the filename:
+          :meth:`_generate_optical_image_name` drops the extension, maps
+          ``_0000``/``_0001``/``deriv`` onto ``highres``/``derived``/
+          ``overview`` and truncates anything else at 30 characters, so
+          ``sample_0000.tif`` and ``sample_0000.jpg`` both land under
+          ``<dataset_id>_optical_highres`` and neither name survives.
+        * **Which one the alignment is stated against.** The .mis names it
+          in ``<ImageFile>``; the store only ever implied it, through the
+          transform (the alignment image gets ``Identity``, the others a
+          ``Scale`` into its pixel grid) and only when
+          ``apply_optical_alignment=True``. A consumer that wanted the
+          alignment image had to guess -- Ousia guesses alphabetically.
+
+        Written into the store's own root attrs rather than onto the
+        elements, because per-element attributes do not survive the write:
+        see :class:`~thyra.converters.spatialdata.optical_image.StreamedOpticalImage`.
+
+        Returns:
+            ``{"alignment_element": str | None, "elements": {name:
+            {"source_file": str}}}``, or ``None`` when the conversion put
+            no optical image in the store -- the section is omitted rather
+            than written empty, as every other optional section here is.
+        """
+        if not self._optical_image_sources:
+            return None
+        return {
+            "alignment_element": self._primary_optical_element,
+            "elements": {
+                name: {"source_file": source_file}
+                for name, source_file in self._optical_image_sources.items()
+            },
+        }
 
     # Schema version for the structured `coordinate_systems` attr below.
     # Bump when the schema shape changes in a way consumers need to notice.
@@ -4134,11 +4242,18 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             unit = "pixel"
             pixel_size_um_x: Optional[float] = None
             pixel_size_um_y: Optional[float] = None
-            reference_element: Optional[str] = (
-                self._primary_optical_filename
-                if self._primary_optical_filename
-                else None
-            )
+            # The element, not the file. This used to be
+            # _primary_optical_filename -- the .mis <ImageFile> stem,
+            # lowercased -- which names nothing in the store: the element
+            # is <dataset_id>_optical_<suffix>, so a consumer following
+            # the documented meaning ("the canonical raster element that
+            # defines pixel space") got a key that never resolves. It is
+            # None when this store does not hold the alignment image
+            # (optical images not included, or its pixels could not be
+            # read): "global" is still that image's pixel grid, there is
+            # just no element here that is it. The filename is in
+            # `optical_images`.
+            reference_element: Optional[str] = self._primary_optical_element
         else:
             unit = "micrometer"
             pixel_size_um_x = float(self.pixel_size_um)

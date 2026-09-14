@@ -34,8 +34,6 @@ from thyra.core.mobility import ccs_from_one_over_k0, mason_schamp_ccs
 from thyra.readers.bruker.timstof.timstof_reader import BrukerReader
 from thyra.utils.bruker_exceptions import SDKError
 
-pytestmark = pytest.mark.integration
-
 FIXTURE = Path(__file__).resolve().parents[1] / "data" / "fixtures" / "synthetic_tims.d"
 EXPECTED = FIXTURE.with_name("synthetic_tims_expected.json")
 
@@ -603,7 +601,7 @@ class TestDemultiplexedStore:
         assert set(sdata.tables) == {"tims_z0"}
         assert "resolved_table" not in sdata.tables["tims_z0"].uns["msms_schedule"]
 
-    def test_a_single_precursor_acquisition_is_refused(self, tmp_path, caplog):
+    def test_a_single_precursor_acquisition_is_refused(self, tmp_path, thyra_logs):
         """Its summed table already is the fragment spectrum of 1046.54."""
         spatialdata = pytest.importorskip("spatialdata")
         _open("scan_sum").close()
@@ -617,12 +615,12 @@ class TestDemultiplexedStore:
                 "VALUES (?, NULL, 1046.54, 1.5, NULL, 57.327)",
                 [(row[0],) for row in conn.execute("SELECT Id FROM Frames")],
             )
-        with caplog.at_level(logging.INFO):
+        with thyra_logs("thyra.converters", logging.INFO) as records:
             out = _convert_path(source, tmp_path / "single.zarr", msms_table=True)
         sdata = spatialdata.read_zarr(out)
 
         assert set(sdata.tables) == {"tims_z0"}
-        assert "single precursor" in caplog.text
+        assert "single precursor" in records.text
 
     def test_an_ms1_acquisition_is_untouched(self, tmp_path):
         """Asking for the table on a survey run changes nothing at all."""
@@ -756,7 +754,7 @@ class TestMobilityGridStore:
         assert int(schema_grid["n_channels"]) == 256
         assert float(schema_grid["lower"]) == pytest.approx(float(block["lower"]))
 
-    def test_a_tsf_file_is_refused_by_name(self, tmp_path, caplog):
+    def test_a_tsf_file_is_refused_by_name(self, tmp_path):
         """No mobility dimension, so no grid -- and no exception either."""
         from thyra.converters.spatialdata.mobility_table import grid_refusal
         from thyra.resampling.mobility_grid import build_mobility_grid
@@ -772,7 +770,7 @@ class TestMobilityGridStore:
         assert "no ion mobility" in str(grid_refusal(_Tsf(), np.arange(10.0), grid))
 
     def test_the_var_ceiling_refuses_the_table_and_keeps_the_store(
-        self, tmp_path, caplog, monkeypatch
+        self, tmp_path, thyra_logs, monkeypatch
     ):
         """The ceiling is on occupied pairs, so it is checked on the count."""
         import thyra.converters.spatialdata.mobility_table as module
@@ -780,7 +778,7 @@ class TestMobilityGridStore:
 
         monkeypatch.setattr(module, "MAX_GRID_VAR_ENTRIES", 8)
         out = tmp_path / "ceiling.zarr"
-        with caplog.at_level(logging.WARNING):
+        with thyra_logs("thyra.converters", logging.WARNING) as records:
             assert convert_msi(
                 str(FIXTURE),
                 str(out),
@@ -788,7 +786,7 @@ class TestMobilityGridStore:
                 pixel_size_um=20.0,
                 mobility_grid=True,
             )
-        assert "above the var ceiling" in caplog.text
+        assert "above the var ceiling" in records.text
         spatialdata = pytest.importorskip("spatialdata")
         from thyra.utils.windows_paths import prepare_zarr_read_path
 
