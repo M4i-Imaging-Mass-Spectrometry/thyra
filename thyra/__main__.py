@@ -7,6 +7,7 @@ import warnings  # noqa: E402
 from math import isfinite  # noqa: E402
 from pathlib import Path  # noqa: E402
 from typing import Literal, Optional, Tuple  # noqa: E402
+from uuid import uuid4  # noqa: E402
 
 import click  # noqa: E402
 
@@ -218,8 +219,51 @@ def _validate_output_path(output: Path) -> None:
             "The output is a Zarr store, which is a directory tree, so every "
             "part of its path above it has to be a directory."
         )
-    if not os.access(ancestor, os.W_OK):
-        raise click.BadParameter(f"Cannot write {output}: {ancestor} is not writable")
+    _refuse_an_unwritable_directory(output, ancestor)
+
+
+def _refuse_an_unwritable_directory(output: Path, ancestor: Path) -> None:
+    """Refuse now if the store cannot be created under ``ancestor``.
+
+    The check is an actual ``mkdir``, not ``os.access(W_OK)``. On Windows
+    ``os.access`` consults the read-only *attribute* and not the ACL, so
+    it answers True for a directory the user has no write permission on
+    -- measured here on a directory denied ``(WD,AD)`` via ``icacls``:
+    ``os.access(W_OK) -> True``, ``st_mode -> 0o40777``, and both
+    ``mkdir`` and ``open(w)`` raise ``PermissionError`` errno 13. So the
+    refusal could never fire on the one platform this project is
+    developed on, and the failure surfaced instead from deep inside the
+    conversion, as "Error during conversion" plus a traceback out of the
+    CSC scratch allocation, after the metadata scan (issue #312).
+
+    ``mkdir`` rather than a temporary file because the thing being
+    refused is a directory tree: the store and its scratch are both
+    directories.
+
+    Not ``tempfile.TemporaryDirectory(dir=ancestor)``, which is what the
+    issue proposed: ``mkdtemp`` retries ``PermissionError`` when
+    ``os.name == 'nt' and os.path.isdir(dir) and os.access(dir, W_OK)``
+    -- gated on the very predicate that is broken here. It would spin
+    ``TMP_MAX`` times (2,147,483,647 on this build, extrapolating to
+    days) and then raise ``FileExistsError``, which is neither the right
+    exception nor a usable wait.
+
+    Raises:
+        click.BadParameter: When the directory cannot be written.
+    """
+    probe = ancestor / f".thyra-write-probe-{uuid4().hex}"
+    try:
+        probe.mkdir()
+    except OSError as e:
+        raise click.BadParameter(
+            f"Cannot write {output}: {ancestor} is not writable " f"({e.strerror or e})"
+        ) from e
+    try:
+        probe.rmdir()
+    except OSError:
+        # The directory is writable, which is the whole question. A
+        # failure to tidy up must not refuse the conversion.
+        logger.debug(f"Could not remove the write probe {probe}")
 
 
 def _display_calibration_info(input: Path, use_recalibrated: bool) -> None:
