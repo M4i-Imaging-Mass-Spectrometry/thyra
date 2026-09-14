@@ -77,8 +77,14 @@ def test_regions_are_spatially_distinct(example_dataset):
 
 
 @pytest.mark.unit
-def test_output_is_deterministic(tmp_path):
-    """The same seed reproduces identical intensities."""
+def test_same_seed_reproduces_identical_intensities(tmp_path):
+    """The same seed reproduces identical intensities.
+
+    Renamed from ``test_output_is_deterministic``: the docstring was
+    already the true statement while the name promised more than the tool
+    delivers. Three places claimed the *files* were byte-identical for a
+    fixed seed and none of them was right (issue #314).
+    """
     kwargs = dict(n_x=6, n_y=5, n_mz_bins=200)
     a = generate_example_imzml(tmp_path / "a" / "d.imzML", seed=7, **kwargs)
     b = generate_example_imzml(tmp_path / "b" / "d.imzML", seed=7, **kwargs)
@@ -87,6 +93,57 @@ def test_output_is_deterministic(tmp_path):
         spec_a = parser_a.getspectrum(3)[1]
         spec_b = parser_b.getspectrum(3)[1]
     np.testing.assert_array_equal(spec_a, spec_b)
+
+
+@pytest.mark.unit
+def test_the_ibd_past_its_uuid_header_is_byte_identical(tmp_path):
+    """What determinism here actually means, stated positively.
+
+    The 16-byte UUID header is the only non-reproducible range in the
+    binary; everything after it is the same bytes for the same seed.
+    """
+    kwargs = dict(n_x=6, n_y=5, n_mz_bins=200)
+    a = generate_example_imzml(tmp_path / "a" / "d.imzML", seed=7, **kwargs)
+    b = generate_example_imzml(tmp_path / "b" / "d.imzML", seed=7, **kwargs)
+
+    ibd_a = a.with_suffix(".ibd").read_bytes()
+    ibd_b = b.with_suffix(".ibd").read_bytes()
+    assert ibd_a[16:] == ibd_b[16:]
+    assert ibd_a[:16] != ibd_b[:16]  # and the UUID is genuinely fresh
+
+
+@pytest.mark.unit
+def test_the_output_path_does_not_reach_the_file(tmp_path):
+    """pyimzML derives ``<run id=...>`` from the path it was handed.
+
+    So the generated imzML carried the caller's absolute output directory
+    -- into a file the tutorial tells people to share, and one that
+    therefore differed between two machines running the same command.
+    """
+    path = generate_example_imzml(
+        tmp_path / "nested" / "sample.imzML", n_x=4, n_y=4, n_mz_bins=100
+    )
+    text = path.read_text(encoding="ISO-8859-1")
+
+    assert str(tmp_path) not in text
+    assert "nested" not in text
+
+
+@pytest.mark.unit
+def test_the_run_id_is_the_stem_alone(tmp_path):
+    """No separator of either flavour, so two platforms agree."""
+    import xml.etree.ElementTree as ET  # nosec B405 - our own output
+
+    path = generate_example_imzml(
+        tmp_path / "nested" / "sample.imzML", n_x=4, n_y=4, n_mz_bins=100
+    )
+    root = ET.parse(path).getroot()  # nosec B314 - our own output
+    run = root.find(".//{http://psi.hupo.org/ms/mzml}run")
+    assert run is not None
+    run_id = run.get("id")
+
+    assert run_id == "sample"
+    assert "/" not in run_id and "\\" not in run_id
 
 
 @pytest.mark.unit

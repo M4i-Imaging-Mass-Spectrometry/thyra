@@ -64,8 +64,15 @@ outer region, one confined to the inner region, plus low-mass matrix ions
 covering the entire slide. That gives the images below real spatial structure
 to show.
 
-The output is deterministic: the same `--seed` always produces byte-identical
-data, so your numbers should match the ones printed in this tutorial exactly.
+The same `--seed` always produces the same spectra: identical m/z axis,
+identical intensities, every pixel. So your numbers should match the ones
+printed in this tutorial exactly.
+
+The *files* are not byte-identical between runs, and should not be. Every
+imzML carries a fresh UUID and the SHA-1 of its own `.ibd`, exactly as a real
+acquisition does -- two runs of the same command describe two datasets, and
+saying otherwise would make every `--seed 0` file claim to be the same
+acquisition as every other.
 
 !!! note "This is synthetic data"
     The phantom is for verifying the software and learning the output layout.
