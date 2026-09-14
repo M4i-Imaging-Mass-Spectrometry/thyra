@@ -1,4 +1,27 @@
-# thyra/convert.py
+"""The Python entry point: one call, source path to store.
+
+:func:`convert_msi` is what the package is for, and the only function most
+callers need. It detects the format, builds the reader, chooses and builds
+the converter, runs it, and cleans up after it. The CLI in
+:mod:`thyra.__main__` is a thin wrapper over this, so the two cannot
+diverge in behaviour -- only in how arguments are spelled.
+
+Most of this module is the part that runs before any data is read.
+Arguments are validated up front, against the paths as well as each other,
+because a conversion that fails on a bad ``dataset_id`` after an hour of
+reading has wasted the hour: the identifier becomes an element name in the
+store, so it is checked for the characters a store will accept rather than
+discovered to be unusable at write time.
+
+**A failed conversion must not leave something that looks finished.**
+:func:`quarantine_partial_output` renames a partial store to ``.failed``,
+which is what ``docs/cli.md`` promises of any failed run and what frees
+the output path for a retry. This is the counterpart to ``convert()``
+catching ``KeyboardInterrupt``: both exist so that the only thing at the
+output path is either a complete store or something plainly marked as not
+one (issues #245, #293).
+"""
+
 import logging
 import traceback
 import warnings

@@ -1,4 +1,37 @@
-# thyra/core/base_reader.py
+"""What every source must answer, and what it may decline to answer.
+
+A reader turns one vendor acquisition into the four answers the rest of
+the package is written against: a metadata extractor, a common mass axis,
+an iteration of spectra, and a way to let the file handles go. Those four
+are the abstract methods; everything else on :class:`BaseMSIReader` has a
+default, because seven formats do not agree on what else they can say.
+
+``iter_spectra`` is the load-bearing one. It yields
+``((x, y, z), mzs, intensities)`` with coordinates already rebased to
+0-based indices, so nothing downstream has to know that imzML counts from
+1, that a Bruker stage reports absolute raster positions, or that a PHI
+file records ion events rather than spectra. A reader that skips an
+unacquired position simply does not yield it; the grid comes from the
+metadata, not from the count of spectra.
+
+**Optional capabilities are per file, not per format.** This is the part
+that surprises: the predicates below cannot be answered by looking at the
+class. One :class:`~thyra.readers.bruker.timstof.timstof_reader.BrukerReader`
+serves both TDF and TSF, so ``has_ion_mobility`` is ``file_type == "tdf"``;
+``ImzMLReader.has_ion_mobility`` depends on whether that particular file
+declares a mobility array; and ``has_frame_scans`` additionally depends on
+whether the vendor library loaded and a handle is still open, so it can go
+from True to False over one reader's lifetime. Ask the instance, never the
+type.
+
+The conventions for declining are not yet uniform -- a predicate plus a
+raising iterator for frame scans, a predicate plus a ``None``-returning
+getter for mobility, a ``None``-returning describer for fragmentation --
+and issue #275 tracks unifying them. ``tests/unit/readers/
+test_reader_conformance.py`` pins what they currently are, for all seven
+readers at once, so the next change to them is a visible one.
+"""
+
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path

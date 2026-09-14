@@ -1,4 +1,27 @@
-# thyra/core/registry.py
+"""Which format a path is, and which classes handle it.
+
+Two jobs that look like one. Registration is a decorator
+(:func:`register_reader`, :func:`register_converter`) that runs at import
+time, so importing :mod:`thyra.readers` is what populates the tables;
+nothing scans the filesystem for plugins. Detection is
+:func:`detect_format`, and it is the harder half.
+
+**Extensions are not enough, which is why detection inspects the path.**
+``.imzML`` and ``.d`` map straight to a format, but ``.raw`` is claimed by
+both Waters and PHI and can only be told apart by looking inside, and a
+``.d`` directory may be timsTOF, solariX or a flexImaging pre-scan that is
+not an imaging run at all. So the detectors here open files and read
+headers rather than trusting the name. Each refusal names the path and
+says what was missing, because "unsupported format" on a directory the
+user believes is supported is the least actionable message this package
+could give.
+
+The ``RLock`` guards the registration tables. It is not a general thread
+safety claim: registration happens at import, which the import lock
+already serialises, and ``_get_bruker_folder_structure()``'s lazy global
+below is *not* covered by it (issue #284).
+"""
+
 import logging
 import re
 import zipfile

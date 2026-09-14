@@ -1,4 +1,25 @@
-# thyra/metadata/core/base_extractor.py
+"""Two phases, because one of them costs a pass over the data.
+
+Metadata splits by price, not by subject. ``get_essential()`` returns what
+the conversion needs to set itself up -- grid, bounds, mass range, pixel
+size, counts -- and the caller pays for it on every run.
+``get_comprehensive()`` returns everything the source records, for
+provenance, and on several formats that means parsing far more of the
+file. Keeping them apart is what lets ``preview_msi`` describe an
+acquisition without decoding it.
+
+The split is a price, not a promise about cost: "essential" is cheap for a
+format whose header states the counts and expensive for one that does not.
+imzML scans every spectrum in processed mode to find the true mass range,
+and PHI has to aggregate the whole ion-event stream to learn which pixels
+fired at all -- which is why both offer a way to skip the counting and say
+so in the result rather than guessing (``n_spectra_counted``, issue #240).
+
+Both results are cached on the instance, so the expensive phase runs once
+per reader. :meth:`MetadataExtractor.clear_cache` exists for the case
+where the underlying source changed beneath a live extractor.
+"""
+
 import logging
 from abc import ABC, abstractmethod
 from typing import Any, Optional
