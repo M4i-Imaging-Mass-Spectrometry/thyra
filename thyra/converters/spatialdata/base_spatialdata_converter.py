@@ -4159,11 +4159,18 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             unit = "pixel"
             pixel_size_um_x: Optional[float] = None
             pixel_size_um_y: Optional[float] = None
-            reference_element: Optional[str] = (
-                self._primary_optical_filename
-                if self._primary_optical_filename
-                else None
-            )
+            # The element, not the file. This used to be
+            # _primary_optical_filename -- the .mis <ImageFile> stem,
+            # lowercased -- which names nothing in the store: the element
+            # is <dataset_id>_optical_<suffix>, so a consumer following
+            # the documented meaning ("the canonical raster element that
+            # defines pixel space") got a key that never resolves. It is
+            # None when this store does not hold the alignment image
+            # (optical images not included, or its pixels could not be
+            # read): "global" is still that image's pixel grid, there is
+            # just no element here that is it. The filename is in
+            # `optical_images`.
+            reference_element: Optional[str] = self._primary_optical_element
         else:
             unit = "micrometer"
             pixel_size_um_x = float(self.pixel_size_um)

@@ -667,10 +667,10 @@ def test_a_store_with_no_optical_image_omits_the_section(
     assert "optical_images" not in _root_attrs(output_path)
 
 
-def test_the_store_names_the_alignment_element(
+def test_the_store_names_the_alignment_element_not_the_filename(
     tmp_path: Path,
 ) -> None:
-    """The designated image is named by its element key, which resolves."""
+    """Both places that state it name an element key that resolves."""
     import spatialdata
 
     rng = np.random.default_rng(4)
@@ -682,6 +682,8 @@ def test_the_store_names_the_alignment_element(
     tifffile.imwrite(str(other), rng.integers(0, 256, size=(10, 12, 3), dtype=np.uint8))
 
     output_path = tmp_path / "aligned.zarr"
+    # An alignment matrix is what puts "global" in optical pixels, which is
+    # the variant that fills reference_element in.
     _, success = _convert_designating(
         "slideb_0000",
         _mock_reader(primary, other),
@@ -692,10 +694,13 @@ def test_the_store_names_the_alignment_element(
 
     attrs = _root_attrs(output_path)
     assert attrs["optical_images"]["alignment_element"] == "ds_optical_highres"
+    cs_global = attrs["coordinate_systems"]["global"]
+    assert cs_global["unit"] == "pixel"
+    assert cs_global["reference_element"] == "ds_optical_highres"
 
     # The point of naming the element: it resolves.
     sdata = spatialdata.SpatialData.read(str(output_path))
-    assert attrs["optical_images"]["alignment_element"] in sdata.images
+    assert cs_global["reference_element"] in sdata.images
 
 
 def test_a_dropped_optical_image_leaves_no_trace_in_the_attrs(
