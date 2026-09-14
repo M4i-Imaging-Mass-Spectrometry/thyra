@@ -3837,6 +3837,7 @@ test = [
     { name = "mock" },
     { name = "pytest" },
     { name = "pytest-cov" },
+    { name = "pyyaml" },
     { name = "zstandard" },
 ]
 
@@ -3893,6 +3894,7 @@ test = [
     { name = "mock", specifier = ">=4.0.0" },
     { name = "pytest", specifier = ">=7.0.0" },
     { name = "pytest-cov", specifier = ">=4.0.0" },
+    { name = "pyyaml", specifier = ">=6.0.0" },
     { name = "zstandard", specifier = ">=0.22" },
 ]
 

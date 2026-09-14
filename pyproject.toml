@@ -246,6 +246,16 @@ test = [
     # from the test environment. `test` rather than `dev` because that is the
     # group tests.yml installs.
     "zstandard>=0.22",
+    # tests/unit/tools/test_ci_workflows.py and tests/unit/test_py_typed_marker.py
+    # both `import yaml` at module scope to parse the workflow files they assert
+    # over, and it was declared in no group at all: it resolves only because dask
+    # requires it. That is the same undeclared-direct-import defect as `click`
+    # above and the same resolve-by-accident as `zstandard` beside it, and here
+    # it is quieter than either, because `types-PyYAML` in `dev` means the type
+    # checker was told about a dependency the installer was not. The floor is
+    # the major the stubs already name. `test` rather than `dev` because the two
+    # importers are tests and `test` is the group tests.yml installs for them.
+    "PyYAML>=6.0.0",
 ]
 dev = [
     "black>=23.0.0",
