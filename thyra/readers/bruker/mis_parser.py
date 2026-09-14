@@ -149,7 +149,7 @@ def parse_mis_file(path: Path) -> Dict[str, Any]:
     Raises:
         ConversionRefused: If the document declares XML entities or reaches
             for an external reference. Where that lands differs by
-            consumer, and only three of the five let it travel untouched.
+            consumer, and only four of the six let it travel untouched.
 
             The solariX, Rapiflex and timsTOF readers each parse from
             ``__init__``, so it leaves the constructor and reaches
@@ -179,6 +179,15 @@ def parse_mis_file(path: Path) -> Dict[str, Any]:
             whenever the .mis is present. A preview therefore reaches this
             function even though it decodes no spectra and, for timsTOF,
             loads no vendor library.
+
+            ``BrukerFolderStructure._find_mis_optical_image`` is a sixth
+            surface, added when optical discovery started resolving the
+            ``<ImageFile>`` the .mis names instead of globbing for whatever
+            images were in the folder. It lets the refusal travel untouched,
+            and in practice it is not the one that raises: ``analyze()`` is
+            lazy, so every Bruker reader has already parsed the same file
+            from its own ``__init__`` and stopped the conversion before
+            discovery is ever asked for the optical images.
     """
     metadata: Dict[str, Any] = {}
 

@@ -70,6 +70,14 @@ guessed at. Pixel size is the one exception worth knowing about: when a source
 cannot report it, the CLI falls back to a default and records that it did so in
 `uns` (see [Output Format](output-format.md)).
 
+"Optical image" means TIFF, JPEG, PNG or BMP, matched case-insensitively on the
+suffix -- FlexImaging exports more than TIFF, and a Rapiflex `.mis` regularly
+names a `.jpg`. Which of a folder's images is the alignment image is decided by
+the `.mis`, not by the search: `<ImageFile>` names it, and Thyra resolves that
+name against the acquisition folder. (`<OriginalImage>` holds an absolute path
+on the machine that acquired the data, drive letter and all. It is kept as
+provenance and never opened.)
+
 ---
 
 ## imzML
@@ -232,6 +240,12 @@ The `.dat` header's raster origin reaches the store as
 `coordinate_offsets_px`, with `stage_offset_um` beside it, so a Rapiflex
 store can be placed against its optical image the way a solariX or timsTOF
 one can. The stored pixel coordinates themselves stay 0-based.
+
+The optical image is whichever file the `.mis` `<ImageFile>` element names,
+resolved against the acquisition folder. Rapiflex slides commonly hold several
+images -- a slide overview and one or two more beside the alignment scan -- and
+they are frequently `.jpg` rather than `.tif`; all of them are carried into the
+store, but only the named one gets the teaching points' coordinate space.
 
 ## Waters MassLynx
 
@@ -496,5 +510,6 @@ Optional overrides that are worth implementing when the format allows it:
 | `get_mass_axis_annotations` | keeps a native non-m/z axis in `var` |
 | `get_region_map` / `get_region_info` | per-pixel region annotation |
 | `get_optical_image_paths` | optical images carried into the output |
+| `get_primary_optical_image_path` | says which of them the alignment is stated against |
 
 See [Contributing](contributing.md).

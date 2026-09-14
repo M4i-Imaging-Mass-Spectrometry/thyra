@@ -54,14 +54,29 @@ class BrukerBaseMSIReader(BaseMSIReader):
     def get_optical_image_paths(self) -> List[Path]:
         """Get paths to optical/microscopy images associated with this data.
 
-        Uses the BrukerFolderStructure to find TIFF images in the folder
-        hierarchy. Searches the data folder and parent folders for optical
-        images.
+        Uses the BrukerFolderStructure to find images in the folder
+        hierarchy. Searches the data folder and parent folders for every
+        format FlexImaging exports (see
+        ``BrukerFolderStructure.OPTICAL_IMAGE_SUFFIXES``), not TIFF alone.
 
         Returns:
-            List of paths to TIFF files
+            Paths to optical images, the one the .mis names first
         """
         return self.folder_info.optical_images
+
+    def get_primary_optical_image_path(self) -> Optional[Path]:
+        """Get the optical image the .mis names as the alignment image.
+
+        This is the file ``<ImageFile>`` points at, resolved against the
+        acquisition folder. It is the image the teaching points are stated
+        in, so it is the one whose pixel coordinates the alignment puts the
+        MSI shapes into; any other image in the folder is a bystander.
+
+        Returns:
+            Path to the named image, or None when no .mis names one that is
+            actually there.
+        """
+        return self.folder_info.primary_optical_image
 
     def get_teaching_points_file(self) -> Optional[Path]:
         """Get path to the teaching points / alignment file.
