@@ -10,7 +10,7 @@ import below for why there is no stdlib fallback.
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
 # defusedxml, unconditionally, and never xml.etree here. The stdlib parser
 # expands entity declarations -- measured on a .mis carrying
@@ -35,29 +35,82 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def find_mis_file_for_d_folder(data_path: Path) -> Optional[Path]:
+def find_mis_file_for_d_folder(
+    data_path: Path, search_paths: Optional[Sequence[Path]] = None
+) -> Optional[Path]:
     """Locate the .mis file that corresponds to a Bruker .d folder.
 
-    A FlexImaging acquisition typically writes the .mis next to the .d folder,
-    using the same stem. Falls back to any .mis in the parent directory.
+    A FlexImaging acquisition typically writes the .mis next to the .d
+    folder using the same stem, and Rapiflex writes it inside the data
+    folder, so both are searched -- the data folder first.
+
+    This is the one locator. There were four, and they disagreed in two
+    ways that changed what a store records (issue #303):
+
+    - **Order.** Three of them took ``list(glob("*.mis"))[0]`` when no
+      stem matched, so which file was picked depended on directory
+      listing order. The pick decides the pixel pitch
+      (``_resolve_pixel_size_um`` prefers the .mis ``<Raster>`` over
+      ``BeamScanSize``) and the acquisition areas that ``--region``
+      resolves against, so the same dataset could convert two ways on
+      two machines.
+    - **Where they looked.** This function searched only
+      ``data_path.parent`` while ``_find_teaching_points_file`` searched
+      the data folder first. A .mis sitting inside the .d was therefore
+      visible to the areas lookup and invisible to the pitch lookup, and
+      one dataset could take its pitch from one file and its regions
+      from another. That needed no unlucky listing order at all.
+
+    Several non-matching candidates are refused rather than guessed at,
+    which is what the solariX reader already did. An arbitrary pick
+    writes a *wrong* pitch into the store silently; returning ``None``
+    falls back to ``BeamScanSize``, which is at least the instrument's
+    own answer. A lone non-matching candidate is still accepted, since
+    there is nothing to guess between.
+
+    Never raises: the timsTOF reader wraps its caller in
+    ``except (ValueError, OSError)``, and :class:`ConversionRefused` is a
+    ``ValueError``, so a refusal here would be swallowed and read as
+    "no .mis".
 
     Args:
         data_path: Path to the Bruker .d directory
+        search_paths: Directories to search, in order. Defaults to the
+            data folder then its parent.
 
     Returns:
         Path to the matching .mis file, or None if none found.
     """
-    parent = data_path.parent
-    if not parent.exists():
-        return None
+    if search_paths is None:
+        search_paths = [data_path, data_path.parent]
 
-    matching = parent / f"{data_path.stem}.mis"
-    if matching.exists():
-        return matching
+    for search_path in search_paths:
+        if not search_path.exists():
+            continue
 
-    candidates = list(parent.glob("*.mis"))
-    if candidates:
-        return candidates[0]
+        matching = search_path / f"{data_path.stem}.mis"
+        if matching.exists():
+            return matching
+
+        candidates = sorted(search_path.glob("*.mis"))
+        if len(candidates) == 1:
+            logger.info(
+                "No .mis matching stem '%s' in %s; using the only candidate %s",
+                data_path.stem,
+                search_path,
+                candidates[0].name,
+            )
+            return candidates[0]
+        if candidates:
+            logger.warning(
+                "No .mis matching stem '%s' and %d non-matching candidates "
+                "in %s -- refusing to guess which one describes this "
+                "acquisition",
+                data_path.stem,
+                len(candidates),
+                search_path,
+            )
+            return None
     return None
 
 

@@ -267,3 +267,116 @@ def test_internal_subset_dtd_still_parses(tmp_path: Path) -> None:
     )
 
     assert parse_mis_file(mis)["raster"] == [5, 5]
+
+
+class TestTheMisPickIsDeterministic:
+    """Issue #303: four locators, three of them order-dependent.
+
+    ``list(glob("*.mis"))[0]`` made the pick depend on directory listing
+    order, and the pick decides the pixel pitch -- ``_resolve_pixel_size_um``
+    prefers the .mis ``<Raster>`` over ``BeamScanSize`` -- and the
+    acquisition areas ``--region`` resolves against. The same dataset
+    could convert two ways on two machines.
+
+    The locators also searched different directories, which needed no
+    unlucky ordering at all: a .mis inside the .d was visible to the
+    areas lookup and invisible to the pitch lookup.
+    """
+
+    def test_the_pick_does_not_depend_on_listing_order(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        d_folder = tmp_path / "sample.d"
+        d_folder.mkdir()
+        _write_mis(tmp_path, "a_other.mis", raster="5,5")
+        _write_mis(tmp_path, "z_other.mis", raster="50,50")
+        # Two non-matching candidates: refused rather than guessed at.
+        assert find_mis_file_for_d_folder(d_folder) is None
+
+        _write_mis(tmp_path, "sample.mis", raster="9,9")
+        first = find_mis_file_for_d_folder(d_folder)
+
+        real_glob = Path.glob
+        monkeypatch.setattr(
+            Path, "glob", lambda self, p: reversed(list(real_glob(self, p)))
+        )
+        assert find_mis_file_for_d_folder(d_folder) == first
+        assert first is not None and first.name == "sample.mis"
+
+    def test_several_non_matching_candidates_are_refused_not_guessed(
+        self, tmp_path: Path, caplog
+    ) -> None:
+        """An arbitrary pick writes a *wrong* pitch into the store.
+
+        ``None`` falls back to ``BeamScanSize``, which is at least the
+        instrument's own answer. This is what the solariX reader already
+        did.
+        """
+        d_folder = tmp_path / "sample.d"
+        d_folder.mkdir()
+        _write_mis(tmp_path, "other_a.mis", raster="5,5")
+        _write_mis(tmp_path, "other_b.mis", raster="50,50")
+
+        with caplog.at_level(logging.WARNING):
+            assert find_mis_file_for_d_folder(d_folder) is None
+        assert "refusing to guess" in caplog.text
+
+    def test_a_lone_non_matching_candidate_is_still_accepted(
+        self, tmp_path: Path
+    ) -> None:
+        """There is nothing to guess between."""
+        d_folder = tmp_path / "sample.d"
+        d_folder.mkdir()
+        other = _write_mis(tmp_path, "different_name.mis", raster="7,7")
+        assert find_mis_file_for_d_folder(d_folder) == other
+
+    def test_a_mis_inside_the_d_is_found(self, tmp_path: Path) -> None:
+        """Rapiflex writes it there; the pitch lookup could not see it."""
+        d_folder = tmp_path / "sample.d"
+        d_folder.mkdir()
+        inside = _write_mis(d_folder, "sample.mis", raster="5,5")
+        assert find_mis_file_for_d_folder(d_folder) == inside
+
+    def test_the_pitch_and_the_areas_resolve_to_the_same_file(
+        self, tmp_path: Path
+    ) -> None:
+        """The two lookups disagreed by construction: one searched the
+        data folder first, the other searched only the parent."""
+        from thyra.readers.bruker.folder_structure import BrukerFolderStructure
+
+        d_folder = tmp_path / "sample.d"
+        d_folder.mkdir()
+        (d_folder / "analysis.tsf").write_text("")
+        _write_mis(d_folder, "inside.mis", raster="5,5")
+        _write_mis(tmp_path, "outside.mis", raster="50,50")
+
+        pitch_pick = find_mis_file_for_d_folder(d_folder)
+        areas_pick = BrukerFolderStructure(d_folder)._find_teaching_points_file(
+            d_folder
+        )
+        assert pitch_pick == areas_pick
+
+
+class TestTheOtherBrukerPicksAreSorted:
+    """The same defect in the non-.mis picks of the same folder."""
+
+    def test_which_d_folder_is_converted_does_not_depend_on_order(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """This pick decides which dataset gets converted, and what
+        format it is called."""
+        from thyra.readers.bruker.folder_structure import BrukerFolderStructure
+
+        for name in ("b_second.d", "a_first.d"):
+            d = tmp_path / name
+            d.mkdir()
+            (d / "analysis.tsf").write_text("")
+
+        first = BrukerFolderStructure(tmp_path)._detect_format()[1]
+
+        real_glob = Path.glob
+        monkeypatch.setattr(
+            Path, "glob", lambda self, p: reversed(list(real_glob(self, p)))
+        )
+        assert BrukerFolderStructure(tmp_path)._detect_format()[1] == first
+        assert first.name == "a_first.d"

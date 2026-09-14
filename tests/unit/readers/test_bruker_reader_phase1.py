@@ -52,6 +52,17 @@ RETIRED_KEYWORDS = {
 }
 
 
+def _no_mis(self: Path) -> bool:
+    """``Path.exists`` for fixtures that carry no optical alignment.
+
+    ``return_value=True`` answered for every path, so the .mis locator's
+    stem probe (``<d-stem>.mis``, added when the four locators were
+    unified in #303) found a file that is not there and the parse then
+    hit the real filesystem.
+    """
+    return not str(self).endswith(".mis")
+
+
 class TestRetiredConstructorKeywords:
     """The three retired keywords are answered rather than swallowed.
 
@@ -142,7 +153,7 @@ class TestRetiredConstructorKeywords:
         mock_sdk.open_file.return_value = MagicMock()
 
         with (
-            patch.object(Path, "exists", return_value=True),
+            patch.object(Path, "exists", new=_no_mis),
             patch.object(Path, "is_dir", return_value=True),
             patch("sqlite3.connect") as mock_connect,
         ):
@@ -174,7 +185,7 @@ class TestRetiredConstructorKeywords:
             return None
 
         with (
-            patch.object(Path, "exists", return_value=True),
+            patch.object(Path, "exists", new=_no_mis),
             patch.object(Path, "is_dir", return_value=True),
             patch("sqlite3.connect") as mock_connect,
         ):
@@ -204,7 +215,7 @@ class TestBrukerReader:
         mock_sdk.open_file.return_value = MagicMock()
 
         with (
-            patch.object(Path, "exists", return_value=True),
+            patch.object(Path, "exists", new=_no_mis),
             patch.object(Path, "is_dir", return_value=True),
             patch("sqlite3.connect") as mock_connect,
         ):
@@ -253,7 +264,7 @@ class TestBrukerReader:
         # Mock database connection
         with (
             patch("sqlite3.connect") as mock_connect,
-            patch.object(Path, "exists", return_value=True),
+            patch.object(Path, "exists", new=_no_mis),
             patch.object(Path, "is_dir", return_value=True),
         ):
 
@@ -478,7 +489,7 @@ class TestReaderInterface:
 
         with (
             patch("sqlite3.connect") as mock_connect,
-            patch.object(Path, "exists", return_value=True),
+            patch.object(Path, "exists", new=_no_mis),
             patch.object(Path, "is_dir", return_value=True),
         ):
 
@@ -518,7 +529,7 @@ class TestIntensityThresholdFiltering:
 
         with (
             patch("sqlite3.connect") as mock_connect,
-            patch.object(Path, "exists", return_value=True),
+            patch.object(Path, "exists", new=_no_mis),
             patch.object(Path, "is_dir", return_value=True),
         ):
 
@@ -563,7 +574,7 @@ class TestIntensityThresholdFiltering:
 
         with (
             patch("sqlite3.connect") as mock_connect,
-            patch.object(Path, "exists", return_value=True),
+            patch.object(Path, "exists", new=_no_mis),
             patch.object(Path, "is_dir", return_value=True),
         ):
 

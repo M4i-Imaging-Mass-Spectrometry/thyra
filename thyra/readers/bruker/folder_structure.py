@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from ...errors import ConversionRefused
+from .mis_parser import find_mis_file_for_d_folder
 
 logger = logging.getLogger(__name__)
 
@@ -161,16 +162,19 @@ class BrukerFolderStructure:
         if self._is_rapiflex_folder(self.path):
             return BrukerFormat.RAPIFLEX, self.path
 
-        # Check if this is a parent folder containing a .d subfolder
-        d_folders = list(self.path.glob("*.d"))
+        # Sorted: this decides WHICH dataset gets converted, and what
+        # format it is called. ``glob`` order is the filesystem's
+        # business (issue #303), and ``__main__``'s own multi-dataset
+        # prompt already sorts the same shape.
+        d_folders = sorted(self.path.glob("*.d"))
         for d_folder in d_folders:
             if self._is_timstof_folder(d_folder):
                 return BrukerFormat.TIMSTOF, d_folder
             if self._is_solarix_folder(d_folder):
                 return BrukerFormat.SOLARIX, d_folder
 
-        # Check subfolders for Rapiflex
-        for subdir in self.path.iterdir():
+        # Check subfolders for Rapiflex, in the same sorted order.
+        for subdir in sorted(self.path.iterdir()):
             if subdir.is_dir() and self._is_rapiflex_folder(subdir):
                 return BrukerFormat.RAPIFLEX, subdir
 
@@ -280,30 +284,15 @@ class BrukerFolderStructure:
         Returns:
             Path to teaching points file, or None if not found
         """
-        # The .d folder stem is the matching key (e.g., "sample_E2506")
-        d_stem = data_path.stem
-
-        search_paths = [data_path, self.path, data_path.parent]
-
-        for search_path in search_paths:
-            if not search_path.exists():
-                continue
-
-            mis_files = list(search_path.glob("*.mis"))
-            if mis_files:
-                # Prefer .mis file whose stem matches the .d folder stem
-                for mis_file in mis_files:
-                    if mis_file.stem == d_stem:
-                        logger.debug(
-                            f"Found matching teaching points file: " f"{mis_file.name}"
-                        )
-                        return mis_file
-
-                # Fallback to first .mis file found
-                logger.debug(f"No .mis matching '{d_stem}', using {mis_files[0].name}")
-                return mis_files[0]
-
-        return None
+        # One locator, shared with the pixel-pitch lookup in
+        # BrukerMetadataExtractor. They used to be separate and searched
+        # different directories, so a .mis inside the .d could give this
+        # one the areas while the other took the pitch from a different
+        # file entirely (issue #303). ``self.path`` is the extra this
+        # caller contributes; the first and last entries are the default.
+        return find_mis_file_for_d_folder(
+            data_path, search_paths=[data_path, self.path, data_path.parent]
+        )
 
     def _find_metadata_files(self, data_path: Path, fmt: BrukerFormat) -> dict:
         """Find metadata files based on format.

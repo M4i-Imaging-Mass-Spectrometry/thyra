@@ -11,13 +11,23 @@ from thyra.readers.bruker.timstof.timstof_reader import BrukerReader
 from thyra.utils.bruker_exceptions import SDKError
 
 
+def _no_mis(self: Path) -> bool:
+    """These fixtures carry no optical alignment, so no .mis exists.
+
+    The stub used to answer True for every path, which made the .mis
+    locator's stem probe (``<d-stem>.mis`` inside the .d, added when the
+    four locators were unified in #303) find a file that is not there.
+    """
+    return not str(self).endswith(".mis")
+
+
 def _only_tdf_exists(self: Path) -> bool:
     """``Path.exists`` that makes a fake ``.d`` look like a TDF acquisition."""
-    return not str(self).endswith("analysis.tsf")
+    return _no_mis(self) and not str(self).endswith("analysis.tsf")
 
 
 def _make_reader(file_type: str, **kwargs) -> tuple:
-    exists = _only_tdf_exists if file_type == "tdf" else (lambda self: True)
+    exists = _only_tdf_exists if file_type == "tdf" else _no_mis
     with (
         patch("thyra.readers.bruker.timstof.timstof_reader.DLLManager") as dll_manager,
         patch(
