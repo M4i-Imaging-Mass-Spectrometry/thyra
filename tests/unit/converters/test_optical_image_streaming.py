@@ -16,6 +16,11 @@ than against a stored fixture:
 
 Plus the tolerance the old route had: a TIFF whose pixels cannot be read
 is dropped with a warning, not fatal, on both converter routes.
+
+And what the store says about the images it holds: which file each optical
+element came from and which one the alignment is stated against, in the
+root attrs -- the only place that survives, since the ome-zarr writer keeps
+nothing a caller puts on the element itself.
 """
 
 from __future__ import annotations
@@ -590,3 +595,142 @@ def test_same_name_keeps_the_last_file(tmp_path: Path, thyra_logs):
     assert any("is replaced by b_0000.tif" in r.message for r in records)
     _, levels, _ = _read_element(output_path, "ds_optical_highres")
     np.testing.assert_array_equal(levels["s0"][1], np.moveaxis(last, -1, 0))
+
+
+# ---- what the store says about its optical images ----------------------
+
+
+def _root_attrs(store: Path) -> dict:
+    """The store's own top-level attributes, as a consumer reads them."""
+    with open(store / "zarr.json") as f:
+        return json.load(f)["attributes"]
+
+
+def _convert_designating(primary_stem: str, reader, output_path: Path, **fields):
+    """Convert with the .mis alignment image already resolved.
+
+    On a real Bruker acquisition ``_primary_optical_filename`` is set while
+    the .mis is read; the mock reader has no .mis, so it is planted here.
+    Extra ``fields`` are set on the converter the same way.
+    """
+    from thyra.converters.spatialdata.streaming_converter import (
+        StreamingSpatialDataConverter,
+    )
+
+    converter = StreamingSpatialDataConverter(
+        reader, output_path, dataset_id="ds", pixel_size_um=10.0, use_csc=True
+    )
+    converter._primary_optical_filename = primary_stem
+    for name, value in fields.items():
+        setattr(converter, name, value)
+    return converter, converter.convert()
+
+
+def test_the_store_says_which_file_each_optical_element_came_from(
+    tmp_path: Path,
+) -> None:
+    """The element name is derived; the filename is only in the root attrs."""
+    rng = np.random.default_rng(3)
+    highres = tmp_path / "SlideA_0000.tif"
+    overview = tmp_path / "SlideA_deriv.tif"
+    tifffile.imwrite(
+        str(highres), rng.integers(0, 256, size=(20, 24, 3), dtype=np.uint8)
+    )
+    tifffile.imwrite(
+        str(overview), rng.integers(0, 256, size=(10, 12, 3), dtype=np.uint8)
+    )
+
+    output_path = tmp_path / "sources.zarr"
+    _, success = _convert(_mock_reader(highres, overview), output_path)
+    assert success is True
+
+    optical = _root_attrs(output_path)["optical_images"]
+    assert optical["elements"] == {
+        "ds_optical_highres": {"source_file": "SlideA_0000.tif"},
+        "ds_optical_overview": {"source_file": "SlideA_deriv.tif"},
+    }
+    # Nothing designated one: the block still carries the provenance.
+    assert optical["alignment_element"] is None
+    # And it is in the root attrs because it cannot be on the element: the
+    # ome-zarr writer keeps exactly these two keys, whatever it was handed.
+    attrs, _, _ = _read_element(output_path, "ds_optical_highres")
+    assert sorted(attrs) == ["ome", "spatialdata_attrs"]
+
+
+def test_a_store_with_no_optical_image_omits_the_section(
+    tmp_path: Path,
+) -> None:
+    """Omitted rather than written empty, like every other optional section."""
+    output_path = tmp_path / "none.zarr"
+    _, success = _convert(_mock_reader(), output_path)
+    assert success is True
+    assert "optical_images" not in _root_attrs(output_path)
+
+
+def test_the_store_names_the_alignment_element_not_the_filename(
+    tmp_path: Path,
+) -> None:
+    """Both places that state it name an element key that resolves."""
+    import spatialdata
+
+    rng = np.random.default_rng(4)
+    primary = tmp_path / "SlideB_0000.tif"
+    other = tmp_path / "SlideB_deriv.tif"
+    tifffile.imwrite(
+        str(primary), rng.integers(0, 256, size=(20, 24, 3), dtype=np.uint8)
+    )
+    tifffile.imwrite(str(other), rng.integers(0, 256, size=(10, 12, 3), dtype=np.uint8))
+
+    output_path = tmp_path / "aligned.zarr"
+    # An alignment matrix is what puts "global" in optical pixels, which is
+    # the variant that fills reference_element in.
+    _, success = _convert_designating(
+        "slideb_0000",
+        _mock_reader(primary, other),
+        output_path,
+        _tic_to_image_matrix=np.eye(3, dtype=np.float64),
+    )
+    assert success is True
+
+    attrs = _root_attrs(output_path)
+    assert attrs["optical_images"]["alignment_element"] == "ds_optical_highres"
+    cs_global = attrs["coordinate_systems"]["global"]
+    assert cs_global["unit"] == "pixel"
+    assert cs_global["reference_element"] == "ds_optical_highres"
+
+    # The point of naming the element: it resolves.
+    sdata = spatialdata.SpatialData.read(str(output_path))
+    assert cs_global["reference_element"] in sdata.images
+
+
+def test_a_dropped_optical_image_leaves_no_trace_in_the_attrs(
+    truncated_tiff: Path, tmp_path: Path, thyra_logs
+) -> None:
+    """Attrs naming an element the store does not hold are worse than none."""
+    output_path = tmp_path / "dropped.zarr"
+    with thyra_logs("thyra.converters", logging.WARNING) as records:
+        _, success = _convert_designating(
+            "truncated_0000",
+            _mock_reader(truncated_tiff),
+            output_path,
+            _tic_to_image_matrix=np.eye(3, dtype=np.float64),
+        )
+    assert success is True
+    # The premise: it was declared and then dropped, not never added.
+    assert any(
+        "dropping 'ds_optical_highres' from the store" in r.message for r in records
+    )
+    assert not (output_path / "images" / "ds_optical_highres").exists()
+
+    attrs = _root_attrs(output_path)
+    assert "optical_images" not in attrs
+    # The alignment image went with it; "global" is still that image's
+    # pixel grid, there is just no element here that is it.
+    assert attrs["coordinate_systems"]["global"]["unit"] == "pixel"
+    assert attrs["coordinate_systems"]["global"]["reference_element"] is None
+    # The consolidated copy the reader actually uses agrees.
+    consolidated = SpatialData.read(str(output_path))
+    assert [k for k in consolidated.images if "optical" in k] == []
+    assert (
+        consolidated.attrs["coordinate_systems"]["global"]["reference_element"] is None
+    )

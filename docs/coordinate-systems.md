@@ -61,7 +61,7 @@ zarr.attrs["coordinate_systems"] = {
 |-------|---------|
 | ``unit`` | Unit of one step in ``"global"`` -- either ``"micrometer"`` or ``"pixel"``. |
 | ``pixel_size_um_x``, ``pixel_size_um_y`` | Conversion factor: micrometers per one ``"global"`` unit. ``1.0`` when ``unit="micrometer"``; physical pixel size when ``unit="pixel"``. ``None`` if the producer cannot calibrate (e.g. an uncalibrated optical photo). |
-| ``reference_element`` | Name of the canonical raster element that defines pixel space, when ``unit="pixel"``. ``None`` otherwise. |
+| ``reference_element`` | Key of the canonical raster element that defines pixel space, as it appears in ``sdata.images``, when ``unit="pixel"``. ``None`` otherwise -- including when ``unit="pixel"`` but this store does not hold that element (optical images not included, or its pixels could not be read): ``"global"`` is still that image's pixel grid, there is just no element here that is it. Which *file* that was is in [``optical_images``](output-format.md#which-image-is-which-attrsoptical_images). |
 | ``convention_version`` | Schema version; bump when the shape of this attr changes. Currently ``1``. |
 | ``produced_by`` | ``"thyra/<version>"`` for Thyra-produced zarrs. |
 | ``raster_to_global_affine`` | Explicit 3x3 row-major affine from TIC raster indices to ``"global"`` -- the same mapping the TIC element's transform expresses, duplicated here so a consumer that reads only attrs still gets the full placement. A pure pixel-size scale in the micrometer variant; the optical alignment matrix in the pixel variant. Purely additive (``convention_version`` stays 1, same reasoning as the z fields below). |
@@ -192,9 +192,9 @@ pixel grid*, because the photo can be drawn with no transform.
   the primary image's pixel grid.
 - ``zarr.attrs["coordinate_systems"]["global"]`` declares
   ``unit="pixel"`` with ``reference_element`` set to the primary
-  optical filename; ``pixel_size_um_x/y`` is typically ``None``
-  because FlexImaging photos do not generally carry a um-per-pixel
-  calibration.
+  optical image's **element key**; ``pixel_size_um_x/y`` is typically
+  ``None`` because FlexImaging photos do not generally carry a
+  um-per-pixel calibration.
 
 Note that the two modes pick the right convention for what is
 actually known about the data; consumers should look at
