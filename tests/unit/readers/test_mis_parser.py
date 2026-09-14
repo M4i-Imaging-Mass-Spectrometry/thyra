@@ -42,15 +42,13 @@ def _write_mis(
     area: str = RECTANGULAR_AREA,
 ) -> Path:
     mis = tmp_path / name
-    mis.write_text(
-        f"""<?xml version="1.0"?>
+    mis.write_text(f"""<?xml version="1.0"?>
 <ImagingSequence>
 <ImageFile>img.tif</ImageFile>
 <Raster>{raster}</Raster>
 {area}
 </ImagingSequence>
-"""
-    )
+""")
     return mis
 
 
@@ -153,12 +151,10 @@ def test_parse_mis_extracts_polygon_area_bounding_box(tmp_path: Path) -> None:
 
 def _write_entity_mis(tmp_path: Path, name: str = "entity.mis") -> Path:
     mis = tmp_path / name
-    mis.write_text(
-        """<?xml version="1.0"?>
+    mis.write_text("""<?xml version="1.0"?>
 <!DOCTYPE ImagingSequence [<!ENTITY r "5,5">]>
 <ImagingSequence><Raster>&r;</Raster></ImagingSequence>
-"""
-    )
+""")
     return mis
 
 
@@ -259,11 +255,9 @@ def test_internal_subset_dtd_still_parses(tmp_path: Path) -> None:
     here so a later tightening to forbid_dtd=True cannot pass unnoticed.
     """
     mis = tmp_path / "dtd.mis"
-    mis.write_text(
-        """<?xml version="1.0"?>
+    mis.write_text("""<?xml version="1.0"?>
 <!DOCTYPE ImagingSequence [<!ELEMENT Raster (#PCDATA)>]>
 <ImagingSequence><Raster>5,5</Raster></ImagingSequence>
-"""
-    )
+""")
 
     assert parse_mis_file(mis)["raster"] == [5, 5]

@@ -76,11 +76,19 @@ jobs:
         elif [ $COMPLEXITY_EXIT_CODE -eq 2 ]; then
           echo "BROKEN: The monitor could not work out which files changed (see the error above)."
           echo "BROKEN: This is a CI configuration problem, not a complexity violation."
+        elif [ $COMPLEXITY_EXIT_CODE -eq 3 ]; then
+          echo "BROKEN: One or more files could not be parsed, so the gate did not cover them (see the errors above)."
+          echo "BROKEN: This is a CI or source-encoding problem, not a complexity violation."
         else
           echo "FAILURE: Complexity violations found (exit code: $COMPLEXITY_EXIT_CODE)"
         fi
 
-        # Always exit 0 here since we use continue-on-error
+        # Propagate the real status. continue-on-error below does NOT discard
+        # it: it sets this step's `conclusion` to success so the later steps
+        # run at all, while `outcome` keeps the failure -- and the "Set
+        # complexity check status" step at the end reads `outcome` and exits 1.
+        # So a non-zero code here does fail the job, whether it means
+        # violations (1), an unknown diff base (2) or an unreadable file (3).
         exit $COMPLEXITY_EXIT_CODE
       continue-on-error: true
       id: complexity-check
@@ -133,6 +141,20 @@ jobs:
           comment += `**Threshold:** ${threshold}\n`;
           comment += `**Total Violations:** ${latestReport.total_violations}\n`;
 
+          // A file that could not be parsed is not a file with no violations,
+          // and the count above cannot express the difference. Without this
+          // the PR would read "No complexity violations found" for a gate that
+          // never ran on part of the diff.
+          const unreadable = latestReport.unreadable_files ?? [];
+          if (unreadable.length > 0) {
+            comment += `**Files that could not be parsed:** ${unreadable.length}\n\n`;
+            comment += '### Not covered by this check\n';
+            for (const entry of unreadable) {
+              comment += `- \`${entry}\`\n`;
+            }
+            comment += '\n> **Warning:** these files were skipped, not cleared.\n';
+          }
+
           if (latestReport.total_violations > 0) {
             comment += `**Average Complexity:** ${latestReport.average_complexity}\n`;
             comment += `**Maximum Complexity:** ${latestReport.max_complexity}\n\n`;
@@ -150,7 +172,10 @@ jobs:
             }
 
             comment += `\n> **Warning:** Consider refactoring functions with complexity > ${threshold} for better maintainability.`;
-          } else {
+          } else if (unreadable.length === 0) {
+            // Withheld when something failed to parse: "no violations found"
+            // would be true and misleading at the same time, since the gate
+            // did not look at every file it was asked to.
             comment += '\n**Excellent!** No complexity violations found.';
           }
 
@@ -197,7 +222,7 @@ jobs:
     - name: Set complexity check status
       run: |
         if [ "${{ steps.complexity-check.outcome }}" = "failure" ]; then
-          echo "FAILED: Complexity check failed - violations found"
+          echo "FAILED: Complexity check failed - see the Run complexity monitoring step"
           exit 1
         else
           echo "PASSED: Complexity check passed"

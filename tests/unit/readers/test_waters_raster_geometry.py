@@ -13,6 +13,7 @@ import math
 
 import pytest
 
+from thyra.errors import ConversionRefused
 from thyra.readers.waters.imaging_grid import (
     _grid_from_scan_map,
     _mm_to_um_key,
@@ -108,11 +109,11 @@ class TestInteriorGap:
         assert grid.pixel_count_y == 9
         assert grid.pixel_size_y == pytest.approx(30.0)
 
-    def test_the_gap_is_reported(self, caplog):
-        with caplog.at_level(logging.WARNING):
+    def test_the_gap_is_reported(self, thyra_logs):
+        with thyra_logs("thyra.readers", logging.WARNING) as records:
             _grid_from_scan_map(_raster(20, 10, 30.0, skip_rows=(5,)))
 
-        assert "missing 1 of its 10 raster lines" in caplog.text
+        assert "missing 1 of its 10 raster lines" in records.text
 
 
 class TestReadingsThatAreNotARaster:
@@ -121,7 +122,9 @@ class TestReadingsThatAreNotARaster:
     def test_jitter_is_refused_rather_than_made_into_a_grid(self):
         # +-1 % of a 30 um pitch gave a 187x171 store with a 3 x 1.6 um
         # "pitch" and 200 of 31,977 pixels filled, silently.
-        with pytest.raises(ValueError, match="do not lie on a regular raster|only"):
+        with pytest.raises(
+            ConversionRefused, match="do not lie on a regular raster|only"
+        ):
             _grid_from_scan_map(_raster(20, 10, 30.0, jitter_um=0.3))
 
     def test_jitter_far_below_the_key_resolution_still_grids(self):
@@ -132,7 +135,7 @@ class TestReadingsThatAreNotARaster:
         assert grid.pixel_size_x == pytest.approx(30.0, abs=1e-6)
 
     def test_the_refusal_names_the_axis_and_the_pitch_it_fitted(self):
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(ConversionRefused) as excinfo:
             _grid_from_scan_map(_raster(20, 10, 30.0, jitter_um=0.3))
 
         assert "x axis" in str(excinfo.value) or "y axis" in str(excinfo.value)
@@ -169,59 +172,59 @@ class TestNonFinitePositions:
         assert grid.pixel_count_x == 5
         assert grid.pixel_size_x == pytest.approx(30.0)
 
-    def test_the_dropped_scans_are_reported(self, caplog):
+    def test_the_dropped_scans_are_reported(self, thyra_logs):
         scan_map = _raster(5, 4, 30.0)
         scan_map[(0, 999)] = _scan(float("inf"), 0.03)
 
-        with caplog.at_level(logging.WARNING):
+        with thyra_logs("thyra.readers", logging.WARNING) as records:
             _grid_from_scan_map(scan_map)
 
-        assert "non-finite stage position" in caplog.text
+        assert "non-finite stage position" in records.text
 
 
 class TestSentinelOnTheRaster:
     """-1.0 mm is a coordinate a stage can really visit."""
 
-    def test_a_raster_passing_through_the_sentinel_says_so(self, caplog):
+    def test_a_raster_passing_through_the_sentinel_says_so(self, thyra_logs):
         # 100 um raster from (-1.2, -1.2) mm, so (-1.0, -1.0) is on it.
         scan_map = _raster(5, 5, 100.0, origin_mm=(-1.2, -1.2))
         # The scan that would have landed there reports the sentinel.
         scan_map[(0, 12)] = _scan(-1.0, -1.0)
 
-        with caplog.at_level(logging.WARNING):
+        with thyra_logs("thyra.readers", logging.WARNING) as records:
             _grid_from_scan_map(scan_map)
 
-        assert "no-position sentinel" in caplog.text
+        assert "no-position sentinel" in records.text
 
-    def test_a_raster_nowhere_near_the_sentinel_stays_quiet(self, caplog):
+    def test_a_raster_nowhere_near_the_sentinel_stays_quiet(self, thyra_logs):
         scan_map = _raster(5, 5, 100.0)
         scan_map[(0, 99)] = _scan(-1.0, -1.0)
 
-        with caplog.at_level(logging.WARNING):
+        with thyra_logs("thyra.readers", logging.WARNING) as records:
             _grid_from_scan_map(scan_map)
 
-        assert "no-position sentinel" not in caplog.text
+        assert "no-position sentinel" not in records.text
 
 
 class TestSharedPixels:
     """Two scans on one pixel are summed; that was silent."""
 
-    def test_a_repeated_stage_position_is_reported(self, caplog):
+    def test_a_repeated_stage_position_is_reported(self, thyra_logs):
         scan_map = _raster(4, 3, 30.0)
         # The stage stopped: one more scan at the position of scan 0.
         scan_map[(0, 500)] = _scan(0.0, 0.0)
 
-        with caplog.at_level(logging.WARNING):
+        with thyra_logs("thyra.readers", logging.WARNING) as records:
             _grid_from_scan_map(scan_map)
 
-        assert "carry the SUM of every scan on them" in caplog.text
-        assert "(0, 0)" in caplog.text
+        assert "carry the SUM of every scan on them" in records.text
+        assert "(0, 0)" in records.text
 
-    def test_a_clean_raster_stays_quiet(self, caplog):
-        with caplog.at_level(logging.WARNING):
+    def test_a_clean_raster_stays_quiet(self, thyra_logs):
+        with thyra_logs("thyra.readers", logging.WARNING) as records:
             _grid_from_scan_map(_raster(4, 3, 30.0))
 
-        assert "SUM of every scan" not in caplog.text
+        assert "SUM of every scan" not in records.text
 
 
 class TestGridFromConvertedFunctionsOnly:
@@ -235,7 +238,7 @@ class TestGridFromConvertedFunctionsOnly:
         # reader never offers it the chance by fitting the MS functions only.
         scan_map[(1, 0)] = _scan(11.0, 4.4)
 
-        with pytest.raises(ValueError, match="carry a reading"):
+        with pytest.raises(ConversionRefused, match="carry a reading"):
             _grid_from_scan_map(scan_map)
 
         without_spot = _grid_from_scan_map(scan_map, functions=[0])
@@ -288,17 +291,17 @@ class TestGridFromConvertedFunctionsOnly:
 
         assert regrid_for_functions(grid, [0]) is grid
 
-    def test_regrid_reports_a_geometry_it_had_to_change(self, caplog):
+    def test_regrid_reports_a_geometry_it_had_to_change(self, thyra_logs):
         scan_map = _raster(10, 5, 30.0, func=0)
         scan_map.update(_raster(10, 5, 30.0, func=1, origin_mm=(0.015, 0.0)))
         grid = _grid_from_scan_map(scan_map)
 
-        with caplog.at_level(logging.WARNING):
+        with thyra_logs("thyra.readers", logging.WARNING) as records:
             refitted = regrid_for_functions(grid, [0])
 
         assert refitted is not grid
         assert refitted.pixel_size_x == pytest.approx(30.0)
-        assert "re-fitted to the converted functions" in caplog.text
+        assert "re-fitted to the converted functions" in records.text
 
 
 class TestScansByFunction:

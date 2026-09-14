@@ -239,7 +239,9 @@ def test_conversion_carries_a_jpeg_into_the_store(tmp_path: Path):
     )
 
 
-def test_an_undecodable_jpeg_drops_the_image_not_the_conversion(tmp_path: Path, caplog):
+def test_an_undecodable_jpeg_drops_the_image_not_the_conversion(
+    tmp_path: Path, thyra_logs
+):
     """Header intact, entropy-coded data cut: the tolerance TIFF already had."""
     jpeg = _save(_rgb(), tmp_path / "scan_0000.jpg")
     data = jpeg.read_bytes()
@@ -247,14 +249,18 @@ def test_an_undecodable_jpeg_drops_the_image_not_the_conversion(tmp_path: Path, 
     assert probe_optical_source(jpeg).shape == (3, 37, 53)
 
     output_path = tmp_path / "truncated.zarr"
-    with caplog.at_level(logging.WARNING):
+    # Not caplog: this test converts, and a conversion can reach setup_logging,
+    # which sets propagate = False on the `thyra` logger process-wide. After
+    # that caplog's root handler never sees another Thyra record, so a caplog
+    # assertion here passes alone and fails in the full suite.
+    with thyra_logs("thyra", logging.WARNING) as records:
         converter, success = _convert_with_optical(jpeg, output_path)
 
     assert success is True
     assert converter._pending_optical_images == {}
     assert any(
-        "Failed to load optical image scan_0000.jpg" in record.message
-        for record in caplog.records
+        "Failed to load optical image scan_0000.jpg" in record.getMessage()
+        for record in records
     )
     sdata = SpatialData.read(str(output_path))
     assert [key for key in sdata.images if "optical" in key] == []

@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 from thyra.core.mobility import MobilityAxis, classify_mobility_array
+from thyra.errors import ConversionRefused
 from thyra.readers.imzml.imzml_reader import ImzMLReader
 from thyra.readers.imzml.mobility_array import (
     collect_array_offsets,
@@ -237,5 +238,5 @@ class TestDetection:
         assert (name is None) == (expected is None)
 
     def test_offsets_refuse_a_spectrum_count_mismatch(self):
-        with pytest.raises(ValueError, match="pyimzml reported"):
+        with pytest.raises(ConversionRefused, match="pyimzml reported"):
             collect_array_offsets(CONTINUOUS, "mobilityArray", 3)

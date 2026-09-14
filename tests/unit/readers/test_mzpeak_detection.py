@@ -14,6 +14,7 @@ import pytest
 
 from tests.fixtures.mzpeak_builder import build_mzpeak, grid_spectra
 from thyra.core.registry import MSIRegistry
+from thyra.errors import ConversionRefused
 
 
 @pytest.fixture
@@ -58,7 +59,7 @@ class TestRejects:
         impostor = tmp_path / "impostor.mzpeak"
         impostor.write_bytes(b"this is not a zip archive at all")
 
-        with pytest.raises(ValueError, match="missing ZIP signature"):
+        with pytest.raises(ConversionRefused, match="missing ZIP signature"):
             registry.detect_format(impostor)
 
     def test_rejects_a_zip_without_the_index_member(self, registry, tmp_path):
@@ -71,7 +72,7 @@ class TestRejects:
         with zipfile.ZipFile(bare, "w", compression=zipfile.ZIP_STORED) as handle:
             handle.writestr("spectra_data.parquet", b"not really parquet")
 
-        with pytest.raises(ValueError, match="no mzpeak_index.json member"):
+        with pytest.raises(ConversionRefused, match="no mzpeak_index.json member"):
             registry.detect_format(bare)
 
     def test_rejects_a_directory(self, registry, tmp_path):
@@ -79,12 +80,12 @@ class TestRejects:
         directory = tmp_path / "unpacked.mzpeak"
         directory.mkdir()
 
-        with pytest.raises(ValueError, match="requires a .mzpeak archive file"):
+        with pytest.raises(ConversionRefused, match="requires a .mzpeak archive file"):
             registry.detect_format(directory)
 
     def test_rejects_a_missing_path(self, registry, tmp_path):
         """A path that does not exist fails before any format guessing."""
-        with pytest.raises(ValueError, match="does not exist"):
+        with pytest.raises(ConversionRefused, match="does not exist"):
             registry.detect_format(tmp_path / "absent.mzpeak")
 
 
@@ -115,5 +116,5 @@ class TestRegistration:
         unknown = tmp_path / "mystery.xyz"
         unknown.write_bytes(b"\x00\x01\x02")
 
-        with pytest.raises(ValueError, match=r"\.mzpeak"):
+        with pytest.raises(ConversionRefused, match=r"\.mzpeak"):
             registry.detect_format(unknown)
