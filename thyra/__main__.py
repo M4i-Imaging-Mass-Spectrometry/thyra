@@ -58,14 +58,12 @@ def _get_calibration_states(bruker_path: Path) -> list[dict]:
         cursor = conn.cursor()
 
         # Query calibration states
-        cursor.execute(
-            """
+        cursor.execute("""
             SELECT cs.Id, ci.DateTime
             FROM CalibrationState cs
             LEFT JOIN CalibrationInfo ci ON cs.Id = ci.StateId
             ORDER BY cs.Id
-            """
-        )
+            """)
 
         states = []
         for row in cursor.fetchall():

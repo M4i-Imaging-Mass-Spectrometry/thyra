@@ -9,6 +9,7 @@ from numpy.typing import NDArray
 from pyimzml.ImzMLParser import ImzMLParser
 
 from ...core.base_extractor import MetadataExtractor
+from ...errors import ConversionRefused
 from ...resampling.constants import (
     BinaryDataType,
     ImzMLAccessions,
@@ -679,15 +680,19 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         would reject files that were being read correctly.
 
         Raises:
-            ValueError: If the file declares a unit outside ``UM_PER_UNIT``.
-                Guessing a factor for, say, centimetre would be the same
-                silent scale error this method exists to close.
+            ConversionRefused: If the file declares a unit outside
+                ``UM_PER_UNIT``. Guessing a factor for, say, centimetre
+                would be the same silent scale error this method exists to
+                close. The message names the file, the unit it declared and
+                the three units there are, so it is addressed to whoever ran
+                the conversion -- which is what makes it a refusal and not a
+                plain ``ValueError`` whose traceback would bury it.
         """
         if unit_accession is None:
             return value
         factor = UM_PER_UNIT.get(unit_accession)
         if factor is None:
-            raise ValueError(
+            raise ConversionRefused(
                 f"{self.imzml_path} declares its pixel size in unit "
                 f"{unit_accession!r}, which Thyra cannot convert to "
                 f"micrometres. Supported units: UO:0000016 (millimeter), "

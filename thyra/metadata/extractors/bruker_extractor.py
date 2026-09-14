@@ -432,14 +432,12 @@ class BrukerMetadataExtractor(MetadataExtractor):
     def _extract_laser_params(self, cursor, params: Dict[str, Any]) -> None:
         """Extract laser parameters from database."""
         try:
-            cursor.execute(
-                """
+            cursor.execute("""
                 SELECT DISTINCT LaserPower, LaserFrequency, BeamScanSizeX, \
 BeamScanSizeY, SpotSize
                 FROM MaldiFrameLaserInfo
                 LIMIT 1
-            """
-            )
+            """)
             result = cursor.fetchone()
 
             if result:

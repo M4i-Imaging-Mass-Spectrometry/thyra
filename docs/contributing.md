@@ -32,10 +32,14 @@ Thank you for your interest in contributing to Thyra! This document provides gui
    uv sync
    ```
 
-3. **Install Pre-commit Hooks** (Recommended)
+3. **Install Pre-commit Hooks**
    ```bash
    uv run pre-commit install
    ```
+
+   CI runs `pre-commit run --all-files` on every pull request, so skipping this
+   step does not skip the checks. It only moves the failure from your machine
+   to the PR.
 
 4. **Verify Installation**
    ```bash
@@ -58,8 +62,31 @@ We use automated tools to maintain consistent code style:
 ### Type Hints
 - Use type hints for all public functions
 - Follow PEP 484 conventions
+- `thyra/py.typed` is the PEP 561 marker, so those annotations are part of the
+  published API rather than an internal convenience: a type checker in a
+  downstream project reads them instead of resolving every thyra symbol to
+  `Any`. The marker and the `Typing :: Typed` classifier in `pyproject.toml`
+  stand or fall together, and the `clean-venv-install` CI job asserts the
+  installed distribution carries it.
+- `disallow_untyped_defs` and `disallow_incomplete_defs` are still off under
+  `[tool.mypy]`, so a function left unannotated is not caught here -- it is
+  published as implicit `Any` inside a package that advertises itself as
+  typed. That is what makes the first bullet a rule rather than a preference.
 
 ### Running Code Quality Checks
+
+One command reproduces the CI lint job exactly, because CI runs this command:
+
+```bash
+uv run pre-commit run --all-files
+```
+
+It applies black, isort, flake8, mypy, bandit and pydocstyle with the settings
+in `.flake8` and `pyproject.toml`, plus the file-hygiene and lab-share-path
+hooks. **`--all-files` skips untracked files**, so `git add -A` first or a new
+file you have just written is not checked.
+
+The individual tools are still there if you want to run one on its own:
 
 ```bash
 # Format code
@@ -100,7 +127,21 @@ uv run bandit -r thyra/
 - Place unit tests in `tests/unit/`
 - Place integration tests in `tests/integration/`
 - Use descriptive test names: `test_should_convert_imzml_when_valid_file_provided`
-- Mark tests appropriately: `@pytest.mark.unit` or `@pytest.mark.integration`
+- Do not hand-write a `unit` or `integration` marker. `tests/conftest.py`
+  stamps one on every collected test from the directory it lives in, so the
+  directory you chose above is the whole of the decision
+- Capture Thyra's log records with the `thyra_logs` fixture, not `caplog`.
+  `setup_logging` sets `propagate = False` on the `thyra` logger, so once
+  any test has invoked the CLI caplog's root handler stops seeing Thyra
+  records -- and an assertion against an empty capture passes rather than
+  fails. `thyra_logs` attaches to the named logger and carries `.text`,
+  `.messages` and the records themselves
+- Set command-line arguments with `monkeypatch.setattr(sys, "argv", [...])`,
+  never by assigning `sys.argv`. An assignment is never undone, so the last
+  CLI test decides what every test after it sees
+
+Both rules are enforced by `tests/unit/test_log_capture_convention.py`,
+which reads the test sources rather than running them.
 
 ## Pull Request Process
 
@@ -118,11 +159,13 @@ uv run bandit -r thyra/
 
 3. **Run Quality Checks**
    ```bash
-   uv run black .
-   uv run isort .
-   uv run flake8
+   git add -A                            # --all-files skips untracked files
+   uv run pre-commit run --all-files
    uv run pytest
    ```
+
+   The last two are what the CI `lint` and `test` jobs run. Running them here
+   is the only way to see a red check before a reviewer does.
 
 4. **Commit Your Changes**
    - Use clear, descriptive commit messages

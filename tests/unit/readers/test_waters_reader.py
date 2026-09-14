@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
+from thyra.errors import ConversionRefused
 from thyra.readers.waters.imaging_grid import ImagingGrid, _grid_from_scan_map
 from thyra.readers.waters.masslynx_lib import FunctionType, ScanInfoData
 from thyra.readers.waters.waters_reader import WatersReader
@@ -62,21 +63,21 @@ class TestWatersReaderValidation:
     def test_rejects_nonexistent_path(self, tmp_path):
         """Test that a non-existent path raises ValueError."""
         bad_path = tmp_path / "missing.raw"
-        with pytest.raises(ValueError, match="must be a directory"):
+        with pytest.raises(ConversionRefused, match="must be a directory"):
             WatersReader(bad_path)
 
     def test_rejects_file_instead_of_dir(self, tmp_path):
         """Test that a regular file with .raw extension is rejected."""
         fake = tmp_path / "test.raw"
         fake.touch()
-        with pytest.raises(ValueError, match="must be a directory"):
+        with pytest.raises(ConversionRefused, match="must be a directory"):
             WatersReader(fake)
 
     def test_rejects_empty_raw_dir(self, tmp_path):
         """Test that a .raw dir without _FUNC*.DAT is rejected."""
         raw_dir = tmp_path / "empty.raw"
         raw_dir.mkdir()
-        with pytest.raises(ValueError, match="No _FUNC.*DAT files found"):
+        with pytest.raises(ConversionRefused, match="No _FUNC.*DAT files found"):
             WatersReader(raw_dir)
 
     def test_accepts_valid_raw_dir(self, mock_waters_data):
@@ -117,7 +118,7 @@ class TestWatersReaderInit:
         mock_ml.is_imaging_file.return_value = False
 
         reader = WatersReader(mock_waters_data)
-        with pytest.raises(ValueError, match="not a Waters imaging file"):
+        with pytest.raises(ConversionRefused, match="not a Waters imaging file"):
             reader._ensure_initialized()
 
         # Should have cleaned up the handle
@@ -133,7 +134,7 @@ class TestWatersReaderInit:
         mock_ml.classify_function.return_value = FunctionType.LOCKMASS
 
         reader = WatersReader(mock_waters_data)
-        with pytest.raises(ValueError, match="No MS functions found"):
+        with pytest.raises(ConversionRefused, match="No MS functions found"):
             reader._ensure_initialized()
 
     @patch("thyra.readers.waters.waters_reader.MassLynxLib")
@@ -838,7 +839,7 @@ class TestWatersReaderMissingFunctionFiles:
         )
         (mock_waters_data / "_FUNC002.DAT").unlink()
 
-        with pytest.raises(ValueError, match="_FUNC002.DAT"):
+        with pytest.raises(ConversionRefused, match="_FUNC002.DAT"):
             list(reader.iter_spectra())
 
     @patch("thyra.readers.waters.waters_reader.MassLynxLib")
@@ -858,7 +859,7 @@ class TestWatersReaderMissingFunctionFiles:
         (mock_waters_data / "_FUNC002.DAT").unlink()
         (mock_waters_data / "_FUNC003.DAT").unlink()
 
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(ConversionRefused) as excinfo:
             list(reader.iter_spectra())
 
         assert "_FUNC002.DAT" in str(excinfo.value)

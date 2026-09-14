@@ -149,6 +149,8 @@ chosen, and the [CLI Reference](cli.md#resampling-advanced) for all options.
 
 For Bruker data, Thyra automatically includes optical (microscopy) images and
 aligns them to the MSI data using teaching point calibration from the `.mis` file.
+TIFF, JPEG, PNG and BMP are all read; when the `.mis` names one of them in its
+`<ImageFile>` element, that is the image the alignment is stated against.
 
 ```bash
 # Optical images included by default

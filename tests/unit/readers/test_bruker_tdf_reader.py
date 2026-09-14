@@ -1,5 +1,6 @@
 """BrukerReader's TDF-specific wiring, with the SDK and the database mocked."""
 
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -7,6 +8,7 @@ import numpy as np
 import pytest
 
 from thyra.core.mobility import MobilityAxis
+from thyra.errors import ConversionRefused
 from thyra.readers.bruker.timstof.timstof_reader import BrukerReader
 from thyra.utils.bruker_exceptions import SDKError
 
@@ -88,7 +90,7 @@ class TestTdfWiring:
         assert reader.tdf_spectrum == "scan_sum"
 
     def test_unknown_mode_is_rejected_before_touching_the_sdk(self):
-        with pytest.raises(ValueError, match="tdf_spectrum"):
+        with pytest.raises(ConversionRefused, match="tdf_spectrum"):
             _make_reader("tdf", tdf_spectrum="bogus")
 
     def test_tdf_reports_no_per_pixel_peak_counts(self):
@@ -256,7 +258,7 @@ class TestMobilityIteration:
         np.testing.assert_allclose(mobility, [2.0 - 0.001, 2.0 - 0.002])
         np.testing.assert_array_equal(intensities, [6.0, 7.0])
 
-    def test_empty_frames_are_skipped_and_failures_logged(self, caplog):
+    def test_empty_frames_are_skipped_and_failures_logged(self, thyra_logs):
         reader, sdk, _ = _make_reader("tdf")
         self._prime(reader, sdk, [(3, (0, 0, 0)), (4, (1, 0, 0)), (5, (2, 0, 0))])
         empty = (
@@ -270,11 +272,12 @@ class TestMobilityIteration:
             np.array([0], dtype=np.int32),
         )
         sdk.read_tdf_scans.side_effect = [empty, RuntimeError("boom"), good]
-        out = list(reader.iter_mobility_spectra())
+        with thyra_logs("thyra.readers.bruker", logging.WARNING) as records:
+            out = list(reader.iter_mobility_spectra())
         assert [coords for coords, *_ in out] == [(2, 0, 0)]
-        assert "frame 4" in caplog.text
+        assert "frame 4" in records.text
 
-    def test_scans_beyond_the_axis_are_clipped_with_one_warning(self, caplog):
+    def test_scans_beyond_the_axis_are_clipped_with_one_warning(self, thyra_logs):
         reader, sdk, _ = _make_reader("tdf")
         self._prime(reader, sdk, [(3, (0, 0, 0)), (4, (1, 0, 0))])
         reader._mobility_axis = _axis(10)
@@ -283,9 +286,10 @@ class TestMobilityIteration:
             np.array([5], dtype=np.uint32),
             np.array([12], dtype=np.int32),
         )
-        out = list(reader.iter_mobility_spectra())
+        with thyra_logs("thyra.readers.bruker", logging.WARNING) as records:
+            out = list(reader.iter_mobility_spectra())
         assert out[0][2][0] == pytest.approx(2.0 - 0.009)
-        assert caplog.text.count("beyond the 10-scan mobility axis") == 1
+        assert records.text.count("beyond the 10-scan mobility axis") == 1
 
     def test_tsf_has_nothing_to_iterate(self):
         reader, _, _ = _make_reader("tsf")
@@ -314,7 +318,7 @@ class TestSummedIterationSharesTheFrameLoop:
         assert [coords for coords, *_ in out] == [(0, 0, 0)]
         sdk.read_spectrum.assert_any_call(42, 3, buffer_size_hint=None, num_scans=2382)
 
-    def test_a_failing_read_skips_only_that_frame(self, caplog):
+    def test_a_failing_read_skips_only_that_frame(self, thyra_logs):
         reader, sdk, _ = _make_reader("tdf")
         reader._iter_frames = lambda: iter([(3, (0, 0, 0)), (4, (1, 0, 0))])
         reader._num_scans_cache = {3: 2382, 4: 2382}
@@ -323,6 +327,7 @@ class TestSummedIterationSharesTheFrameLoop:
             RuntimeError("boom"),
             (np.array([100.0]), np.array([1.0])),
         ]
-        out = list(reader.iter_spectra())
+        with thyra_logs("thyra.readers.bruker", logging.WARNING) as records:
+            out = list(reader.iter_spectra())
         assert [coords for coords, *_ in out] == [(1, 0, 0)]
-        assert "frame 3" in caplog.text
+        assert "frame 3" in records.text

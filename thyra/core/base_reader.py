@@ -70,17 +70,39 @@ class BaseMSIReader(ABC):
     def get_optical_image_paths(self) -> List[Path]:
         """Get paths to optical/microscopy images associated with this data.
 
-        Returns list of TIFF file paths that contain optical images of the
-        sample. These images can be stored alongside MSI data in SpatialData
-        output for multimodal analysis.
+        Returns the image files that hold optical images of the sample --
+        TIFF, JPEG, PNG or BMP. These images can be stored alongside MSI data
+        in SpatialData output for multimodal analysis.
 
         Default implementation returns empty list. Subclasses should override
         to return paths to optical images specific to their format.
 
         Returns:
-            List of paths to TIFF files, empty if no optical images available.
+            Paths to optical images, empty if none are available. When one of
+            them is the alignment image (see
+            :meth:`get_primary_optical_image_path`) it comes first.
         """
         return []
+
+    def get_primary_optical_image_path(self) -> Optional[Path]:
+        """Get the optical image the source designates as the alignment image.
+
+        Some formats say which of an acquisition's images the registration is
+        stated against -- FlexImaging names it in the .mis ``<ImageFile>``
+        element -- and that one gets the identity transform while the others
+        are scaled into its pixel space. Without it the converter has no way
+        to tell an alignment scan from a slide overview that happens to sit
+        in the same folder.
+
+        Default implementation returns None, which leaves every optical image
+        equal. Override alongside :meth:`get_optical_image_paths` when the
+        format designates one; it must be a member of that list.
+
+        Returns:
+            Path to the designated image, or None if the format does not
+            designate one or the designated file is not present.
+        """
+        return None
 
     @abstractmethod
     def get_common_mass_axis(self) -> NDArray[np.float64]:

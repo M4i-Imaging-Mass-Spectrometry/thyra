@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "thyra"
-version = "3.23.2"
+version = "3.23.3"
 description = "A modern Python library for converting Mass Spectrometry Imaging (MSI) data into SpatialData/Zarr format - your portal to spatial omics"
 authors = [{ name = "Theodoros Visvikis", email = "t.visvikis@maastrichtuniversity.nl" }]
 maintainers = [{ name = "Theodoros Visvikis", email = "t.visvikis@maastrichtuniversity.nl" }]
@@ -176,6 +176,20 @@ dependencies = [
     # test_optical_image_streaming.py and on real FlexImaging exports).
     "tifffile>=2026.5.2",             # tested 2026.8.23
     "xarray>=2024.10.0",
+    # Same category as tifffile and xarray above: imported directly by
+    # converters/spatialdata/optical_image.py, and arriving transitively
+    # today (scikit-image, a hard requirement of ome-zarr, requires
+    # pillow>=10.1). It reads the optical images FlexImaging exports that
+    # are not TIFF -- a Rapiflex .mis names a .jpg, and .png and .bmp occur
+    # too -- and tifffile reads none of those. Pillow rather than imagecodecs,
+    # which is already here and does decode all three, because `Image.open`
+    # parses the header and stops: the streaming design needs the shape and
+    # dtype BEFORE the store is written and the pixels only after, and
+    # imagecodecs offers no way to learn the first without doing the second.
+    # Floor is scikit-image's own, which is also comfortably above the 9.5
+    # that `Image.has_transparency_data` needs; no upper bound, nothing here
+    # has tested one.
+    "pillow>=10.1",                   # tested 12.3.0
 ]
 
 [project.urls]
@@ -223,6 +237,25 @@ test = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
     "mock>=4.0.0",
+    # tests/data/fixtures/build_tdf_fixture.py compresses the TDF frame blocks
+    # with it. It reaches CI today only by accident -- xarray-spatial 0.10.17,
+    # four levels down from spatialdata, depends on it unconditionally -- and
+    # 0.10.18 has already moved it behind `geotiff`/`tests` extras that
+    # spatialdata does not request. `build_command` below re-locks on every
+    # release, so the first resolve that takes 0.10.18 would delete zstandard
+    # from the test environment. `test` rather than `dev` because that is the
+    # group tests.yml installs.
+    "zstandard>=0.22",
+    # tests/unit/tools/test_ci_workflows.py and tests/unit/test_py_typed_marker.py
+    # both `import yaml` at module scope to parse the workflow files they assert
+    # over, and it was declared in no group at all: it resolves only because dask
+    # requires it. That is the same undeclared-direct-import defect as `click`
+    # above and the same resolve-by-accident as `zstandard` beside it, and here
+    # it is quieter than either, because `types-PyYAML` in `dev` means the type
+    # checker was told about a dependency the installer was not. The floor is
+    # the major the stubs already name. `test` rather than `dev` because the two
+    # importers are tests and `test` is the group tests.yml installs for them.
+    "PyYAML>=6.0.0",
 ]
 dev = [
     "black>=23.0.0",
@@ -257,9 +290,14 @@ testpaths = ["tests"]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
+# Neither marker is ever hand-written. tests/conftest.py stamps one on every
+# collected item from the directory it lives in, so the lane a test runs in is
+# decided by where the file sits and by nothing else. Both stay declared here
+# because a mark pytest does not know about raises PytestUnknownMarkWarning,
+# and because `pytest --markers` is where a contributor looks for the rule.
 markers = [
-    "unit: marks tests as unit tests (fast, no external dependencies)",
-    "integration: marks tests as integration tests (may be slow, may require external dependencies)"
+    "unit: applied automatically to everything under tests/unit/ (fast, no external dependencies)",
+    "integration: applied automatically to everything under tests/integration/ (may be slow, may require external dependencies)"
 ]
 addopts = "-v --tb=short -m \"not integration\""
 filterwarnings = [
@@ -338,6 +376,31 @@ skips = ["B101", "B601", "B603", "B607"]  # Allow assert statements, shell usage
 
 [tool.mypy]
 python_version = "3.12"
+# Analyse as Windows, whatever the host is.
+#
+# Without this the lint job's verdict depends on which runner picked it up, and
+# that is not a gate. The hook passed on a developer's Windows machine for the
+# whole life of this repository and failed on its first ubuntu run with eight
+# errors, all of them artefacts of the host rather than the code: `winreg` and
+# `ctypes.windll` do not exist off Windows, so `winreg.OpenKey`,
+# `HKEY_LOCAL_MACHINE`, `QueryValueEx` and `ctypes.windll` read as missing
+# attributes; `dll_manager`'s two loaders degrade to `Any` and trip
+# `warn_return_any`; and the bodies after `if sys.platform != "win32": return`
+# read as unreachable, which `warn_unreachable` reports.
+#
+# Every one of those is guarded at runtime -- `import winreg` sits inside a
+# `try/except ImportError`, the `windll` access behind
+# `platform.system() == "Windows"` -- so the code is correct on both platforms
+# and only the analysis was host-dependent.
+#
+# The cost, stated plainly: the non-Windows side of those guards is no longer
+# type-checked. That is three early-return statements
+# (`utils/windows_paths.py` twice, `utils/zarr_atomic_write.py` once), each one
+# line. Pinning the substantial platform -- the MAX_PATH handling and the SDK
+# loader are Windows-specific and are where the types matter -- buys
+# determinism at that price. Revisit if non-Windows-specific code ever grows
+# past a guard clause.
+platform = "win32"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false  # Set to true once types are added
