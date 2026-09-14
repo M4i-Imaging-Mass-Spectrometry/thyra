@@ -29,9 +29,14 @@ def _test_files() -> List[Path]:
 
 
 def _parse(path: Path) -> ast.Module:
-    # utf-8-sig, not utf-8: tests/unit/metadata/schema/test_cli_metadata.py
-    # carries a BOM, and ast.parse on a plain utf-8 read of it raises
-    # SyntaxError: invalid non-printable character U+FEFF.
+    # utf-8-sig, not utf-8. No tracked file carries a BOM any more --
+    # tests/unit/metadata/schema/test_cli_metadata.py did until #307 stripped
+    # it, and that issue also added the fix-byte-order-marker hook and a test
+    # over the index to keep it that way. The tolerant read stays anyway,
+    # because the failure it absorbs is out of proportion to its cost: one BOM
+    # slipping past both makes ast.parse raise "SyntaxError: invalid
+    # non-printable character U+FEFF" here, and this module would report that
+    # instead of the convention it exists to check.
     return ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
 
 

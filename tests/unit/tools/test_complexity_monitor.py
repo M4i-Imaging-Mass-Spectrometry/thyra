@@ -664,8 +664,10 @@ def test_no_tracked_source_file_carries_a_byte_order_mark() -> None:
     Driven from the index rather than the filesystem for two reasons: an
     untracked local scratch file must not fail the suite, and reading what is
     committed is what makes this a guard against ``git commit --no-verify``
-    too. No workflow runs pre-commit today (see #291), so this assertion is the
-    only part of the BOM rule that runs in CI at all.
+    too. #291's ``lint`` job now runs ``pre-commit run --all-files`` on every
+    pull request, so this is no longer the only part of the BOM rule that runs
+    in CI. It is the part that reads the committed bytes, and the part that
+    still speaks when the hook itself is what broke.
     """
     repo_root = Path(__file__).resolve().parents[3]
     listed = subprocess.run(

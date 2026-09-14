@@ -36,8 +36,12 @@ def pytest_collection_modifyitems(config, items):
 
     Stamping by location makes the two agree by construction, and makes a
     misfiled test the only way to get it wrong -- which
-    ``tests/unit/test_lane_markers.py`` then catches. The hook only adds:
-    an explicit marker on an item is left alone. It runs before ``-m``
+    ``tests/unit/test_lane_markers.py`` then catches. The hook only adds and
+    never removes, and it does not look at what an item already carries: a
+    hand-written ``@pytest.mark.integration`` under ``tests/unit/`` would end
+    up with both markers rather than with the one it asked for. There are zero
+    such decorators today and ``test_lane_markers.py`` is what keeps it that
+    way, so the case is a hazard rather than a behaviour. It runs before ``-m``
     deselection, so the stamp is honoured by the same run that applies it.
 
     Args:

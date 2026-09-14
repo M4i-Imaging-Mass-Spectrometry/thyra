@@ -370,6 +370,20 @@ class TestARealRaiseSiteReachesTheUser:
     """
 
     def test_an_ambiguous_precision_declaration_is_one_sentence(self, tmp_path, runner):
+        """Coverage, not a guard: this passes on the tree before the change.
+
+        ``imzml_reader.py`` already raised ``ConversionRefused`` for the
+        ambiguous declaration, so nothing in the commit that added this test
+        moved the behaviour it asserts -- only its sibling's raise site was
+        promoted from a plain ``ValueError``. Said here rather than left for a
+        reader to mistake for a regression test.
+
+        What it is worth keeping for is the handler. It reaches a real raise
+        with no monkeypatch anywhere, so changing ``convert_msi`` to print a
+        traceback instead of the sentence fails this and the narrowed
+        ``pytest.raises`` assertions under ``tests/unit/readers/`` do not --
+        they call the reader directly and never reach the handler.
+        """
         source = _FIXTURE_DIR / "two_precision_terms.imzML"
 
         result = runner.invoke(main, [str(source), str(tmp_path / "out.zarr")])

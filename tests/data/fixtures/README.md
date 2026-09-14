@@ -83,11 +83,13 @@ third is loud instead — and it is the one that actually happened.
    measured, removing the exemption fails ten of them and no other test in the
    suite.
 2. **Pre-commit.** `mixed-line-ending --fix=lf` does the same thing to the
-   worktree file, and `trailing-whitespace` and `end-of-file-fixer` are free to
-   move any byte. All three carry
+   worktree file, and `trailing-whitespace`, `end-of-file-fixer` and
+   `fix-byte-order-marker` are free to move any byte. All four rewrite in
+   place, so all four carry
    `exclude: ^tests/data/fixtures/([^/]+\.(imzML|ibd)|synthetic_tims\.d/.*)$`,
    scoped to the byte-exact fixtures so this README and `build_fixtures.py`
-   stay covered.
+   stay covered. `.pre-commit-config.yaml`'s header names the same four; add a
+   fifth in-place rewriter and it needs the same `exclude`.
 3. **The build script.** `build_tdf_fixture.py` used to `import zstandard`
    inside `encode_frame`, which the build reaches only after
    `shutil.rmtree(OUT_DIR)` has run and the new `analysis.tdf_bin` is open.

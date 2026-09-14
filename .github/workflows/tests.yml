@@ -113,14 +113,20 @@ jobs:
         # See the test job: pin the lean pre-v9 pruning behaviour.
         prune-cache: true
     - name: Install dependencies
-      # --only-group, not the `--no-default-groups --group dev` the jobs above
-      # use, because `dev` IS uv's default group here (there is no [tool.uv]
-      # section), so that spelling is the long form of a plain `uv sync` and
-      # would install spatialdata, dask, zarr, Jupyter and matplotlib for a job
-      # whose one need is pre-commit. --only-group drops the project and its
-      # runtime tree while still reading the pre-commit version out of uv.lock,
-      # which keeps the lockfile the single source of it. Revisit on a measured
-      # install time, not in advance.
+      # --only-group, not the `--no-default-groups --group <name>` spelling the
+      # jobs above use, because `dev` IS uv's default group here (there is no
+      # [tool.uv] section), so `--no-default-groups --group dev` is the long
+      # form of a plain `uv sync` and would install the project and its whole
+      # runtime tree -- spatialdata, dask, zarr and everything under them --
+      # for a job whose one need is pre-commit. --only-group drops the project
+      # and that tree while still reading the pre-commit version out of
+      # uv.lock, which keeps the lockfile the single source of it.
+      #
+      # What it does NOT do is make the install small. `dev` is installed
+      # whole, Jupyter, ipykernel, matplotlib and ptitprince included, because
+      # pre-commit is declared in that group and there is no leaner group to
+      # ask for. Splitting a `lint` group out is the change that would buy
+      # that; revisit on a measured install time, not in advance.
       run: uv sync --locked --only-group dev
     - name: Cache the pre-commit hook environments
       uses: actions/cache@v4
@@ -188,13 +194,22 @@ jobs:
       # tests/README.md -- which keeps that documentation honest.
       #
       # Coverage is measured here as well as in `test`, and not because this
-      # lane is a coverage lane. Eleven tests moved into it when membership
-      # became a matter of directory -- the six end-to-end CLI tests among
-      # them, which walk thyra/__main__.py from argv to a written store. Those
-      # lines stay covered by a run; they would simply stop being counted, and
-      # the reported figure would fall for a reason that has nothing to do
-      # with coverage. .codecov.yml declares no flags, so `integration` is
-      # created on first upload and joins the union with `unittests`.
+      # lane is a coverage lane. Sixteen tests joined it when membership became
+      # a matter of directory -- the 14 that sat under tests/integration/
+      # carrying no marker, plus the 2 undecorated ones that travelled with
+      # test_streaming_converter.py when it moved in. Collected either side:
+      # 65 of 2690 before, 81 of 2704 today.
+      #
+      # Eleven of those sixteen are what this step is about, because they are
+      # the ones that were EXECUTING in `test` and so were being counted: the
+      # six end-to-end CLI tests, which walk thyra/__main__.py from argv to a
+      # written store, three imzML conversion tests, and the two streaming
+      # ones. The other five skip for want of a real acquisition and counted
+      # nothing in either job. Those lines stay covered by a run; they would
+      # simply stop being counted, and the reported figure would fall for a
+      # reason that has nothing to do with coverage. .codecov.yml declares no
+      # flags, so `integration` is created on first upload and joins the union
+      # with `unittests`.
       run: |
         uv run pytest -m integration --disable-warnings --cov=thyra --cov-report=xml
 
