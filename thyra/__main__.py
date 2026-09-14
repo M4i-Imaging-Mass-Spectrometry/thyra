@@ -3,7 +3,6 @@
 # Configure dependencies to suppress warnings BEFORE any imports
 import logging  # noqa: E402
 import os  # noqa: E402
-import sqlite3  # noqa: E402
 import warnings  # noqa: E402
 from math import isfinite  # noqa: E402
 from pathlib import Path  # noqa: E402
@@ -38,51 +37,6 @@ warnings.filterwarnings(
     message="The legacy Dask DataFrame implementation is deprecated",
     category=FutureWarning,
 )
-
-
-def _get_calibration_states(bruker_path: Path) -> list[dict]:
-    """Read calibration states from calibration.sqlite.
-
-    Args:
-        bruker_path: Path to Bruker .d directory
-
-    Returns:
-        List of calibration state dictionaries with id, datetime, and version info
-    """
-    cal_file = bruker_path / "calibration.sqlite"
-    if not cal_file.exists():
-        return []
-
-    try:
-        conn = sqlite3.connect(str(cal_file))
-        cursor = conn.cursor()
-
-        # Query calibration states
-        cursor.execute(
-            """
-            SELECT cs.Id, ci.DateTime
-            FROM CalibrationState cs
-            LEFT JOIN CalibrationInfo ci ON cs.Id = ci.StateId
-            ORDER BY cs.Id
-            """
-        )
-
-        states = []
-        for row in cursor.fetchall():
-            state_id, datetime_str = row
-            states.append(
-                {
-                    "id": state_id,
-                    "datetime": datetime_str or "Unknown",
-                    "version": state_id,
-                }
-            )
-
-        conn.close()
-        return states
-
-    except Exception:
-        return []
 
 
 def _is_usable_number(value: float) -> bool:
@@ -274,29 +228,36 @@ def _display_calibration_info(input: Path, use_recalibrated: bool) -> None:
     Note: This is informational only. Full interactive selection
     will be implemented in the future (see GitHub issue #54).
     """
-    states = _get_calibration_states(input)
+    from thyra.readers.bruker.timstof.timstof_reader import read_calibration_states
+
+    states = read_calibration_states(input)
     if not states:
         return
+
+    # A recalibration adds a state, so the count is a property of the
+    # dataset, not of a state. It used to be printed per row as
+    # ``state["id"] - 1``, which made a three-state file claim the
+    # second state had been recalibrated once and the third twice.
+    n_recalibrations = len(states) - 1
+    active_id = states[-1]["id"]
 
     click.echo("\n" + "=" * 60)
     click.echo("Calibration Information (Display Only)")
     click.echo("=" * 60)
-    for state in states:
-        is_active = state["id"] == max(s["id"] for s in states)
-        active_marker = " (active/will be used)" if is_active else ""
-        recal_info = (
-            f" - recalibrated {state['version'] - 1} times"
-            if state["version"] > 1
-            else ""
-        )
+    if n_recalibrations:
         click.echo(
-            f"  State {state['id']}: {state['datetime']}{recal_info}{active_marker}"
+            f"  Recalibrated {n_recalibrations} time"
+            f"{'s' if n_recalibrations > 1 else ''} since acquisition"
+        )
+    for state in states:
+        active_marker = " (active/will be used)" if state["id"] == active_id else ""
+        click.echo(
+            f"  State {state['id']}: {state['datetime']} "
+            f"[{state['source']}]{active_marker}"
         )
 
     if use_recalibrated:
-        click.echo(
-            f"\nUsing active calibration state (State {max(s['id'] for s in states)})"
-        )
+        click.echo(f"\nUsing active calibration state (State {active_id})")
     else:
         click.echo("\nUsing original calibration (--no-recalibrated flag set)")
 

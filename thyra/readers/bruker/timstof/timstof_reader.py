@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
@@ -46,6 +47,7 @@ from ....utils.bruker_exceptions import DataError, FileFormatError, SDKError
 from ..base_bruker_reader import BrukerBaseMSIReader
 from ..folder_structure import BrukerFolderStructure, BrukerFormat
 from ..mis_parser import parse_mis_file
+from ..vendor_db import open_read_only
 from .sdk.dll_manager import DLLManager
 from .sdk.sdk_functions import (
     DEFAULT_TDF_SPECTRUM,
@@ -215,6 +217,50 @@ def _optional_float(value: Any) -> Optional[float]:
 def _optional_int(value: Any) -> Optional[int]:
     """A nullable integer column, keeping NULL as ``None``."""
     return None if value is None else int(value)
+
+
+def read_calibration_states(data_path: Path) -> List[Dict[str, Any]]:
+    """Every calibration state of a Bruker ``.d``, oldest first.
+
+    The state with the highest ``Id`` is the active one -- the SDK reads
+    the most recent calibration -- so ``states[-1]`` is what a conversion
+    will use and ``len(states) - 1`` is how many times the acquisition
+    has been recalibrated since.
+
+    This is a plain file read rather than a method, because the CLI
+    displays it before any reader exists; constructing a
+    :class:`BrukerReader` to answer it would load the vendor DLL and
+    open the SDK just to print three lines.
+
+    Args:
+        data_path: The ``.d`` directory.
+
+    Returns:
+        One dict per state with ``id``, ``datetime`` and ``source``.
+        Empty when the file is absent or unreadable -- a missing
+        calibration is not an error here, it is simply nothing to show.
+    """
+    cal_file = data_path / "calibration.sqlite"
+    if not cal_file.exists():
+        return []
+
+    try:
+        with closing(open_read_only(cal_file)) as conn:
+            rows = conn.execute(
+                "SELECT Id, DateTime, Source FROM CalibrationState ORDER BY Id"
+            ).fetchall()
+    except sqlite3.Error as e:
+        logger.debug(f"Could not read calibration states from {cal_file}: {e}")
+        return []
+
+    return [
+        {
+            "id": int(state_id),
+            "datetime": datetime_str or "Unknown",
+            "source": source or "Unknown",
+        }
+        for state_id, datetime_str, source in rows
+    ]
 
 
 def _get_frame_count(db_path: Path) -> int:
