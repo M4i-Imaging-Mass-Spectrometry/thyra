@@ -154,10 +154,10 @@ class TestDecision:
         assert not inst.is_mrt
         assert inst.decided_by == "no instrument field found"
 
-    def test_decision_is_logged(self, tmp_path, caplog):
-        with caplog.at_level(logging.INFO, logger="thyra.readers.waters.instrument"):
+    def test_decision_is_logged(self, tmp_path, thyra_logs):
+        with thyra_logs("thyra.readers.waters.instrument", logging.INFO) as records:
             identify_waters_instrument(_raw_dir(tmp_path, MRT_EXTERN, MRT_HEADER))
-        assert "SELECT SERIES MRT (OpticMode=MRT)" in caplog.text
+        assert "SELECT SERIES MRT (OpticMode=MRT)" in records.text
 
 
 class TestSampleSpacing:
@@ -258,10 +258,10 @@ class TestReaderDefault:
         assert mrt.use_centroid is explicit
         assert synapt.use_centroid is explicit
 
-    def test_default_is_logged_with_its_reason(self, tmp_path, caplog):
-        with caplog.at_level(logging.INFO, logger="thyra.readers.waters.waters_reader"):
+    def test_default_is_logged_with_its_reason(self, tmp_path, thyra_logs):
+        with thyra_logs("thyra.readers.waters.waters_reader", logging.INFO) as records:
             WatersReader(_raw_dir(tmp_path, MRT_EXTERN, MRT_HEADER))
-        assert "profile trace by default (OpticMode=MRT" in caplog.text
+        assert "profile trace by default (OpticMode=MRT" in records.text
 
     @patch("thyra.readers.waters.waters_reader.MassLynxLib")
     @patch("thyra.readers.waters.waters_reader.build_imaging_grid")

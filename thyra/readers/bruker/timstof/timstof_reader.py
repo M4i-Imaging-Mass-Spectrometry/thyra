@@ -772,24 +772,20 @@ class BrukerReader(BrukerBaseMSIReader):
         num_versions = cursor.fetchone()[0]
 
         # Get ACTIVE calibration (highest ID = most recent)
-        cursor.execute(
-            """
+        cursor.execute("""
             SELECT Id, Key, DateTime, Source
             FROM CalibrationState
             ORDER BY Id DESC LIMIT 1
-        """
-        )
+        """)
         cal_id, cal_uuid, cal_datetime, cal_source = cursor.fetchone()
 
         # Get original calibration if recalibrated
         original_datetime = None
         if num_versions > 1:
-            cursor.execute(
-                """
+            cursor.execute("""
                 SELECT DateTime FROM CalibrationState
                 ORDER BY Id ASC LIMIT 1
-            """
-            )
+            """)
             original_datetime = cursor.fetchone()[0]
 
         # Get additional metadata from CalibrationInfo

@@ -10,9 +10,8 @@ class TestCheckOntology:
 
     @patch("thyra.tools.check_ontology.ONTOLOGY", autospec=True)
     @patch("thyra.metadata.validator.ImzMLOntologyValidator", autospec=True)
-    @patch("sys.argv")
     def test_main_file_check(
-        self, mock_argv, mock_validator_class, mock_ontology, capsys, tmp_path
+        self, mock_validator_class, mock_ontology, capsys, tmp_path, monkeypatch
     ):
         """Verify the CLI output for a single file check with no unknown terms."""
         # Setup mocks
@@ -38,34 +37,29 @@ class TestCheckOntology:
         )
 
         # Set up command line arguments
-        original_argv = sys.argv.copy()
-        try:
-            sys.argv = ["check_ontology", str(dummy_imzml)]
+        monkeypatch.setattr(sys, "argv", ["check_ontology", str(dummy_imzml)])
 
-            # Run main
-            main()
+        # Run main
+        main()
 
-            # Assertions
-            mock_validator_class.assert_called_once()  # Ensure the validator class was instantiated
-            mock_validator_instance.validate_file.assert_called_once_with(dummy_imzml)
-            captured = capsys.readouterr()
-            # The summary comes from the validator's return value.
-            expected_output = (
-                "Ontology Validation Summary\n"
-                "===========================\n"
-                "Total CV terms found: 3\n\n"
-                "No unknown terms encountered.\n\n"
-                "Global unknown terms: None\n"
-            )
-            assert expected_output == captured.out
-        finally:
-            sys.argv = original_argv
+        # Assertions
+        mock_validator_class.assert_called_once()  # Ensure the validator class was instantiated
+        mock_validator_instance.validate_file.assert_called_once_with(dummy_imzml)
+        captured = capsys.readouterr()
+        # The summary comes from the validator's return value.
+        expected_output = (
+            "Ontology Validation Summary\n"
+            "===========================\n"
+            "Total CV terms found: 3\n\n"
+            "No unknown terms encountered.\n\n"
+            "Global unknown terms: None\n"
+        )
+        assert expected_output == captured.out
 
     @patch("thyra.tools.check_ontology.ONTOLOGY", autospec=True)
     @patch("thyra.metadata.validator.ImzMLOntologyValidator", autospec=True)
-    @patch("sys.argv")
     def test_main_file_check_with_unknown_terms(
-        self, mock_argv, mock_validator_class, mock_ontology, capsys, tmp_path
+        self, mock_validator_class, mock_ontology, capsys, tmp_path, monkeypatch
     ):
         """A file with unknown terms lists them rather than crashing.
 
@@ -87,21 +81,16 @@ class TestCheckOntology:
         dummy_imzml = tmp_path / "test.imzML"
         dummy_imzml.write_text("<mzML/>")
 
-        original_argv = sys.argv.copy()
-        try:
-            sys.argv = ["check_ontology", str(dummy_imzml)]
-            main()
-            captured = capsys.readouterr()
-            assert "Found 1 unknown terms:" in captured.out
-            assert "  - MS:9999999: mystery" in captured.out
-        finally:
-            sys.argv = original_argv
+        monkeypatch.setattr(sys, "argv", ["check_ontology", str(dummy_imzml)])
+        main()
+        captured = capsys.readouterr()
+        assert "Found 1 unknown terms:" in captured.out
+        assert "  - MS:9999999: mystery" in captured.out
 
     @patch("thyra.tools.check_ontology.ONTOLOGY", autospec=True)
     @patch("thyra.metadata.validator.ImzMLOntologyValidator", autospec=True)
-    @patch("sys.argv")
     def test_main_directory_check(
-        self, mock_argv, mock_validator_class, mock_ontology, capsys, tmp_path
+        self, mock_validator_class, mock_ontology, capsys, tmp_path, monkeypatch
     ):
         """Verify the CLI output for a directory check."""
         # Setup mocks
@@ -121,39 +110,32 @@ class TestCheckOntology:
         (dummy_dir / "file2.imzML").write_text("<mzML/>")
 
         # Set up command line arguments
-        original_argv = sys.argv.copy()
-        try:
-            sys.argv = ["check_ontology", str(dummy_dir)]
+        monkeypatch.setattr(sys, "argv", ["check_ontology", str(dummy_dir)])
 
-            # Run main
-            main()
+        # Run main
+        main()
 
-            # Assertions
-            mock_validator_class.assert_called_once()
-            mock_validator_instance.validate_directory.assert_called_once_with(
-                dummy_dir
-            )
-            captured = capsys.readouterr()
+        # Assertions
+        mock_validator_class.assert_called_once()
+        mock_validator_instance.validate_directory.assert_called_once_with(dummy_dir)
+        captured = capsys.readouterr()
 
-            # CORRECTED: Define the expected output precisely.
-            expected_output = (
-                "Checked 2 files\n"
-                "Found 2 unique unknown terms\n\n"
-                "Most common unknown terms:\n"
-                "  - term1\n"
-                "  - term2\n\n"
-                "Global unknown terms: Some\n"
-            )
+        # CORRECTED: Define the expected output precisely.
+        expected_output = (
+            "Checked 2 files\n"
+            "Found 2 unique unknown terms\n\n"
+            "Most common unknown terms:\n"
+            "  - term1\n"
+            "  - term2\n\n"
+            "Global unknown terms: Some\n"
+        )
 
-            assert expected_output == captured.out
-        finally:
-            sys.argv = original_argv
+        assert expected_output == captured.out
 
     @patch("thyra.tools.check_ontology.ONTOLOGY", autospec=True)
     @patch("thyra.metadata.validator.ImzMLOntologyValidator", autospec=True)
-    @patch("sys.argv")
     def test_main_output_to_json(
-        self, mock_argv, mock_validator_class, mock_ontology, capsys, tmp_path
+        self, mock_validator_class, mock_ontology, capsys, tmp_path, monkeypatch
     ):
         """Verify that results are correctly saved to a JSON file."""
         # Setup mocks
@@ -173,40 +155,34 @@ class TestCheckOntology:
         dummy_imzml.write_text("""<mzML/>""")
 
         # Set up command line arguments
-        original_argv = sys.argv.copy()
-        try:
-            sys.argv = [
-                "check_ontology",
-                str(dummy_imzml),
-                "--output",
-                str(output_json),
-            ]
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["check_ontology", str(dummy_imzml), "--output", str(output_json)],
+        )
 
-            # Run main
-            main()
+        # Run main
+        main()
 
-            # Assertions
-            captured = capsys.readouterr()
+        # Assertions
+        captured = capsys.readouterr()
 
-            # CORRECTED: Removed the extra newline for a more likely output format
-            expected_output = (
-                f"Results saved to {output_json}\nGlobal unknown terms: JSON\n"
-            )
+        # CORRECTED: Removed the extra newline for a more likely output format
+        expected_output = (
+            f"Results saved to {output_json}\nGlobal unknown terms: JSON\n"
+        )
 
-            assert expected_output == captured.out
+        assert expected_output == captured.out
 
-            assert output_json.exists()
-            with open(output_json, "r") as f:
-                content = json.load(f)
-            assert content == validation_result
-        finally:
-            sys.argv = original_argv
+        assert output_json.exists()
+        with open(output_json, "r") as f:
+            content = json.load(f)
+        assert content == validation_result
 
     @patch("thyra.tools.check_ontology.ONTOLOGY", autospec=True)
     @patch("thyra.metadata.validator.ImzMLOntologyValidator", autospec=True)
-    @patch("sys.argv")
     def test_main_verbose_output(
-        self, mock_argv, mock_validator_class, mock_ontology, capsys, tmp_path
+        self, mock_validator_class, mock_ontology, capsys, tmp_path, monkeypatch
     ):
         """Verify the verbose output includes the validator's summary."""
         # Setup mocks
@@ -224,28 +200,26 @@ class TestCheckOntology:
         dummy_imzml.write_text("""<mzML/>""")
 
         # Set up command line arguments
-        original_argv = sys.argv.copy()
-        try:
-            sys.argv = ["check_ontology", str(dummy_imzml), "--verbose"]
+        monkeypatch.setattr(
+            sys, "argv", ["check_ontology", str(dummy_imzml), "--verbose"]
+        )
 
-            # Run main
-            main()
+        # Run main
+        main()
 
-            # Assertions
-            captured = capsys.readouterr()
+        # Assertions
+        captured = capsys.readouterr()
 
-            # The summary is followed by a blank line on both paths now.
-            # It used to be printed without one under --verbose and with
-            # one otherwise, because the two were separate branches (#299).
-            expected_output = (
-                "Verbose summary\n\n"
-                "No unknown terms encountered.\n\n"
-                "Global unknown terms: Verbose\n"
-            )
+        # The summary is followed by a blank line on both paths now. It
+        # used to be printed without one under --verbose and with one
+        # otherwise, because the two were separate branches (#299).
+        expected_output = (
+            "Verbose summary\n\n"
+            "No unknown terms encountered.\n\n"
+            "Global unknown terms: Verbose\n"
+        )
 
-            assert expected_output == captured.out
-        finally:
-            sys.argv = original_argv
+        assert expected_output == captured.out
 
 
 class TestTheSummaryReachesTheUser:
@@ -273,36 +247,40 @@ class TestTheSummaryReachesTheUser:
         "</mzML>\n"
     )
 
-    def _run(self, tmp_path, capsys, *extra_args):
+    def _run(self, tmp_path, capsys, monkeypatch, *extra_args):
+        """``monkeypatch``, not a try/finally.
+
+        A test that assigns ``sys.argv`` and restores it by hand leaks the
+        value for the rest of the process whenever it fails before the
+        finally -- which is what #292 removed from the rest of this file.
+        """
         imzml = tmp_path / "three_terms.imzML"
         imzml.write_text(self.THREE_TERMS)
-        original_argv = sys.argv.copy()
-        try:
-            sys.argv = ["check_ontology", str(imzml), *extra_args]
-            main()
-        finally:
-            sys.argv = original_argv
+        monkeypatch.setattr(sys, "argv", ["check_ontology", str(imzml), *extra_args])
+        main()
         return capsys.readouterr().out
 
-    def test_the_placeholder_is_gone(self, tmp_path, capsys):
-        assert "Test summary for file" not in self._run(tmp_path, capsys)
+    def test_the_placeholder_is_gone(self, tmp_path, capsys, monkeypatch):
+        assert "Test summary for file" not in self._run(tmp_path, capsys, monkeypatch)
 
-    def test_the_term_count_is_the_one_the_validator_computed(self, tmp_path, capsys):
-        assert "Total CV terms found: 3" in self._run(tmp_path, capsys)
+    def test_the_term_count_is_the_one_the_validator_computed(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        assert "Total CV terms found: 3" in self._run(tmp_path, capsys, monkeypatch)
 
-    def test_the_known_unknown_split_is_reported(self, tmp_path, capsys):
-        out = self._run(tmp_path, capsys)
+    def test_the_known_unknown_split_is_reported(self, tmp_path, capsys, monkeypatch):
+        out = self._run(tmp_path, capsys, monkeypatch)
         assert "Known terms: 2" in out
         assert "Unknown terms: 1" in out
 
-    def test_it_does_not_need_verbose(self, tmp_path, capsys):
+    def test_it_does_not_need_verbose(self, tmp_path, capsys, monkeypatch):
         """``--verbose`` turns on INFO logging; it is not a request for
         the tool's only output."""
-        plain = self._run(tmp_path, capsys)
+        plain = self._run(tmp_path, capsys, monkeypatch)
         assert "Total CV terms found: 3" in plain
 
     def test_the_most_common_terms_carry_their_names_not_their_xsd_types(
-        self, tmp_path, capsys
+        self, tmp_path, capsys, monkeypatch
     ):
         """``ONTOLOGY.get_term`` returns ``(name, data_type)``.
 
@@ -310,18 +288,20 @@ class TestTheSummaryReachesTheUser:
         IMS:1000080 and ``None`` for a term with no declared type, where
         the term's name belongs.
         """
-        out = self._run(tmp_path, capsys)
+        out = self._run(tmp_path, capsys, monkeypatch)
         assert "IMS:1000080 (universally unique identifier)" in out
         assert "xsd:string" not in out
 
-    def test_the_unknown_term_is_named_inside_the_summary(self, tmp_path, capsys):
+    def test_the_unknown_term_is_named_inside_the_summary(
+        self, tmp_path, capsys, monkeypatch
+    ):
         """Within the summary block, not merely somewhere in the output.
 
         The unknown-terms report printed the accession anyway, so
         asserting it appears at all passes without the summary ever being
         reached.
         """
-        out = self._run(tmp_path, capsys)
+        out = self._run(tmp_path, capsys, monkeypatch)
         summary = out.split("Found 1 unknown terms:")[0]
         assert "Unknown Terms:" in summary
         assert "IMS:9999999" in summary

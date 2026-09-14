@@ -34,49 +34,49 @@ class TestTheTally:
     def _tally(self):
         return DropTally(logging.getLogger(_TALLY_LOGGER), "frames with no coordinates")
 
-    def test_nothing_dropped_says_nothing(self, caplog):
+    def test_nothing_dropped_says_nothing(self, thyra_logs):
         tally = self._tally()
-        with caplog.at_level(logging.DEBUG, logger=_TALLY_LOGGER):
+        with thyra_logs(_TALLY_LOGGER, logging.DEBUG) as records:
             tally.summarise(10)
-        assert caplog.records == []
+        assert list(records) == []
 
-    def test_the_first_drop_warns_with_its_cause(self, caplog):
+    def test_the_first_drop_warns_with_its_cause(self, thyra_logs):
         tally = self._tally()
-        with caplog.at_level(logging.DEBUG, logger=_TALLY_LOGGER):
+        with thyra_logs(_TALLY_LOGGER, logging.DEBUG) as records:
             tally.drop("frame 7", OSError("truncated"))
-        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        warnings = [r for r in records if r.levelno == logging.WARNING]
         assert len(warnings) == 1
         assert "frame 7" in warnings[0].getMessage()
         assert "truncated" in warnings[0].getMessage()
 
-    def test_the_rest_go_to_debug(self, caplog):
+    def test_the_rest_go_to_debug(self, thyra_logs):
         tally = self._tally()
-        with caplog.at_level(logging.DEBUG, logger=_TALLY_LOGGER):
+        with thyra_logs(_TALLY_LOGGER, logging.DEBUG) as records:
             for frame_id in range(1, 6):
                 tally.drop(f"frame {frame_id}")
-        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-        debugs = [r for r in caplog.records if r.levelno == logging.DEBUG]
+        warnings = [r for r in records if r.levelno == logging.WARNING]
+        debugs = [r for r in records if r.levelno == logging.DEBUG]
         assert len(warnings) == 1
         assert len(debugs) == 4
 
-    def test_the_total_is_reported_once_with_the_fraction(self, caplog):
+    def test_the_total_is_reported_once_with_the_fraction(self, thyra_logs):
         tally = self._tally()
-        with caplog.at_level(logging.DEBUG, logger=_TALLY_LOGGER):
+        with thyra_logs(_TALLY_LOGGER, logging.DEBUG) as records:
             for frame_id in range(1, 4):
                 tally.drop(f"frame {frame_id}")
             tally.summarise(5)
         summaries = [
-            r.getMessage() for r in caplog.records if "Dropped 3 of 5" in r.getMessage()
+            r.getMessage() for r in records if "Dropped 3 of 5" in r.getMessage()
         ]
         assert len(summaries) == 1
         assert "frames with no coordinates" in summaries[0]
 
-    def test_an_unknown_total_still_reports_the_count(self, caplog):
+    def test_an_unknown_total_still_reports_the_count(self, thyra_logs):
         tally = self._tally()
-        with caplog.at_level(logging.DEBUG, logger=_TALLY_LOGGER):
+        with thyra_logs(_TALLY_LOGGER, logging.DEBUG) as records:
             tally.drop("frame 1")
             tally.summarise(None)
-        assert any("Dropped 1 frames" in r.getMessage() for r in caplog.records)
+        assert any("Dropped 1 frames" in r.getMessage() for r in records)
 
 
 class TestTheFrameLoopUsesIt:
@@ -99,19 +99,19 @@ class TestTheFrameLoopUsesIt:
         )
         return lambda: BrukerReader._iter_frames(stub)
 
-    def test_three_missing_of_five_warn_once_and_summarise_once(self, caplog):
+    def test_three_missing_of_five_warn_once_and_summarise_once(self, thyra_logs):
         iter_frames = self._reader(
             lambda frame_id: None if frame_id in (2, 3, 4) else (frame_id, 0, 0)
         )
         module = "thyra.readers.bruker.timstof.timstof_reader"
-        with caplog.at_level(logging.DEBUG, logger=module):
+        with thyra_logs(module, logging.DEBUG) as records:
             kept = list(iter_frames())
 
         assert [frame_id for frame_id, _ in kept] == [1, 5]
-        messages = [r.getMessage() for r in caplog.records if r.name == module]
+        messages = [r.getMessage() for r in records]
         warnings = [
             r.getMessage()
-            for r in caplog.records
+            for r in records
             if r.name == module and r.levelno == logging.WARNING
         ]
         # One naming the first dropped frame, one carrying the total.
@@ -122,12 +122,12 @@ class TestTheFrameLoopUsesIt:
         assert any("frame 3" in m for m in messages)
         assert any("frame 4" in m for m in messages)
 
-    def test_a_clean_pass_says_nothing(self, caplog):
+    def test_a_clean_pass_says_nothing(self, thyra_logs):
         iter_frames = self._reader(lambda frame_id: (frame_id, 0, 0))
         module = "thyra.readers.bruker.timstof.timstof_reader"
-        with caplog.at_level(logging.WARNING, logger=module):
+        with thyra_logs(module, logging.WARNING) as records:
             assert len(list(iter_frames())) == 5
-        assert [r for r in caplog.records if r.name == module] == []
+        assert [r for r in records] == []
 
 
 class TestARefusalIsNotDemotedToADrop:

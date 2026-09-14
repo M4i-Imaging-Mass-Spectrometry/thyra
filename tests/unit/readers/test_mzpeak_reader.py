@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 from tests.fixtures.mzpeak_builder import Spectrum, build_mzpeak, grid_spectra
+from thyra.errors import ConversionRefused
 from thyra.readers.mzpeak import MzPeakReader
 
 
@@ -338,7 +339,7 @@ class TestRefusals:
             include_positions=False,
         )
 
-        with pytest.raises(ValueError, match="not an imaging mzPeak archive"):
+        with pytest.raises(ConversionRefused, match="not an imaging mzPeak archive"):
             with MzPeakReader(archive) as reader:
                 reader.get_essential_metadata()
 

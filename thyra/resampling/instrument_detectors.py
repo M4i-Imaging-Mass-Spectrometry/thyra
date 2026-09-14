@@ -11,7 +11,12 @@ from abc import ABC, abstractmethod
 from typing import List, Optional, Tuple
 
 from .data_characteristics import DataCharacteristics
-from .mass_axis.tof_generator import DEFAULT_BINS_PER_FWHM, MRT_TOF_LAW, TIMSTOF_TOF_LAW
+from .mass_axis.tof_generator import (
+    DEFAULT_BINS_PER_FWHM,
+    MRT_TOF_LAW,
+    PHI_NANOTOF_LAW,
+    TIMSTOF_TOF_LAW,
+)
 from .types import AxisType, ResamplingMethod
 
 logger = logging.getLogger(__name__)
@@ -19,6 +24,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "DEFAULT_BINS_PER_FWHM",
     "MRT_TOF_LAW",
+    "PHI_NANOTOF_LAW",
     "TIMSTOF_TOF_LAW",
 ]
 
@@ -326,6 +332,14 @@ class PhiToFSIMSDetector(InstrumentDetector):
     spread over m/z 0.5-1850 -- fabricates intensity in every bin between
     them. The TIC rescale then hides the damage behind a total that still
     balances.
+
+    A PHI pixel is a list of ion arrival times, so re-binning it is exact:
+    nearest neighbour just re-histograms counts that have no width of their
+    own. Nothing is interpolated and nothing is lost, and the only question
+    the axis has to answer is how fine a histogram keeps the peak shape.
+    That makes this the clearest case in Thyra for bins that track the
+    measured peak width -- :attr:`AxisType.TOF` and
+    :data:`~thyra.resampling.mass_axis.tof_generator.PHI_NANOTOF_LAW`.
     """
 
     @property
@@ -349,8 +363,41 @@ class PhiToFSIMSDetector(InstrumentDetector):
         return ResamplingMethod.NEAREST_NEIGHBOR
 
     def get_axis_type(self) -> AxisType:
-        """Return the linear-TOF law the detector's own grid follows."""
-        return AxisType.LINEAR_TOF
+        """Return the two-term TOF law: bins that follow the measured width.
+
+        Not ``linear_tof``, which is the law of the *digitiser's* grid and
+        is still reported by :attr:`source_grid_law`. The target axis has a
+        different job: it should track how wide a peak is, and on this
+        instrument the two are different laws. Measured resolving power
+        climbs from about 2,200 at m/z 10 to a plateau near 4,250 above
+        m/z 60, which is neither single-term limit -- ``linear_tof`` has R
+        climbing as ``sqrt(m)`` without end, ``reflector_tof`` has it flat
+        throughout -- and is exactly the knee the two-term law describes.
+
+        The cost of the old answer was measurable. Inheriting the generic
+        ``linear_tof`` default of 17 mDa at m/z 300 put 42% of the peaks
+        measured across the corpus under two bins per peak width, and one
+        single bin inside the 6 mDa window the reference acquisition's own
+        peak list uses at nominal m/z 27 to separate C15N- from 13CN-.
+        Against the instrument's own ``.bif6`` peak-image export, per-peak
+        recovery ran 88.6-113.1% with a worst correlation of 0.9024; on the
+        axis this law lays it is 92.8-105.1% at 0.9695, better correlated
+        than even the unresampled store, for 11% more bytes.
+        """
+        return AxisType.TOF
+
+    def get_tof_law(
+        self, characteristics: DataCharacteristics
+    ) -> Optional[Tuple[float, float]]:
+        """The pair fitted on 311 peaks from 12 nanoTOF acquisitions."""
+        return PHI_NANOTOF_LAW
+
+    # ``get_reference_width`` stays ``None``, as on
+    # :class:`WatersMRTCentroidDetector`: a TOF axis is sized in bins per
+    # peak width, and the law plus ``DEFAULT_BINS_PER_FWHM`` already fix the
+    # width at every m/z. A width declared here would be a second spelling
+    # of the same quantity, and ``_reference_params`` would never read it --
+    # it answers for a ``tof`` axis before it consults a detector's width.
 
     @property
     def source_grid_law(self) -> Optional[AxisType]:
@@ -363,6 +410,11 @@ class PhiToFSIMSDetector(InstrumentDetector):
         :attr:`AxisType.LINEAR_TOF`. Measured on the reference acquisition:
         9.8e-5 u per channel at m/z 1 against 5.0e-4 at m/z 26, a ratio of
         5.1 where ``sqrt(26)`` is 5.099.
+
+        This is deliberately *not* the law :meth:`get_axis_type` asks for.
+        The digitiser's step and the instrument's peak width follow
+        different laws here, and only the second one has any business
+        setting a bin width.
 
         Declaring it is documentation of the acquisition, not a switch.
         ``_gate_tic_preserving`` governs auto-selection only, and this

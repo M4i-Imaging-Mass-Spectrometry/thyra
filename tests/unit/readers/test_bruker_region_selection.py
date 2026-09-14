@@ -6,6 +6,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import pytest
 
+from thyra.errors import ConversionRefused
 from thyra.readers.bruker.timstof.timstof_reader import BrukerReader
 
 _MODULE_LOGGER_NAME = "thyra.readers.bruker.timstof.timstof_reader"
@@ -101,7 +102,7 @@ def test_resolve_string_falls_back_to_int_when_name_unknown() -> None:
 
 def test_resolve_string_raises_when_name_unknown_and_not_int() -> None:
     h = _harness(["A", "B", "C"], [(0, 10), (1, 20), (2, 30)], "doesnotexist")
-    with pytest.raises(ValueError, match="not a recognised .mis Area Name"):
+    with pytest.raises(ConversionRefused, match="not a recognised .mis Area Name"):
         h._resolve_requested_region()
 
 
@@ -172,12 +173,12 @@ class TestASingleRegionSetStillChecksTheRequest:
 
     def test_an_unparseable_request_is_refused(self) -> None:
         h = _harness(["01"], [(0, 713)], "foo")
-        with pytest.raises(ValueError, match="not a recognised .mis Area Name"):
+        with pytest.raises(ConversionRefused, match="not a recognised .mis Area Name"):
             h._select_region()
 
     def test_a_region_that_is_not_there_is_refused(self) -> None:
         h = _harness(["01"], [(0, 713)], "3")
-        with pytest.raises(ValueError, match="Region 3 not found"):
+        with pytest.raises(ConversionRefused, match="Region 3 not found"):
             h._select_region()
 
     def test_the_only_region_is_accepted_and_converts_everything(self) -> None:
@@ -192,7 +193,7 @@ class TestASingleRegionSetStillChecksTheRequest:
 
     def test_a_request_with_no_region_information_is_refused(self) -> None:
         h = _harness([], [], "01")
-        with pytest.raises(ValueError, match="no region information"):
+        with pytest.raises(ConversionRefused, match="no region information"):
             h._select_region()
 
     def test_no_request_with_no_region_information_still_converts(self) -> None:

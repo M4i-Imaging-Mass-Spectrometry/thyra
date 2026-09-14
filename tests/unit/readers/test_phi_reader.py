@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from thyra.core.registry import detect_format
+from thyra.errors import ConversionRefused
 from thyra.readers.phi import PhiReader, build_mass_axis, parse_phi_header, scan_blocks
 from thyra.readers.phi.event_stream import decode_events
 
@@ -156,18 +157,18 @@ class TestHeaderParsing:
     def test_rejects_non_phi_file(self, tmp_path):
         path = tmp_path / "other.raw"
         path.write_bytes(b"NOTPHI" + b"\x00" * 100)
-        with pytest.raises(ValueError, match="SOFH"):
+        with pytest.raises(ConversionRefused, match="SOFH"):
             parse_phi_header(path)
 
     def test_rejects_unterminated_header(self, tmp_path):
         path = tmp_path / "trunc.raw"
         path.write_bytes(b"SOFH\r\nImagePixels: 4\r\n")
-        with pytest.raises(ValueError, match="EOFH"):
+        with pytest.raises(ConversionRefused, match="EOFH"):
             parse_phi_header(path)
 
     def test_rejects_empty_flight_time_range(self, tmp_path):
         path = write_raw(tmp_path / "bad.raw", b"", start_us="9.0", stop_us="1.0")
-        with pytest.raises(ValueError, match="flight-time range"):
+        with pytest.raises(ConversionRefused, match="flight-time range"):
             parse_phi_header(path)
 
 
@@ -196,7 +197,7 @@ class TestBlockScan:
 
     def test_raises_when_no_event_blocks(self, tmp_path):
         path = write_raw(tmp_path / "empty.raw", block(2))
-        with pytest.raises(ValueError, match="No event blocks"):
+        with pytest.raises(ConversionRefused, match="No event blocks"):
             scan_blocks(path, parse_phi_header(path))
 
     def test_appended_calibration_is_recovered(self, tmp_path):
@@ -290,11 +291,11 @@ class TestMassAxis:
         np.testing.assert_allclose(recomputed, good.mz[-n:], rtol=1e-9)
 
     def test_rejects_non_positive_bin_size(self):
-        with pytest.raises(ValueError, match="SpecBinSize"):
+        with pytest.raises(ConversionRefused, match="SpecBinSize"):
             build_mass_axis(1.0, 0.0, 0.0, 10.0, 0.0)
 
     def test_rejects_empty_mass_window(self):
-        with pytest.raises(ValueError, match="No time channel"):
+        with pytest.raises(ConversionRefused, match="No time channel"):
             build_mass_axis(1.0, 0.0, 0.0, 10.0, 1000.0, 500.0, 900.0)
 
 
@@ -430,7 +431,7 @@ class TestPhiReader:
     def test_rejects_directory(self, tmp_path):
         directory = tmp_path / "waters.raw"
         directory.mkdir()
-        with pytest.raises(ValueError, match="must be a file"):
+        with pytest.raises(ConversionRefused, match="must be a file"):
             PhiReader(directory)
 
 
@@ -484,11 +485,11 @@ class TestRegistryDetection:
     def test_waters_directory_without_func_files_still_errors(self, tmp_path):
         directory = tmp_path / "empty.raw"
         directory.mkdir()
-        with pytest.raises(ValueError, match="_FUNC"):
+        with pytest.raises(ConversionRefused, match="_FUNC"):
             detect_format(directory)
 
     def test_unrecognised_raw_file_is_reported(self, tmp_path):
         path = tmp_path / "mystery.raw"
         path.write_bytes(b"XXXX" + b"\x00" * 64)
-        with pytest.raises(ValueError, match="Unrecognised .raw file"):
+        with pytest.raises(ConversionRefused, match="Unrecognised .raw file"):
             detect_format(path)

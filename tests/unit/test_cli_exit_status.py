@@ -66,6 +66,11 @@ class TestExitStatus:
         False, so this exercises the real CLI path rather than a
         monkeypatched stub. Exit code 1 rather than click's 2 confirms the
         failure came from the conversion, not from argument parsing.
+
+        The refusal is raised in ``thyra/core/registry.py``, before any
+        reader is constructed, so the traceback assertion here covers the
+        detection layer. The two reader- and extractor-level raise sites are
+        covered in ``tests/unit/test_cli_refusals.py`` (issue #304).
         """
         unknown_input = temp_dir / "not_an_msi_file.txt"
         unknown_input.write_text("not MSI data")
@@ -74,6 +79,7 @@ class TestExitStatus:
         result = _invoke(runner, unknown_input, output_path)
 
         assert result.exit_code == 1, result.output
+        assert "Traceback" not in result.output
 
 
 #: The logger the base workflow reports a refusal on. Named rather than

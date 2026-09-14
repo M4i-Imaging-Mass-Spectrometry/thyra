@@ -1,4 +1,4 @@
-﻿# thyra/metadata/extractors/mzpeak_extractor.py
+# thyra/metadata/extractors/mzpeak_extractor.py
 """Metadata extraction for mzPeak archives.
 
 Everything here comes from two places: the per-spectrum columns of

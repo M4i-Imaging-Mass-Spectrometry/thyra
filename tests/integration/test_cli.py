@@ -12,10 +12,10 @@ from thyra.__main__ import main
 class TestCommandLineInterface:
     """Test the command-line interface."""
 
-    def test_cli_help(self, capsys):
+    def test_cli_help(self, capsys, monkeypatch):
         """Test the help output."""
         # Set up command line arguments
-        sys.argv = ["thyra", "--help"]
+        monkeypatch.setattr(sys, "argv", ["thyra", "--help"])
 
         # Run main with exit handling
         with pytest.raises(SystemExit) as e:
@@ -54,17 +54,21 @@ class TestCommandLineInterface:
         output_path = temp_dir / "cli_output.h5ad"
 
         # Use monkeypatch to simulate command line arguments
-        sys.argv = [
-            "thyra",
-            str(imzml_path),
-            str(output_path),
-            "--format",
-            "spatialdata",
-            "--dataset-id",
-            "cli_test",
-            "--pixel-size",
-            "3.5",
-        ]
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "thyra",
+                str(imzml_path),
+                str(output_path),
+                "--format",
+                "spatialdata",
+                "--dataset-id",
+                "cli_test",
+                "--pixel-size",
+                "3.5",
+            ],
+        )
 
         # Run main with exit handling
         try:
@@ -77,10 +81,10 @@ class TestCommandLineInterface:
         assert code == 0
         assert output_path.exists()
 
-    def test_cli_missing_args(self, capsys):
+    def test_cli_missing_args(self, capsys, monkeypatch):
         """Test CLI behavior with missing arguments."""
         # Set up command line arguments with missing output
-        sys.argv = ["thyra", "input.imzML"]
+        monkeypatch.setattr(sys, "argv", ["thyra", "input.imzML"])
 
         # Run main with exit handling
         with pytest.raises(SystemExit):
@@ -93,7 +97,7 @@ class TestCommandLineInterface:
         assert "error" in captured.err.lower()
 
     def test_cli_rejects_a_format_it_does_not_write(
-        self, create_minimal_imzml, temp_dir
+        self, create_minimal_imzml, temp_dir, monkeypatch
     ):
         """An unknown ``--format`` value fails before any data is read.
 
@@ -107,13 +111,17 @@ class TestCommandLineInterface:
         output_path = temp_dir / "invalid_format.h5ad"
 
         # Set up command line arguments with invalid format
-        sys.argv = [
-            "thyra",
-            str(imzml_path),
-            str(output_path),
-            "--format",
-            "invalid_format",
-        ]
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "thyra",
+                str(imzml_path),
+                str(output_path),
+                "--format",
+                "invalid_format",
+            ],
+        )
 
         # Run main with exit handling
         with pytest.raises(SystemExit) as e:
@@ -142,14 +150,18 @@ class TestCommandLineInterface:
         monkeypatch.setattr("thyra.__main__.convert_msi", mock_convert_msi)
 
         # Set up command line arguments with 3D handling
-        sys.argv = [
-            "thyra",
-            str(imzml_path),
-            str(output_path),
-            "--handle-3d",
-            "--pixel-size",
-            "1.0",
-        ]
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "thyra",
+                str(imzml_path),
+                str(output_path),
+                "--handle-3d",
+                "--pixel-size",
+                "1.0",
+            ],
+        )
 
         # Run main
         try:
@@ -181,15 +193,19 @@ class TestCommandLineInterface:
         monkeypatch.setattr("thyra.__main__.convert_msi", lambda *args, **kwargs: True)
 
         # Set up command line arguments with debug log level
-        sys.argv = [
-            "thyra",
-            str(imzml_path),
-            str(output_path),
-            "--log-level",
-            "DEBUG",
-            "--pixel-size",
-            "1.0",
-        ]
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "thyra",
+                str(imzml_path),
+                str(output_path),
+                "--log-level",
+                "DEBUG",
+                "--pixel-size",
+                "1.0",
+            ],
+        )
 
         # Run main
         try:

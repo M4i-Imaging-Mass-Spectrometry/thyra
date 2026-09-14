@@ -106,7 +106,7 @@ catch-all default. This table is the actual observed behaviour of that chain:
 | imzML declaring an FT-ICR analyzer or model | FT-ICR | `nearest_neighbor` | `fticr` |
 | solariX `.d` (native, peaks.sqlite) | FT-ICR | `nearest_neighbor` | `fticr` |
 | imzML declaring an Orbitrap analyzer or model | Orbitrap | `nearest_neighbor` | `orbitrap` |
-| PHI SmartSoft-TOF `.raw` | PHI SmartSoft-TOF (ToF-SIMS) | `nearest_neighbor` | `linear_tof` |
+| PHI SmartSoft-TOF `.raw` | PHI SmartSoft-TOF (ToF-SIMS) | `nearest_neighbor` | `tof` |
 | Waters MassLynx `.raw`, profile trace (the SELECT SERIES MRT default) | Waters MassLynx (profile trace) | `tic_preserving` | `linear_tof` |
 | Waters MassLynx `.raw`, SELECT SERIES MRT vendor centroid | Waters SELECT SERIES MRT (vendor centroid) | `nearest_neighbor` | `tof` |
 | Waters MassLynx `.raw`, vendor centroid or undeclared, other instruments | Waters MassLynx | `nearest_neighbor` | `reflector_tof` |
@@ -123,9 +123,54 @@ catch-all default. This table is the actual observed behaviour of that chain:
     combination is destructive here: a PHI pixel holds a median of 44
     measured points across m/z 0.5--1850, and interpolating between them
     fabricates intensity in every bin in the gaps, with the TIC rescale
-    hiding it behind a total that still balances. The detector reports the
-    law the data actually follows -- `PhiMassAxis` steps at a constant
-    flight time, so spacing goes as `sqrt(m/z)` -- which is `linear_tof`.
+    hiding it behind a total that still balances.
+
+!!! note "Why PHI's target axis is `tof` and its source law is `linear_tof`"
+    These are two different laws on this instrument, and the row above is
+    the target axis. `PhiMassAxis` steps at a constant flight time, so its
+    *channels* are spaced as `sqrt(m/z)` -- that is `linear_tof`, and it is
+    what `source_grid_law` reports. The *peaks* do not follow that law:
+    measured resolving power climbs from about 2,200 at m/z 10 and levels
+    off near 4,250 above m/z 60, where `linear_tof` would have it climbing
+    as `sqrt(m)` without end and `reflector_tof` would have it flat from the
+    start. Only the peak width has any business setting a bin width, so the
+    target axis takes the two-term law fitted to it.
+
+    Getting this wrong was expensive. PHI used to inherit the generic
+    `linear_tof` default of 17 mDa at m/z 300, which put 42% of the peaks
+    measured across a twelve-acquisition corpus under two bins per peak
+    width, and exactly **one bin** inside the 6 mDa window the reference
+    acquisition's own vendor peak list uses at nominal m/z 27 to separate
+    C<sup>15</sup>N<sup>-</sup> from <sup>13</sup>CN<sup>-</sup>, 6.3 mDa
+    apart. Measured against the instrument's own `.bif6` peak-image export:
+
+    | | `--no-resample` | old `linear_tof` default | `tof` default |
+    |---|---|---|---|
+    | bins | 863,670 | 86,204 | 103,070 |
+    | store | 65.8 MB | 46.5 MB | 51.6 MB |
+    | TIC vs the vendor's own export | exact, 262,144/262,144 px | exact | exact |
+    | per-peak recovery | 97.9--103.6% | 88.6--113.1% | 92.8--105.1% |
+    | worst correlation | 0.9509 | 0.9024 | **0.9695** |
+    | bins in the 6 mDa window at m/z 27 | 12 | **1** | 3 |
+
+    Nearest-neighbour conserves counts, so the total ion image is bit-exact
+    against the vendor's export on all three -- only *windowed* numbers
+    move, and on the old axis they moved in both directions at once
+    (113.1% for one ion, 88.6% for another), which is the signature of one
+    bin per peak.
+
+!!! tip "Resampling stays on by default for PHI"
+    It is reasonable to ask whether PHI should default to `--no-resample`,
+    since the native channel grid is the instrument's own measurement and
+    nothing is interpolated either way. On the tuned axis it should not:
+    the resampled store is 22% smaller, has 8.4x fewer columns, opens about
+    1.8x faster (0.61 s against 1.08 s, medians of four alternating warm
+    reads), and comes out *better* correlated with the vendor's peak images
+    than the unresampled one. Its remaining recovery spread is
+    window-edge quantisation -- the vendor's windows span 3 to 10 bins, and
+    their edges fall mid-bin -- not lost peak shape; the windows with the
+    fewest bins are exactly the ones with the worst recovery. Use
+    `--no-resample` when you need `var["tof_us"]` or the raw channel grid.
 
 !!! info "`tic_preserving` is gated on the source and target axis laws matching"
     A detector may only ask for `tic_preserving` if it knows the spacing law
@@ -399,6 +444,7 @@ isolated peaks by least squares on `FWHM^2 = A m + B m^2`:
 |---|---|---|---|---|
 | SELECT SERIES MRT | 0.0185 | 9.1e-6 | 331,000 | 229 peaks, m/z 300-1000 (R<sup>2</sup> 0.36 on FWHM<sup>2</sup>: the peaks scatter, the trend does not) |
 | timsTOF fleX | 0.0877 | 8.74e-4 | 34,000 | 180 peaks, m/z 300-1000 (R<sup>2</sup> 0.89) |
+| PHI nanoTOF | 0.454 | 0.0284 | 5,900 | 311 peaks, m/z 12-377, across 12 acquisitions (2017-2026, both polarities) -- quantile regression at q = 0.05, not least squares |
 
 The MRT pair reproduces the measured 2.97 / 3.79 / 4.54 mDa at m/z 400 / 600 /
 800; a log-log fit of the same peaks gives an exponent of 0.67, between the
@@ -407,6 +453,24 @@ an MRT centroid list exactly. The timsTOF pair is within 10% of the
 `reflector_tof` shape over m/z 400-1000 (7% at 400, 3% at 600; the constant
 term shows below that and the gap reaches 10% at m/z 300), so nothing changes
 for timsTOF by default and the pair is opt-in.
+
+The nanoTOF pair is fitted differently, and the difference is worth
+understanding if you fit a law for an instrument of your own. Least squares
+runs the law through the *middle* of a corpus, so half of every acquisition's
+peaks come out narrower than it predicts and get fewer bins than intended --
+on this corpus, 12% of peaks would have landed under two bins per peak width.
+The two errors are not symmetric: a peak **broader** than the law simply gets
+more bins than it needs, costing store and nothing else, while a peak
+**narrower** than the law is the one case that loses shape. So the fit is
+placed at the narrow edge instead -- quantile regression at `q = 0.05` on
+`FWHM^2 = A m + B m^2`, which puts 94% of the 311 measured peaks at three bins
+per width or better and none below two. It costs 20% more bins than a
+least-squares fit of the same data, and buys a 6% failure rate instead of
+70%. ToF-SIMS resolving power
+varies by a factor of three between tunes, and a C60 primary beam resolves
+about five times worse again (R 280-1,200 against 1,700-7,100 for Bi<sub>3</sub>);
+those acquisitions are deliberately oversampled by this law rather than
+averaged into it.
 
 The axis lays bins at `FWHM(m) / k` for `k` bins per peak width (default 3).
 The cumulative bin count has a closed form, `(2/sqrt(B)) asinh(sqrt(B m / A))`,
@@ -428,8 +492,8 @@ thyra run.d out.zarr --mass-axis-type tof \
 ```
 
 `--mass-axis-type tof` takes the pair the detected instrument declares (MRT
-centroid, timsTOF); `--tof-law A B` supplies one for an instrument that has
-none, and it is an error to have neither. There is no separate flag for the
+centroid, timsTOF, PHI nanoTOF); `--tof-law A B` supplies one for an
+instrument that has none, and it is an error to have neither. There is no separate flag for the
 bins per peak width: `--resample-width-at-mz` at `--resample-reference-mz`
 fixes it, since `k` is whatever puts a bin of that width at the reference m/z.
 The Python API's `ResamplingConfig` also accepts `bins_per_fwhm` directly.
