@@ -1,4 +1,4 @@
-﻿"""The `thyra validate` / `thyra export-metaspace` subcommands."""
+"""The `thyra validate` / `thyra export-metaspace` subcommands."""
 
 import json
 import shutil

@@ -1,6 +1,7 @@
 # Pre-commit hooks configuration
 #
-# The three whitespace hooks skip the imzML and .ibd files under
+# The four hooks that rewrite bytes in place -- the three whitespace ones and
+# fix-byte-order-marker -- skip the imzML and .ibd files under
 # tests/data/fixtures/, which are byte-exact fixtures rather than source.
 # mixed-line-ending --fix=lf strips the 174 CRLFs that iontof_sparse.imzML
 # exists to prove a real IONTOF export carries -- measured, 11,593 bytes become
@@ -79,6 +80,19 @@ repos:
         args: [--markdown-linebreak-ext=md]
         exclude: ^tests/data/fixtures/([^/]+\.(imzML|ibd)|synthetic_tims\.d/.*)$
       - id: end-of-file-fixer
+        exclude: ^tests/data/fixtures/([^/]+\.(imzML|ibd)|synthetic_tims\.d/.*)$
+      # A UTF-8 BOM is a Windows editor default, and ast.parse rejects the
+      # U+FEFF it produces. That is how a BOM on line 1 of
+      # thyra/metadata/extractors/mzpeak_extractor.py exempted 14 functions
+      # from the CI complexity gate for as long as it sat there, with only a
+      # warning nobody read. The gate now reports such a file instead of
+      # skipping it; this is the half that keeps one from arriving.
+      #
+      # Carries the fixture exclude for the same reason its three siblings
+      # above and below do -- it is the fourth in-place byte rewriter from
+      # this repo, and the header at the top of this file explains what moving
+      # a fixture's bytes costs.
+      - id: fix-byte-order-marker
         exclude: ^tests/data/fixtures/([^/]+\.(imzML|ibd)|synthetic_tims\.d/.*)$
       - id: check-yaml
       - id: check-toml

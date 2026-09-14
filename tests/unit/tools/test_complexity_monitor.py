@@ -19,6 +19,7 @@ which made it a flag with no output at any verbosity.
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -407,3 +408,305 @@ def test_base_ref_candidates_do_not_include_main_when_a_base_is_known(
 
     monkeypatch.delenv("GITHUB_BASE_REF")
     assert monitor._base_ref_candidates() == ["origin/main", "main", "HEAD~1"]
+
+
+@pytest.fixture
+def tree_with_a_bom_prefixed_function(tmp_path):
+    """The same complexity-4 function, written with a UTF-8 BOM in front of it.
+
+    Written with ``write_bytes`` rather than ``write_text(encoding="utf-8-sig")``
+    so that the three bytes under test are visible in the test itself.
+    """
+    package = tmp_path / "thyra"
+    package.mkdir()
+    (package / "tangled.py").write_bytes(
+        b"\xef\xbb\xbf"
+        b"def tangled(a, b, c):\n"
+        b"    if a:\n"
+        b"        return 1\n"
+        b"    if b:\n"
+        b"        return 2\n"
+        b"    if c:\n"
+        b"        return 3\n"
+        b"    return 4\n"
+    )
+    return tmp_path
+
+
+@pytest.fixture
+def tree_with_one_good_and_one_broken_file(tmp_path):
+    """A ``thyra`` package holding one analysable file and one that cannot parse.
+
+    The mix is the point: with only a broken file the run would be empty either
+    way, and the defect under test is a broken file disappearing into an
+    otherwise healthy, passing run.
+    """
+    package = tmp_path / "thyra"
+    package.mkdir()
+    (package / "fine.py").write_text(
+        "def fine(a, b, c):\n"
+        "    if a:\n"
+        "        return 1\n"
+        "    if b:\n"
+        "        return 2\n"
+        "    if c:\n"
+        "        return 3\n"
+        "    return 4\n",
+        encoding="utf-8",
+    )
+    (package / "broken.py").write_text("def f(:\n", encoding="utf-8")
+    return tmp_path
+
+
+@pytest.mark.unit
+def test_a_byte_order_mark_does_not_exempt_a_file(
+    tree_with_a_bom_prefixed_function, monkeypatch, capsys
+) -> None:
+    """A BOM must not remove a file from the gate.
+
+    Regression guard. ``ast.parse`` rejects U+FEFF as a non-printable
+    character, so reading with plain ``utf-8`` turned the whole file into a
+    warning and an empty result list: before the fix this run reported
+    "Analyzed 1 files, 0 functions" and exited 0, the violation never found.
+    """
+    monkeypatch.chdir(tree_with_a_bom_prefixed_function)
+    monkeypatch.setattr(
+        sys, "argv", ["complexity_monitor.py", "--threshold", "3", "--no-save"]
+    )
+
+    exit_code = monitor.main()
+
+    assert exit_code == 1, "the BOM'd file's violation must be found"
+    out = capsys.readouterr().out
+    assert "Analyzed 1 files, 1 functions" in out
+    assert "tangled (4)" in out
+
+
+@pytest.mark.unit
+def test_an_unparseable_file_raises_instead_of_returning_no_functions(
+    tmp_path,
+) -> None:
+    """The shape of the defect: "could not read it" must not be an empty result.
+
+    Regression guard, and the counterpart of
+    ``test_shallow_checkout_raises_instead_of_returning_nothing`` above.
+    ``generate_report`` cannot tell an empty list from a file holding no
+    functions, so returning one exempted the file silently.
+    """
+    broken = tmp_path / "broken.py"
+    broken.write_text("def f(:\n", encoding="utf-8")
+
+    with pytest.raises(monitor.FileAnalysisError) as excinfo:
+        monitor.analyze_file(broken)
+
+    assert "broken.py" in str(excinfo.value), "the message should name the file"
+    assert excinfo.value.__cause__ is not None, "the parse error should be chained"
+
+
+@pytest.mark.unit
+def test_a_file_that_cannot_be_opened_is_reported_the_same_way(tmp_path) -> None:
+    """An unreadable path is a gate that did not run, like an unparseable one.
+
+    This case never even had a warning to fall back on: ``OSError`` sat outside
+    the old ``except`` clause entirely, so a missing file escaped
+    ``analyze_file`` as a bare traceback.
+    """
+    with pytest.raises(monitor.FileAnalysisError):
+        monitor.analyze_file(tmp_path / "does_not_exist.py")
+
+
+@pytest.mark.unit
+def test_a_deeply_nested_lambda_chain_does_not_escape_as_a_traceback(
+    tmp_path,
+) -> None:
+    """The visitor's own recursion is a parse failure too, and must be caught.
+
+    A ``lambda:`` chain needs neither parentheses nor indentation, so it clears
+    the tokenizer's depth limits and then exhausts the stack inside
+    ``ComplexityAnalyzer.visit``. Before the fix that ``RecursionError``
+    escaped and exited 1, which the workflow prints as "complexity violations
+    found" -- the same conflation of a broken gate with a code-quality result
+    that this issue exists to remove.
+    """
+    deep = tmp_path / "deep.py"
+    deep.write_text(
+        "def outer():\n    f = " + "lambda: " * 500 + "1\n", encoding="utf-8"
+    )
+
+    with pytest.raises(monitor.FileAnalysisError):
+        monitor.analyze_file(deep)
+
+
+@pytest.mark.unit
+def test_main_exits_three_and_names_the_file_it_could_not_parse(
+    tree_with_one_good_and_one_broken_file, monkeypatch, capsys
+) -> None:
+    """A file the gate could not read fails the run, under its own exit code.
+
+    Regression guard. Before the fix this exact tree exited 0 with a warning on
+    stdout, which the workflow reports as "SUCCESS: No complexity violations
+    found".
+    """
+    monkeypatch.chdir(tree_with_one_good_and_one_broken_file)
+    monkeypatch.setattr(
+        sys, "argv", ["complexity_monitor.py", "--threshold", "15", "--no-save"]
+    )
+
+    exit_code = monitor.main()
+
+    assert exit_code == monitor.EXIT_UNREADABLE_FILES
+    err = capsys.readouterr().err
+    assert "ERROR" in err
+    assert "broken.py" in err, "the log must name the file that was skipped"
+    assert "did not cover" in err
+
+
+@pytest.mark.unit
+def test_the_analysed_count_excludes_a_file_that_could_not_be_parsed(
+    tree_with_one_good_and_one_broken_file, monkeypatch, capsys
+) -> None:
+    """The count must be files read, not files selected.
+
+    Regression guard for the half of the defect the exit code does not cover:
+    the skipped file was not merely absent from the analysis, it was
+    affirmatively counted as analysed.
+    """
+    monkeypatch.chdir(tree_with_one_good_and_one_broken_file)
+    monkeypatch.setattr(
+        sys, "argv", ["complexity_monitor.py", "--threshold", "15", "--no-save"]
+    )
+
+    monitor.main()
+
+    out = capsys.readouterr().out
+    assert "Analyzed 1 files" in out
+    assert "Analyzed 2 files" not in out, "an unparseable file is not an analysed one"
+
+
+@pytest.mark.unit
+def test_unreadable_files_survive_quiet(
+    tree_with_one_good_and_one_broken_file, monkeypatch, capsys
+) -> None:
+    """--quiet suppresses findings about the code, not news that the gate broke."""
+    monkeypatch.chdir(tree_with_one_good_and_one_broken_file)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["complexity_monitor.py", "--threshold", "15", "--no-save", "--quiet"],
+    )
+
+    exit_code = monitor.main()
+
+    assert exit_code == monitor.EXIT_UNREADABLE_FILES
+    captured = capsys.readouterr()
+    assert "broken.py" in captured.err
+    assert captured.out == "", "the summary is still what --quiet is for"
+
+
+@pytest.mark.unit
+def test_the_report_is_still_written_when_a_file_could_not_be_parsed(
+    tree_with_one_good_and_one_broken_file, monkeypatch
+) -> None:
+    """Exiting 3 must not cost the artifact the PR comment is built from.
+
+    Regression guard against this fix's own likeliest mistake: returning as
+    soon as the failure is known skips the save block, which leaves the
+    workflow uploading an empty artifact and posting no comment at all --
+    strictly less feedback than the silent exemption being replaced.
+    """
+    monkeypatch.chdir(tree_with_one_good_and_one_broken_file)
+    monkeypatch.setattr(
+        sys, "argv", ["complexity_monitor.py", "--threshold", "15", "--save"]
+    )
+
+    exit_code = monitor.main()
+
+    assert exit_code == monitor.EXIT_UNREADABLE_FILES
+    reports = sorted(
+        (tree_with_one_good_and_one_broken_file / "reports" / "complexity").glob(
+            "complexity_report_*.json"
+        )
+    )
+    assert reports, "the report must still be saved on a failing run"
+
+    saved = json.loads(reports[-1].read_text(encoding="utf-8"))
+    assert saved["files_analyzed"] == 1
+    assert len(saved["unreadable_files"]) == 1
+    assert "broken.py" in saved["unreadable_files"][0]
+
+
+@pytest.mark.unit
+def test_the_report_records_what_was_analysed_and_what_was_not() -> None:
+    """Both keys are part of the report's contract: the PR comment reads them.
+
+    Cannot fail before the change -- the keys did not exist, so this pins the
+    new contract rather than guarding the old defect.
+    """
+    report = monitor.generate_report(
+        [], 15, files_analyzed=1, unreadable_files=["thyra/broken.py: invalid syntax"]
+    )
+
+    assert report["files_analyzed"] == 1
+    assert report["unreadable_files"] == ["thyra/broken.py: invalid syntax"]
+
+
+@pytest.mark.unit
+def test_the_unreadable_exit_code_is_its_own_number() -> None:
+    """complexity-monitoring.yml branches on the literal 3, so pin it here.
+
+    Cannot fail before the change -- the constant is new. It exists so a later
+    edit cannot renumber it without the workflow's ``elif`` being noticed.
+    """
+    assert monitor.EXIT_UNREADABLE_FILES == 3
+    assert monitor.EXIT_UNREADABLE_FILES != monitor.EXIT_CHANGED_FILES_UNKNOWN
+
+
+@pytest.mark.unit
+def test_the_headroom_line_names_the_function_holding_the_margin(
+    tree_with_one_tangled_function, monkeypatch, capsys
+) -> None:
+    """The gate reports how much room is left, not only whether it was exceeded.
+
+    Cannot fail before the change -- the line is new. The threshold in this
+    repository equals the worst function in it, so the margin is zero and the
+    gate is a tripwire under whoever next edits that function; printing the
+    margin is what keeps CI from being the first to mention it.
+    """
+    monkeypatch.chdir(tree_with_one_tangled_function)
+    monkeypatch.setattr(
+        sys, "argv", ["complexity_monitor.py", "--threshold", "5", "--no-save"]
+    )
+
+    assert monitor.main() == 0
+    out = capsys.readouterr().out
+    assert "Closest to the threshold: tangled" in out
+    assert "at 4, 1 below the limit of 5" in out
+
+
+@pytest.mark.unit
+def test_no_tracked_source_file_carries_a_byte_order_mark() -> None:
+    """No BOM may enter the tree, whatever .pre-commit-config.yaml is doing.
+
+    Driven from the index rather than the filesystem for two reasons: an
+    untracked local scratch file must not fail the suite, and reading what is
+    committed is what makes this a guard against ``git commit --no-verify``
+    too. No workflow runs pre-commit today (see #291), so this assertion is the
+    only part of the BOM rule that runs in CI at all.
+    """
+    repo_root = Path(__file__).resolve().parents[3]
+    listed = subprocess.run(
+        ["git", "ls-files", "-z", "--", "thyra/*.py", "tests/*.py"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+    )
+
+    tracked = [name for name in listed.stdout.split(b"\0") if name]
+    assert tracked, "the query should match this repository's Python sources"
+
+    offenders = [
+        name.decode()
+        for name in tracked
+        if (repo_root / name.decode()).read_bytes().startswith(b"\xef\xbb\xbf")
+    ]
+    assert offenders == [], "a UTF-8 BOM makes a file unparseable to ast.parse"
