@@ -624,7 +624,7 @@ def _tof_plan(converter: Any) -> Tuple[float, float, float]:
             raise ConversionRefused(
                 "A 'tof' mass axis needs the width law's coefficients: pass "
                 "--tof-law A B, or convert a run whose instrument declares "
-                "them (SELECT SERIES MRT centroid, timsTOF)."
+                "them (SELECT SERIES MRT centroid, timsTOF, PHI nanoTOF)."
             )
         a, b = law
     generator = TOFAxisGenerator(float(a), float(b))

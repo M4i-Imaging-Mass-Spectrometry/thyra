@@ -860,7 +860,8 @@ class GroupedCommand(click.Command):
         "Mass axis spacing type (default: auto-detect). 'tof' lays bins at a "
         "measured peak width sqrt(A m + B m^2) mDa, of which linear_tof "
         "(B=0) and reflector_tof (A=0) are the limits; the instrument's own "
-        "pair applies (SELECT SERIES MRT centroid, timsTOF) unless --tof-law "
+        "pair applies (SELECT SERIES MRT centroid, timsTOF, PHI nanoTOF) "
+        "unless --tof-law "
         "gives one."
     ),
 )
@@ -872,7 +873,8 @@ class GroupedCommand(click.Command):
     metavar="A B",
     help=(
         "Coefficients of the 'tof' width law, A in mDa^2/Da and B "
-        "dimensionless (MRT 0.0185 9.1e-6, timsTOF 0.0877 8.74e-4). Only "
+        "dimensionless (MRT 0.0185 9.1e-6, timsTOF 0.0877 8.74e-4, PHI "
+        "nanoTOF 0.454 0.0284). Only "
         "needed for an instrument Thyra has no pair for. Bins per peak "
         "width default to 3; --resample-width-at-mz sets them otherwise."
     ),
