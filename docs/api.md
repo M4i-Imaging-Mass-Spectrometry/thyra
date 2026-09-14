@@ -278,6 +278,7 @@ implementing and what each one buys you.
         - get_common_mass_axis
         - get_mass_axis_annotations
         - get_optical_image_paths
+        - get_primary_optical_image_path
         - get_peak_counts_per_pixel
         - iter_spectra
         - get_region_map

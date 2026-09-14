@@ -55,7 +55,7 @@ from ...resampling.tic import preserved_tic, rescale_to_preserved_tic
 from ...resampling.types import AxisType, ResamplingConfig
 from ...utils.zarr_atomic_write import install_windows_atomic_write_retry
 from ._chunking import image_chunks, table_write_config
-from .optical_image import OpticalTiffSource, StreamedOpticalImage
+from .optical_image import StreamedOpticalImage, probe_optical_source
 
 logger = logging.getLogger(__name__)
 
@@ -3562,7 +3562,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
     def _add_optical_images(self, data_structures: Dict[str, Any]) -> None:
         """Load and add optical images from the reader to data structures.
 
-        Finds optical TIFF files associated with the MSI data and adds them
+        Finds the optical images associated with the MSI data and adds them
         as image layers in the SpatialData output. The primary alignment image
         (from .mis <ImageFile>) is loaded first so its dimensions are known
         when computing Scale transforms for the other images.
@@ -3578,23 +3578,55 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             logger.debug("No optical images found")
             return
 
+        self._adopt_reader_primary_optical()
         logger.info(f"Found {len(optical_paths)} optical image(s)")
 
         # Load primary image first so we know its dimensions for scaling others
         primary_paths = [p for p in optical_paths if self._is_primary_optical(p)]
         other_paths = [p for p in optical_paths if not self._is_primary_optical(p)]
 
-        for tiff_path in primary_paths + other_paths:
+        for image_path in primary_paths + other_paths:
             try:
-                self._load_single_optical_image(tiff_path, data_structures)
+                self._load_single_optical_image(image_path, data_structures)
             except Exception as e:
-                logger.warning(f"Failed to load optical image {tiff_path.name}: {e}")
+                logger.warning(f"Failed to load optical image {image_path.name}: {e}")
 
-    def _is_primary_optical(self, tiff_path: Path) -> bool:
-        """Check if a TIFF file is the primary alignment image from .mis."""
+    def _adopt_reader_primary_optical(self) -> None:
+        """Take the .mis alignment image from the reader if nothing else set it.
+
+        ``_compute_optical_alignment`` normally records it while it is
+        reading the .mis, but it returns early whenever there is nothing to
+        align -- no Area definitions, no positions -- and then the primary
+        image is never named even though the .mis names it. The Bruker
+        readers resolve it during folder discovery regardless, so ask them.
+
+        Asked for with ``getattr`` even though ``BaseMSIReader`` defines it,
+        because a reader here is whatever satisfies the interface and not
+        necessarily a subclass: this project's own
+        ``tests/unit/converters/test_streaming_converter.py`` passes in a
+        plain class that implements the methods and inherits nothing. This
+        method is optional and arrived after those readers were written, so
+        not having it has to mean "no designated image", not a crash in the
+        middle of a conversion.
+        """
+        if self._primary_optical_filename:
+            return
+        resolve = getattr(self.reader, "get_primary_optical_image_path", None)
+        primary = resolve() if callable(resolve) else None
+        if primary is not None:
+            self._primary_optical_filename = Path(primary).stem.lower()
+            logger.info(f"Primary alignment image from .mis: {primary.name}")
+
+    def _is_primary_optical(self, image_path: Path) -> bool:
+        """Check if an image file is the primary alignment image from .mis.
+
+        Matched on the stem, not the whole filename: what the .mis names and
+        what is on disk agree on the name but not always on the spelling of
+        the extension, and a folder does not hold the same stem twice.
+        """
         if not self._primary_optical_filename:
             return False
-        return tiff_path.stem.lower() == self._primary_optical_filename
+        return image_path.stem.lower() == self._primary_optical_filename
 
     def _compute_optical_scale_transform(self, x_size: int, y_size: int) -> Any:
         """Compute a Scale transform for a non-primary optical image.
@@ -3659,22 +3691,22 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         )
 
     def _load_single_optical_image(
-        self, tiff_path: Path, data_structures: Dict[str, Any]
+        self, image_path: Path, data_structures: Dict[str, Any]
     ) -> None:
-        """Load a single optical TIFF and add it to data structures.
+        """Load a single optical image and add it to data structures.
 
         The primary image (identified by .mis <ImageFile>) gets an Identity
         transform. Other images get a Scale transform mapping their pixel
         coordinates to the primary image's coordinate space.
 
         Args:
-            tiff_path: Path to the TIFF file
+            image_path: Path to the optical image (TIFF, JPEG, PNG or BMP)
             data_structures: Data structures dict to add the image to
         """
         # Generate a clean name for the image layer
-        image_name = self._generate_optical_image_name(tiff_path)
+        image_name = self._generate_optical_image_name(image_path)
 
-        logger.info(f"Loading optical image: {tiff_path.name} as '{image_name}'")
+        logger.info(f"Loading optical image: {image_path.name} as '{image_name}'")
 
         # Only the page header is read here. The pixels never enter this
         # process whole: the element is declared to SpatialData as a lazy
@@ -3685,7 +3717,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # probe raises for a layout or sample format it cannot read; the
         # per-image guard in _add_optical_images turns that into the same
         # "skip with a warning" the whole-page decode used to give.
-        source = OpticalTiffSource.probe(tiff_path)
+        source = probe_optical_source(image_path)
         n_channels, y_size, x_size = source.shape
 
         # Determine transform.  Two cases:
@@ -3704,7 +3736,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         um_mode = (
             not self._apply_optical_alignment and self._tic_to_image_matrix is not None
         )
-        is_primary = self._is_primary_optical(tiff_path)
+        is_primary = self._is_primary_optical(image_path)
         if is_primary:
             self._primary_optical_dims = (x_size, y_size)
             if um_mode:
@@ -3763,7 +3795,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         if earlier is not None:
             logger.warning(
                 f"Optical image '{image_name}' from {earlier.source.path.name} "
-                f"is replaced by {tiff_path.name}, which maps to the same name"
+                f"is replaced by {image_path.name}, which maps to the same name"
             )
         data_structures["images"][image_name] = streamed.placeholder()
         self._pending_optical_images[image_name] = streamed
@@ -3774,7 +3806,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # characters is truncated), and the alignment image is only
         # distinguishable by its transform, and only when the alignment
         # was applied. Recorded here, written by the root attrs.
-        self._optical_image_sources[image_name] = tiff_path.name
+        self._optical_image_sources[image_name] = image_path.name
         if is_primary:
             self._primary_optical_element = image_name
 
@@ -3876,16 +3908,19 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             "global": {**systems["global"], "reference_element": None},
         }
 
-    def _generate_optical_image_name(self, tiff_path: Path) -> str:
+    def _generate_optical_image_name(self, image_path: Path) -> str:
         """Generate a clean name for an optical image layer.
 
+        The suffix is dropped, so the same acquisition exported as a .tif or
+        a .jpg lands under the same element name.
+
         Args:
-            tiff_path: Path to the TIFF file
+            image_path: Path to the optical image
 
         Returns:
             Clean name for the image layer (e.g., 'optical_0000', 'optical_deriv')
         """
-        stem = tiff_path.stem.lower()
+        stem = image_path.stem.lower()
 
         # Extract meaningful suffix from filename
         if "_0000" in stem:

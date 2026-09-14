@@ -1,4 +1,4 @@
-"""Bounded-memory loading of optical TIFFs into a SpatialData store.
+"""Bounded-memory loading of optical images into a SpatialData store.
 
 The optical images Thyra bundles with a conversion (FlexImaging brightfield,
 typically a 10k x 40k RGB TIFF that decodes to 1-2 GB) used to travel the
@@ -39,14 +39,26 @@ by one *band* of the source, not by the image:
    exact :func:`block_mean`, so a worker holds one source chunk, one
    accumulator and the chunk it is building whatever the image size.
 
+**Formats other than TIFF.** FlexImaging does not always export a TIFF: an
+acquisition's ``.mis`` can name a ``.jpg``, and ``.png`` and ``.bmp`` turn up
+too. Those are single entropy-coded streams with no addressable row range --
+a baseline JPEG cannot be decoded in pieces at all -- so
+:class:`OpticalRasterSource` reads them through Pillow and yields the page
+once, whole, where :class:`OpticalTiffSource` yields bands. Only step 2
+changes: the decoded page still goes straight into the store's level-0 array
+instead of through ``Image2DModel.parse`` (no dask copy), and every pyramid
+level is still reduced from the level below on disk, which is where the
+whole-page route spent most of its memory. :func:`probe_optical_source`
+picks between the two by suffix, on the same list discovery filters on.
+
 The pixel values are those ``xarray``'s ``coarsen`` produces: same
 ``boundary="trim", side="right"`` rule (an odd-sized axis drops its FIRST
 row or column), same float64 mean, same truncating cast back to the source
 dtype. :func:`block_mean` is unit-tested against xarray for exactly that.
 
-**Failure policy.** A TIFF that cannot be decoded used to be skipped with a
-warning before anything was written; now the header is read up front and
-the pixels only after the store exists, so
+**Failure policy.** An optical image that cannot be decoded used to be
+skipped with a warning before anything was written; now the header is read
+up front and the pixels only after the store exists, so
 :meth:`BaseSpatialDataConverter._stream_pending_optical_pixels` keeps that
 contract by dropping the declared element from the store and warning. A
 store never keeps an image whose pixels were not written.
@@ -58,15 +70,17 @@ import itertools
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Sequence, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
 import dask.array as da
 import numpy as np
 import tifffile
 import xarray as xr
 import zarr
+from PIL import Image as PILImage
 from spatialdata.models import Image2DModel
 from spatialdata.transformations import set_transformation
 
@@ -91,6 +105,28 @@ REDUCE_WORKERS = 4
 #: pixel (what FlexImaging exports and practically every RGB TIFF use),
 #: a single sample, or one plane per sample.
 PAGE_LAYOUTS = ("YXS", "YX", "SYX")
+
+#: Suffixes :func:`probe_optical_source` routes to :class:`OpticalTiffSource`.
+#: Everything else goes to :class:`OpticalRasterSource`.
+TIFF_SUFFIXES = (".tif", ".tiff")
+
+#: Pillow modes :class:`OpticalRasterSource` reads as they are, each mapped
+#: to the ``(channels, dtype)`` the decoded array has. Anything not listed
+#: (palette, CMYK, YCbCr, ...) is converted to RGB, or to RGBA when the file
+#: carries transparency: those two are the conversions Pillow supports from
+#: every mode, and converting is the only way to know the channel count at
+#: probe time without decoding.
+_PILLOW_MODES: Dict[str, Tuple[int, str]] = {
+    "L": (1, "uint8"),
+    "LA": (2, "uint8"),
+    "RGB": (3, "uint8"),
+    "RGBA": (4, "uint8"),
+    "I;16": (1, "uint16"),
+    "I;16B": (1, "uint16"),
+    "I;16L": (1, "uint16"),
+    "I": (1, "int32"),
+    "F": (1, "float32"),
+}
 
 Shape = Tuple[int, int, int]
 
@@ -309,6 +345,154 @@ class OpticalTiffSource:
         return decoded
 
 
+@contextmanager
+def _unlimited_pixels() -> Iterator[None]:
+    """Pillow's decompression-bomb ceiling lifted for one open or decode.
+
+    ``Image.MAX_IMAGE_PIXELS`` warns above ~89 megapixels and raises above
+    twice that. It guards a process that opens images it did not ask for;
+    the file here is the acquisition's own optical scan, sitting next to the
+    raw data the user pointed Thyra at, and a whole-slide brightfield export
+    passes both thresholds legitimately -- a 36736 x 21000 FlexImaging scan
+    is 771 Mpx. The TIFF path has no such ceiling, and a refusal here would
+    not be visible as one: the per-image guard turns it into a warning and
+    the store silently loses the image. Restored on the way out rather than
+    cleared once at import, because the attribute is process-wide and shared
+    with every other library in the process.
+    """
+    previous = PILImage.MAX_IMAGE_PIXELS
+    PILImage.MAX_IMAGE_PIXELS = None
+    try:
+        yield
+    finally:
+        PILImage.MAX_IMAGE_PIXELS = previous
+
+
+@dataclass(frozen=True)
+class OpticalRasterSource:
+    """An optical image in a format that is not TIFF: JPEG, PNG or BMP.
+
+    Same surface as :class:`OpticalTiffSource` -- ``shape`` is ``(c, y, x)``,
+    :meth:`bands` yields ``(first_row, band)`` -- so
+    :class:`StreamedOpticalImage` never has to know which of the two it
+    holds. What differs is that these are single entropy-coded streams with
+    no addressable row range, so ``strip_rows`` is the whole height and
+    :meth:`bands` decodes the page once, whole, however small the band
+    budget is. That is the same thing :class:`OpticalTiffSource` already
+    does for a single-strip TIFF.
+
+    ``convert_to`` is the Pillow mode the decode goes through, or ``None``
+    when the file's own mode is one :data:`_PILLOW_MODES` reads directly.
+    It is decided from the header at :meth:`probe` time so the declared
+    channel count and dtype are the ones the pixels will actually have.
+    """
+
+    path: Path
+    shape: Shape
+    dtype: np.dtype
+    mode: str
+    convert_to: Optional[str]
+    strip_rows: int
+
+    @classmethod
+    def probe(cls, path: Union[str, Path]) -> "OpticalRasterSource":
+        """Read the header.
+
+        Pillow's ``open`` parses the header and stops, so nothing is decoded
+        here.
+
+        Raises:
+            OSError: if the file is not an image Pillow recognises
+                (``UnidentifiedImageError`` is one), or is truncated before
+                the header ends -- the same point, and the same per-image
+                skip, as :meth:`OpticalTiffSource.probe`.
+        """
+        path = Path(path)
+        with _unlimited_pixels(), PILImage.open(path) as page:
+            mode = str(page.mode)
+            width, height = (int(n) for n in page.size)
+            # Pillow >= 9.5. Says whether the file carries alpha at all,
+            # including the palette-with-transparency case that plain
+            # ``"A" in mode`` misses.
+            transparent = bool(getattr(page, "has_transparency_data", False))
+        spec = _PILLOW_MODES.get(mode)
+        convert_to: Optional[str] = None
+        if spec is None:
+            convert_to = "RGBA" if transparent else "RGB"
+            spec = _PILLOW_MODES[convert_to]
+        channels, dtype = spec
+        if width < 1 or height < 1:
+            raise ValueError(f"{path.name}: image is {width}x{height}")
+        return cls(
+            path=path,
+            shape=(channels, height, width),
+            dtype=np.dtype(dtype),
+            mode=mode,
+            convert_to=convert_to,
+            strip_rows=height,
+        )
+
+    @property
+    def row_bytes(self) -> int:
+        """Decoded bytes of one full-width row across all channels."""
+        return int(self.shape[0]) * int(self.shape[2]) * int(self.dtype.itemsize)
+
+    def bands(self, rows: int) -> Iterator[Tuple[int, np.ndarray]]:
+        """Yield ``(0, page)``: these formats decode whole or not at all.
+
+        ``rows`` is accepted for the shared surface and ignored;
+        :func:`band_rows` returns the full height for a ``strip_rows`` this
+        large anyway, so the caller asks for the whole page regardless.
+        """
+        del rows
+        with _unlimited_pixels(), PILImage.open(self.path) as page:
+            frame = page if self.convert_to is None else page.convert(self.convert_to)
+            decoded = np.asarray(frame)
+        yield 0, self._to_cyx(decoded)
+
+    def _to_cyx(self, decoded: np.ndarray) -> np.ndarray:
+        """``(y, x)`` or ``(y, x, s)`` as Pillow returns it, to ``(c, y, x)``."""
+        if decoded.ndim == 2:
+            decoded = decoded[:, :, np.newaxis]
+        if decoded.ndim != 3:
+            raise ValueError(
+                f"{self.path.name}: decoded to a {decoded.ndim}-d array, "
+                f"expected 2 or 3 dimensions"
+            )
+        moved = np.moveaxis(decoded, -1, 0)
+        if moved.shape != self.shape:
+            raise ValueError(
+                f"{self.path.name}: decoded to {moved.shape}, "
+                f"but its header said {self.shape}"
+            )
+        return moved
+
+
+#: What :func:`probe_optical_source` returns. The two classes share the
+#: surface :class:`StreamedOpticalImage` uses, not a base class: they have
+#: nothing else in common, and a Protocol would only restate this line.
+OpticalSource = Union[OpticalTiffSource, OpticalRasterSource]
+
+
+def probe_optical_source(path: Union[str, Path]) -> OpticalSource:
+    """Read the header of an optical image, whatever raster format it is.
+
+    TIFF goes to :class:`OpticalTiffSource`, which decodes row bands; every
+    other format goes to :class:`OpticalRasterSource`, which decodes the
+    page whole. The split is by suffix, from the same list discovery filters
+    on (``BrukerFolderStructure.OPTICAL_IMAGE_SUFFIXES``), so the two agree
+    on what a ``.jpg`` is.
+
+    Raises:
+        Whatever the chosen probe raises for a file it cannot read. Callers
+        skip that image with a warning; see the failure policy above.
+    """
+    path = Path(path)
+    if path.suffix.lower() in TIFF_SUFFIXES:
+        return OpticalTiffSource.probe(path)
+    return OpticalRasterSource.probe(path)
+
+
 @dataclass
 class StreamedOpticalImage:
     """One optical image: declared to SpatialData up front, pixels streamed after.
@@ -333,7 +517,7 @@ class StreamedOpticalImage:
     it, under ``optical_images``.
     """
 
-    source: OpticalTiffSource
+    source: OpticalSource
     name: str
     chunks: Tuple[int, ...]
     scale_factors: Sequence[int]
@@ -393,8 +577,9 @@ class StreamedOpticalImage:
         """Fill the element's arrays in ``store_path`` with the real pixels.
 
         Requires the store to hold the element :meth:`placeholder` declared.
-        Level 0 comes from the TIFF in bands; each further level from the
-        level below, one write unit at a time.
+        Level 0 comes from the source in bands (one whole-page band for a
+        format that cannot be decoded in pieces); each further level from
+        the level below, one write unit at a time.
         """
         arrays = self._open_level_arrays(store_path)
         self._stream_level0(arrays[0])
