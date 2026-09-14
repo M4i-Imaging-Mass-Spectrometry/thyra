@@ -31,6 +31,7 @@ else:
 
 from ....core.base_extractor import MetadataExtractor
 from ....core.drop_tally import DropTally
+from ....core.mass_axis import MassAxisAccumulator
 from ....core.mobility import (
     INVERSE_REDUCED_MOBILITY_ACCESSION,
     MOBILITY_KIND_NAMES,
@@ -120,7 +121,21 @@ def build_raw_mass_axis(
     """
     from tqdm import tqdm
 
-    unique_mzs: set[float] = set()
+    # A ``set[float]`` is O(unique) in elements but roughly ten times that
+    # in bytes: every value becomes a boxed CPython float (32 bytes each),
+    # plus the set's own table, plus the pointer list ``sorted()`` builds,
+    # plus the output array. The progress line reported the cost as
+    # ``len(unique_mzs) * 8``, which is the output array alone. The shared
+    # accumulator holds numpy arrays throughout (#294).
+    #
+    # It also fixes a latent defect: ``set`` dedupes NaN by identity and
+    # ``sorted()`` on NaN is meaningless, so a frame carrying a NaN m/z
+    # produced an UNSORTED axis with the NaNs duplicated. The converter
+    # refuses a non-finite axis downstream, so it never shipped, but every
+    # other reader returns ``np.unique``'s answer and now so does this one.
+    #
+    # No cap: ``max_mass_axis_length`` stays an imzML-only default.
+    accumulator = MassAxisAccumulator()
     count = 0
     total_peaks = 0
 
@@ -135,7 +150,7 @@ def build_raw_mass_axis(
     try:
         for coords, mzs, intensities in spectra_iterator:
             if mzs.size > 0:
-                unique_mzs.update(mzs)
+                accumulator.add(mzs)
                 total_peaks += len(mzs)
             count += 1
             pbar.update(1)
@@ -144,9 +159,8 @@ def build_raw_mass_axis(
             if count % 10000 == 0:
                 pbar.set_postfix(
                     {
-                        "unique_mz": len(unique_mzs),
+                        "unique_mz": accumulator.n_unique,
                         "total_peaks": total_peaks,
-                        "memory_est_mb": len(unique_mzs) * 8 / 1024 / 1024,
                     }
                 )
 
@@ -156,7 +170,12 @@ def build_raw_mass_axis(
         pbar.close()
 
     logger.info(f"Total peaks counted: {total_peaks:,}")
-    return (np.array(sorted(unique_mzs)), total_peaks)
+    if not accumulator.saw_any:
+        # Unchanged: an empty source returns an empty axis and lets the
+        # converter refuse it (base_spatialdata_converter), rather than
+        # refusing here. test_build_raw_mass_axis_empty_input pins it.
+        return (np.array([], dtype=np.float64), total_peaks)
+    return (accumulator.finish(), total_peaks)
 
 
 def _get_frame_coordinates(

@@ -31,13 +31,14 @@ import logging
 import sqlite3
 import xml.etree.ElementTree as ET  # nosec B405 - trusted local instrument files
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional, Tuple
+from typing import Any, Dict, Generator, Optional, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
 from tqdm import tqdm
 
 from ....core.base_extractor import MetadataExtractor
+from ....core.mass_axis import MassAxisAccumulator
 from ....core.registry import register_reader
 from ....errors import ConversionRefused
 from ..base_bruker_reader import BrukerBaseMSIReader
@@ -477,7 +478,20 @@ class SolarixReader(BrukerBaseMSIReader):
         instead.
         """
         if self._common_mass_axis is None:
-            chunks: List[NDArray[np.float64]] = []
+            # Folded rather than collected. This held every spectrum's m/z
+            # array in a list and then paid np.concatenate plus np.unique,
+            # so the transient was the size of the whole peak payload
+            # rather than of its distinct values -- three payload-sized
+            # allocations live at once (#294). The fold's peak is O(unique).
+            # No cap here: ``max_mass_axis_length`` remains an imzML-only
+            # default (10M, SCiLS Lab's own limit). Turning it on for this
+            # reader would refuse acquisitions that convert today, which is
+            # a defaults decision rather than part of removing a duplicate
+            # builder. The cap plumbing reaches every reader now, so it is
+            # one argument away when that decision is taken.
+            accumulator = MassAxisAccumulator(
+                max_length=getattr(self, "max_mass_axis_length", None)
+            )
             cursor = self._conn.execute(
                 "SELECT Id, NumPeaks, PeakMzValues FROM Spectra ORDER BY Id"
             )
@@ -485,13 +499,17 @@ class SolarixReader(BrukerBaseMSIReader):
                 mzs = self._decode_blob(
                     spectrum_id, "PeakMzValues", mz_blob, int(num_peaks), np.float64
                 )
-                if mzs.size:
-                    chunks.append(mzs)
-            if not chunks:
-                raise ConversionRefused(
-                    f"Cannot build a mass axis: no peaks in {self.data_path}"
-                )
-            self._common_mass_axis = np.unique(np.concatenate(chunks))
+                accumulator.add(mzs)
+                mzs = None
+            try:
+                self._common_mass_axis = accumulator.finish()
+            except ConversionRefused as e:
+                # Keep this reader's own wording, which names the file.
+                if "No spectra found" in str(e) or "Failed to extract" in str(e):
+                    raise ConversionRefused(
+                        f"Cannot build a mass axis: no peaks in {self.data_path}"
+                    ) from e
+                raise
         return self._common_mass_axis
 
     def _decode_blob(

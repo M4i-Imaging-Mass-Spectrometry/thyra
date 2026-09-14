@@ -59,6 +59,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from ...core.base_reader import BaseMSIReader
+from ...core.mass_axis import MassAxisAccumulator
 from ...core.registry import register_reader
 from ...errors import ConversionRefused
 
@@ -682,20 +683,34 @@ class MzPeakReader(BaseMSIReader):
             return self._common_axis
 
         data = self.archive.parquet("spectrum", "data_arrays")
-        axis = np.empty(0, dtype=np.float64)
+        # ``np.union1d`` per row group re-copied the entire axis every
+        # group, which is O(unique) memory but quadratic work over the
+        # archive. The shared accumulator's buffer capacity tracks the axis
+        # length instead, so the number of merges is logarithmic in the
+        # input (#294).
+        #
+        # No cap: ``max_mass_axis_length`` stays an imzML-only default, so
+        # no archive that converts today starts being refused.
+        accumulator = MassAxisAccumulator(
+            data.metadata.num_row_groups,
+            max_length=getattr(self, "max_mass_axis_length", None),
+        )
         for group in range(data.metadata.num_row_groups):
             table = data.read_row_group(group, columns=["point"])
             mzs = self._point_field(table, "mz")
             # Null-pair padding carries no intensity; excluded so the
             # axis holds only channels that can actually take a value.
-            mzs = mzs[~np.isnan(mzs)]
-            axis = np.union1d(axis, np.unique(mzs))
+            accumulator.add(mzs[~np.isnan(mzs)])
+            mzs = None
 
-        if axis.size == 0:
+        try:
+            axis = accumulator.finish()
+        except ConversionRefused as e:
+            # Keep this reader's own wording, which names the archive.
             raise ConversionRefused(
                 f"{self.data_path} yielded no m/z values; the archive has no "
                 f"usable signal data."
-            )
+            ) from e
         self._common_axis = axis.astype(np.float64, copy=False)
         return self._common_axis
 

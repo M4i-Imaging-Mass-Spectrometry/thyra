@@ -17,6 +17,7 @@ from tqdm import tqdm
 
 from ...core.base_extractor import MetadataExtractor
 from ...core.base_reader import BaseMSIReader
+from ...core.mass_axis import MassAxisAccumulator
 from ...core.msms import (
     COLLISION_INDUCED_DISSOCIATION_ACCESSION,
     FragmentationSchedule,
@@ -701,8 +702,23 @@ class WatersReader(BaseMSIReader):
             self._require_initialized()
         )
 
-        all_mzs: list = []
         total = sum(ml.get_number_of_scans_in_function(handle, f) for f in ms_functions)
+
+        # Folded rather than collected. This held every scan's m/z array in
+        # a list and then paid np.concatenate plus np.unique, so the
+        # transient was the whole peak payload rather than its distinct
+        # values -- three payload-sized allocations live at once. Worst
+        # exactly where Waters usually sits: an MRT defaults to a profile
+        # trace, where every scan shares the same grid, so the unique count
+        # is small and the concatenate is pure waste (#294).
+        #
+        # No cap: ``max_mass_axis_length`` stays an imzML-only default, so
+        # no acquisition that converts today starts being refused. The
+        # plumbing reaches this reader now, one argument away.
+        accumulator = MassAxisAccumulator(
+            total, max_length=getattr(self, "max_mass_axis_length", None)
+        )
+        n_spectra = 0
 
         with tqdm(total=total, desc="Building mass axis", unit="scan") as pbar:
             for func in ms_functions:
@@ -716,22 +732,27 @@ class WatersReader(BaseMSIReader):
 
                     try:
                         mzs, _ = ml.read_spectrum(handle, func, scan)
-                        if mzs.size > 0:
-                            all_mzs.append(mzs)
                     except Exception as e:
                         logger.debug(
                             f"Error reading spectrum func={func} scan={scan}: {e}"
                         )
+                        continue
 
-        if not all_mzs:
-            raise ConversionRefused("No spectra found to build common mass axis")
+                    # Outside the read's try/except, deliberately: a
+                    # max_mass_axis_length refusal is a ConversionRefused,
+                    # which subclasses ValueError, so folding inside that
+                    # handler would swallow it and log it at DEBUG as one
+                    # unreadable scan. Same reasoning as the imzML build.
+                    if mzs.size > 0:
+                        n_spectra += 1
+                        accumulator.add(mzs)
+                    mzs = None
 
-        combined = np.concatenate(all_mzs)
-        self._common_mass_axis_cache = np.unique(combined)
+        self._common_mass_axis_cache = accumulator.finish()
 
         logger.info(
             f"Built common mass axis with {len(self._common_mass_axis_cache):,} "
-            f"unique m/z values from {len(all_mzs):,} spectra"
+            f"unique m/z values from {n_spectra:,} spectra"
         )
         return self._common_mass_axis_cache
 

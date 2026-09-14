@@ -225,11 +225,18 @@ class MassAxisAccumulator:
     than on the size of the file.
     """
 
-    def __init__(self, total_spectra: int, max_length: Optional[int] = None) -> None:
+    def __init__(
+        self, total_spectra: Optional[int] = None, max_length: Optional[int] = None
+    ) -> None:
         """Initialize the accumulator.
 
         Args:
-            total_spectra: Spectrum count, used only in the error message.
+            total_spectra: Spectrum count, used only in the error message,
+                and ``None`` when the reader cannot say cheaply -- solariX
+                is walking a cursor and would need a second ``COUNT(*)``
+                over the table to answer. The message then reports how far
+                the build got without claiming a denominator it does not
+                have.
             max_length: Cap on unique m/z values, or None for unlimited.
         """
         self._total_spectra = total_spectra
@@ -243,6 +250,17 @@ class MassAxisAccumulator:
         #: Spectra handed to :meth:`add`, for the refusal message. Tracked
         #: here so no caller has to keep a loop variable alive for it.
         self.n_seen = 0
+
+    @property
+    def n_unique(self) -> int:
+        """Distinct m/z values folded in so far.
+
+        Only what has been *folded*: values still sitting in the scratch
+        buffer are not counted, so this is a lower bound during a build and
+        exact once :meth:`finish` has run. It is for progress reporting,
+        which is the only thing that asks mid-build.
+        """
+        return 0 if self._acc is None else int(self._acc.size)
 
     def add(self, mzs: NDArray[Any]) -> None:
         """Buffer one spectrum's m/z values, folding first if the buffer is full.
@@ -340,9 +358,14 @@ class MassAxisAccumulator:
             return
         if self._acc.size <= self._max_length:
             return
+        progress = (
+            f"after {self.n_seen:,} of {self._total_spectra:,} spectra"
+            if self._total_spectra is not None
+            else f"after {self.n_seen:,} spectra"
+        )
         raise ConversionRefused(
             f"Common mass axis exceeded {self._max_length:,} unique m/z values "
-            f"after {self.n_seen:,} of {self._total_spectra:,} spectra "
+            f"{progress} "
             f"({self._acc.size:,} so far). The peak lists in this dataset do "
             "not share m/z values, so a raw axis grows to roughly one column "
             "per peak, which is not usable downstream. Convert with resampling "
