@@ -26,6 +26,7 @@ from spatialdata.models import Image2DModel, Image3DModel, TableModel
 from spatialdata.transformations import Affine, Scale
 from tqdm import tqdm
 
+from ...core.conversion_state import ConversionState
 from ...errors import ConversionRefused
 from ...resampling import ResamplingMethod
 from .base_spatialdata_converter import BaseSpatialDataConverter, _kept_mz_range
@@ -444,7 +445,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             for z in range(n_z)
         ]
 
-    def _create_data_structures(self) -> Dict[str, Any]:
+    def _create_data_structures(self) -> ConversionState:
         """Plan the tables and the accumulators the two passes fill.
 
         Returns:
@@ -474,17 +475,14 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # its own per plane, as it always did.
         passes = self._fused_sibling_passes(units[0].key) if len(units) == 1 else None
 
-        data_structures: Dict[str, Any] = {
-            "mode": "3d_volume" if self.handle_3d else "2d_slices",
-            "units": units,
-            "passes": passes,
-            "tables": {},
-            "shapes": {},
-            "images": {},
-            "var_df": self._create_mass_dataframe(),
-            "pixel_count": 0,
-            "avg_spectrum_per_region": None,
-        }
+        # ``mode`` ("3d_volume" / "2d_slices") is not carried: it restated
+        # ``self.handle_3d``, which every stage already has, and nothing in
+        # the package ever read it back (issue #273).
+        state = ConversionState(
+            units=units,
+            passes=passes,
+            var_df=self._create_mass_dataframe(),
+        )
 
         # Per-region accumulators for multi-region datasets. Unlike the
         # per-table average these stay dataset-wide, because a region is:
@@ -493,12 +491,12 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # _finalize_table for what that means for a multi-plane store.
         if self._region_map is not None:
             unique_regions = sorted(set(self._region_map.values()))
-            data_structures["region_total_intensity"] = {
+            state.region_total_intensity = {
                 r: np.zeros(n_cols, dtype=np.float64) for r in unique_regions
             }
-            data_structures["region_row_count"] = {r: 0 for r in unique_regions}
+            state.region_row_count = {r: 0 for r in unique_regions}
 
-        return data_structures
+        return state
 
     def _locate(
         self, units: List[_TableUnit], x: int, y: int, z: int
@@ -542,7 +540,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 continue
             yield frame.coords, spectrum[0], spectrum[1], frame
 
-    def _process_spectra(self, data_structures: Dict[str, Any]) -> None:
+    def _process_spectra(self, state: ConversionState) -> None:
         """Run both passes: count, size the arrays, scatter.
 
         Overrides the base's single pass. The pre-scan is light -- the
@@ -550,11 +548,11 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         it costs is far less than the disk I/O of caching every spectrum
         between the passes, which is what it replaced.
         """
-        units: List[_TableUnit] = data_structures["units"]
-        passes = data_structures["passes"]
+        units: List[_TableUnit] = state.units
+        passes = state.passes
 
         logger.info("Step 1/3: Pre-scan (counting entries per column)...")
-        self._count_pass(data_structures)
+        self._count_pass(state)
 
         logger.info("Step 2/3: Allocating memory-mapped CSC arrays...")
         for unit in units:
@@ -570,8 +568,8 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # Before anything is allocated and before the source is read a
         # second time: a conversion with no row has nothing left to do
         # and no store to write (#242).
-        self._refuse_an_empty_conversion(data_structures)
-        self._finish_region_averages(data_structures)
+        self._refuse_an_empty_conversion(state)
+        self._finish_region_averages(state)
 
         for unit in units:
             unit.assembly.allocate(
@@ -588,7 +586,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 passes.merge_duplicate_rows()
 
         logger.info("Step 3/3: Processing spectra and scattering to CSC...")
-        self._scatter_pass(data_structures)
+        self._scatter_pass(state)
         if passes is not None:
             passes.finish_scattering()
             self._take_fused_results(passes)
@@ -604,7 +602,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         in_plane = kept % (n_x * n_y) if unit.plane is None else kept
         return in_plane % n_x, in_plane // n_x
 
-    def _refuse_an_empty_conversion(self, data_structures: Dict[str, Any]) -> None:
+    def _refuse_an_empty_conversion(self, state: ConversionState) -> None:
         """Refuse a conversion in which no position carries a spectrum.
 
         Such a run used to report success: ``convert_msi`` returned
@@ -636,11 +634,11 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
         raise ConversionRefused(
             f"{self.dataset_id}: no pixel carries a spectrum, so there is no "
-            f"table to write -- {self._why_nothing_survived(data_structures)}. "
+            f"table to write -- {self._why_nothing_survived(state)}. "
             f"Nothing was written to {self.output_path}."
         )
 
-    def _why_nothing_survived(self, data_structures: Dict[str, Any]) -> str:
+    def _why_nothing_survived(self, state: ConversionState) -> str:
         """Which of the routes into an empty store this conversion took.
 
         "Every spectrum was empty" and "every peak fell outside
@@ -655,9 +653,9 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         they hold that one pass's totals -- they count resample calls,
         and an ordinary conversion resamples every spectrum twice.
         """
-        pixel_count = int(data_structures.get("pixel_count", 0))
-        off_grid = int(data_structures.get("out_of_grid_spectra", 0))
-        peaks_in = int(data_structures.get("input_peaks", 0))
+        pixel_count = int(state.pixel_count)
+        off_grid = int(state.out_of_grid_spectra)
+        peaks_in = int(state.input_peaks)
 
         if pixel_count == 0:
             return "the reader yielded no spectra at all"
@@ -685,7 +683,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             )
         return "every intensity in the source is zero"
 
-    def _finish_region_averages(self, data_structures: Dict[str, Any]) -> None:
+    def _finish_region_averages(self, state: ConversionState) -> None:
         """Divide each region's summed intensity by the rows it covers.
 
         The numerator is every spectrum that got a row in the region, so
@@ -700,12 +698,12 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         every plane, and splitting it per plane would answer a question
         the source never asked.
         """
-        region_total = data_structures.get("region_total_intensity")
+        region_total = state.region_total_intensity
         if region_total is None:
             return
 
-        rows: Dict[int, int] = data_structures["region_row_count"]
-        for unit in data_structures["units"]:
+        rows: Dict[int, int] = state.region_row_count
+        for unit in state.units:
             x_idx, y_idx = self._kept_in_plane_xy(unit)
             numbers, counts = np.unique(
                 self.build_region_numbers(x_idx, y_idx), return_counts=True
@@ -714,12 +712,12 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 if region in rows:
                     rows[region] += int(count)
 
-        data_structures["avg_spectrum_per_region"] = {
+        state.avg_spectrum_per_region = {
             str(region): total / max(rows.get(region, 0), 1)
             for region, total in region_total.items()
         }
 
-    def _count_pass(self, data_structures: Dict[str, Any]) -> None:
+    def _count_pass(self, state: ConversionState) -> None:
         """Pass 1: count entries per column, TIC, occupancy, region totals.
 
         The mean spectrum is *not* accumulated here. It is each table's
@@ -729,9 +727,9 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         Also feeds the sibling tables' pass-1 sinks, when ``passes`` is
         set, from the same frame read (see ``fused_passes.py``).
         """
-        units: List[_TableUnit] = data_structures["units"]
-        passes = data_structures["passes"]
-        region_total = data_structures.get("region_total_intensity")
+        units: List[_TableUnit] = state.units
+        passes = state.passes
+        region_total = state.region_total_intensity
 
         pixel_count = 0
         n_out_of_bounds = 0
@@ -821,11 +819,11 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # _process_spectra rather than from here (#241), and no average is
         # taken over it any more (#243). All it sizes now is pass 2's
         # progress bar, which counts the same spectra pass 1 walked.
-        data_structures["pixel_count"] = pixel_count
-        data_structures["out_of_grid_spectra"] = n_out_of_bounds
-        data_structures["input_peaks"] = n_input_peaks
+        state.pixel_count = pixel_count
+        state.out_of_grid_spectra = n_out_of_bounds
+        state.input_peaks = n_input_peaks
 
-    def _scatter_pass(self, data_structures: Dict[str, Any]) -> None:
+    def _scatter_pass(self, state: ConversionState) -> None:
         """Pass 2: resample every spectrum again and scatter it into its table.
 
         Same resampling as the pre-scan, so the two passes agree on which
@@ -845,8 +843,8 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         with it and refuses on the first disagreement. That also catches
         two pixels exchanging spectra, which no count can.
         """
-        units: List[_TableUnit] = data_structures["units"]
-        passes = data_structures["passes"]
+        units: List[_TableUnit] = state.units
+        passes = state.passes
 
         # Reset reader for second pass. For real readers (ImzML, Bruker),
         # iter_spectra() is a generator factory that creates a fresh
@@ -856,7 +854,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         self._suppress_reader_progress()
 
         with tqdm(
-            total=data_structures["pixel_count"],
+            total=state.pixel_count,
             desc="Scatter to CSC" if passes is None else "Scatter to CSC + siblings",
             unit="spectrum",
         ) as pbar:
@@ -894,27 +892,25 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
     # From memmaps to elements
     # ------------------------------------------------------------------
 
-    def _finalize_data(self, data_structures: Dict[str, Any]) -> None:
+    def _finalize_data(self, state: ConversionState) -> None:
         """Build every table, its shapes and its TIC image from the memmaps.
 
         Args:
-            data_structures: What the passes filled.
+            state: What the passes filled.
         """
-        for unit in data_structures["units"]:
+        for unit in state.units:
             if unit.n_rows == 0:
                 logger.warning(
                     "%s: no position carries a spectrum; no table is written " "for it",
                     unit.key,
                 )
                 continue
-            self._finalize_table(data_structures, unit)
+            self._finalize_table(state, unit)
 
         # Add optical images if available
-        self._add_optical_images(data_structures)
+        self._add_optical_images(state)
 
-    def _finalize_table(
-        self, data_structures: Dict[str, Any], unit: _TableUnit
-    ) -> None:
+    def _finalize_table(self, state: ConversionState, unit: _TableUnit) -> None:
         """One table over its memmaps, parsed, with its shapes and TIC image."""
         # The matrix is canonical as scattered when the reader handed its
         # pixels over in raster order (rows are numbered in raster order,
@@ -928,7 +924,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         adata = AnnData(
             X=matrix,
             obs=self._table_obs(unit),
-            var=data_structures["var_df"].copy(),
+            var=state.var_df.copy(),
         )
 
         # This table's own mean spectrum, taken from this table's own
@@ -947,7 +943,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # z: see _finish_region_averages. On a multi-plane store they
         # therefore describe a wider population than the key above, which
         # docs/output-format.md says out loud.
-        per_region = data_structures.get("avg_spectrum_per_region")
+        per_region = state.avg_spectrum_per_region
         if per_region is not None:
             adata.uns["average_spectrum_per_region"] = per_region
 
@@ -974,12 +970,12 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             instance_key="instance_key",
         )
 
-        data_structures["tables"][unit.key] = table
-        data_structures["shapes"][unit.region_key] = self._create_pixel_shapes(adata)
+        state.tables[unit.key] = table
+        state.shapes[unit.region_key] = self._create_pixel_shapes(adata)
         self._attach_sibling_tables(
-            data_structures, unit.key, unit.region_key, adata.obs, z_value=unit.plane
+            state, unit.key, unit.region_key, adata.obs, z_value=unit.plane
         )
-        data_structures["images"][f"{unit.key}_tic"] = self._tic_image(unit)
+        state.images[f"{unit.key}_tic"] = self._tic_image(unit)
 
     def _table_obs(self, unit: _TableUnit) -> pd.DataFrame:
         """``obs`` for the kept rows of one table.

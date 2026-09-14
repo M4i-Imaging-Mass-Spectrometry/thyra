@@ -37,6 +37,7 @@ from spatialdata.transformations import Affine, Identity, Scale, Sequence
 from ...alignment import AreaAlignmentResult, TeachingPointAlignment
 from ...core.base_converter import BaseMSIConverter, PixelSizeSource
 from ...core.base_reader import BaseMSIReader
+from ...core.conversion_state import ConversionState
 from ...errors import ConversionRefused
 from ...metadata.types import ComprehensiveMetadata, EssentialMetadata
 from ...resampling import ResamplingDecisionTree, ResamplingMethod
@@ -1861,7 +1862,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
     def _attach_sibling_tables(
         self,
-        data_structures: Dict[str, Any],
+        state: ConversionState,
         table_key: str,
         region_key: str,
         obs: pd.DataFrame,
@@ -1883,7 +1884,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # over the very data the siblings hold resolved or split.
         sibling_uns = self.build_uns_metadata()
         sibling_uns.pop("mobility_heatmap", None)
-        summed = data_structures["tables"].get(table_key)
+        summed = state.tables.get(table_key)
         if self._mobility_table_key is not None:
             table = self._build_mobility_sibling(
                 obs, table_key, region_key, dict(sibling_uns), z_value
@@ -1891,14 +1892,14 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             if table is not None:
                 if self._mobility_grid is not None:
                     self._record_mobility_marginal(table, summed, table_key)
-                data_structures["tables"][self._mobility_table_key] = table
+                state.tables[self._mobility_table_key] = table
         if self._msms_table_key is not None:
             table = self._build_msms_sibling(
                 obs, table_key, region_key, dict(sibling_uns), z_value
             )
             if table is not None:
                 self._record_demultiplexed_current(table, summed, table_key)
-                data_structures["tables"][self._msms_table_key] = table
+                state.tables[self._msms_table_key] = table
 
     def _build_mobility_sibling(
         self,
@@ -3585,7 +3586,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             f"offset=({tx:.1f}, {ty:.1f})"
         )
 
-    def _add_optical_images(self, data_structures: Dict[str, Any]) -> None:
+    def _add_optical_images(self, state: ConversionState) -> None:
         """Load and add optical images from the reader to data structures.
 
         Finds the optical images associated with the MSI data and adds them
@@ -3594,7 +3595,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         when computing Scale transforms for the other images.
 
         Args:
-            data_structures: Data structures dict to add images to
+            state: Data structures dict to add images to
         """
         if not self._include_optical:
             return
@@ -3613,7 +3614,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         for image_path in primary_paths + other_paths:
             try:
-                self._load_single_optical_image(image_path, data_structures)
+                self._load_single_optical_image(image_path, state)
             except Exception as e:
                 logger.warning(f"Failed to load optical image {image_path.name}: {e}")
 
@@ -3717,7 +3718,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         )
 
     def _load_single_optical_image(
-        self, image_path: Path, data_structures: Dict[str, Any]
+        self, image_path: Path, state: ConversionState
     ) -> None:
         """Load a single optical image and add it to data structures.
 
@@ -3727,7 +3728,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         Args:
             image_path: Path to the optical image (TIFF, JPEG, PNG or BMP)
-            data_structures: Data structures dict to add the image to
+            state: Data structures dict to add the image to
         """
         # Generate a clean name for the image layer
         image_name = self._generate_optical_image_name(image_path)
@@ -3823,7 +3824,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 f"Optical image '{image_name}' from {earlier.source.path.name} "
                 f"is replaced by {image_path.name}, which maps to the same name"
             )
-        data_structures["images"][image_name] = streamed.placeholder()
+        state.images[image_name] = streamed.placeholder()
         self._pending_optical_images[image_name] = streamed
         # Which file this element came from, and whether it is the one the
         # alignment is stated against. Neither is recoverable from the
@@ -3964,11 +3965,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         return f"{self.dataset_id}_optical_{suffix}"
 
-    def _save_output(self, data_structures: Dict[str, Any]) -> bool:
+    def _save_output(self, state: ConversionState) -> bool:
         """Save the data to SpatialData format.
 
         Args:
-            data_structures: Data structures to save
+            state: Data structures to save
 
         Returns:
             True if saving was successful, False otherwise
@@ -3976,9 +3977,9 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         try:
             # Create SpatialData object with images included
             sdata = SpatialData(
-                tables=data_structures["tables"],
-                shapes=data_structures["shapes"],
-                images=data_structures["images"],
+                tables=state.tables,
+                shapes=state.shapes,
+                images=state.images,
             )
 
             # Add metadata
@@ -3999,7 +4000,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             # Every table was written from its memmaps; nothing holds them
             # now but this object and the caller's mapping.
             del sdata
-            self._release_table_scratch(data_structures.get("tables"))
+            self._release_table_scratch(state.tables)
             return True
         except Exception as e:
             logger.error(f"Error saving SpatialData: {e}")
@@ -4396,11 +4397,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         )
 
     @abstractmethod
-    def _create_data_structures(self) -> Dict[str, Any]:
+    def _create_data_structures(self) -> ConversionState:
         """Create data structures for the specific converter type."""
         pass
 
     @abstractmethod
-    def _finalize_data(self, data_structures: Dict[str, Any]) -> None:
+    def _finalize_data(self, state: ConversionState) -> None:
         """Finalize data structures for the specific converter type."""
         pass

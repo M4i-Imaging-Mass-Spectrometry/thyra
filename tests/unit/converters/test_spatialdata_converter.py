@@ -12,6 +12,7 @@ from thyra.converters.spatialdata import (
     SpatialDataConverter,
     StreamingSpatialDataConverter,
 )
+from thyra.core.conversion_state import ConversionState
 
 
 def _create_mock_extractor(dims):
@@ -138,8 +139,8 @@ class TestSpatialDataConverter:
         converter._initialize_conversion()
         data_structures = converter._create_data_structures()
 
-        assert data_structures["mode"] == "2d_slices"
-        units = data_structures["units"]
+        assert converter.handle_3d is False
+        units = data_structures.units
         assert [u.key for u in units] == ["test_dataset_z0", "test_dataset_z1"]
         assert [u.region_key for u in units] == [
             "test_dataset_z0_pixels",
@@ -148,10 +149,11 @@ class TestSpatialDataConverter:
         assert [u.plane for u in units] == [0, 1]
         assert all(u.n_grid == 9 for u in units)
         assert all(u.tic.shape == (3, 3) for u in units)
-        assert isinstance(data_structures["var_df"], pd.DataFrame)
-        assert len(data_structures["var_df"]) == 100
-        for key in ("tables", "shapes", "images"):
-            assert data_structures[key] == {}
+        assert isinstance(data_structures.var_df, pd.DataFrame)
+        assert len(data_structures.var_df) == 100
+        assert data_structures.tables == {}
+        assert data_structures.shapes == {}
+        assert data_structures.images == {}
 
     def test_plans_one_volume_table(self, temp_dir):
         """With 3D handling, the same dataset is one volume table."""
@@ -162,8 +164,8 @@ class TestSpatialDataConverter:
         converter._initialize_conversion()
         data_structures = converter._create_data_structures()
 
-        assert data_structures["mode"] == "3d_volume"
-        (unit,) = data_structures["units"]
+        assert converter.handle_3d is True
+        (unit,) = data_structures.units
         assert unit.key == "msi_dataset"
         assert unit.region_key == "msi_dataset_pixels"
         assert unit.plane is None
@@ -180,7 +182,7 @@ class TestSpatialDataConverter:
         try:
             data_structures = _run_passes(converter)
 
-            for unit in data_structures["units"]:
+            for unit in data_structures.units:
                 matrix = unit.assembly.matrix().tocsr()
                 assert matrix.shape == (9, 100)
                 grid = 1 * 3 + 1  # pixel (1, 1) on this plane
@@ -201,7 +203,7 @@ class TestSpatialDataConverter:
         try:
             data_structures = _run_passes(converter)
 
-            (unit,) = data_structures["units"]
+            (unit,) = data_structures.units
             matrix = unit.assembly.matrix().tocsr()
             assert matrix.shape == (18, 100)
             rows = [int(unit.row_of_grid[z * 9 + 1 * 3 + 1]) for z in (0, 1)]
@@ -226,19 +228,19 @@ class TestSpatialDataConverter:
             data_structures = _run_passes(converter)
             converter._finalize_data(data_structures)
 
-            assert set(data_structures["tables"]) == {
+            assert set(data_structures.tables) == {
                 "test_dataset_z0",
                 "test_dataset_z1",
             }
-            assert set(data_structures["shapes"]) == {
+            assert set(data_structures.shapes) == {
                 "test_dataset_z0_pixels",
                 "test_dataset_z1_pixels",
             }
-            assert set(data_structures["images"]) == {
+            assert set(data_structures.images) == {
                 "test_dataset_z0_tic",
                 "test_dataset_z1_tic",
             }
-            table = data_structures["tables"]["test_dataset_z0"]
+            table = data_structures.tables["test_dataset_z0"]
             assert table.shape == (9, 100)
             assert list(table.obs.columns) == [
                 "y",
@@ -249,10 +251,10 @@ class TestSpatialDataConverter:
                 "region_number",
                 "instance_key",
             ]
-            assert data_structures["images"]["test_dataset_z0_tic"].shape == (1, 3, 3)
-            assert len(data_structures["shapes"]["test_dataset_z0_pixels"]) == 9
+            assert data_structures.images["test_dataset_z0_tic"].shape == (1, 3, 3)
+            assert len(data_structures.shapes["test_dataset_z0_pixels"]) == 9
         finally:
-            converter._release_table_scratch(data_structures["tables"])
+            converter._release_table_scratch(data_structures.tables)
 
     def test_finalize_builds_the_volume_elements(self, temp_dir):
         """One table with depth in obs, one 3D TIC image."""
@@ -263,8 +265,8 @@ class TestSpatialDataConverter:
             data_structures = _run_passes(converter)
             converter._finalize_data(data_structures)
 
-            assert set(data_structures["tables"]) == {"msi_dataset"}
-            table = data_structures["tables"]["msi_dataset"]
+            assert set(data_structures.tables) == {"msi_dataset"}
+            table = data_structures.tables["msi_dataset"]
             assert table.shape == (18, 100)
             assert list(table.obs.columns) == [
                 "x",
@@ -277,9 +279,9 @@ class TestSpatialDataConverter:
                 "region_number",
                 "instance_key",
             ]
-            assert data_structures["images"]["msi_dataset_tic"].shape == (1, 2, 3, 3)
+            assert data_structures.images["msi_dataset_tic"].shape == (1, 2, 3, 3)
         finally:
-            converter._release_table_scratch(data_structures["tables"])
+            converter._release_table_scratch(data_structures.tables)
 
     @patch(
         "thyra.converters.spatialdata.base_spatialdata_converter.zarr.consolidate_metadata"
@@ -310,12 +312,13 @@ class TestSpatialDataConverter:
         # Mock the add_metadata method to avoid any issues there
         converter.add_metadata = MagicMock()
 
-        # Simple data structures
-        data_structures = {
-            "tables": {"table1": "mock_table"},
-            "shapes": {"shape1": "mock_shape"},
-            "images": {},  # Add images key to match converter expectations
-        }
+        # Simple state: only the three element containers matter here.
+        data_structures = ConversionState(
+            units=[],
+            var_df=pd.DataFrame(),
+            tables={"table1": "mock_table"},
+            shapes={"shape1": "mock_shape"},
+        )
 
         # Call the method directly
         result = converter._save_output(data_structures)
