@@ -16,10 +16,13 @@ says what was missing, because "unsupported format" on a directory the
 user believes is supported is the least actionable message this package
 could give.
 
-The ``RLock`` guards the registration tables. It is not a general thread
-safety claim: registration happens at import, which the import lock
-already serialises, and ``_get_bruker_folder_structure()``'s lazy global
-below is *not* covered by it (issue #284).
+The ``RLock`` guards the registration tables and nothing else. It is not a
+general thread-safety claim: the tables are filled while ``thyra.readers``
+imports and only read afterwards. The lazy import below used to memoise
+into an unsynchronised module global -- the one piece of mutable global
+state here, and the one piece the lock did not reach -- and that global is
+gone rather than locked (issue #284). :func:`_get_bruker_folder_structure`
+says why locking it would have been worse than leaving it alone.
 """
 
 import logging
@@ -35,26 +38,56 @@ from .base_reader import BaseMSIReader
 
 logger = logging.getLogger(__name__)
 
-# Import BrukerFolderStructure for unified Bruker format detection
-# This avoids circular imports by importing lazily in the method
-_bruker_folder_structure_module = None
-
 
 def _get_bruker_folder_structure():
-    """Lazy import of BrukerFolderStructure to avoid circular imports."""
-    global _bruker_folder_structure_module
-    if _bruker_folder_structure_module is None:
-        from ..readers.bruker.folder_structure import (
-            BrukerFolderStructure,
-            BrukerFormat,
-        )
+    """Import ``BrukerFolderStructure`` and ``BrukerFormat`` late, to break a cycle.
 
-        _bruker_folder_structure_module = (BrukerFolderStructure, BrukerFormat)
-    return _bruker_folder_structure_module
+    Their module reaches this one through ``thyra.readers.__init__``, which
+    imports every reader package so the ``@register_reader`` decorators run.
+    Importing them at module scope here would close that cycle, so the
+    import is deferred to call time.
+
+    It is a plain import and deliberately not memoised. It used to assign
+    the pair to a module-level global under an unsynchronised
+    check-then-set -- the only mutable global state in this module, and the
+    only part ``MSIRegistry._lock`` did not cover (issue #284). Two things
+    decided deleting the global over locking it:
+
+    * The memo bought 0.07 us per call (measured, 200k calls: 0.035 us
+      against 0.105 us), because ``sys.modules`` already caches the import
+      and a repeat is two dict lookups. This function runs about three
+      times per conversion.
+    * Holding the registry lock across an import is a deadlock shape, not
+      merely a slow one. The holder waits for the ``thyra.readers`` import
+      lock; a thread part-way through importing that package holds it and
+      waits for the registry lock inside a ``@register_reader`` decorator.
+      Neither can finish. Reproduced on CPython 3.13.3 against this exact
+      pair of locks: holding the lock across the import hangs both threads
+      indefinitely, while not holding it completes the same interleaving in
+      1.1 ms.
+    """
+    from ..readers.bruker.folder_structure import BrukerFolderStructure, BrukerFormat
+
+    return BrukerFolderStructure, BrukerFormat
 
 
 class MSIRegistry:
-    """Thread-safe registry with format detection for MSI data."""
+    """Which classes handle a format, and which format a path is.
+
+    Populated at import, read for the rest of the process: the
+    ``@register_reader`` and ``@register_converter`` decorators fill the two
+    tables while ``thyra.readers`` imports, and nothing registers after
+    that.
+
+    ``_lock`` covers those two tables and nothing else. It is not a claim
+    that the class is safe to use concurrently in general -- the detection
+    half holds no state to protect, and callers share one module-level
+    instance. What it buys is that the compound accesses cannot see a
+    half-applied registration: :meth:`get_reader_class` tests membership and
+    then indexes, and on the failure path iterates the table to list what is
+    available. The single dict operations underneath are already atomic in
+    CPython; those two sequences of them are not.
+    """
 
     def __init__(self):
         """Initialize the MSI registry."""

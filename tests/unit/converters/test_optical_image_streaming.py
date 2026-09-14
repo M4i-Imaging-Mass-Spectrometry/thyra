@@ -28,7 +28,9 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+import threading
 from pathlib import Path
+from typing import List
 
 import numpy as np
 import pytest
@@ -472,6 +474,65 @@ def test_streaming_a_small_band_budget_still_matches(
     np.testing.assert_array_equal(levels["s1"][1], _stream_reference(whole, 2))
     np.testing.assert_array_equal(
         levels["s2"][1], _stream_reference(_stream_reference(whole, 2), 2)
+    )
+
+
+def test_the_reducer_never_reads_through_the_tiff_decoder(
+    rgb_tiff: Path, tmp_path: Path, monkeypatch
+):
+    """Issue #284 item 3, measured, and it does not hold.
+
+    The issue proposed that the reducer's worker threads read concurrently
+    from one ``zarr.Array`` opened over tifffile's zarr adapter, backed by a
+    single ``TiffFile`` handle, and that this needed a lock or a handle per
+    worker if the adapter turned out not to be safe for concurrent reads.
+
+    No worker ever touches that adapter. ``page.aszarr()`` has exactly one
+    caller, :meth:`OpticalTiffSource.bands`, which level 0 drives from the
+    calling thread inside its own ``with tifffile.TiffFile(...)``. What
+    :meth:`_reduce_level` hands the pool is ``arrays[k-1]`` from
+    :meth:`_open_level_arrays` -- the pyramid level already written to the
+    output store, a plain zarr array over a ``LocalStore``.
+
+    So this pins three things: the TIFF decoder is only ever entered from
+    the calling thread, the pool nonetheless really does run wide (or the
+    first assertion would be vacuous), and what it reads is the store on
+    disk.
+    """
+    decoder_threads: List[threading.Thread] = []
+    worker_threads: List[threading.Thread] = []
+    reduced_from: List[object] = []
+
+    real_bands = OpticalTiffSource.bands
+    real_block_mean = optical_image.block_mean
+    real_reduce = StreamedOpticalImage._reduce_level
+
+    def spy_bands(self, rows):
+        decoder_threads.append(threading.current_thread())
+        yield from real_bands(self, rows)
+
+    def spy_block_mean(*args, **kwargs):
+        # Only _reduce_level's workers call this.
+        worker_threads.append(threading.current_thread())
+        return real_block_mean(*args, **kwargs)
+
+    def spy_reduce(self, source, target, factor):
+        reduced_from.append(source.store)
+        return real_reduce(self, source, target, factor)
+
+    monkeypatch.setattr(OpticalTiffSource, "bands", spy_bands)
+    monkeypatch.setattr(optical_image, "block_mean", spy_block_mean)
+    monkeypatch.setattr(StreamedOpticalImage, "_reduce_level", spy_reduce)
+
+    streamed = _streamed(OpticalTiffSource.probe(rgb_tiff), [2, 2])
+    store = tmp_path / "threads.zarr"
+    SpatialData(images={"optical": streamed.placeholder()}).write(store)
+    streamed.stream_pixels(store)
+
+    assert decoder_threads == [threading.current_thread()]
+    assert len({thread.name for thread in worker_threads}) > 1
+    assert reduced_from and all(
+        isinstance(store_, zarr.storage.LocalStore) for store_ in reduced_from
     )
 
 
