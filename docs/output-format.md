@@ -122,6 +122,36 @@ print(f"Offset: ({matrix[0,2]:.0f}, {matrix[1,2]:.0f})")
     that positions it in the optical coordinate space. This comes from the
     teaching point calibration in the `.mis` file (Bruker data).
 
+### Which image is which: `attrs["optical_images"]`
+
+An element name is derived, not the filename -- `sample_0000.tif` and
+`sample_0000.jpg` both become `{dataset_id}_optical_highres` -- and the
+alignment image is otherwise only implied, by its Identity transform, and
+only when the alignment was applied. The store says both outright:
+
+```python
+optical = sdata.attrs.get("optical_images")
+if optical:
+    for key, info in optical["elements"].items():
+        print(key, "<-", info["source_file"])
+    print("alignment image:", optical["alignment_element"])
+```
+
+| Field | Meaning |
+|-------|---------|
+| `elements` | One entry per optical element in the store, keyed by element name. `source_file` is the name of the file it was read from (no directory: the acquiring machine's path does not travel with the store). |
+| `alignment_element` | The element the `.mis` `<ImageFile>` designates -- the one the teaching points are stated in, so the one the other images are scaled into. `None` when the source designates none, or when the designated file is not in this store. |
+
+The whole section is **absent** when the conversion put no optical image in
+the store, and an image whose pixels could not be read is taken back out of
+it, so a name here always resolves in `sdata.images`.
+
+!!! note "Not on the element"
+    This is in the store's root attrs and not on the `images/*` groups
+    because per-element attributes do not survive the write: an element
+    group carries exactly `ome` and `spatialdata_attrs`, whatever the
+    producer put in the element's `.attrs`.
+
 ---
 
 ## Mass Spectrum Data
