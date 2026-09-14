@@ -222,7 +222,13 @@ class TestARefusalIsNotDemotedToADrop:
 
 
 def _reader_functions():
-    """Every method of the two readers, as ``(label, ast node, source)``."""
+    """Every method of the two reader classes, as ``(label, node, source)``.
+
+    Walked out of the class body rather than filtered by ``hasattr``:
+    ``hasattr`` also matches a module-level function or another class's
+    method that happens to share a name, and mis-labels it as the
+    reader's.
+    """
     import ast
     import importlib
     import inspect
@@ -233,14 +239,15 @@ def _reader_functions():
         ("thyra.readers.imzml.imzml_reader", "ImzMLReader"),
     ):
         module = importlib.import_module(module_name)
-        owner = getattr(module, owner_name)
         tree = ast.parse(inspect.getsource(module))
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            if not hasattr(owner, node.name):
-                continue
-            out.append((f"{owner_name}.{node.name}", node, ast.unparse(node)))
+        owner = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ClassDef) and node.name == owner_name
+        )
+        for node in owner.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                out.append((f"{owner_name}.{node.name}", node, ast.unparse(node)))
     return out
 
 
@@ -257,7 +264,15 @@ def _swallowing_generators():
     not yield is not handing the caller the rest of the run:
     ``_isolation_windows`` continues past a ``sqlite3.OperationalError``
     but is probing which schema variant the file has, not discarding
-    data.
+    data. Both exclusions were measured against the tree, not assumed.
+
+    **It cannot see a loop whose handler lives in a helper it calls** --
+    which is the shape of imzML's ``_iter_spectra_single`` and
+    ``_iter_spectra_batch``, where the drop happens inside
+    ``_process_single_spectrum``. Those are caught by the second rule
+    below instead, because they open a tally. A *new* delegating loop
+    that drops with no tally at all would be invisible to both, so this
+    is an aid to review rather than a proof of completeness.
     """
     import ast
 

@@ -555,10 +555,14 @@ def convert_msi(
         ``output_path`` by this call is renamed to a sibling
         ``<name>.failed`` (``.failed2`` and so on if one is already
         there), so the same call can be retried without the caller
-        deleting a directory first, and a half-written store is never
-        left where a finished one is expected -- it would not open, but
-        it looks like one. An ``output_path`` that already existed when
-        the call started is refused untouched, never renamed. See
+        deleting a directory first, and a half-written store is not left
+        where a finished one is expected -- it would not open, but it
+        looks like one. When the rename itself fails -- a live handle on
+        the directory is the usual reason on Windows -- the partial store
+        stays put and the failure says so at ``ERROR``, naming the path
+        to delete; a retry is then refused until it is gone. An
+        ``output_path`` that already existed when the call started is
+        refused untouched, never renamed. See
         :func:`quarantine_partial_output` (issue #293).
     """
     # Validate input parameters

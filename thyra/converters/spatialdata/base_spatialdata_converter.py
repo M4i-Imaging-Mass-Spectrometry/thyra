@@ -3327,8 +3327,9 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # result, so this agrees with the TIC image and with the
         # coordinate_systems attr. Gating on `_alignment_result` alone was
         # not equivalent: `_build_tic_to_image_affine` returns early when
-        # `region_mappings` is empty, which `_compute_region_mappings` can
-        # produce from a real .mis whose areas match no region. In that
+        # `region_mappings` is empty, which
+        # `TeachingPointAlignment.compute_area_alignment` produces from a
+        # real .mis whose areas match no region. In that
         # state the attr and the TIC image took the micrometer branch
         # while this took the alignment branch, `transform_point` returned
         # None for every position, and the shapes element came out with

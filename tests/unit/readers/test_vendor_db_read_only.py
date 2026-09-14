@@ -86,7 +86,9 @@ class TestTheUri:
         uri = read_only_uri(r"\\server\share\run.d\analysis.tdf")
         assert uri.startswith("file:////server/share/")
 
-    def test_immutable_is_downgraded_when_a_wal_sits_beside_the_file(self, tmp_path):
+    def test_immutable_is_downgraded_when_a_live_wal_sits_beside_the_file(
+        self, tmp_path
+    ):
         """Immutability is a promise the file will not change. A ``-wal``
         holding committed rows contradicts it, and an immutable open
         would skip them."""
@@ -94,8 +96,20 @@ class TestTheUri:
         db.write_bytes(b"")
         assert "immutable=1" in read_only_uri(db)
 
-        db.with_name(db.name + "-wal").write_bytes(b"")
+        db.with_name(db.name + "-wal").write_bytes(b"not empty")
         assert "immutable" not in read_only_uri(db).rsplit("?", 1)[1]
+
+    def test_an_empty_wal_is_not_a_live_one(self, tmp_path):
+        """``PRAGMA wal_checkpoint(TRUNCATE)`` leaves a 0-byte ``-wal``.
+
+        It contradicts nothing, and downgrading on it would be
+        self-perpetuating: the downgraded read leaves its own ``-wal``
+        and ``-shm`` for the next one to find.
+        """
+        db = tmp_path / "analysis.tdf"
+        db.write_bytes(b"")
+        db.with_name(db.name + "-wal").write_bytes(b"")
+        assert "immutable=1" in read_only_uri(db)
 
 
 class TestAWalIsNotSkipped:

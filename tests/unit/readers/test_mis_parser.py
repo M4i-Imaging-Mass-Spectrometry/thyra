@@ -403,13 +403,44 @@ class TestTheOtherBrukerPicksAreSorted:
     ) -> None:
         """Rapiflex writes its .mis inside the data folder, and its pick
         only ever looked there. Adopting a lone slide-level one would put
-        a foreign acquisition's teaching points into this store."""
-        from thyra.readers.bruker.rapiflex.rapiflex_reader import (
-            find_mis_file_for_d_folder as locator,
-        )
+        a foreign acquisition's teaching points and raster step into this
+        store.
+
+        Driven through ``_find_data_files``, not by calling the locator
+        with search paths the test supplies itself -- that version passes
+        whatever ``rapiflex_reader`` does, including deleting it.
+        """
+        from thyra.readers.bruker.rapiflex.rapiflex_reader import RapiflexReader
 
         folder = tmp_path / "run"
         folder.mkdir()
+        (folder / "run.dat").write_bytes(b"")
+        (folder / "run_info.txt").write_text("")
+        (folder / "run_poslog.txt").write_text("")
         _write_mis(tmp_path, "whole_slide.mis", raster="50,50")
 
-        assert locator(folder, search_paths=[folder]) is None
+        reader = RapiflexReader.__new__(RapiflexReader)
+        reader.data_path = folder
+        reader._mis_path = None
+        reader._find_data_files()
+
+        assert reader._mis_path is None
+
+    def test_the_rapiflex_pick_still_finds_its_own_mis(self, tmp_path: Path) -> None:
+        """The other half: the .mis it does own is still picked up."""
+        from thyra.readers.bruker.rapiflex.rapiflex_reader import RapiflexReader
+
+        folder = tmp_path / "run"
+        folder.mkdir()
+        (folder / "run.dat").write_bytes(b"")
+        (folder / "run_info.txt").write_text("")
+        (folder / "run_poslog.txt").write_text("")
+        mine = _write_mis(folder, "run.mis", raster="5,5")
+        _write_mis(tmp_path, "whole_slide.mis", raster="50,50")
+
+        reader = RapiflexReader.__new__(RapiflexReader)
+        reader.data_path = folder
+        reader._mis_path = None
+        reader._find_data_files()
+
+        assert reader._mis_path == mine

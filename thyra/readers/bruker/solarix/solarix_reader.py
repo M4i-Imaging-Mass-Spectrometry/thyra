@@ -165,9 +165,14 @@ class SolarixReader(BrukerBaseMSIReader):
     def _open_peaks_db(self) -> sqlite3.Connection:
         """Open peaks.sqlite strictly read-only.
 
-        The URI form with ``mode=ro`` guarantees sqlite never creates
-        journal/WAL side files next to the database, which matters when the
-        data sits on a read-only network share.
+        ``mode=ro`` keeps sqlite from writing to the database itself,
+        which matters when the data sits on a read-only network share.
+        It is not a guarantee of no side files -- measured, a read-only
+        open of a WAL database still creates a ``-shm`` and a ``-wal``
+        and leaves them; ``immutable=1`` is the spelling that creates
+        neither, and see ``bruker/vendor_db`` for why it is not used
+        unconditionally. A solariX ``peaks.sqlite`` has not been seen in
+        WAL mode.
 
         The URI builder used to live here, and ``bruker/vendor_db`` was
         written from it when the timsTOF opens were made read-only. That

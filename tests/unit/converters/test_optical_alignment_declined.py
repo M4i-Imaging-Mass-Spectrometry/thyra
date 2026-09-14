@@ -168,3 +168,75 @@ class TestTheAttrAgreesWithTheElement:
         np.testing.assert_allclose(
             _global_cs(store)["raster_to_global_affine"], matrix, atol=1e-9
         )
+
+
+class TestAlignmentDataThatYieldsNoMatrix:
+    """An alignment result whose ``region_mappings`` is empty.
+
+    ``TeachingPointAlignment.compute_area_alignment`` skips every area
+    with no matching region, so a real ``.mis`` whose areas match no
+    region in the data produces an ``AreaAlignmentResult`` with an empty
+    mapping list. ``_build_tic_to_image_affine`` then returns early and
+    no matrix exists.
+
+    The pixel polygons used to gate on ``_alignment_result`` alone, so in
+    that state they took the alignment branch while the attr and the TIC
+    image took the micrometer one. ``transform_point`` iterates
+    ``region_mappings`` and returns ``None`` for every position, so the
+    shapes element came out **empty** -- a store with a table, an image
+    and no polygons at all.
+    """
+
+    def _convert(self, output: Path) -> Path:
+        from thyra.alignment.teaching_points import AreaAlignmentResult
+
+        class _NoMappings(StreamingSpatialDataConverter):
+            def _compute_optical_alignment(self) -> None:
+                self._alignment_result = AreaAlignmentResult(
+                    region_mappings=[], first_raster_x=0, first_raster_y=0
+                )
+
+            def _build_tic_to_image_affine(self) -> None:
+                # What the real one does with no region mappings.
+                return
+
+        converter = _NoMappings(
+            reader=MockMSIReader(
+                MockMSIConfig(
+                    n_x=N_X,
+                    n_y=N_Y,
+                    n_z=1,
+                    n_mz_bins=64,
+                    peaks_per_spectrum=(3, 5),
+                    seed=11,
+                    pixel_size_um=PITCH,
+                )
+            ),
+            output_path=output,
+            dataset_id="m",
+            pixel_size_um=PITCH,
+            include_optical=False,
+        )
+        assert converter.convert() is True
+        return output
+
+    @pytest.fixture(scope="class")
+    def store(self, tmp_path_factory) -> Path:
+        return self._convert(tmp_path_factory.mktemp("nomap") / "out.zarr")
+
+    def test_the_store_declares_micrometers(self, store):
+        assert _global_cs(store)["unit"] == "micrometer"
+
+    def test_the_polygons_are_there(self, store):
+        """The assertion the old gate failed: not an empty shapes element."""
+        sdata = spatialdata.SpatialData.read(str(store))
+        shapes = next(iter(sdata.shapes.values()))
+        assert len(shapes) == N_X * N_Y
+
+    def test_the_polygons_are_in_micrometers_like_everything_else(self, store):
+        sdata = spatialdata.SpatialData.read(str(store))
+        shapes = next(iter(sdata.shapes.values()))
+        xmin, ymin, xmax, ymax = shapes.total_bounds
+        # The raster is N_X x N_Y pixels of PITCH micrometers.
+        assert xmax - xmin == pytest.approx(N_X * PITCH)
+        assert ymax - ymin == pytest.approx(N_Y * PITCH)

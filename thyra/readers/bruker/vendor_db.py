@@ -7,7 +7,10 @@ consequences none of them wanted:
 - **It creates side files.** A ``.tdf`` in WAL mode gets a ``-wal`` and a
   ``-shm`` written next to it on the first read. They land inside the
   vendor directory, which may be a read-only share or a directory the
-  user backs up byte-for-byte.
+  user backs up byte-for-byte. A *clean* read-write close checkpoints
+  and removes them again; several of these opens leaked their handle
+  (``with sqlite3.connect(...)`` commits without closing), so they
+  stayed.
 - **It takes a lock.** DataAnalysis holding the acquisition open is the
   ordinary case in a lab, not an exotic one, and a read-write open loses
   to it.
@@ -31,21 +34,43 @@ more committed into the ``-wal`` of a file a writer still holds open::
 
 A short frame count read as if it were the whole acquisition is the
 defect this module exists to remove, not one to introduce, so the
-immutable promise is made only when there is no ``-wal`` beside the file
-to contradict it. When there is one, the file is being written or was
-not closed cleanly, and plain ``mode=ro`` is used: it reads the log
-correctly, and the side files it needs are already there.
+immutable promise is made only when there is a **non-empty** ``-wal``
+beside the file to contradict it. (A ``wal_checkpoint(TRUNCATE)`` leaves
+a 0-byte one behind; it holds nothing, and downgrading on it would be
+self-perpetuating, since a downgraded read leaves its own side files.)
 
-That leaves ``immutable=1`` covering the ordinary case, which is what a
-vendor ``.d`` actually is -- the committed TDF fixture's journal mode is
-``delete``, not ``wal``. Measured on a WAL-mode database with no side
-files present::
+**The downgrade costs something, and it is the lesser cost, not a free
+one.** Plain ``mode=ro`` reads the log correctly, but it is not
+side-file-free and it is not always able to open. Measured:
+
+    WAL db, no side files   mode=ro    after = [tdf, -shm, -wal]
+    -wal present, no -shm   mode=ro    after = [tdf, -shm, -wal]
+    ...same, dir denied     mode=ro    OperationalError, cannot open
+    ...same, dir denied     immutable  reads, 50 of 50 -- but stale
+
+So on a read-only share holding a database with a live ``-wal``, this
+refuses where an immutable open would have answered. That is the right
+way round: sqlite cannot read a WAL database without the ``-shm`` it
+cannot create there, so the alternative is not a correct answer, it is a
+stale one presented as current. Failing is what lets the user close the
+writer, or copy the ``.d`` somewhere writable, and get the real number.
+
+That leaves ``immutable=1`` covering the case with no live log, which is
+the ordinary one. Measured on a WAL-mode database with no side files
+present::
 
     read-write           during=[tdf, -shm, -wal]  after=[tdf]
     mode=ro              during=[tdf, -shm, -wal]  after=[tdf, -shm, -wal]
     mode=ro&immutable=1  during=[tdf]              after=[tdf]
 
-so plain ``mode=ro`` is the one spelling that leaves litter behind.
+so of the two read-only spellings, plain ``mode=ro`` is the one that
+leaves litter behind.
+
+A rollback journal is not probed for. ``immutable=1`` ignores a hot
+``-journal`` the same way it ignores a ``-wal``, and the same reasoning
+would apply; it is not handled here because nothing has shown a vendor
+``.d`` in that state, and a probe nobody can trigger is a claim nobody
+can check.
 
 The URI is built rather than interpolated because of UNC paths, which is
 what a mapped network drive resolves to on Windows and where this lab's
@@ -61,6 +86,22 @@ from urllib.parse import quote
 logger = logging.getLogger(__name__)
 
 __all__ = ["read_only_uri", "open_read_only"]
+
+
+def _has_live_wal(path: Path) -> bool:
+    """Whether a write-ahead log beside ``path`` holds anything.
+
+    Existence is not enough: ``PRAGMA wal_checkpoint(TRUNCATE)`` leaves a
+    0-byte ``-wal`` behind, which contradicts nothing. Treating that as
+    live would also be self-perpetuating, because the downgraded read it
+    forces leaves its own ``-wal`` and ``-shm`` for the next one to find.
+    """
+    try:
+        return path.with_name(path.name + "-wal").stat().st_size > 0
+    except OSError:
+        # Absent, or a directory we cannot stat. Either way there is no
+        # log we can show to be live, so the immutable promise stands.
+        return False
 
 
 def read_only_uri(path: Union[str, Path], immutable: bool = True) -> str:
@@ -87,10 +128,11 @@ def read_only_uri(path: Union[str, Path], immutable: bool = True) -> str:
         A ``file:`` URI for :func:`sqlite3.connect` with ``uri=True``.
     """
     path = Path(path)
-    if immutable and path.with_name(path.name + "-wal").exists():
+    if immutable and _has_live_wal(path):
         logger.debug(
-            "%s has a -wal beside it, so it is opened read-only but not "
-            "immutable: an immutable open would skip the log's committed rows.",
+            "%s has a non-empty -wal beside it, so it is opened read-only but "
+            "not immutable: an immutable open would skip the log's committed "
+            "rows.",
             path,
         )
         immutable = False
