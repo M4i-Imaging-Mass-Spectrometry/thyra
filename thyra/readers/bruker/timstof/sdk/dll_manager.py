@@ -38,13 +38,36 @@ class DLLManager:
     ) -> "DLLManager":
         """Create or return existing DLLManager instance.
 
+        A **failed** load is not cached. The instance was published to
+        ``cls._instance`` before ``_initialize`` ran, so the first
+        attempt raised its ``SDKError`` -- the long message naming the
+        four places to put the SDK -- and left a dead manager behind.
+        Every later attempt in that process then returned the dead one
+        silently, raising the bare "No Bruker SDK library loaded" from
+        the ``dll`` property, at a call site with no idea why (issue
+        #298). Installing the SDK and retrying in the same session could
+        not work, and the escape hatch that would have fixed it,
+        ``force_reload=True``, has no caller anywhere.
+
+        So the instance is built locally and published only once
+        ``_initialize`` has returned. ``not cls._instance.is_loaded``
+        covers the other route to a dead singleton: ``reload()`` clears
+        ``_dll`` before loading, and mutates in place, so a local cannot
+        protect it.
+
+        Retrying costs nothing worth saving -- discovery is a handful of
+        ``Path.exists()`` checks, with no network probe -- and the
+        alternative, caching the cause, still leaves the user unable to
+        act on the fix the message recommends.
+
         Args:
             data_directory: Optional data directory for local library discovery
             force_reload: Force reloading of the library even if already loaded
         """
-        if cls._instance is None or force_reload:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialize(data_directory, force_reload)
+        if cls._instance is None or force_reload or not cls._instance.is_loaded:
+            instance = super().__new__(cls)
+            instance._initialize(data_directory, force_reload)
+            cls._instance = instance
         return cls._instance
 
     def _initialize(
