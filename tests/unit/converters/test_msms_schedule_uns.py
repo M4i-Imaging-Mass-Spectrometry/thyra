@@ -158,32 +158,29 @@ class TestStoredBlock:
 
 
 class TestChimeraWarning:
-    def test_merging_precursors_is_said_out_loud(self, tmp_path, caplog):
+    def test_merging_precursors_is_said_out_loud(self, tmp_path, thyra_logs):
         """Silence here is the failure: a chimeric spectrum looks ordinary.
 
         Nothing in the output shows that one pixel's spectrum holds
         fragments of several precursors, so it is worth a WARNING rather
         than leaving it for a reader of the peaks to work out.
         """
-        with caplog.at_level(logging.WARNING):
+        with thyra_logs("thyra.converters", logging.WARNING) as records:
             _convert(tmp_path / "chimera.zarr", _schedule(3))
 
-        merged = [r for r in caplog.records if "isolates 3 precursors" in r.message]
+        merged = [r for r in records if "isolates 3 precursors" in r.message]
         assert merged and merged[0].levelno == logging.WARNING
         assert "msms_schedule" in merged[0].message
 
-    def test_a_single_precursor_is_not_warned_about(self, tmp_path, caplog):
-        with caplog.at_level(logging.WARNING):
+    def test_a_single_precursor_is_not_warned_about(self, tmp_path, thyra_logs):
+        with thyra_logs("thyra.converters", logging.WARNING) as records:
             _convert(tmp_path / "single.zarr", _schedule(1))
 
-        assert not [r for r in caplog.records if "precursors per pixel" in r.message]
+        assert not [r for r in records if "precursors per pixel" in r.message]
 
-    def test_it_is_said_once_per_conversion(self, tmp_path, caplog):
+    def test_it_is_said_once_per_conversion(self, tmp_path, thyra_logs):
         """The schedule is read once; the warning must not repeat per pixel."""
-        with caplog.at_level(logging.WARNING):
+        with thyra_logs("thyra.converters", logging.WARNING) as records:
             _convert(tmp_path / "once.zarr", _schedule(3))
 
-        assert (
-            len([r for r in caplog.records if "isolates 3 precursors" in r.message])
-            == 1
-        )
+        assert len([r for r in records if "isolates 3 precursors" in r.message]) == 1

@@ -17,8 +17,6 @@ import io
 import logging
 import sys
 
-import pytest
-
 from thyra.utils.logging_config import _console_stream, setup_logging
 
 
@@ -106,16 +104,10 @@ class TestTheLogFile:
         assert "日本.zarr" in log_file.read_text(encoding="utf-8")
 
 
-@pytest.fixture(autouse=True)
-def _restore_thyra_logger():
-    logger = logging.getLogger("thyra")
-    handlers = list(logger.handlers)
-    propagate = logger.propagate
-    level = logger.level
-    yield
-    for handler in logger.handlers:
-        if handler not in handlers:
-            handler.close()
-    logger.handlers = handlers
-    logger.propagate = propagate
-    logger.setLevel(level)
+# The module-local _restore_thyra_logger that used to live here is now
+# tests/conftest.py's autouse _restore_process_globals, which does the same
+# snapshot for every test in the suite rather than only this file's. It also
+# corrects it: this one closed every handler the test had added, and while a
+# logger is non-propagating pytest attaches its own session-shared
+# caplog_handler and report_handler directly to it -- so running this file
+# closed the plugin's handlers for the rest of the session.

@@ -369,13 +369,13 @@ class TestSolarixReader:
         with pytest.raises(RuntimeError, match="closed"):
             list(reader.iter_spectra())
 
-    def test_scan_count_mismatch_warns(self, tmp_path, caplog):
+    def test_scan_count_mismatch_warns(self, tmp_path, thyra_logs):
         d_dir = make_solarix_d(tmp_path, n_info_scans=99)
 
-        with caplog.at_level(logging.WARNING):
+        with thyra_logs("thyra.readers", logging.WARNING) as records:
             SolarixReader(d_dir).close()
 
-        assert any("truncated or partially copied" in m for m in caplog.messages)
+        assert any("truncated or partially copied" in m for m in records.messages)
 
 
 class TestSolarixSchemaRefusal:

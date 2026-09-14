@@ -458,14 +458,16 @@ class TestWatersProfileDetector:
         assert reference == 1000.0
         assert width == pytest.approx(0.0158)
 
-    def test_unknown_spacing_falls_back_to_the_mrt_width_with_a_warning(self, caplog):
+    def test_unknown_spacing_falls_back_to_the_mrt_width_with_a_warning(
+        self, thyra_logs
+    ):
         import logging
 
         characteristics = self._characteristics(is_mrt=False)
-        with caplog.at_level(logging.WARNING):
+        with thyra_logs("thyra.resampling", logging.WARNING) as records:
             width = self.detector.get_reference_width(characteristics)
         assert width == (0.0013, 1000.0)
-        assert "predict its sample spacing" in caplog.text
+        assert "predict its sample spacing" in records.text
 
     def test_decision_tree_exposes_the_width(self):
         tree = ResamplingDecisionTree()

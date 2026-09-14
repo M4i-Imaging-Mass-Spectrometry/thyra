@@ -130,6 +130,18 @@ uv run bandit -r thyra/
 - Do not hand-write a `unit` or `integration` marker. `tests/conftest.py`
   stamps one on every collected test from the directory it lives in, so the
   directory you chose above is the whole of the decision
+- Capture Thyra's log records with the `thyra_logs` fixture, not `caplog`.
+  `setup_logging` sets `propagate = False` on the `thyra` logger, so once
+  any test has invoked the CLI caplog's root handler stops seeing Thyra
+  records -- and an assertion against an empty capture passes rather than
+  fails. `thyra_logs` attaches to the named logger and carries `.text`,
+  `.messages` and the records themselves
+- Set command-line arguments with `monkeypatch.setattr(sys, "argv", [...])`,
+  never by assigning `sys.argv`. An assignment is never undone, so the last
+  CLI test decides what every test after it sees
+
+Both rules are enforced by `tests/unit/test_log_capture_convention.py`,
+which reads the test sources rather than running them.
 
 ## Pull Request Process
 

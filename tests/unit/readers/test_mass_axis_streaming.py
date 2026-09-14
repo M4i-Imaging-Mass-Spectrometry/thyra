@@ -292,7 +292,7 @@ class TestDefaultMaxMassAxisLength:
 class TestPerSpectrumErrors:
     """A failing spectrum is warned about, not fatal."""
 
-    def test_failing_spectra_are_skipped(self, batch, caplog):
+    def test_failing_spectra_are_skipped(self, batch):
         runs = [[1.0], [2.0], [3.0], [4.0]]
         got = _build(runs, raise_on=(1, 2))
         assert np.array_equal(got, np.array([1.0, 4.0]))

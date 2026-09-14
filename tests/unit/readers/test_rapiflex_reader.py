@@ -453,7 +453,7 @@ class TestMissingRasterDeclaration:
         reader.close()
 
     def test_the_missing_declaration_is_reported(
-        self, create_mock_rapiflex_data, caplog
+        self, create_mock_rapiflex_data, thyra_logs
     ):
         import logging
 
@@ -461,11 +461,11 @@ class TestMissingRasterDeclaration:
         self._strip_raster(folder)
 
         reader = RapiflexReader(folder)
-        with caplog.at_level(logging.WARNING):
+        with thyra_logs("thyra.readers", logging.WARNING) as records:
             reader._create_metadata_extractor().get_essential()
 
-        assert "declares no raster step" in caplog.text
-        assert "--pixel-size" in caplog.text
+        assert "declares no raster step" in records.text
+        assert "--pixel-size" in records.text
         reader.close()
 
 

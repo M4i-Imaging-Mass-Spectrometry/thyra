@@ -32,6 +32,18 @@ directory and cannot miss a file somebody forgot to decorate. Do not
 hand-write a `@pytest.mark.unit` or `@pytest.mark.integration`; to move a test
 between lanes, move the file.
 
+**Capture Thyra's logs with `thyra_logs`, not `caplog`, and set argv with
+`monkeypatch`, not by assigning it.** `setup_logging` sets
+`propagate = False` on the `thyra` logger and clears its handlers, which is
+process-global: after any test has invoked the CLI, caplog's root handler
+never sees another Thyra record, and `assert "..." not in caplog.text` then
+passes on an empty capture. `thyra_logs(name, level)` attaches to the named
+logger instead and yields a list carrying `.text`, `.messages` and the
+records. A bare `sys.argv = [...]` is the same shape of problem with no
+version of pytest that hides it. `conftest.py` restores both after every
+test, and `unit/test_log_capture_convention.py` keeps the rules from
+drifting back.
+
 ## Running the Tests
 
 ### Running Unit Tests

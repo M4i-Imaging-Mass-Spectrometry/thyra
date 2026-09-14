@@ -3,10 +3,11 @@ Common test fixtures for thyra tests.
 """
 
 import logging
+import sys
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, List
+from typing import Iterator, List, Union
 
 import numpy as np
 import pytest
@@ -54,6 +55,97 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.unit)
 
 
+@contextmanager
+def restored_process_globals() -> Iterator[None]:
+    """Undo what invoking the CLI does to the process.
+
+    ``setup_logging`` (thyra/utils/logging_config.py:45-53) sets
+    ``propagate = False`` on the ``thyra`` logger, clears its handlers and
+    sets its level, and ``thyra.__main__.main`` calls it on every
+    invocation. All three are process-global, so without this one CLI test
+    decides what every test after it can capture -- and ``sys.argv``, which
+    ``tests/integration/test_cli.py`` used to assign and never restore, is
+    the same class of leak. Restoring here means no test has to remember
+    to, and which pytest version is installed stops mattering: 9.x hides
+    the symptom by walking ``loggerDict`` for non-propagating loggers,
+    8.x does not.
+
+    Snapshotting the root logger as well is insurance rather than a fix
+    for anything measured: ``logging.basicConfig`` is the usual way to
+    leak into it, and under pytest it is a no-op, because pytest has
+    already attached its own handlers to root and CPython only applies
+    ``basicConfig``'s ``level=`` when root has none.
+
+    A context manager and not only a fixture, so that
+    ``tests/unit/utils/test_logging_config.py`` can assert the round trip
+    inside one test rather than across two whose order would decide the
+    answer.
+    """
+    argv_object = sys.argv
+    argv_contents = list(sys.argv)
+    snapshots = [
+        (logger, list(logger.handlers), logger.propagate, logger.level)
+        for logger in (logging.getLogger("thyra"), logging.getLogger())
+    ]
+    try:
+        yield
+    finally:
+        # Both spellings: a module that did ``from sys import argv`` holds
+        # the object, everything else reads the attribute.
+        sys.argv = argv_object
+        sys.argv[:] = argv_contents
+        for logger, handlers, propagate, level in snapshots:
+            added = [h for h in logger.handlers if h not in handlers]
+            logger.handlers = handlers
+            logger.propagate = propagate
+            logger.setLevel(level)
+            for handler in added:
+                # Close only what owns an OS handle. A RotatingFileHandler
+                # opened by --log-file keeps a tmp_path file open, and
+                # Windows will not delete a file that is open. Everything
+                # else added during the test may be pytest's own: while a
+                # logger is non-propagating, catching_logs attaches the
+                # plugin's session-shared caplog_handler and report_handler
+                # to it directly, and closing those closes them for the
+                # rest of the session.
+                if isinstance(handler, logging.FileHandler):
+                    handler.close()
+
+
+@pytest.fixture(autouse=True)
+def _restore_process_globals() -> Iterator[None]:
+    """Wrap every test in :func:`restored_process_globals`.
+
+    Autouse and declared here rather than per-file, because the tests that
+    need it are not the tests that cause it: the CLI test poisons the
+    process and some unrelated reader test is what fails.
+    """
+    with restored_process_globals():
+        yield
+
+
+class _Records(List[logging.LogRecord]):
+    """The records ``thyra_logs`` collected, shaped the way ``caplog`` is.
+
+    ``messages`` and ``text`` exist so that moving an assertion off
+    ``caplog`` is a rename and not a rewrite, and ``text`` is formatted
+    the way caplog formats its own so an assertion carried across still
+    matches the same substring.
+    """
+
+    @property
+    def messages(self) -> List[str]:
+        return [record.getMessage() for record in self]
+
+    @property
+    def text(self) -> str:
+        return "\n".join(
+            f"{record.levelname:<8} {record.name}:{record.filename}:"
+            f"{record.lineno} {record.getMessage()}"
+            for record in self
+        )
+
+
 @pytest.fixture
 def thyra_logs():
     """A context manager collecting records from a named Thyra logger.
@@ -67,6 +159,13 @@ def thyra_logs():
     Attaching a handler to the named logger sidesteps propagation, so the
     result does not depend on which tests ran first.
 
+    ``_restore_process_globals`` above now puts the logger back after
+    every test, which closes the same hole from the other side. Both are
+    wanted: the fixture keeps one test from poisoning the next, this keeps
+    a test that invokes the CLI *inside* its own capture block working --
+    ``setup_logging`` clears ``thyra``'s handlers, so name a child logger
+    in that case, which it does not touch.
+
     Usage::
 
         with thyra_logs("thyra.cli", logging.WARNING) as records:
@@ -76,12 +175,24 @@ def thyra_logs():
 
     @contextmanager
     def capture(
-        logger_name: str = "thyra", level: int = logging.INFO
-    ) -> Iterator[List[logging.LogRecord]]:
-        collected: List[logging.LogRecord] = []
+        logger_name: str = "thyra", level: Union[int, str] = logging.INFO
+    ) -> Iterator[_Records]:
+        # ``caplog.at_level`` takes "WARNING" as happily as logging.WARNING
+        # and call sites migrated off it did. Without this the level
+        # comparison below raises TypeError on a str.
+        if isinstance(level, str):
+            level = logging.getLevelNamesMapping()[level]
+        collected = _Records()
 
         class _Collector(logging.Handler):
             def emit(self, record: logging.LogRecord) -> None:
+                # What logging.Formatter.format sets, and what caplog's
+                # handler therefore leaves behind, because it formats on
+                # emit. Assertions reading record.message work without
+                # this only while pytest's own root handler happens to
+                # have formatted the same record first -- which it does
+                # not do for a logger it never sees.
+                record.message = record.getMessage()
                 collected.append(record)
 
         logger = logging.getLogger(logger_name)
