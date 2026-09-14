@@ -704,11 +704,11 @@ def test_the_store_names_the_alignment_element_not_the_filename(
 
 
 def test_a_dropped_optical_image_leaves_no_trace_in_the_attrs(
-    truncated_tiff: Path, tmp_path: Path, caplog
+    truncated_tiff: Path, tmp_path: Path, thyra_logs
 ) -> None:
     """Attrs naming an element the store does not hold are worse than none."""
     output_path = tmp_path / "dropped.zarr"
-    with caplog.at_level(logging.WARNING):
+    with thyra_logs("thyra.converters", logging.WARNING) as records:
         _, success = _convert_designating(
             "truncated_0000",
             _mock_reader(truncated_tiff),
@@ -716,6 +716,10 @@ def test_a_dropped_optical_image_leaves_no_trace_in_the_attrs(
             _tic_to_image_matrix=np.eye(3, dtype=np.float64),
         )
     assert success is True
+    # The premise: it was declared and then dropped, not never added.
+    assert any(
+        "dropping 'ds_optical_highres' from the store" in r.message for r in records
+    )
     assert not (output_path / "images" / "ds_optical_highres").exists()
 
     attrs = _root_attrs(output_path)
