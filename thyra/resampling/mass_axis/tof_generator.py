@@ -65,12 +65,13 @@ TIMSTOF_TOF_LAW: Tuple[float, float] = (0.0877, 8.74e-4)
 #: Fitted by **quantile regression at q = 0.05** on ``FWHM^2 = A m + B m^2``,
 #: not by least squares, and the difference is the point. A least-squares fit
 #: runs through the middle of the corpus, so half of every acquisition's peaks
-#: come out narrower than it predicts and get fewer bins than intended -- 12%
-#: of the measured peaks would fall below two bins per peak width. Fitting the
-#: narrow edge instead inverts the error: an acquisition sharper than the law
-#: is the one case that loses peak shape, so the law is placed where only 5%
-#: of measured peaks are sharper than it. A peak broader than the law merely
-#: gets more bins than it needs, which costs store and nothing else.
+#: come out narrower than it predicts and get fewer bins than intended -- 70%
+#: of the measured peaks would fall below three bins per peak width and 12%
+#: below two. Fitting the narrow edge instead inverts the error: an acquisition
+#: sharper than the law is the one case that loses peak shape, so the law is
+#: placed where only 5% of measured peaks are sharper than it, which leaves 6%
+#: under three bins and none under two. A peak broader than the law merely gets
+#: more bins than it needs, which costs store and nothing else.
 #:
 #: The corpus spans a factor of three in resolving power between tunes, and a
 #: C60 primary beam resolves about five times worse again (R 280-1200 against

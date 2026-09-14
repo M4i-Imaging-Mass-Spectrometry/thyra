@@ -1555,14 +1555,18 @@ which is the signature of one bin per peak.
 **Why the fit is a 5th-percentile quantile regression, not least squares.**
 This is the part worth arguing with. Least squares runs the law through the
 middle of the corpus, so half of every acquisition's peaks are narrower than it
-predicts; on this corpus a least-squares pair leaves 12% of peaks under two
-bins per width and 39% under three. The two errors are not symmetric. A peak
+predicts; on this corpus a least-squares pair leaves 12% of the 311 measured
+peaks under two bins per width and 70% under three. The two errors are not
+symmetric. A peak
 **broader** than the law gets more bins than it needs, which costs store and
 nothing else. A peak **narrower** than the law is the one case that loses
 shape, and that is the defect being fixed. So the pair is placed at the narrow
 edge: quantile regression at `q = 0.05` on `FWHM^2 = A m + B m^2`, which puts
-95% of measured peaks at three bins per width or better, for 20% more bins than
-the least-squares pair.
+94% of measured peaks at three bins per width or better and none below two, for
+20% more bins than the least-squares pair. The old `linear_tof` default left
+87% under three bins and 42% under two. (Every figure here counts each of the
+311 peaks once; weighting one vote per acquisition instead gives 54%, 4% and
+83% / 35%, with the same ordering.)
 
 **Why one law for an instrument whose tune varies.** Resolving power varies by
 a factor of three between acquisitions in the corpus, and a C60 primary beam

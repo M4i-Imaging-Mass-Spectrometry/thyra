@@ -463,9 +463,10 @@ The two errors are not symmetric: a peak **broader** than the law simply gets
 more bins than it needs, costing store and nothing else, while a peak
 **narrower** than the law is the one case that loses shape. So the fit is
 placed at the narrow edge instead -- quantile regression at `q = 0.05` on
-`FWHM^2 = A m + B m^2`, which puts 95% of measured peaks at three bins per
-width or better. It costs 20% more bins than a least-squares fit of the same
-data, and buys a 5% failure rate instead of 39%. ToF-SIMS resolving power
+`FWHM^2 = A m + B m^2`, which puts 94% of the 311 measured peaks at three bins
+per width or better and none below two. It costs 20% more bins than a
+least-squares fit of the same data, and buys a 6% failure rate instead of
+70%. ToF-SIMS resolving power
 varies by a factor of three between tunes, and a C60 primary beam resolves
 about five times worse again (R 280-1,200 against 1,700-7,100 for Bi<sub>3</sub>);
 those acquisitions are deliberately oversampled by this law rather than
