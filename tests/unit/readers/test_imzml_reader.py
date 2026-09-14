@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 from pyimzml.ImzMLWriter import ImzMLWriter
 
+from thyra.errors import ConversionRefused
 from thyra.readers.imzml import imzml_reader as imzml_reader_module
 from thyra.readers.imzml.imzml_reader import ImzMLReader
 
@@ -65,7 +66,7 @@ class TestImzMLReader:
             f.write("dummy content")
 
         reader = ImzMLReader(imzml_path)
-        with pytest.raises(ValueError):
+        with pytest.raises(ConversionRefused):
             # Error should be raised when parser is accessed due to lazy initialization
             reader.get_essential_metadata()
 
@@ -320,10 +321,12 @@ class TestCrlfUnindentedImzML:
         buffer libxml2 already had, so the parse survives and proves nothing.
         The exact threshold moves with heap layout, so this may not reproduce
         on every platform -- but it can only ever under-report, never fail on
-        correct code, since ElementTree does not go near libxml2. Deliberately
-        NOT marked integration: CI runs -m "not integration", and this is the
-        only test that exercises the actual defect. Costs ~2s and a ~33 MB
-        temporary file.
+        correct code, since ElementTree does not go near libxml2.
+        Deliberately kept under tests/unit/, which is what puts it in the
+        default lane now that conftest.py stamps the lane from the
+        directory: CI's default run is -m "not integration", and this is
+        the only test that exercises the actual defect. Costs ~2s and a
+        ~33 MB temporary file.
         """
         imzml_path = write_crlf_unindented_imzml(temp_dir, 16000)
 
@@ -391,5 +394,5 @@ class TestSpectrumTypeReaderOption:
     def test_a_bad_value_fails_at_construction(self, tmp_path):
         """Fail while the caller is still looking at its own arguments."""
         path = _write_two_pixel_imzml(tmp_path, "bad", "profile")
-        with pytest.raises(ValueError, match="Unknown spectrum_type"):
+        with pytest.raises(ConversionRefused, match="Unknown spectrum_type"):
             ImzMLReader(path, spectrum_type="profil")

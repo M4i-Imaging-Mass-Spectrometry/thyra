@@ -559,17 +559,17 @@ def truncated_tiff(tmp_path: Path) -> Path:
 
 
 def test_unreadable_pixels_drop_the_image_not_the_conversion(
-    truncated_tiff: Path, tmp_path: Path, caplog
+    truncated_tiff: Path, tmp_path: Path, thyra_logs
 ):
     """A TIFF that cannot be decoded is skipped with a warning, as it always was."""
     output_path = tmp_path / "truncated.zarr"
-    with caplog.at_level(logging.WARNING):
+    with thyra_logs("thyra.converters", logging.WARNING) as records:
         converter, success = _convert(_mock_reader(truncated_tiff), output_path)
     assert success is True
     assert converter._pending_optical_images == {}
     assert any(
         "Failed to load optical image truncated_0000.tiff" in record.message
-        for record in caplog.records
+        for record in records
     )
     sdata = SpatialData.read(str(output_path))
     assert [k for k in sdata.images if "optical" in k] == []
@@ -579,7 +579,7 @@ def test_unreadable_pixels_drop_the_image_not_the_conversion(
     assert (output_path / "zarr.json").exists()
 
 
-def test_same_name_keeps_the_last_file(tmp_path: Path, caplog):
+def test_same_name_keeps_the_last_file(tmp_path: Path, thyra_logs):
     """Two TIFFs mapping to one element name: last wins, like the dict always did."""
     rng = np.random.default_rng(5)
     first = tmp_path / "a_0000.tif"
@@ -588,11 +588,11 @@ def test_same_name_keeps_the_last_file(tmp_path: Path, caplog):
     last = rng.integers(0, 256, size=(18, 22, 3), dtype=np.uint8)
     tifffile.imwrite(str(second), last)
     output_path = tmp_path / "out.zarr"
-    with caplog.at_level(logging.WARNING):
+    with thyra_logs("thyra.converters", logging.WARNING) as records:
         converter, success = _convert(_mock_reader(first, second), output_path)
     assert success is True
     assert converter._pending_optical_images == {}
-    assert any("is replaced by b_0000.tif" in r.message for r in caplog.records)
+    assert any("is replaced by b_0000.tif" in r.message for r in records)
     _, levels, _ = _read_element(output_path, "ds_optical_highres")
     np.testing.assert_array_equal(levels["s0"][1], np.moveaxis(last, -1, 0))
 

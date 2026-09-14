@@ -1491,9 +1491,14 @@ required checks.**
 semantic-release pushes the version commit, not *what* that push is.
 
 **What has changed since the measurement, and what it means.** The check list
-has grown from seven contexts to eleven -- four `integration (os, py)` jobs
-joined the seven the issue lists -- which makes the rule stricter, not more
-reachable. More to the point, the risk the issue was opened for is already
+has grown from the seven contexts the issue lists to twelve: four
+`test (os, py)`, one `lint`, four `integration (os, py)`, two
+`clean-venv-install (py)` and one `complexity-check`. Only `tests.yml` and
+`complexity-monitoring.yml` run on a pull request at all -- `docs.yml` is
+`push: [main]` plus `workflow_dispatch`, and `release.yml` has no PR trigger
+-- so those five jobs are the whole list. Every addition makes the rule
+stricter, not more reachable. More to the point, the risk the issue was
+opened for is already
 closed by a different mechanism: `release.yml` waits for the **Tests**
 workflow on the exact commit it is about to release, and refuses to release
 when that run is absent, incomplete, or not successful. Required checks would
@@ -1508,3 +1513,46 @@ own release flow, so this is a reversal, not a detail); a deploy key as a
 where the 422's wording hints the Actions app may be an acceptable actor --
 untested, because it needs `gh auth refresh -s admin:org`, which is
 interactive.
+
+---
+
+## D19. Lint can veto a release
+
+**Status:** Implemented (2026-09-14), issue #291.
+
+**Decision.** The `lint` job -- `pre-commit run --all-files`, which is black,
+isort, flake8, mypy, bandit, pydocstyle and the repo-local path guards -- is a
+job inside `tests.yml`, the workflow named **Tests**. `release.yml` polls for a
+completed, successful run of that workflow on the exact SHA it is about to
+release and fails closed. So a red lint on `main` stops a publish, and that is
+intended rather than incidental.
+
+**Why it is a decision and not a placement.** `release.yml`'s own comment says
+the gate is on tests *specifically*, and gives the reason: waiting on "every
+check for this commit" would let an **advisory** workflow veto a release, and
+`complexity-monitoring.yml` is exactly such a workflow. Putting lint inside
+`tests.yml` hands lint the veto that comment was written to withhold from
+complexity monitoring. The two are not the same kind of check. Complexity is a
+number that a legitimate refactor can move; a lint failure is a file that does
+not meet the rules this repository has written down, including the two guards
+that keep colleague names and lab-share layouts out of a **public**
+repository. Refusing to publish from it is the right answer.
+
+**The alternative, and why not.** A separate `lint.yml` with the same `on:`
+block would enforce lint on pull requests and leave the release gate untouched.
+It was not taken: it buys a second workflow file, a second cache key and a
+second place for the trigger block to drift, to preserve a distinction between
+"blocks the merge" and "blocks the publish" that nobody wants for this check.
+
+**The cost, accepted.** A failure with no bearing on the code can now block a
+release: pre-commit clones each hook's repository, so a GitHub outage or a
+deleted hook tag turns into a red **Tests** run, and that SHA stays unreleasable
+until a new commit lands. The window is small -- releases are batched and cut
+deliberately (`gh workflow run release.yml`), not on every merge -- and a
+blocked release is not a lost one, since the commits stay on `main` and the
+next run releases them together.
+
+**Known limit, and what would reverse this.** If a hook-repo failure ever
+actually blocks a release, the answer is to split `lint.yml` out with the same
+`on:` block. It is **not** to weaken `release.yml`'s gate: that gate is the only
+thing standing between a red commit and PyPI, and it fails closed on purpose.

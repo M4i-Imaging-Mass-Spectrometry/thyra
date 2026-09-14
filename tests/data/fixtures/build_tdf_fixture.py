@@ -36,7 +36,13 @@ agree exactly and the expected values below need no factor.
 
 Regenerate with::
 
+    uv sync --group test
     PYTHONPATH=. python tests/data/fixtures/build_tdf_fixture.py
+
+The first line is not optional: the frame blocks are zstd-compressed and
+``zstandard`` is declared in the ``test`` dependency group, which a plain
+``uv sync`` (what docs/contributing.md tells a contributor to run) does not
+install.
 
 Content-identical on every run (seeded); the SQLite bytes can differ between
 SQLite versions, the ``.tdf_bin`` bytes between zstd versions. The committed
@@ -45,14 +51,30 @@ files are the fixture; this script is its provenance.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import shutil
 import sqlite3
 import struct
+import sys
+import tempfile
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+
+# Imported here, at module scope, rather than inside encode_frame. Deep in the
+# build this raised ModuleNotFoundError only after the committed fixture had
+# already been deleted and half-rewritten (issue #313); at the top it costs the
+# developer one line of advice and no bytes.
+try:
+    import zstandard
+except ModuleNotFoundError as exc:  # pragma: no cover - build-time only
+    raise SystemExit(
+        "build_tdf_fixture.py needs `zstandard` to compress the frame blocks. "
+        "It is declared in the `test` dependency group: install it with "
+        "`uv sync --group test`, or `pip install zstandard`."
+    ) from exc
 
 FIXTURE_DIR = Path(__file__).resolve().parent
 OUT_DIR = FIXTURE_DIR / "synthetic_tims.d"
@@ -269,8 +291,6 @@ def make_frame(k: int, rng: np.random.Generator) -> List[Scan]:
 
 def encode_frame(scans: List[Scan]) -> bytes:
     """One ``analysis.tdf_bin`` frame block (compression type 2)."""
-    import zstandard  # build-time dependency only
-
     n = len(scans)
     words: List[int] = [n]
     for s in range(n - 1):
@@ -287,17 +307,15 @@ def encode_frame(scans: List[Scan]) -> bytes:
     return struct.pack("<II", 8 + len(payload), n) + payload
 
 
-def build() -> None:
-    rng = np.random.default_rng(7)
-    frames = [make_frame(k, rng) for k in range(len(GRID))]
+def _write_fixture(out_dir: Path, frames: List[List[Scan]]) -> Dict[str, object]:
+    """Write both files of the acquisition into ``out_dir``.
 
-    if OUT_DIR.exists():
-        shutil.rmtree(OUT_DIR)
-    OUT_DIR.mkdir()
-
+    Returns the expected-values mapping, which the caller writes out only
+    once the directory has been swapped into place.
+    """
     offsets: List[int] = []
     pos = 64
-    with open(OUT_DIR / "analysis.tdf_bin", "wb") as f:
+    with open(out_dir / "analysis.tdf_bin", "wb") as f:
         f.write(bytes(64))
         for scans in frames:
             block = encode_frame(scans)
@@ -305,108 +323,171 @@ def build() -> None:
             f.write(block)
             pos += len(block)
 
-    con = sqlite3.connect(OUT_DIR / "analysis.tdf")
-    con.execute("PRAGMA page_size = 512")
-    for statement in DDL:
-        con.execute(statement)
-    con.executemany(
-        "INSERT INTO GlobalMetadata VALUES (?, ?)", list(GLOBAL_METADATA.items())
-    )
-    con.execute(
-        "INSERT INTO MzCalibration VALUES ("
-        + ",".join("?" * len(MZ_CALIBRATION))
-        + ")",
-        MZ_CALIBRATION,
-    )
-    con.execute(
-        "INSERT INTO TimsCalibration VALUES ("
-        + ",".join("?" * len(TIMS_CALIBRATION))
-        + ")",
-        TIMS_CALIBRATION,
-    )
-    con.execute("INSERT INTO PropertyGroups VALUES (1)")
-    con.execute("INSERT INTO Segments VALUES (1, 1, ?, 0)", (len(GRID),))
-    con.execute(
-        "INSERT INTO MaldiFrameLaserInfo VALUES "
-        "(1, 'Imaging 20um', 'Single', 0.0, 88.5, 1, 16.0, 16.0, 0, 200, 20.0)"
-    )
+    with contextlib.closing(sqlite3.connect(out_dir / "analysis.tdf")) as con:
+        con.execute("PRAGMA page_size = 512")
+        for statement in DDL:
+            con.execute(statement)
+        con.executemany(
+            "INSERT INTO GlobalMetadata VALUES (?, ?)", list(GLOBAL_METADATA.items())
+        )
+        con.execute(
+            "INSERT INTO MzCalibration VALUES ("
+            + ",".join("?" * len(MZ_CALIBRATION))
+            + ")",
+            MZ_CALIBRATION,
+        )
+        con.execute(
+            "INSERT INTO TimsCalibration VALUES ("
+            + ",".join("?" * len(TIMS_CALIBRATION))
+            + ")",
+            TIMS_CALIBRATION,
+        )
+        con.execute("INSERT INTO PropertyGroups VALUES (1)")
+        con.execute("INSERT INTO Segments VALUES (1, 1, ?, 0)", (len(GRID),))
+        con.execute(
+            "INSERT INTO MaldiFrameLaserInfo VALUES "
+            "(1, 'Imaging 20um', 'Single', 0.0, 88.5, 1, 16.0, 16.0, 0, 200, 20.0)"
+        )
 
-    expected = {
-        "n_scans": N_SCANS,
-        "accumulation_time_ms": ACCUMULATION_TIME_MS,
-        "frames": [],
-    }
-    for frame_id, (scans, offset, (x, y)) in enumerate(
-        zip(frames, offsets, GRID), start=1
-    ):
-        pairs = [
-            (int(t), s, int(i))
-            for s, (tof, it) in enumerate(scans)
-            for t, i in zip(tof.tolist(), it.tolist())
-        ]
-        num_peaks = len(pairs)
-        summed = sum(i for _, _, i in pairs)
-        max_intensity = max(i for _, _, i in pairs)
-        con.execute(
-            "INSERT INTO Frames VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                frame_id,
-                float(frame_id),
-                "+",
-                20,
-                0,
-                offset,
-                max_intensity,
-                summed,
-                N_SCANS,
-                num_peaks,
-                1,
-                25.99,
-                24.11,
-                1,
-                1,
-                ACCUMULATION_TIME_MS,
-                200.0,
-                2.7,
-            ),
-        )
-        con.execute(
-            "INSERT INTO MaldiFrameInfo VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                frame_id,
-                0,
-                f"R00X{x}Y{y}",
-                0,
-                x,
-                y,
-                70.0,
-                50,
-                1000.0,
-                1000.0 * x,
-                -1000.0 * y,
-                0.0,
-                1,
-            ),
-        )
-        by_index: Dict[int, int] = {}
-        for t, _, i in pairs:
-            by_index[t] = by_index.get(t, 0) + i
-        expected["frames"].append(
-            {
-                "frame": frame_id,
-                "x": x,
-                "y": y,
-                "num_pairs": num_peaks,
-                "tic": summed,
-                "unique_indices": len(by_index),
-                "planted_index": IONS[1][0] + 7 * (frame_id - 1),
-                "planted_intensity": by_index[IONS[1][0] + 7 * (frame_id - 1)],
-                "pairs": pairs,
-            }
-        )
-    con.commit()
-    con.execute("VACUUM")
-    con.close()
+        expected = {
+            "n_scans": N_SCANS,
+            "accumulation_time_ms": ACCUMULATION_TIME_MS,
+            "frames": [],
+        }
+        for frame_id, (scans, offset, (x, y)) in enumerate(
+            zip(frames, offsets, GRID), start=1
+        ):
+            pairs = [
+                (int(t), s, int(i))
+                for s, (tof, it) in enumerate(scans)
+                for t, i in zip(tof.tolist(), it.tolist())
+            ]
+            num_peaks = len(pairs)
+            summed = sum(i for _, _, i in pairs)
+            max_intensity = max(i for _, _, i in pairs)
+            con.execute(
+                "INSERT INTO Frames VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    frame_id,
+                    float(frame_id),
+                    "+",
+                    20,
+                    0,
+                    offset,
+                    max_intensity,
+                    summed,
+                    N_SCANS,
+                    num_peaks,
+                    1,
+                    25.99,
+                    24.11,
+                    1,
+                    1,
+                    ACCUMULATION_TIME_MS,
+                    200.0,
+                    2.7,
+                ),
+            )
+            con.execute(
+                "INSERT INTO MaldiFrameInfo VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    frame_id,
+                    0,
+                    f"R00X{x}Y{y}",
+                    0,
+                    x,
+                    y,
+                    70.0,
+                    50,
+                    1000.0,
+                    1000.0 * x,
+                    -1000.0 * y,
+                    0.0,
+                    1,
+                ),
+            )
+            by_index: Dict[int, int] = {}
+            for t, _, i in pairs:
+                by_index[t] = by_index.get(t, 0) + i
+            expected["frames"].append(
+                {
+                    "frame": frame_id,
+                    "x": x,
+                    "y": y,
+                    "num_pairs": num_peaks,
+                    "tic": summed,
+                    "unique_indices": len(by_index),
+                    "planted_index": IONS[1][0] + 7 * (frame_id - 1),
+                    "planted_intensity": by_index[IONS[1][0] + 7 * (frame_id - 1)],
+                    "pairs": pairs,
+                }
+            )
+        con.commit()
+        con.execute("VACUUM")
+
+    return expected
+
+
+def build() -> None:
+    # Build into a staging directory and swap it in, so that a failure anywhere
+    # above leaves the committed fixture exactly as it was. The old tree is
+    # renamed aside rather than deleted in place: Path.replace onto an existing
+    # directory raises PermissionError on Windows, and an rmtree that fails
+    # halfway (WinError 5/32, the class an open reader handle produces) would
+    # leave behind the same half-deleted fixture this guards against. Two
+    # renames leave either the old tree or the new one and never a fragment --
+    # but only because the second one puts the original back when it fails. The
+    # window between them, with the original moved aside and the replacement
+    # not yet in place, is the one spot where the cleanup below would otherwise
+    # leave no fixture at all; see the `except` around that second rename.
+    rng = np.random.default_rng(7)
+    frames = [make_frame(k, rng) for k in range(len(GRID))]
+
+    staging: Optional[Path] = Path(
+        tempfile.mkdtemp(prefix=".synthetic_tims-build-", dir=FIXTURE_DIR)
+    )
+    retired: Optional[Path] = None
+    try:
+        expected = _write_fixture(staging, frames)
+        # mkdtemp is 0700; OUT_DIR.mkdir() used to leave the umask default.
+        staging.chmod(0o755)
+        if OUT_DIR.exists():
+            retired = Path(
+                tempfile.mkdtemp(prefix=".synthetic_tims-old-", dir=FIXTURE_DIR)
+            )
+            retired.rmdir()
+            OUT_DIR.replace(retired)
+        try:
+            staging.replace(OUT_DIR)
+        except BaseException:
+            # The swap failed with the original already moved aside, which is
+            # the one window where the cleanup below is destructive rather than
+            # tidy: `staging` and `retired` are both still set, so the `finally`
+            # would delete the half-built tree AND the committed acquisition,
+            # leaving no fixture at all. That is strictly worse than the
+            # half-written directory this whole dance exists to prevent.
+            #
+            # Put the original back first, and clear `retired` either way so the
+            # cleanup can never reach it. If even the restore fails, the tree is
+            # still intact under its temporary name and saying where is far more
+            # useful than deleting it.
+            if retired is not None:
+                try:
+                    retired.replace(OUT_DIR)
+                except BaseException:
+                    print(
+                        f"COULD NOT RESTORE THE FIXTURE. It is intact at "
+                        f"{retired}; move it back to {OUT_DIR} by hand.",
+                        file=sys.stderr,
+                    )
+                retired = None
+            raise
+        staging = None
+    finally:
+        if staging is not None:
+            shutil.rmtree(staging, ignore_errors=True)
+        if retired is not None:
+            shutil.rmtree(retired, ignore_errors=True)
 
     EXPECTED_JSON.write_text(
         json.dumps(expected, indent=1) + "\n", encoding="utf-8", newline="\n"

@@ -61,16 +61,114 @@ jobs:
         name: codecov-umbrella
         fail_ci_if_error: false
 
+  # Six lint, type and security tools are configured across .flake8,
+  # .pre-commit-config.yaml and pyproject.toml, and until this job existed not
+  # one of them ran anywhere but a local hook a contributor may never install.
+  # A fork PR, a `git commit --no-verify`, or any session that edits files
+  # without hooks merged unlinted, untyped and unscanned with every check
+  # green. The repo-local no-lab-share-paths and no-user-home-paths guards --
+  # the ones that exist to keep colleague names and share layouts out of a
+  # PUBLIC repository -- were unenforced by the same gap, which is the part
+  # that actually matters.
+  #
+  # One `pre-commit run --all-files` rather than six tool invocations: it
+  # applies exactly the settings the local hook applies, so CI and a developer
+  # machine cannot diverge. That is the same reason .flake8 keeps its settings
+  # in .flake8 and out of the hook's args, and it is why adding a seventh tool
+  # to .pre-commit-config.yaml joins this gate with no edit here.
+  #
+  # This job is named nowhere, so its PR check context is `lint` -- not
+  # `Tests / lint`. That string is what a branch-protection rule would have to
+  # list (issue #224, D18), and this job is that rule's prerequisite: branch
+  # protection can only require checks that exist, and no lint check did.
+  #
+  # Living in tests.yml couples lint to the release. release.yml gates the
+  # PyPI publish on a completed successful run of the workflow named `Tests`
+  # for the exact release SHA and fails closed (see its GATE_WORKFLOW block),
+  # and that comment says the gate is on tests specifically so an ADVISORY
+  # workflow cannot veto a release. Lint is not advisory: a red lint on main
+  # should stop a publish, so the coupling is accepted deliberately rather
+  # than inherited. The cost is that a hook-repo clone failure also blocks
+  # that SHA until a new commit lands. If that ever becomes intolerable, the
+  # fix is to move this job to its own workflow with the same `on:` block, not
+  # to weaken release.yml.
+  lint:
+    runs-on: ubuntu-latest
+    env:
+      # One version, referenced by both the interpreter and the cache key
+      # below, so the two can never describe different things. Pinned rather
+      # than left to the runner image because pre-commit builds each hook's
+      # isolated venv with the interpreter it finds, and black's
+      # `language_version: python3` resolves against it: a runner default that
+      # moved would silently rebuild all twenty hook envs on another version.
+      LINT_PYTHON_VERSION: '3.12'
+
+    steps:
+    - uses: actions/checkout@v5
+    - name: Install uv
+      uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      with:
+        python-version: ${{ env.LINT_PYTHON_VERSION }}
+        enable-cache: true
+        # See the test job: pin the lean pre-v9 pruning behaviour.
+        prune-cache: true
+    - name: Install dependencies
+      # --only-group, not the `--no-default-groups --group <name>` spelling the
+      # jobs above use, because `dev` IS uv's default group here (there is no
+      # [tool.uv] section), so `--no-default-groups --group dev` is the long
+      # form of a plain `uv sync` and would install the project and its whole
+      # runtime tree -- spatialdata, dask, zarr and everything under them --
+      # for a job whose one need is pre-commit. --only-group drops the project
+      # and that tree while still reading the pre-commit version out of
+      # uv.lock, which keeps the lockfile the single source of it.
+      #
+      # What it does NOT do is make the install small. `dev` is installed
+      # whole, Jupyter, ipykernel, matplotlib and ptitprince included, because
+      # pre-commit is declared in that group and there is no leaner group to
+      # ask for. Splitting a `lint` group out is the change that would buy
+      # that; revisit on a measured install time, not in advance.
+      run: uv sync --locked --only-group dev
+    - name: Cache the pre-commit hook environments
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pre-commit
+        key: pre-commit-${{ runner.os }}-py${{ env.LINT_PYTHON_VERSION }}-${{ hashFiles('.pre-commit-config.yaml') }}
+        # Warm from the previous entry when the config changes, so editing one
+        # hook rebuilds one env instead of twenty.
+        restore-keys: |
+          pre-commit-${{ runner.os }}-py${{ env.LINT_PYTHON_VERSION }}-
+    - name: Run every hook
+      # --no-sync: the step above deliberately installed only one group, and a
+      # bare `uv run` would re-sync the project back in before running.
+      #
+      # --show-diff-on-failure is what makes the four in-place rewriters
+      # (the three whitespace hooks and fix-byte-order-marker) useful here.
+      # They exit non-zero having already written the fix into a checkout
+      # nobody will ever look at, so without this the log says a file was
+      # modified and never says how.
+      run: uv run --no-sync pre-commit run --all-files --show-diff-on-failure
+
   # The integration lane, which `addopts` in pyproject.toml deselects from every
   # default `pytest` run. It is its own job rather than one more step in `test`
-  # so that it appears as a separately named check: the lane sat with 15 of its
-  # 18 tests failing precisely because no job anywhere ran it, and a step buried
-  # in another job would be just as easy to lose again.
+  # so that it appears as a separately named check. The reason is historical
+  # and worth keeping: back when the lane ran nowhere at all it sat with 15 of
+  # its 18 tests failing, precisely because no job anywhere ran it, and a step
+  # buried in another job would be just as easy to lose again. Those figures
+  # describe that moment, not this lane's size today.
   #
-  # Most of these cover the streaming/CSC converter, which writes the Zarr store
-  # a downstream consumer opens with anndata.experimental.read_lazy(), so both
-  # operating systems are worth the runner time -- the atomic-write and path
-  # behaviour under test differs between them.
+  # `-m integration` is not a set somebody maintains by hand. tests/conftest.py
+  # stamps the marker on every item collected under tests/integration/, so this
+  # job runs that directory and a file added there joins the lane with no edit
+  # anywhere -- which is what closed the gap where 14 of the directory's tests,
+  # every end-to-end CLI test among them, were silently deselected here and ran
+  # in the `test` job instead.
+  #
+  # Both operating systems are worth the runner time because most of this
+  # lane's wall clock is tests that write a real Zarr store and read it back --
+  # the streaming/CSC converter file above all, whose output a downstream
+  # consumer opens with anndata.experimental.read_lazy(). Atomic-write and path
+  # behaviour differ between the two, and that is the part a single runner
+  # would not see.
   integration:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -94,8 +192,35 @@ jobs:
       # `-m integration` on the command line overrides the `-m "not integration"`
       # that addopts supplies, so this is exactly the invocation documented in
       # tests/README.md -- which keeps that documentation honest.
+      #
+      # Coverage is measured here as well as in `test`, and not because this
+      # lane is a coverage lane. Sixteen tests joined it when membership became
+      # a matter of directory -- the 14 that sat under tests/integration/
+      # carrying no marker, plus the 2 undecorated ones that travelled with
+      # test_streaming_converter.py when it moved in. Collected either side:
+      # 65 of 2690 before, 81 of 2704 today.
+      #
+      # Eleven of those sixteen are what this step is about, because they are
+      # the ones that were EXECUTING in `test` and so were being counted: the
+      # six end-to-end CLI tests, which walk thyra/__main__.py from argv to a
+      # written store, three imzML conversion tests, and the two streaming
+      # ones. The other five skip for want of a real acquisition and counted
+      # nothing in either job. Those lines stay covered by a run; they would
+      # simply stop being counted, and the reported figure would fall for a
+      # reason that has nothing to do with coverage. .codecov.yml declares no
+      # flags, so `integration` is created on first upload and joins the union
+      # with `unittests`.
       run: |
-        uv run pytest -m integration --disable-warnings
+        uv run pytest -m integration --disable-warnings --cov=thyra --cov-report=xml
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v7
+      with:
+        # See the test job: `file` is not an alias for `files`, it is ignored.
+        files: ./coverage.xml
+        flags: integration
+        name: codecov-integration
+        fail_ci_if_error: false
 
   # Installs thyra the way an end user does: a plain `pip install .` that
   # resolves dependencies fresh from PyPI, WITHOUT uv.lock. This is the
@@ -145,6 +270,26 @@ jobs:
         cd /tmp
         thyra --version
         thyra --help
+    - name: Verify the installed distribution ships the PEP 561 marker
+      # pyproject.toml declares "Typing :: Typed", which is a promise a type
+      # checker reads. Without thyra/py.typed inside the INSTALLED
+      # distribution, PEP 561 requires a checker to ignore every inline
+      # annotation and hand the consumer `Any` for every thyra symbol -- so a
+      # 94%-annotated package buys that consumer nothing and the classifier
+      # PyPI shows is false. The marker is a zero-byte file that no test, lint
+      # or import failure can notice, so only an assertion like this one
+      # catches a build-config change that drops it.
+      #
+      # Run from outside the checkout for the same reason as the step above:
+      # this must read the installed distribution and cannot be allowed to
+      # fall back to the repo's ./thyra. That is why no pytest assertion can
+      # do this job -- the last step of this job runs `PYTHONPATH=.`, which
+      # puts the repo ahead of site-packages, and the lockfile job installs
+      # thyra editable, so in every pytest lane `files("thyra")` resolves to
+      # the repo tree.
+      run: |
+        cd /tmp
+        python -c "from importlib.resources import files; assert (files('thyra') / 'py.typed').is_file(), 'thyra/py.typed is missing from the installed distribution; the Typing :: Typed classifier in pyproject.toml is false'"
     - name: Install the test-only dependencies
       run: pip install pytest pytest-cov mock
     - name: Verify save / read-back round-trip on the resolved set

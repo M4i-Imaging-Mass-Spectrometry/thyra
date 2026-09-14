@@ -240,10 +240,11 @@ The information is never lost from the document, only from the dict, so
 `ImzMLMetadataExtractor` now reads the unit-bearing path — each `cv_params`
 tuple is `(name, accession, value, raw_name, raw_value, unit_name,
 unit_accession)` — and converts: `UO:0000016` mm x1000, `UO:0000017` um x1,
-`UO:0000018` nm /1000. Any other declared unit is refused with a `ValueError`,
-which fails the conversion; a cvParam with no unit at all keeps the historical
-micrometre reading, because real vendor files (the IONTOF class among them)
-write `IMS:1000046` unitless and were being read correctly.
+`UO:0000018` nm /1000. Any other declared unit is refused with a
+`ConversionRefused`, which fails the conversion and prints the one sentence
+naming the unit rather than a traceback; a cvParam with no unit at all keeps
+the historical micrometre reading, because real vendor files (the IONTOF class
+among them) write `IMS:1000046` unitless and were being read correctly.
 
 Corroboration that the ambiguity was genuine rather than theoretical: pyimzml's
 own `get_physical_coordinates` docstring says it returns **nanometers** while

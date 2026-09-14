@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from thyra.core.registry import detect_format, get_reader_class
+from thyra.errors import ConversionRefused
 from thyra.preview import preview_msi
 from thyra.readers.bruker import BrukerFolderStructure, BrukerFormat, SolarixReader
 from thyra.readers.bruker.solarix.solarix_reader import _read_only_uri
@@ -201,7 +202,7 @@ class TestSolarixDetection:
         (prescan / "analysis.baf").write_bytes(b"\x00" * 16)
         (prescan / "calib.bin").write_bytes(b"\x00" * 16)
 
-        with pytest.raises(ValueError, match="missing analysis files"):
+        with pytest.raises(ConversionRefused, match="missing analysis files"):
             detect_format(prescan)
 
     def test_solarix_family_without_peaks_names_the_fallback(self, tmp_path):
@@ -212,7 +213,7 @@ class TestSolarixDetection:
         (d_dir / "ser").write_bytes(b"\x00" * 16)
         (d_dir / "ImagingInfo.xml").write_text("<ImagingInfo/>", encoding="utf-8")
 
-        with pytest.raises(ValueError, match="without peaks.sqlite") as excinfo:
+        with pytest.raises(ConversionRefused, match="without peaks.sqlite") as excinfo:
             detect_format(d_dir)
         assert "imzML" in str(excinfo.value)
 
@@ -272,7 +273,7 @@ class TestSolarixReader:
         )
 
         with SolarixReader(d_dir) as reader:
-            with pytest.raises(ValueError, match="Corrupt PeakMzValues.*Id=2"):
+            with pytest.raises(ConversionRefused, match="Corrupt PeakMzValues.*Id=2"):
                 list(reader.iter_spectra())
 
     def test_truncated_intensity_blob_is_refused(self, tmp_path):
@@ -282,7 +283,7 @@ class TestSolarixReader:
         )
 
         with SolarixReader(d_dir) as reader:
-            with pytest.raises(ValueError, match="Corrupt PeakIntensityValues"):
+            with pytest.raises(ConversionRefused, match="Corrupt PeakIntensityValues"):
                 list(reader.iter_spectra())
 
     def test_empty_spectrum_is_skipped(self, tmp_path):
@@ -369,13 +370,13 @@ class TestSolarixReader:
         with pytest.raises(RuntimeError, match="closed"):
             list(reader.iter_spectra())
 
-    def test_scan_count_mismatch_warns(self, tmp_path, caplog):
+    def test_scan_count_mismatch_warns(self, tmp_path, thyra_logs):
         d_dir = make_solarix_d(tmp_path, n_info_scans=99)
 
-        with caplog.at_level(logging.WARNING):
+        with thyra_logs("thyra.readers", logging.WARNING) as records:
             SolarixReader(d_dir).close()
 
-        assert any("truncated or partially copied" in m for m in caplog.messages)
+        assert any("truncated or partially copied" in m for m in records.messages)
 
 
 class TestSolarixSchemaRefusal:
@@ -384,13 +385,13 @@ class TestSolarixSchemaRefusal:
     def test_wrong_schema_type(self, tmp_path):
         d_dir = make_solarix_d(tmp_path, properties={"SchemaType": "LC-MS"})
 
-        with pytest.raises(ValueError, match="SchemaType='LC-MS'"):
+        with pytest.raises(ConversionRefused, match="SchemaType='LC-MS'"):
             SolarixReader(d_dir)
 
     def test_wrong_major_version(self, tmp_path):
         d_dir = make_solarix_d(tmp_path, properties={"SchemaVersionMajor": "2"})
 
-        with pytest.raises(ValueError, match="SchemaVersionMajor='2'"):
+        with pytest.raises(ConversionRefused, match="SchemaVersionMajor='2'"):
             SolarixReader(d_dir)
 
     def test_no_peaks_sqlite_names_the_fallback(self, tmp_path):
@@ -399,7 +400,7 @@ class TestSolarixSchemaRefusal:
         (d_dir / "ser").write_bytes(b"\x00" * 16)
         (d_dir / "ImagingInfo.xml").write_text("<ImagingInfo/>", encoding="utf-8")
 
-        with pytest.raises(ValueError, match="imzML"):
+        with pytest.raises(ConversionRefused, match="imzML"):
             SolarixReader(d_dir)
 
     def test_missing_properties_table(self, tmp_path):
@@ -408,7 +409,7 @@ class TestSolarixSchemaRefusal:
         sqlite3.connect(d_dir / "peaks.sqlite").close()
         (d_dir / "ImagingInfo.xml").write_text("<ImagingInfo/>", encoding="utf-8")
 
-        with pytest.raises(ValueError, match="Properties"):
+        with pytest.raises(ConversionRefused, match="Properties"):
             SolarixReader(d_dir)
 
 

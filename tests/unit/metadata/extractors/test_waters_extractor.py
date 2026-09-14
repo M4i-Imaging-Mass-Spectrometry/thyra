@@ -570,11 +570,11 @@ class TestTheResampledAxisRange:
     def test_no_acquisition_range_falls_back_to_the_stored_span(self):
         assert self._range_for(None, (110.0, 900.0)) == (110.0, 900.0)
 
-    def test_the_log_no_longer_claims_nothing_is_dropped(self, caplog):
+    def test_the_log_no_longer_claims_nothing_is_dropped(self, thyra_logs):
         import logging
 
-        with caplog.at_level(logging.WARNING):
+        with thyra_logs("thyra.metadata", logging.WARNING) as records:
             self._range_for((100.0, 1200.0), (99.9878, 1200.2158))
 
-        assert "so nothing is dropped" not in caplog.text
-        assert "widened" in caplog.text
+        assert "so nothing is dropped" not in records.text
+        assert "widened" in records.text
