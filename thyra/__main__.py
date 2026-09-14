@@ -12,7 +12,11 @@ from uuid import uuid4  # noqa: E402
 import click  # noqa: E402
 
 from thyra import __version__  # noqa: E402
-from thyra.convert import convert_msi, dataset_id_problem  # noqa: E402
+from thyra.convert import (  # noqa: E402
+    convert_msi,
+    dataset_id_problem,
+    quarantine_partial_output,
+)
 from thyra.core.registry import detect_format  # noqa: E402
 from thyra.resampling.mobility_grid import MOBILITY_CHANNELS  # noqa: E402
 from thyra.utils.logging_config import setup_logging  # noqa: E402
@@ -521,44 +525,19 @@ def _parse_streaming_option(streaming: str) -> bool | Literal["auto"]:
 def _quarantine_partial_output(output: Path) -> None:
     """Move a partially written store aside after a failed conversion.
 
-    A conversion that fails part-way through writing leaves an
-    incomplete ``.zarr`` at the destination. That store cannot be opened
-    (``spatialdata.read_zarr()`` raises), but it looks like a plausible
-    artifact, and it also blocks a retry because the CLI refuses to write
-    to an existing path. Rename it to a sibling ``.failed`` path so the
-    destination is clear while the partial store remains available for
-    diagnosis.
+    A thin delegation: the move itself lives in
+    :func:`thyra.convert.quarantine_partial_output`, because
+    ``convert_msi`` is the public entry point and a library caller --
+    Ousia converts through it, never through this CLI -- used to get no
+    cleanup at all (issue #293).
 
-    The CLI validates that the output path does not exist before
-    converting, so anything present at this point was written by this
-    run and is safe to move.
+    Kept as a call rather than deleted because ``convert_msi`` resolves
+    and may extend the output path (``prepare_zarr_output_path``) while
+    the CLI still holds the path the user typed. It is idempotent: a
+    store already moved aside does not exist here, so this returns
+    immediately.
     """
-    if not output.exists():
-        return
-
-    quarantine = output.with_name(f"{output.name}.failed")
-    attempt = 1
-    while quarantine.exists():
-        attempt += 1
-        quarantine = output.with_name(f"{output.name}.failed{attempt}")
-
-    try:
-        output.rename(quarantine)
-    except OSError as e:
-        logger.error(
-            "The incomplete output was left at %s because it could not be "
-            "moved aside (%s). It will not open with "
-            "spatialdata.read_zarr(); delete it before retrying.",
-            output,
-            e,
-        )
-        return
-
-    logger.error(
-        "The incomplete output was moved to %s. It will not open with "
-        "spatialdata.read_zarr(); delete it once you no longer need it.",
-        quarantine,
-    )
+    quarantine_partial_output(output)
 
 
 def _handle_post_conversion(success: bool, output: Path) -> bool:
