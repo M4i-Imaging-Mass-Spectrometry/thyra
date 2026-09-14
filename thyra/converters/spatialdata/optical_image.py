@@ -71,7 +71,7 @@ import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
@@ -502,6 +502,19 @@ class StreamedOpticalImage:
     has returned. Between the two the element on disk has all its metadata
     and no pixels; :meth:`discard` removes it again if the pixels cannot
     be streamed.
+
+    There is deliberately no hook for per-element attributes. A store's
+    ``images/*`` group carries exactly ``ome`` and ``spatialdata_attrs``:
+    the ome-zarr writer spatialdata hands the element to composes the group
+    metadata itself and does not carry anything else across, so whatever a
+    caller puts in the element's ``.attrs`` is dropped by the write -- and
+    on the multiscale path ``xr.DataTree.from_dict`` drops it before that,
+    so it never even reaches the writer. This class used to take an
+    ``attrs`` mapping and the converter used to fill it with the image's
+    source filename; nothing of it was ever in a store. Provenance that has
+    to survive belongs in the store's root attrs, which is where
+    :meth:`BaseSpatialDataConverter._create_optical_images_attr` now puts
+    it, under ``optical_images``.
     """
 
     source: OpticalSource
@@ -509,7 +522,6 @@ class StreamedOpticalImage:
     chunks: Tuple[int, ...]
     scale_factors: Sequence[int]
     transformations: Dict[str, Any]
-    attrs: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if len(self.chunks) != 3:
@@ -541,7 +553,6 @@ class StreamedOpticalImage:
                 transformations=dict(self.transformations),
                 chunks=self.chunks,
             )
-            image.attrs.update(self.attrs)
             return image
         base = self.level_shapes[0]
         levels: Dict[str, xr.Dataset] = {}
@@ -555,7 +566,6 @@ class StreamedOpticalImage:
                 da.zeros(shape, chunks=self.chunks, dtype=self.source.dtype),
                 dims=dims,
                 coords=coords,
-                attrs=dict(self.attrs),
             )
             levels[f"scale{index}"] = xr.Dataset({"image": image})
         tree = xr.DataTree.from_dict(levels)

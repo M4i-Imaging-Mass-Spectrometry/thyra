@@ -18,6 +18,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
+from thyra.errors import ConversionRefused
 from thyra.readers.bruker.timstof.sdk.sdk_functions import (
     TDF_SPECTRUM_MODES,
     SDKFunctions,
@@ -208,16 +209,16 @@ class TestModes:
         assert TDF_SPECTRUM_MODES == ("vendor_centroid", "scan_sum")
 
     def test_unknown_mode_is_rejected(self):
-        with pytest.raises(ValueError, match="tdf_spectrum"):
+        with pytest.raises(ConversionRefused, match="tdf_spectrum"):
             make_sdk(FakeDll({}), "peak_pick")
 
-    def test_missing_centroid_export_falls_back_to_scan_sum(self, caplog):
+    def test_missing_centroid_export_falls_back_to_scan_sum(self, thyra_logs):
         dll = FakeDll({7: FRAME_7}, with_centroid_export=False)
-        with caplog.at_level(logging.WARNING):
+        with thyra_logs("thyra.readers", logging.WARNING) as records:
             sdk = make_sdk(dll, "vendor_centroid")
 
         assert sdk.tdf_spectrum == "scan_sum"
-        assert "scan_sum" in caplog.text
+        assert "scan_sum" in records.text
         mzs, intensities = sdk.read_spectrum(handle=42, frame_id=7, num_scans=4)
         np.testing.assert_allclose(intensities, [12.0, 6.0])
 

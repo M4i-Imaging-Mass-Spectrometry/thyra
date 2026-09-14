@@ -16,14 +16,12 @@ def example_dataset(tmp_path):
     return path
 
 
-@pytest.mark.unit
 def test_writes_imzml_and_ibd(example_dataset):
     """Both halves of the imzML pair are written."""
     assert example_dataset.exists()
     assert example_dataset.with_suffix(".ibd").exists()
 
 
-@pytest.mark.unit
 def test_grid_and_axis_dimensions(example_dataset):
     """Spectra cover the full grid and share one m/z axis."""
     with production_parser(example_dataset) as parser:
@@ -36,7 +34,6 @@ def test_grid_and_axis_dimensions(example_dataset):
         assert mzs[-1] == pytest.approx(1200.0)
 
 
-@pytest.mark.unit
 def test_pixel_size_is_written_to_metadata(example_dataset):
     """Pixel size cvParams are present so Thyra can auto-detect them."""
     text = example_dataset.read_text(encoding="ISO-8859-1")
@@ -48,7 +45,6 @@ def test_pixel_size_is_written_to_metadata(example_dataset):
         assert float(parser.imzmldict["pixel size y"]) == pytest.approx(30.0)
 
 
-@pytest.mark.unit
 def test_coordinates_are_one_based(example_dataset):
     """imzML coordinates start at 1, not 0."""
     with production_parser(example_dataset) as parser:
@@ -58,7 +54,6 @@ def test_coordinates_are_one_based(example_dataset):
         assert min(ys) == 1 and max(ys) == 9
 
 
-@pytest.mark.unit
 def test_regions_are_spatially_distinct(example_dataset):
     """The inner structure carries peaks the outer region does not.
 
@@ -76,7 +71,6 @@ def test_regions_are_spatially_distinct(example_dataset):
     assert values.max() > 10 * max(values.min(), 1.0)
 
 
-@pytest.mark.unit
 def test_same_seed_reproduces_identical_intensities(tmp_path):
     """The same seed reproduces identical intensities.
 
@@ -95,7 +89,6 @@ def test_same_seed_reproduces_identical_intensities(tmp_path):
     np.testing.assert_array_equal(spec_a, spec_b)
 
 
-@pytest.mark.unit
 def test_the_ibd_past_its_uuid_header_is_byte_identical(tmp_path):
     """What determinism here actually means, stated positively.
 
@@ -112,7 +105,6 @@ def test_the_ibd_past_its_uuid_header_is_byte_identical(tmp_path):
     assert ibd_a[:16] != ibd_b[:16]  # and the UUID is genuinely fresh
 
 
-@pytest.mark.unit
 def test_the_output_path_does_not_reach_the_file(tmp_path):
     """pyimzML derives ``<run id=...>`` from the path it was handed.
 
@@ -129,7 +121,6 @@ def test_the_output_path_does_not_reach_the_file(tmp_path):
     assert "nested" not in text
 
 
-@pytest.mark.unit
 def test_the_run_id_is_the_stem_alone(tmp_path):
     """No separator of either flavour, so two platforms agree."""
     import xml.etree.ElementTree as ET  # nosec B405 - our own output
@@ -146,7 +137,6 @@ def test_the_run_id_is_the_stem_alone(tmp_path):
     assert "/" not in run_id and "\\" not in run_id
 
 
-@pytest.mark.unit
 def test_extension_is_normalised(tmp_path):
     """A path without the .imzML suffix still produces a valid pair."""
     path = generate_example_imzml(tmp_path / "noext.imzML", n_x=4, n_y=4, n_mz_bins=100)

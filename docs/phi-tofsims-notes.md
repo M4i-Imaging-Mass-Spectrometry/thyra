@@ -201,13 +201,48 @@ output axis. Resampling only comes up when several samples have to share one
 mass axis, and PHI is an awkward case for it.
 
 `InstrumentDetectorChain` recognises the format (via the
-`format_specific["format"]` stamp) and answers **`nearest_neighbor` on a
-`linear_tof` axis**. Both halves matter.
+`format_specific["format"]` stamp) and answers **`nearest_neighbor` on a `tof`
+axis** -- the two-term width law `FWHM(m) = sqrt(A m + B m^2)` with
+`A = 0.454`, `B = 0.0284`, laid at three bins per peak width. Both halves
+matter.
 
-**Why `linear_tof`.** Channels are laid out at a constant flight-time step, and
-m/z goes as the square of time, so the m/z spacing grows as `sqrt(m/z)` -- the
-`linear_tof` law exactly. Measured on the reference file: 9.8e-5 u per channel
-at m/z 1 against 5.0e-4 at m/z 26, a ratio of 5.1 where `sqrt(26)` is 5.099.
+**Why the two-term law and not `linear_tof`.** Two different laws are in play
+here and it is easy to reach for the wrong one. The *channels* are laid out at
+a constant flight-time step, and m/z goes as the square of time, so their
+spacing grows as `sqrt(m/z)` -- the `linear_tof` law exactly, measured on the
+reference file as 9.8e-5 u per channel at m/z 1 against 5.0e-4 at m/z 26, a
+ratio of 5.1 where `sqrt(26)` is 5.099. That is the *source grid*, and
+`source_grid_law` still reports it.
+
+A target axis has a different job: its bins should track how wide a peak is,
+and the peaks do not follow the digitiser's law. Measured across 311 isolated
+peaks from twelve acquisitions, resolving power climbs from about 2,200 at
+m/z 10 and then levels off:
+
+| m/z band | peaks | median R | median FWHM |
+|---|---|---|---|
+| 5--15 | 14 | 2,185 | 6.09 mDa |
+| 15--25 | 29 | 2,399 | 7.98 mDa |
+| 25--40 | 56 | 3,215 | 9.94 mDa |
+| 40--60 | 74 | 4,007 | 12.88 mDa |
+| 60--100 | 70 | 4,183 | 18.74 mDa |
+| 100--200 | 60 | 4,334 | 29.93 mDa |
+| 200--500 | 8 | 4,243 | 70.00 mDa |
+
+A rise then a plateau is neither single-term limit: `linear_tof` has R climbing
+as `sqrt(m)` without end, `reflector_tof` has it flat from the start. It is the
+knee a two-term law describes, with the constant-time term governing below
+m/z 40 and the proportional term above it. Fitting a single power law to this
+is what makes the log-log exponent unstable -- subsets of the same peaks give
+anything from 0.76 to 1.21, none of them near `linear_tof`'s 0.5.
+
+Inheriting the generic `linear_tof` bin width of 17 mDa at m/z 300 cost real
+fidelity: 42% of those peaks landed under two bins per width, and the reference
+acquisition's base peak got exactly one. See the
+[detector table note](resampling.md#which-detector-wins) for the measurement
+against the vendor's own peak-image export, and
+[the two-term TOF law](resampling.md#the-two-term-tof-law) for why the pair is
+fitted at the narrow edge of the corpus rather than through its middle.
 
 **Why not `tic_preserving`.** The method interpolates onto the target axis and
 rescales the result back to the source TIC. A PHI pixel is not a profile
@@ -251,15 +286,31 @@ The instrument's measured resolving power on the reference file is **R ~ 4,000**
 
 Note that this is resolving power, not axis spacing -- the 128 ps grid samples
 each peak 11 to 20 times. A target axis only has to keep a few samples per
-FWHM. A `linear_tof` axis of 0.01 Da at a reference of m/z 500 gives 189,191
-bins over the full range and 2.3 to 4.3 samples per FWHM, which keeps CN⁻ and
-C₂H₂⁻ -- 12.6 mDa apart, or 1.94 FWHM, genuinely resolved by this instrument --
-5.5 bins apart.
+FWHM, and the default does exactly that: the `tof` axis lays bins at
+`FWHM(m) / 3` everywhere, which on the reference file's declared range is
+103,070 bins at 1.9 mDa near m/z 27 and 4.9 mDa near m/z 79. CN⁻ and C₂H₂⁻ --
+12.6 mDa apart, or 1.94 FWHM, genuinely resolved by this instrument -- come out
+7 bins apart, and the 6 mDa window the acquisition's own peak list uses to
+separate C¹⁵N⁻ from ¹³CN⁻ spans 3.
+
+You should not normally need to set a width by hand. If you do, note that
+`--resample-width-at-mz` on a `tof` axis sets the bins per peak width rather
+than a fixed spacing: whatever `k` puts a bin of that width at
+`--resample-reference-mz`.
 
 !!! danger "A constant 0.1 Da axis destroys this data"
     It is roughly 19x the peak width at m/z 26, so CN⁻ and C₂H₂⁻ land in the
     same bin along with everything else between them. Constant-width axes suit
     profile MALDI-TOF; they do not suit ToF-SIMS.
+
+!!! warning "A C60 primary beam resolves about five times worse"
+    The law is fitted to Bi<sub>3</sub> LMIG acquisitions, which dominate the
+    corpus at R 1,700--7,100. C60 acquisitions in the same archive measure
+    R 280--1,200. They are converted correctly -- they simply get around
+    fifteen bins across a peak instead of three, so the store is larger than
+    it needs to be. That is the safe direction, and the one the fit was
+    deliberately placed on: a peak narrower than the law loses shape, a peak
+    broader than it only costs bytes.
 
 ## Previewing without decoding events
 

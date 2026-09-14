@@ -49,6 +49,12 @@ Archive/
 # The hand-written TDF fixture is the one .d directory that belongs in the
 # repository (tests/data/fixtures/build_tdf_fixture.py documents why).
 !tests/data/fixtures/synthetic_tims.d/
+# ...but not the two staging trees build_tdf_fixture.py swaps through. The
+# negation above admits anything under tests/data/fixtures/synthetic_tims.d/,
+# and these sit beside it, so a run killed between mkdtemp and the rename
+# leaves a directory that `git add -A` would otherwise sweep into a commit.
+tests/data/fixtures/.synthetic_tims-build-*/
+tests/data/fixtures/.synthetic_tims-old-*/
 *.mis
 *.slx
 *.tiff

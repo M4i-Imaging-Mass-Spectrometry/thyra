@@ -142,8 +142,19 @@ class TestTheAlignmentWasApplied:
         assert cs["pixel_size_um_x"] is None
         assert cs["pixel_size_um_y"] is None
 
-    def test_the_primary_optical_image_is_the_reference(self, applied):
-        assert _global_cs(applied)["reference_element"] == OPTICAL
+    def test_no_reference_element_when_the_store_holds_no_optical_image(self, applied):
+        """``reference_element`` names an *element*, not a file (#328).
+
+        These fixtures convert with ``include_optical=False``, so
+        ``"global"`` is still the optical photo's pixel grid but there is
+        no element in this store that *is* it -- which is exactly the
+        case #328 made explicit. Before that it carried the ``.mis``
+        ``<ImageFile>`` stem, a key that resolved against nothing.
+
+        What #288 is about is the line above this one: the *unit*. That
+        is asserted separately and is what must not regress here.
+        """
+        assert _global_cs(applied)["reference_element"] is None
 
     def test_the_raster_affine_is_the_alignment(self, applied):
         np.testing.assert_allclose(

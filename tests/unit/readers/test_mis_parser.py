@@ -42,15 +42,13 @@ def _write_mis(
     area: str = RECTANGULAR_AREA,
 ) -> Path:
     mis = tmp_path / name
-    mis.write_text(
-        f"""<?xml version="1.0"?>
+    mis.write_text(f"""<?xml version="1.0"?>
 <ImagingSequence>
 <ImageFile>img.tif</ImageFile>
 <Raster>{raster}</Raster>
 {area}
 </ImagingSequence>
-"""
-    )
+""")
     return mis
 
 
@@ -153,12 +151,10 @@ def test_parse_mis_extracts_polygon_area_bounding_box(tmp_path: Path) -> None:
 
 def _write_entity_mis(tmp_path: Path, name: str = "entity.mis") -> Path:
     mis = tmp_path / name
-    mis.write_text(
-        """<?xml version="1.0"?>
+    mis.write_text("""<?xml version="1.0"?>
 <!DOCTYPE ImagingSequence [<!ENTITY r "5,5">]>
 <ImagingSequence><Raster>&r;</Raster></ImagingSequence>
-"""
-    )
+""")
     return mis
 
 
@@ -259,12 +255,10 @@ def test_internal_subset_dtd_still_parses(tmp_path: Path) -> None:
     here so a later tightening to forbid_dtd=True cannot pass unnoticed.
     """
     mis = tmp_path / "dtd.mis"
-    mis.write_text(
-        """<?xml version="1.0"?>
+    mis.write_text("""<?xml version="1.0"?>
 <!DOCTYPE ImagingSequence [<!ELEMENT Raster (#PCDATA)>]>
 <ImagingSequence><Raster>5,5</Raster></ImagingSequence>
-"""
-    )
+""")
 
     assert parse_mis_file(mis)["raster"] == [5, 5]
 
@@ -304,7 +298,7 @@ class TestTheMisPickIsDeterministic:
         assert first is not None and first.name == "sample.mis"
 
     def test_several_non_matching_candidates_are_refused_not_guessed(
-        self, tmp_path: Path, caplog
+        self, tmp_path: Path, thyra_logs
     ) -> None:
         """An arbitrary pick writes a *wrong* pitch into the store.
 
@@ -317,9 +311,9 @@ class TestTheMisPickIsDeterministic:
         _write_mis(tmp_path, "other_a.mis", raster="5,5")
         _write_mis(tmp_path, "other_b.mis", raster="50,50")
 
-        with caplog.at_level(logging.WARNING):
+        with thyra_logs("thyra.readers.bruker.mis_parser", logging.WARNING) as records:
             assert find_mis_file_for_d_folder(d_folder) is None
-        assert "refusing to guess" in caplog.text
+        assert any("refusing to guess" in r.getMessage() for r in records)
 
     def test_a_lone_non_matching_candidate_is_still_accepted(
         self, tmp_path: Path

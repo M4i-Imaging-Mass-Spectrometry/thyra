@@ -9,6 +9,7 @@ so the marginal invariant, the ``uns`` blocks and the refusals are
 checked on a real store.
 """
 
+import logging
 from pathlib import Path
 from typing import Generator, Optional, Tuple
 
@@ -134,7 +135,7 @@ class TestLinearGrid:
 
 
 class TestChannelWidthBand:
-    def test_the_band_is_reported_never_moves_the_anchor(self, caplog):
+    def test_the_band_is_reported_never_moves_the_anchor(self):
         # A real acquisition's 0.29 span over 256 channels is finer than
         # the band's floor. The count is the anchor and does not move for
         # it; the width is said out loud instead.
@@ -142,14 +143,14 @@ class TestChannelWidthBand:
         assert grid.n_channels == MOBILITY_CHANNELS
         assert grid.channel_width < MIN_CHANNEL_WIDTH
 
-    def test_a_coarse_grid_warns_that_separations_may_merge(self, caplog):
+    def test_a_coarse_grid_warns_that_separations_may_merge(self, thyra_logs):
         from thyra.resampling.mobility_grid import report_channel_width
 
         grid = build_mobility_grid(1.0, 11.0, n_channels=4)
         assert grid.channel_width > MAX_CHANNEL_WIDTH
-        with caplog.at_level("WARNING"):
+        with thyra_logs("thyra.resampling", logging.WARNING) as records:
             report_channel_width(grid)
-        assert "above" in caplog.text
+        assert "above" in records.text
 
 
 class TestLinearChannel:
@@ -341,7 +342,9 @@ class TestVarCeiling:
         assert grid_var_bound(axis, grid) > MAX_GRID_VAR_ENTRIES
         assert grid_refusal(GridStubReader(), axis, grid) is None
 
-    def test_the_count_refuses_before_anything_is_allocated(self, monkeypatch, caplog):
+    def test_the_count_refuses_before_anything_is_allocated(
+        self, monkeypatch, thyra_logs
+    ):
         # The ceiling is checked the moment the count is known -- the end
         # of the discovery pass -- and before the memmaps, the labels or
         # the var exist. Nothing has been committed to when it fires,
@@ -356,7 +359,7 @@ class TestVarCeiling:
             raise AssertionError("allocate() ran after the ceiling refused")
 
         monkeypatch.setattr(csc_assembly.CscAssembly, "allocate", never)
-        with caplog.at_level("WARNING"):
+        with thyra_logs("thyra.converters", logging.WARNING) as records:
             table = build_mobility_table(
                 GridStubReader(),
                 _stub_obs(),
@@ -367,7 +370,7 @@ class TestVarCeiling:
                 grid=build_mobility_grid(1.1, 1.5),
             )
         assert table is None
-        assert "above the var ceiling" in caplog.text
+        assert "above the var ceiling" in records.text
 
     def test_a_span_too_wide_to_count_is_refused_before_the_read(self):
         # The discovery pass counts every (m/z bin, channel) pair the grid
@@ -395,7 +398,7 @@ class TestVarCeiling:
         assert f"{MAX_GRID_VAR_ENTRIES:,}" in refusal
         assert "--mobility-bins" in refusal
 
-    def test_the_operative_guard_is_the_projected_var_memory(self, caplog):
+    def test_the_operative_guard_is_the_projected_var_memory(self, thyra_logs):
         # Design decision D4: the ceiling is a memory guard, not a constant
         # fitted to a dataset. 10M features project to ~3.1 GB at the
         # measured bytes-per-feature; that is refused on a machine with
@@ -411,14 +414,15 @@ class TestVarCeiling:
         assert "4.0 GB free" in refusal
         assert "--resample-bins" in refusal and "--mobility-bins" in refusal
 
-        with caplog.at_level("WARNING"):
+        with thyra_logs("thyra.converters", logging.WARNING) as records:
             assert var_ceiling_refusal(n, available_gb=10.0) is None
-        assert "projected to need" in caplog.text
+        assert "projected to need" in records.text
 
-        caplog.clear()
-        with caplog.at_level("WARNING"):
+        # A second block, so a second collector: each one starts empty,
+        # which is what the caplog.clear() that used to sit here did.
+        with thyra_logs("thyra.converters", logging.WARNING) as records:
             assert var_ceiling_refusal(n, available_gb=100.0) is None
-        assert "projected to need" not in caplog.text
+        assert "projected to need" not in records.text
 
     def test_the_fractions_are_of_free_memory_not_fixed_sizes(self):
         # The same table is fine on a workstation and refused on a laptop.

@@ -100,7 +100,6 @@ def _dense(table):
     return matrix.toarray() if hasattr(matrix, "toarray") else np.asarray(matrix)
 
 
-@pytest.mark.integration
 class TestImzMLParity:
     """The same data through two readers must land in the same store."""
 
@@ -201,7 +200,6 @@ class TestImzMLParity:
         )
 
 
-@pytest.mark.integration
 class TestConversion:
     """Conversion behaviour specific to mzPeak inputs."""
 
@@ -266,7 +264,6 @@ class TestConversion:
         assert table.n_vars == 6
 
 
-@pytest.mark.integration
 @pytest.mark.skipif(
     not os.environ.get("THYRA_MZPEAK_REFERENCE_ARCHIVE"),
     reason=(

@@ -1,4 +1,4 @@
-# tests/unit/converters/test_streaming_converter.py
+# tests/integration/test_streaming_converter.py
 """Tests for the streaming SpatialData converter."""
 
 import tempfile
@@ -207,7 +207,6 @@ def test_converter_initialization():
         assert converter.dataset_id == "test_dataset"
 
 
-@pytest.mark.integration
 class TestStreamingSpatialDataConverter:
     """Tests for StreamingSpatialDataConverter."""
 
@@ -419,7 +418,6 @@ class TestStreamingSpatialDataConverter:
                 ), "Shape area should match pixel size"
 
 
-@pytest.mark.integration
 def test_streaming_converter_memory_efficiency():
     """Test that streaming converter uses bounded memory."""
     # This is a basic check - actual memory profiling would need
@@ -453,7 +451,6 @@ def test_streaming_converter_memory_efficiency():
         assert success
 
 
-@pytest.mark.integration
 def test_single_pixel_dataset():
     """Test conversion with a single pixel (1x1) dataset."""
     reader = MockMSIReader(
@@ -486,7 +483,6 @@ def test_single_pixel_dataset():
         assert len(list(sdata.shapes.values())[0]) == 1, "Should have 1 shape"
 
 
-@pytest.mark.integration
 def test_rectangular_grid():
     """Test conversion with non-square (rectangular) grid."""
     reader = MockMSIReader(
@@ -525,7 +521,6 @@ def test_rectangular_grid():
             assert tic_image.shape[2] == 10, "TIC width should be 10"
 
 
-@pytest.mark.integration
 def test_auto_use_csc_mode_with_resampling():
     """``use_csc="auto"`` converts, and the size it reports is the counted one."""
     reader = MockMSIReader(
@@ -572,7 +567,6 @@ class MockMSIReaderWithOptical(MockMSIReader):
         return self._optical_images
 
 
-@pytest.mark.integration
 def test_optical_image_loading():
     """Test that optical images are loaded when include_optical=True."""
     import tifffile
@@ -611,7 +605,6 @@ def test_optical_image_loading():
         assert len(optical_keys) > 0, "Should have optical image"
 
 
-@pytest.mark.integration
 def test_optical_image_rgb():
     """Test loading RGB optical images (3D TIFF)."""
     import tifffile
@@ -652,7 +645,6 @@ def test_optical_image_rgb():
         assert optical_img.shape[0] == 3, "RGB image should have 3 channels"
 
 
-@pytest.mark.integration
 def test_no_optical_images_when_disabled():
     """Test that optical images are not loaded when include_optical=False."""
     import tifffile
@@ -694,7 +686,6 @@ def test_no_optical_images_when_disabled():
         assert len(tic_keys) > 0, "Should still have TIC image"
 
 
-@pytest.mark.integration
 def test_larger_chunk_write():
     """Test that larger datasets trigger chunk write logic."""
     # Create dataset large enough to trigger multiple chunk writes
@@ -767,7 +758,6 @@ class MockMSIReaderWithControlledIntensities(MockMSIReader):
                     yield (x, y, z), mzs, intensities
 
 
-@pytest.mark.integration
 def test_intensity_threshold_filtering():
     """Test that intensity_threshold filters out low intensity values.
 

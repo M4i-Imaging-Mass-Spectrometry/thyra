@@ -1,5 +1,18 @@
 #!/usr/bin/env python3
-"""Complexity monitoring script for CI/CD pipeline."""
+"""Complexity monitoring script for CI/CD pipeline.
+
+Exit codes, kept distinct so that the workflow can tell a statement about the
+code from a statement about the gate:
+
+    0  every selected file was parsed, none exceeded the threshold
+    1  every selected file was parsed, at least one exceeded the threshold
+    2  --files-changed could not work out which files changed
+    3  at least one selected file could not be parsed, so the gate did not
+       cover it
+
+2 and 3 both mean this run proves nothing about the code, which is the
+opposite of what 0 means and must never be reported as it.
+"""
 
 import argparse
 import ast
@@ -13,7 +26,7 @@ import subprocess  # nosec B404
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, NamedTuple
+from typing import Dict, List, NamedTuple, Tuple
 
 # Generous enough that a cold pack on a CI runner cannot make the timeout the
 # thing that fails the build: since --files-changed now refuses to guess, a
@@ -23,6 +36,13 @@ GIT_TIMEOUT_SECONDS = 30
 # Distinct from 1 ("complexity violations found") so that a broken --files-changed
 # mode cannot be mistaken for a code-quality failure.
 EXIT_CHANGED_FILES_UNKNOWN = 2
+
+# Distinct from both 1 and 2. A file the analyser could not read is a gate that
+# was not applied, which is neither a violation nor a question about which
+# files to look at. Until this existed such a file yielded an empty result
+# list, which generate_report cannot tell from a file holding no functions, so
+# it was exempted silently and permanently -- and still counted as analysed.
+EXIT_UNREADABLE_FILES = 3
 
 # The console listing is a pointer, not the record: every violation is in the
 # saved JSON report, which the workflow uploads as an artifact.
@@ -135,10 +155,39 @@ class ComplexityAnalyzer(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+class FileAnalysisError(RuntimeError):
+    """Raised when a file selected for analysis could not be parsed.
+
+    Deliberately not representable as an empty result list, for the same
+    reason ChangedFilesError below is not representable as an empty file list:
+    generate_report cannot tell "this file holds no functions" from "this file
+    was never read". Returning [] therefore made an unparseable file a silent
+    and permanent exemption from the gate, one that was still counted as
+    analysed. A gate that could not read a file has not checked it, and has to
+    say so rather than report it clean.
+    """
+
+
 def analyze_file(file_path: Path) -> List[ComplexityResult]:
-    """Analyze a Python file for cyclomatic complexity."""
+    """Analyze a Python file for cyclomatic complexity.
+
+    Args:
+        file_path: The file to parse.
+
+    Returns:
+        One result per function definition found.
+
+    Raises:
+        FileAnalysisError: if the file could not be read or parsed. What that
+            means is the caller's decision; it is never quietly no functions.
+    """
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
+        # utf-8-sig rather than utf-8: a UTF-8 BOM is a Windows editor default
+        # and this repository is developed on Windows, while ast.parse rejects
+        # the resulting U+FEFF as a non-printable character. utf-8-sig strips a
+        # BOM when there is one and decodes a BOM-less file identically. The
+        # BOM sits on line 1, so dropping it shifts no reported line number.
+        with open(file_path, "r", encoding="utf-8-sig") as f:
             content = f.read()
 
         tree = ast.parse(content, filename=str(file_path))
@@ -148,9 +197,46 @@ def analyze_file(file_path: Path) -> List[ComplexityResult]:
 
         return analyzer.function_complexities
 
-    except (SyntaxError, UnicodeDecodeError) as e:
-        print(f"Warning: Could not analyze {file_path}: {e}")
-        return []
+    # UnicodeDecodeError is not listed because it subclasses ValueError.
+    # OSError covers a file that cannot be opened at all, which used to escape
+    # as a bare traceback. RecursionError covers the visitor's own Python-level
+    # recursion: a 500-deep `lambda:` chain needs neither parentheses nor
+    # indentation, so it clears the tokenizer's depth limits and then blows the
+    # stack inside ComplexityAnalyzer.visit -- measured, and it escaped as a
+    # traceback exiting 1, which the workflow duly printed as "complexity
+    # violations found". Both are the conflation this exception exists to end.
+    except (OSError, SyntaxError, ValueError, RecursionError) as e:
+        raise FileAnalysisError(f"{file_path}: {e}") from e
+
+
+def analyze_all(
+    python_files: List[Path],
+) -> Tuple[List[ComplexityResult], List[str]]:
+    """Analyze every selected file, keeping the results and the failures apart.
+
+    A separate function rather than a loop inside main because main already
+    measures exactly the repository's max-complexity limit -- see the note
+    there.
+
+    Args:
+        python_files: The files selected for analysis.
+
+    Returns:
+        Every function result from the files that parsed, and one message per
+        file that did not. A file in the second list contributes nothing to
+        the first, which is precisely the distinction a caller needs in order
+        not to report an unreadable file as a clean one.
+    """
+    results: List[ComplexityResult] = []
+    unreadable: List[str] = []
+
+    for file_path in python_files:
+        try:
+            results.extend(analyze_file(file_path))
+        except FileAnalysisError as e:
+            unreadable.append(str(e))
+
+    return results, unreadable
 
 
 def find_python_files(root_dir: Path) -> List[Path]:
@@ -308,8 +394,26 @@ def get_changed_files() -> ChangedFiles:
     return ChangedFiles(base_ref=base_ref, files=changed)
 
 
-def generate_report(results: List[ComplexityResult], threshold: int) -> Dict:
-    """Generate complexity report."""
+def generate_report(
+    results: List[ComplexityResult],
+    threshold: int,
+    *,
+    files_analyzed: int,
+    unreadable_files: List[str],
+) -> Dict:
+    """Generate complexity report.
+
+    Args:
+        results: Every function that was successfully analysed.
+        threshold: The complexity above which a function is a violation.
+        files_analyzed: How many files actually parsed. Keyword-only and
+            required because the number the script used to print was the count
+            of files *selected*, which counted a file it could not read as
+            analysed.
+        unreadable_files: One message per file that could not be parsed, so
+            that the saved report -- and the PR comment built from it -- can
+            say what the gate did not cover as well as what it found.
+    """
     violations = [r for r in results if r.complexity > threshold]
 
     # Calculate statistics
@@ -344,6 +448,8 @@ def generate_report(results: List[ComplexityResult], threshold: int) -> Dict:
     return {
         "timestamp": datetime.now().isoformat(),
         "threshold": threshold,
+        "files_analyzed": files_analyzed,
+        "unreadable_files": list(unreadable_files),
         "total_functions": len(results),
         "total_violations": len(violations),
         "average_complexity": round(avg_complexity, 2),
@@ -365,6 +471,53 @@ def generate_report(results: List[ComplexityResult], threshold: int) -> Dict:
     }
 
 
+def report_unreadable(unreadable: List[str]) -> None:
+    """Name every file the gate could not read, on stderr.
+
+    Not guarded by ``--quiet``, and on stderr rather than stdout, matching the
+    ``--files-changed`` failure block in :func:`main`. ``--quiet`` suppresses
+    findings about the code, and a gate that did not run is not a finding about
+    the code.
+    """
+    if not unreadable:
+        return
+
+    for entry in unreadable:
+        print(f"ERROR: could not parse {entry}", file=sys.stderr)
+    print(
+        f"ERROR: the complexity gate did not cover {len(unreadable)} file(s); "
+        '"unreadable" is not "clean".',
+        file=sys.stderr,
+    )
+
+
+def format_headroom(results: List[ComplexityResult], threshold: int) -> str:
+    """Describe how much room is left under the threshold, and who is using it.
+
+    The threshold is 15 and the worst function in this repository measures
+    exactly 15, so the margin is zero: the gate is a tripwire under whoever
+    next adds a branch to that one function, and it says nothing at all until
+    they trip it. Raising the threshold would buy headroom by weakening the
+    only thing the gate does, so the margin is printed instead -- it is then in
+    every run's log, ahead of the moment CI would otherwise be the first to
+    mention it.
+    """
+    worst_inside = max(
+        (r for r in results if r.complexity <= threshold),
+        key=lambda r: r.complexity,
+        default=None,
+    )
+    if worst_inside is None:
+        return "Closest to the threshold: nothing was analyzed under it"
+
+    margin = threshold - worst_inside.complexity
+    return (
+        f"Closest to the threshold: {worst_inside.function} "
+        f"({worst_inside.file}:{worst_inside.line}) at {worst_inside.complexity}, "
+        f"{margin} below the limit of {threshold}"
+    )
+
+
 def print_violations(report: Dict) -> None:
     """Print the worst offenders in a report.
 
@@ -383,7 +536,13 @@ def print_violations(report: Dict) -> None:
 
 
 def main():
-    """Main function."""
+    """Main function.
+
+    Sits at exactly the repository's ``max-complexity = 15`` (.flake8), so a
+    branch added here fails C901 rather than merely being untidy. New steps go
+    into a helper -- analyze_all and report_unreadable were extracted for this
+    reason, not for reuse.
+    """
     parser = argparse.ArgumentParser(description="Monitor cyclomatic complexity")
     parser.add_argument(
         "--threshold", type=int, default=10, help="Complexity threshold (default: 10)"
@@ -443,23 +602,36 @@ def main():
         return 0
 
     # Analyze all files
-    all_results = []
-    for file_path in python_files:
-        results = analyze_file(file_path)
-        all_results.extend(results)
+    all_results, unreadable = analyze_all(python_files)
+
+    # Before the summary, so that a merged CI log reads "what I could not
+    # read", then "what I did read", rather than the other way round.
+    report_unreadable(unreadable)
 
     # Generate report
-    report = generate_report(all_results, args.threshold)
+    report = generate_report(
+        all_results,
+        args.threshold,
+        files_analyzed=len(python_files) - len(unreadable),
+        unreadable_files=unreadable,
+    )
 
     violations = report["total_violations"]
 
     # Print summary
     if not args.quiet:
+        # report['files_analyzed'], not len(python_files): the two differ
+        # exactly when a file could not be parsed, and recomputing the number
+        # here is how the console total and the saved report's total would
+        # drift apart. The "Analyzing N changed files" line above counts what
+        # was selected, which is a different question from what was read.
         print(
-            f"Analyzed {len(python_files)} files, {report['total_functions']} functions"
+            f"Analyzed {report['files_analyzed']} files, "
+            f"{report['total_functions']} functions"
         )
         print(f"Complexity threshold: {args.threshold}")
         print(f"Violations found: {violations}")
+        print(format_headroom(all_results, args.threshold))
 
         if violations > 0:
             print(f"Average complexity: {report['average_complexity']}")
@@ -486,6 +658,18 @@ def main():
 
         if not args.quiet:
             print(f"\nReport saved to: {report_file}")
+
+    # After the save block on purpose. Returning any earlier skips the save,
+    # and the workflow then uploads an empty artifact and posts no PR comment
+    # at all -- strictly less feedback than the silent exemption this replaces,
+    # and it would leave unreadable_files unreachable in the very report that
+    # exists to carry it.
+    #
+    # Unreadable outranks violations because it says the gate is unsound, not
+    # that the code is. The violation listing has already printed above, so
+    # nothing is lost by returning here.
+    if unreadable:
+        return EXIT_UNREADABLE_FILES
 
     # Return exit code based on violations
     return 1 if report["total_violations"] > 0 else 0

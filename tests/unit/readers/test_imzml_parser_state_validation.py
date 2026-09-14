@@ -26,6 +26,7 @@ from pyimzml.compression import ZlibCompression
 from pyimzml.ImzMLParser import ImzMLParser
 
 from thyra.convert import _create_converter
+from thyra.errors import ConversionRefused
 from thyra.preview import preview_msi
 from thyra.readers.imzml import imzml_reader as imzml_reader_module
 from thyra.readers.imzml.imzml_reader import ImzMLReader
@@ -231,7 +232,7 @@ class TestOffsetsAgainstTheIbd:
         assert cut < full_size
 
         reader = ImzMLReader(path)
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(ConversionRefused) as excinfo:
             reader._ensure_parser_initialized()
 
         message = str(excinfo.value)
@@ -245,7 +246,7 @@ class TestOffsetsAgainstTheIbd:
         poison_cv_param(path, 4, "mzArray", "IMS:1000102", str(ibd_size + 4096))
 
         reader = ImzMLReader(path)
-        with pytest.raises(ValueError, match=r"spectrum 4 declares a m/z array"):
+        with pytest.raises(ConversionRefused, match=r"spectrum 4 declares a m/z array"):
             reader._ensure_parser_initialized()
 
     def test_leading_negative_offset_is_refused(self, temp_dir):
@@ -259,7 +260,7 @@ class TestOffsetsAgainstTheIbd:
         poison_cv_param(path, 0, "mzArray", "IMS:1000102", "-16")
 
         reader = ImzMLReader(path)
-        with pytest.raises(ValueError, match=r"negative m/z offset"):
+        with pytest.raises(ConversionRefused, match=r"negative m/z offset"):
             reader._ensure_parser_initialized()
 
     def test_array_length_disagreement_is_refused(self, temp_dir):
@@ -267,7 +268,7 @@ class TestOffsetsAgainstTheIbd:
         poison_cv_param(path, 2, "intensityArray", "IMS:1000103", "3")
 
         reader = ImzMLReader(path)
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(ConversionRefused) as excinfo:
             reader._ensure_parser_initialized()
         message = str(excinfo.value)
         assert "spectrum 2" in message
@@ -319,7 +320,7 @@ class TestBinaryArrayDeclarations:
             intensity_compression=ZlibCompression(),
         )
         reader = ImzMLReader(path)
-        with pytest.raises(ValueError, match=r"MS:1000574"):
+        with pytest.raises(ConversionRefused, match=r"MS:1000574"):
             reader._ensure_parser_initialized()
 
     def test_two_precision_terms_in_one_group_are_refused(self, temp_dir):
@@ -341,7 +342,7 @@ class TestBinaryArrayDeclarations:
         path.write_text(text.replace(needle, extra + needle, 1), encoding="utf-8")
 
         reader = ImzMLReader(path)
-        with pytest.raises(ValueError, match=r"declares 2 precision terms"):
+        with pytest.raises(ConversionRefused, match=r"declares 2 precision terms"):
             reader._ensure_parser_initialized()
 
     def test_64_bit_integer_is_refused_as_platform_dependent(self, temp_dir):
@@ -353,7 +354,7 @@ class TestBinaryArrayDeclarations:
         """
         path = write_imzml(temp_dir, intensity_dtype=np.int64)
         reader = ImzMLReader(path)
-        with pytest.raises(ValueError, match=r"64-bit integer"):
+        with pytest.raises(ConversionRefused, match=r"64-bit integer"):
             reader._ensure_parser_initialized()
 
     def test_encoded_length_contradicting_the_precision_is_refused(self, temp_dir):
@@ -369,7 +370,7 @@ class TestBinaryArrayDeclarations:
         poison_cv_param(path, 0, "mzArray", "IMS:1000104", "20")
 
         reader = ImzMLReader(path)
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(ConversionRefused) as excinfo:
             reader._ensure_parser_initialized()
         message = str(excinfo.value)
         assert "IMS:1000104" in message
@@ -407,7 +408,7 @@ class TestRefusalCleansUp:
         poison_cv_param(path, 0, "mzArray", "IMS:1000102", "-16")
 
         reader = ImzMLReader(path)
-        with pytest.raises(ValueError):
+        with pytest.raises(ConversionRefused):
             reader._ensure_parser_initialized()
         assert reader.ibd_file is None
         path.with_suffix(".ibd").unlink()
@@ -438,9 +439,9 @@ class TestARefusedFileIsNotParsedTwice:
         monkeypatch.setattr(imzml_reader_module, "ImzMLParser", _counting_parser)
 
         reader = ImzMLReader(path)
-        with pytest.raises(ValueError) as first:
+        with pytest.raises(ConversionRefused) as first:
             reader._ensure_parser_initialized()
-        with pytest.raises(ValueError) as second:
+        with pytest.raises(ConversionRefused) as second:
             reader._ensure_parser_initialized()
 
         assert len(constructions) == 1
@@ -509,6 +510,11 @@ class TestConverterCreationDoesNotSwallowRefusals:
 
         from thyra.core.base_converter import PixelSizeSource
 
+        # Deliberately NOT narrowed to ConversionRefused, unlike every other
+        # ValueError assertion in this directory. The stub above raises a plain
+        # ValueError from the test body, and the claim is that
+        # _create_converter swallows a metadata failure of ANY type -- narrowing
+        # this would assert something the reader never raises and test less.
         with pytest.raises(ValueError, match="spectrum 3"):
             _create_converter(
                 "spatialdata",
