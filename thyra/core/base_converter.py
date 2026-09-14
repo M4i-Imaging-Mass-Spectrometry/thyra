@@ -38,6 +38,7 @@ from tqdm import tqdm
 
 from ..errors import ConversionRefused
 from .base_reader import BaseMSIReader
+from .conversion_state import ConversionState
 
 if TYPE_CHECKING:
     from ..metadata.types import EssentialMetadata
@@ -189,10 +190,10 @@ class BaseMSIConverter(ABC):
         """
         try:
             self._initialize_conversion()
-            data_structures = self._create_data_structures()
-            self._process_spectra(data_structures)
-            self._finalize_data(data_structures)
-            success = self._save_output(data_structures)
+            state = self._create_data_structures()
+            self._process_spectra(state)
+            self._finalize_data(state)
+            success = self._save_output(state)
 
             return success
         except ConversionRefused as e:
@@ -458,22 +459,20 @@ class BaseMSIConverter(ABC):
             )
 
     @abstractmethod
-    def _create_data_structures(self) -> Any:
-        """Create format-specific data structures.
+    def _create_data_structures(self) -> ConversionState:
+        """Plan the conversion and create the state its stages share.
 
         Returns:
-        --------
-        Any: Format-specific data structures to be used in subsequent steps.
+            The :class:`~thyra.core.conversion_state.ConversionState` the
+            remaining three stages are handed.
         """
         pass
 
-    def _process_spectra(self, data_structures: Any) -> None:
-        """Process all spectra from the reader and integrate into data structures.
+    def _process_spectra(self, state: ConversionState) -> None:
+        """Read every spectrum from the source into the conversion state.
 
-        Parameters:
-        -----------
-        data_structures: Format-specific data containers created by
-            _create_data_structures.
+        Args:
+            state: The state created by :meth:`_create_data_structures`.
         """
         if self._dimensions is None:
             raise ValueError("Dimensions are not initialized.")
@@ -491,7 +490,7 @@ class BaseMSIConverter(ABC):
             total=total_spectra, desc="Converting spectra", unit="spectrum"
         ) as pbar:
             for coords, mzs, intensities in self.reader.iter_spectra():
-                self._process_single_spectrum(data_structures, coords, mzs, intensities)
+                self._process_single_spectrum(state, coords, mzs, intensities)
                 pbar.update(1)
 
     def _get_total_spectra_count(self) -> int:
@@ -534,7 +533,7 @@ class BaseMSIConverter(ABC):
 
     def _process_single_spectrum(
         self,
-        data_structures: Any,
+        state: ConversionState,
         coords: Tuple[int, int, int],
         mzs: NDArray[np.float64],
         intensities: NDArray[np.float64],
@@ -542,7 +541,7 @@ class BaseMSIConverter(ABC):
         """Process a single spectrum.
 
         Args:
-            data_structures: Format-specific data containers
+            state: The conversion state to accumulate into.
             coords: (x, y, z) coordinates
             mzs: m/z values
             intensities: Intensity values
@@ -550,11 +549,11 @@ class BaseMSIConverter(ABC):
         # Default implementation - to be overridden by subclasses if needed
         pass
 
-    def _finalize_data(self, data_structures: Any) -> None:
-        """Perform any final processing on the data structures before saving.
+    def _finalize_data(self, state: ConversionState) -> None:
+        """Perform any final processing on the state before saving.
 
         Args:
-            data_structures: Format-specific data containers
+            state: The conversion state, with its passes complete.
         """
         # Default implementation - to be overridden by subclasses if needed
         pass
@@ -568,11 +567,11 @@ class BaseMSIConverter(ABC):
         return self._metadata
 
     @abstractmethod
-    def _save_output(self, data_structures: Any) -> bool:
+    def _save_output(self, state: ConversionState) -> bool:
         """Save the processed data to the output format.
 
         Args:
-            data_structures: Format-specific data containers
+            state: The finalised conversion state.
 
         Returns:
             True if saving was successful, False otherwise
