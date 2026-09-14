@@ -176,7 +176,7 @@ def _get_frame_coordinates(
         found
     """
     try:
-        with sqlite3.connect(str(db_path)) as conn:
+        with closing(open_read_only(db_path)) as conn:
             cursor = conn.cursor()
 
             # Check if this is MALDI data
@@ -266,20 +266,34 @@ def read_calibration_states(data_path: Path) -> List[Dict[str, Any]]:
 def _get_frame_count(db_path: Path) -> int:
     """Get total frame count directly from database.
 
+    A database that cannot be read is refused rather than reported as
+    zero frames. Zero is a real answer -- it is what an empty
+    acquisition has -- and returning it for an unreadable file made the
+    two indistinguishable: the caller got the empty-conversion refusal,
+    which blames the user's data, for a file that was merely open in
+    DataAnalysis. The count is also cached by ``BrukerReader``, so a
+    zero read under a transient lock was never retried.
+
     Args:
         db_path: Path to the SQLite database file
 
     Returns:
         Total number of frames
+
+    Raises:
+        ConversionRefused: When the database cannot be read.
     """
     try:
-        with sqlite3.connect(str(db_path)) as conn:
+        with closing(open_read_only(db_path)) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM Frames")
             return int(cursor.fetchone()[0])
-    except Exception as e:
-        logger.error(f"Error getting frame count: {e}")
-        return 0
+    except sqlite3.Error as e:
+        raise ConversionRefused(
+            f"Cannot read the frame table of {db_path}: {e}. The file may be "
+            "open in another program (DataAnalysis holds it exclusively), or "
+            "it may be truncated."
+        ) from e
 
 
 class TdfFrameScans:
@@ -729,85 +743,95 @@ class BrukerReader(BrukerBaseMSIReader):
             return None
 
         try:
-            conn = sqlite3.connect(cal_file)
-            cursor = conn.cursor()
-
-            # Count total calibration versions
-            cursor.execute("SELECT COUNT(*) FROM CalibrationState")
-            num_versions = cursor.fetchone()[0]
-
-            # Get ACTIVE calibration (highest ID = most recent)
-            cursor.execute(
-                """
-                SELECT Id, Key, DateTime, Source
-                FROM CalibrationState
-                ORDER BY Id DESC LIMIT 1
-            """
-            )
-            cal_id, cal_uuid, cal_datetime, cal_source = cursor.fetchone()
-
-            # Get original calibration if recalibrated
-            original_datetime = None
-            if num_versions > 1:
-                cursor.execute(
-                    """
-                    SELECT DateTime FROM CalibrationState
-                    ORDER BY Id ASC LIMIT 1
-                """
-                )
-                original_datetime = cursor.fetchone()[0]
-
-            # Get additional metadata from CalibrationInfo
-            cursor.execute(
-                """
-                SELECT KeyName, Value
-                FROM CalibrationInfo
-                WHERE CalibrationState = ?
-                AND KeyName IN ('CalibrationSoftwareVersion', 'CalibrationUser')
-            """,
-                (cal_id,),
-            )
-
-            extra_info = dict(cursor.fetchall())
-
-            conn.close()
-
-            metadata = {
-                "calibration_id": cal_id,
-                "calibration_uuid": cal_uuid,
-                "calibration_datetime": cal_datetime,
-                "calibration_source": cal_source,
-                "calibration_software_version": extra_info.get(
-                    "CalibrationSoftwareVersion"
-                ),
-                "calibration_user": extra_info.get("CalibrationUser"),
-                "num_calibration_versions": num_versions,
-                "recalibrated": num_versions > 1,
-                "original_calibration_datetime": original_datetime,
-                "calibration_file_size": cal_file.stat().st_size,
-            }
-
-            # Log which calibration is being used
-            if self.use_recalibrated_state:
-                recal_info = (
-                    f" (recalibrated {num_versions} times)" if num_versions > 1 else ""
-                )
-                logger.info(
-                    f"Using active calibration state {cal_id} from {cal_datetime}"
-                    f"{recal_info}"
-                )
-            else:
-                active_info = f", active state is {cal_id}" if num_versions > 1 else ""
-                logger.info(
-                    f"Using original calibration (use_recalibrated_state=False)"
-                    f"{active_info}"
-                )
-
-            return metadata
-
+            # ``closing``, not ``with conn``: a sqlite connection used as
+            # a context manager commits a transaction and leaves the
+            # handle open. The old bare open closed only on the happy
+            # path, so any raise inside this block leaked a handle on a
+            # vendor file.
+            with closing(open_read_only(cal_file)) as conn:
+                return self._parse_calibration_state(conn, cal_file)
+        except ConversionRefused:
+            raise
         except Exception as e:
             logger.error(f"Failed to read calibration metadata: {e}")
             return None
+
+    def _parse_calibration_state(
+        self, conn: sqlite3.Connection, cal_file: Path
+    ) -> Dict:
+        """The active calibration state and its history, from an open db."""
+        cursor = conn.cursor()
+
+        # Count total calibration versions
+        cursor.execute("SELECT COUNT(*) FROM CalibrationState")
+        num_versions = cursor.fetchone()[0]
+
+        # Get ACTIVE calibration (highest ID = most recent)
+        cursor.execute(
+            """
+            SELECT Id, Key, DateTime, Source
+            FROM CalibrationState
+            ORDER BY Id DESC LIMIT 1
+        """
+        )
+        cal_id, cal_uuid, cal_datetime, cal_source = cursor.fetchone()
+
+        # Get original calibration if recalibrated
+        original_datetime = None
+        if num_versions > 1:
+            cursor.execute(
+                """
+                SELECT DateTime FROM CalibrationState
+                ORDER BY Id ASC LIMIT 1
+            """
+            )
+            original_datetime = cursor.fetchone()[0]
+
+        # Get additional metadata from CalibrationInfo
+        cursor.execute(
+            """
+            SELECT KeyName, Value
+            FROM CalibrationInfo
+            WHERE CalibrationState = ?
+            AND KeyName IN ('CalibrationSoftwareVersion', 'CalibrationUser')
+        """,
+            (cal_id,),
+        )
+
+        extra_info = dict(cursor.fetchall())
+
+        metadata = {
+            "calibration_id": cal_id,
+            "calibration_uuid": cal_uuid,
+            "calibration_datetime": cal_datetime,
+            "calibration_source": cal_source,
+            "calibration_software_version": extra_info.get(
+                "CalibrationSoftwareVersion"
+            ),
+            "calibration_user": extra_info.get("CalibrationUser"),
+            "num_calibration_versions": num_versions,
+            "recalibrated": num_versions > 1,
+            "original_calibration_datetime": original_datetime,
+            "calibration_file_size": cal_file.stat().st_size,
+        }
+
+        # Log which calibration is being used
+        if self.use_recalibrated_state:
+            recal_info = (
+                f" (recalibrated {num_versions} times)" if num_versions > 1 else ""
+            )
+            logger.info(
+                f"Using active calibration state {cal_id} from {cal_datetime}"
+                f"{recal_info}"
+            )
+        else:
+            active_info = f", active state is {cal_id}" if num_versions > 1 else ""
+            logger.info(
+                f"Using original calibration (use_recalibrated_state=False)"
+                f"{active_info}"
+            )
+
+        return metadata
 
     def _initialize_sdk(self) -> None:
         """Initialize the Bruker SDK with error handling."""
@@ -836,12 +860,12 @@ class BrukerReader(BrukerBaseMSIReader):
     def _initialize_database(self) -> None:
         """Initialize database connection with optimizations."""
         try:
-            # Open database in read-only mode to avoid locking issues
-            # This allows reading from network drives and concurrent access
-            db_uri = f"file:{self.db_path}?mode=ro&immutable=1"
-            self.conn = sqlite3.connect(
-                db_uri, uri=True, timeout=30.0, check_same_thread=False
-            )
+            # Open database in read-only mode to avoid locking issues.
+            # The URI is built rather than interpolated: a mapped network
+            # drive resolves to a UNC path, whose leading "//" reads as a
+            # URI authority and is rejected ("invalid uri authority").
+            # This connection is shared across threads.
+            self.conn = open_read_only(self.db_path, check_same_thread=False)
 
             # Apply read-only compatible SQLite optimizations
             # Note: journal_mode and synchronous are not needed for read-only access
@@ -1909,7 +1933,7 @@ class BrukerReader(BrukerBaseMSIReader):
                 y += y_offset
                 z += z_offset
 
-            with sqlite3.connect(str(self.db_path)) as conn:
+            with closing(open_read_only(self.db_path)) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT Frame FROM MaldiFrameInfo WHERE "
@@ -2019,7 +2043,7 @@ class BrukerReader(BrukerBaseMSIReader):
             else "SELECT Id, NumPeaks, NULL FROM Frames ORDER BY Id"
         )
         try:
-            with sqlite3.connect(str(self.db_path)) as conn:
+            with closing(open_read_only(self.db_path)) as conn:
                 cursor = conn.cursor()
                 cursor.execute(query)
 
@@ -2126,11 +2150,22 @@ class BrukerReader(BrukerBaseMSIReader):
         return essential_metadata.mass_range
 
     def __repr__(self) -> str:
-        """String representation of the reader."""
+        """String representation of the reader.
+
+        The frame count can refuse now (an unreadable database is no
+        longer reported as zero frames), and a ``__repr__`` that raises
+        replaces a useful traceback with a confusing one -- this is
+        called from debuggers and from logging of other failures. So the
+        refusal is shown here rather than propagated.
+        """
+        try:
+            frames: object = self._get_frame_count()
+        except ConversionRefused:
+            frames = "unreadable"
         return (
             f"BrukerReader(path={self.data_path}, "
             f"type={self.file_type.upper()}, "
-            f"frames={self._get_frame_count()})"
+            f"frames={frames})"
         )
 
     @property

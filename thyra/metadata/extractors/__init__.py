@@ -21,9 +21,11 @@ Example usage:
     >>> extractor = ImzMLMetadataExtractor(parser, Path("data.imzML"))
     >>> essential = extractor.get_essential()
     >>>
-    >>> # For Bruker files
-    >>> import sqlite3
-    >>> conn = sqlite3.connect("data.d/analysis.tsf")
+    >>> # For Bruker files. Open the vendor database read-only: a
+    >>> # read-write open writes -wal/-shm side files into the .d and
+    >>> # loses to any lock DataAnalysis holds.
+    >>> from thyra.readers.bruker.vendor_db import open_read_only
+    >>> conn = open_read_only("data.d/analysis.tsf")
     >>> extractor = BrukerMetadataExtractor(conn, Path("data.d"))
     >>> essential = extractor.get_essential()
 """

@@ -357,7 +357,11 @@ class TestDirectCoordinateExtraction:
         with patch("sqlite3.connect") as mock_connect:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
-            mock_connect.return_value.__enter__.return_value = mock_conn
+            # Not ``__enter__``: the opens go through
+            # ``closing(open_read_only(...))`` now, because
+            # ``with sqlite3.connect(...)`` commits without closing
+            # and opened the vendor file read-write (issue #290).
+            mock_connect.return_value = mock_conn
             mock_conn.cursor.return_value = mock_cursor
 
             # Mock MALDI coordinate query
@@ -381,7 +385,11 @@ class TestDirectCoordinateExtraction:
         with patch("sqlite3.connect") as mock_connect:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
-            mock_connect.return_value.__enter__.return_value = mock_conn
+            # Not ``__enter__``: the opens go through
+            # ``closing(open_read_only(...))`` now, because
+            # ``with sqlite3.connect(...)`` commits without closing
+            # and opened the vendor file read-write (issue #290).
+            mock_connect.return_value = mock_conn
             mock_conn.cursor.return_value = mock_cursor
 
             # Mock MALDI coordinate query
@@ -404,7 +412,11 @@ class TestDirectCoordinateExtraction:
         with patch("sqlite3.connect") as mock_connect:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
-            mock_connect.return_value.__enter__.return_value = mock_conn
+            # Not ``__enter__``: the opens go through
+            # ``closing(open_read_only(...))`` now, because
+            # ``with sqlite3.connect(...)`` commits without closing
+            # and opened the vendor file read-write (issue #290).
+            mock_connect.return_value = mock_conn
             mock_conn.cursor.return_value = mock_cursor
 
             # Mock no MALDI table
@@ -425,7 +437,11 @@ class TestDirectCoordinateExtraction:
         with patch("sqlite3.connect") as mock_connect:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
-            mock_connect.return_value.__enter__.return_value = mock_conn
+            # Not ``__enter__``: the opens go through
+            # ``closing(open_read_only(...))`` now, because
+            # ``with sqlite3.connect(...)`` commits without closing
+            # and opened the vendor file read-write (issue #290).
+            mock_connect.return_value = mock_conn
             mock_conn.cursor.return_value = mock_cursor
 
             # Mock frame count query

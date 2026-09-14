@@ -101,9 +101,11 @@ def create_extractor(format_name: str, *args, **kwargs):
         >>> parser = ImzMLParser("data.imzML")
         >>> extractor = create_extractor('imzml', parser, Path("data.imzML"))
         >>>
-        >>> # For Bruker
-        >>> import sqlite3
-        >>> conn = sqlite3.connect("data.d/analysis.tsf")
+        >>> # For Bruker. Open the vendor database read-only: a
+        >>> # read-write open writes -wal/-shm side files into the .d
+        >>> # and loses to any lock DataAnalysis holds.
+        >>> from thyra.readers.bruker.vendor_db import open_read_only
+        >>> conn = open_read_only("data.d/analysis.tsf")
         >>> extractor = create_extractor('bruker', conn, Path("data.d"))
     """
     extractor_class = get_extractor_for_format(format_name)

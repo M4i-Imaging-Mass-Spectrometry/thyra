@@ -99,7 +99,9 @@ class TestTdfWiring:
     def test_num_peaks_above_65535_are_kept(self):
         reader, _, _ = _make_reader("tdf")
         conn = MagicMock()
-        cursor = conn.__enter__.return_value.cursor.return_value
+        # Not ``__enter__``: the preload goes through
+        # ``closing(open_read_only(...))`` now (issue #290).
+        cursor = conn.cursor.return_value
         cursor.fetchall.return_value = [(1, 70000, 477), (2, 0, 477), (3, 96845, 477)]
         with patch("sqlite3.connect", return_value=conn):
             cache = reader._preload_frame_num_peaks()
