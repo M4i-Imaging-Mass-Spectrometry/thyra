@@ -11,17 +11,22 @@ from thyra.errors import ConversionRefused
 from thyra.readers.bruker.rapiflex import RapiflexReader
 
 
-@pytest.fixture
-def create_mock_rapiflex_data(tmp_path):
-    """Create mock Rapiflex data files for testing.
+def build_rapiflex_dataset(parent):
+    """Write a synthetic Rapiflex acquisition under ``parent``.
+
+    A plain function rather than a fixture body so the reader conformance
+    suite can build the same acquisition (issue #274).
 
     Creates:
     - sample.dat: Binary file with header, offset table, and spectral data
     - sample_info.txt: Metadata file
     - sample_poslog.txt: Position log file
     - sample.mis: Optional XML method file
+
+    Returns:
+        ``(folder, n_spots, n_datapoints, mass_start, mass_end, spectra)``.
     """
-    folder = tmp_path / "mock_rapiflex"
+    folder = parent / "mock_rapiflex"
     folder.mkdir()
 
     # Parameters
@@ -143,6 +148,12 @@ def create_mock_rapiflex_data(tmp_path):
             f.write(spectrum.tobytes())
 
     return folder, n_spots, n_datapoints, mass_start, mass_end, spectra
+
+
+@pytest.fixture
+def create_mock_rapiflex_data(tmp_path):
+    """Mock Rapiflex data files; see :func:`build_rapiflex_dataset`."""
+    return build_rapiflex_dataset(tmp_path)
 
 
 class TestRapiflexReader:
