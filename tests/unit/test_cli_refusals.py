@@ -13,6 +13,8 @@ defect in each was when and how the refusal arrived.
 from __future__ import annotations
 
 import logging
+import shutil
+from pathlib import Path
 from types import SimpleNamespace
 
 import click
@@ -24,6 +26,8 @@ from thyra.convert import convert_msi, dataset_id_problem
 from thyra.errors import ConversionRefused
 
 _CONVERTER_MODULE = "thyra.converters.spatialdata.base_spatialdata_converter"
+
+_FIXTURE_DIR = Path(__file__).resolve().parents[1] / "data" / "fixtures"
 
 
 @pytest.fixture
@@ -322,3 +326,71 @@ class TestUnknownResamplingConfigKeys:
             )
 
         assert not records
+
+
+def _centimetre_imzml(tmp_path):
+    """The ``unit_nanometre`` pair rewritten to declare centimetre.
+
+    UO:0000015 is a real length unit deliberately absent from ``UM_PER_UNIT``,
+    so the extractor must refuse rather than accept the bare number and store
+    a pixel size ten thousand times too small. The ``.ibd`` is copied
+    unchanged: only the declaration moves, so what is refused is the unit and
+    not unreadable data.
+    """
+    text = (_FIXTURE_DIR / "unit_nanometre.imzML").read_text(encoding="utf-8")
+    text = text.replace(
+        'unitAccession="UO:0000018"', 'unitAccession="UO:0000015"'
+    ).replace('unitName="nanometer"', 'unitName="centimeter"')
+
+    imzml = tmp_path / "unit_centimetre.imzML"
+    imzml.write_text(text, encoding="utf-8")
+    shutil.copyfile(_FIXTURE_DIR / "unit_nanometre.ibd", imzml.with_suffix(".ibd"))
+    return imzml
+
+
+class TestARealRaiseSiteReachesTheUser:
+    """Issue #304: every refusal above is monkeypatched into place.
+
+    ``TestPresentation`` replaces ``thyra.convert.detect_format`` with a
+    function that raises the exception under test, so it pins how
+    ``convert_msi`` presents a ``ConversionRefused`` and nothing at all about
+    whether a raise written in the source still produces one. These two drive
+    the CLI over committed imzML fixtures with no monkeypatch anywhere, so each
+    reaches a real ``raise``:
+
+    * ``imzml_reader.py`` refuses the ambiguous precision declaration carried
+      by the ``two_precision_terms`` fixture;
+    * ``imzml_extractor.py`` refuses a pixel size declared in centimetre.
+
+    Downgrade either to a plain ``ValueError`` and the assertion that fails is
+    ``"Traceback" not in result.output``. That is the whole of what the type
+    buys, and it is the one thing the narrowed ``pytest.raises`` assertions
+    under ``tests/unit/readers/`` cannot catch: they call the reader directly
+    and never reach the handler that decides what to print.
+    """
+
+    def test_an_ambiguous_precision_declaration_is_one_sentence(self, tmp_path, runner):
+        source = _FIXTURE_DIR / "two_precision_terms.imzML"
+
+        result = runner.invoke(main, [str(source), str(tmp_path / "out.zarr")])
+
+        assert result.exit_code == 1, result.output
+        assert "declares 2 precision terms" in result.output
+        assert "Traceback" not in result.output
+
+    def test_an_unconvertible_pixel_size_unit_is_one_sentence(self, tmp_path, runner):
+        """The refusal promoted from a plain ``ValueError`` for issue #304.
+
+        The message was always written for whoever ran the conversion -- it
+        names the file, the unit it declared and the three units there are --
+        and it reached them under thirty lines of traceback because the type
+        said "surprise" while the sentence said "refusal".
+        """
+        source = _centimetre_imzml(tmp_path)
+
+        result = runner.invoke(main, [str(source), str(tmp_path / "out.zarr")])
+
+        assert result.exit_code == 1, result.output
+        assert "UO:0000015" in result.output
+        assert "Supported units" in result.output
+        assert "Traceback" not in result.output

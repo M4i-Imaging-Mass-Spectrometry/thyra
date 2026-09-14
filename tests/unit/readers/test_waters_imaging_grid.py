@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from thyra.errors import ConversionRefused
 from thyra.readers.waters.imaging_grid import (
     ImagingGrid,
     _mm_to_um_key,
@@ -228,7 +229,7 @@ class TestBuildImagingGrid:
         mock_ml = self._setup_mock_ml(positions)
         func_types = {0: FunctionType.MS}
 
-        with pytest.raises(ValueError, match="same stage position"):
+        with pytest.raises(ConversionRefused, match="same stage position"):
             build_imaging_grid(mock_ml, "handle", func_types)
 
     def test_single_row_grid_is_kept(self):
@@ -260,7 +261,7 @@ class TestBuildImagingGrid:
         mock_ml = self._setup_mock_ml(positions)
         func_types = {0: FunctionType.MS}
 
-        with pytest.raises(ValueError, match="No valid laser positions"):
+        with pytest.raises(ConversionRefused, match="No valid laser positions"):
             build_imaging_grid(mock_ml, "handle", func_types)
 
     def test_multiple_functions(self):

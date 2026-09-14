@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from thyra.core.mobility import MobilityAxis
+from thyra.errors import ConversionRefused
 from thyra.readers.bruker.timstof.timstof_reader import BrukerReader
 from thyra.utils.bruker_exceptions import SDKError
 
@@ -89,7 +90,7 @@ class TestTdfWiring:
         assert reader.tdf_spectrum == "scan_sum"
 
     def test_unknown_mode_is_rejected_before_touching_the_sdk(self):
-        with pytest.raises(ValueError, match="tdf_spectrum"):
+        with pytest.raises(ConversionRefused, match="tdf_spectrum"):
             _make_reader("tdf", tdf_spectrum="bogus")
 
     def test_tdf_reports_no_per_pixel_peak_counts(self):

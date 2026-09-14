@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from thyra.errors import ConversionRefused
 from thyra.readers.bruker.folder_structure import (
     BrukerFolderInfo,
     BrukerFolderStructure,
@@ -324,7 +325,7 @@ class TestBrukerFolderStructure:
         nonexistent = tmp_path / "nonexistent"
 
         folder = BrukerFolderStructure(nonexistent)
-        with pytest.raises(ValueError, match="does not exist"):
+        with pytest.raises(ConversionRefused, match="does not exist"):
             folder.analyze()
 
     def test_classmethod_detect_format(self, tmp_path):

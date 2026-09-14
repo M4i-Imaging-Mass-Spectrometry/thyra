@@ -7,6 +7,7 @@ import struct
 import numpy as np
 import pytest
 
+from thyra.errors import ConversionRefused
 from thyra.readers.bruker.rapiflex import RapiflexReader
 
 
@@ -178,7 +179,7 @@ class TestRapiflexReader:
         (folder / "sample_info.txt").write_text("Rapiflex Info File\n")
         (folder / "sample_poslog.txt").write_text("#Timestamp Pos X Y Z\n")
 
-        with pytest.raises(ValueError, match="No .dat file found"):
+        with pytest.raises(ConversionRefused, match="No .dat file found"):
             RapiflexReader(folder)
 
     def test_missing_poslog_file(self, tmp_path):
@@ -190,7 +191,7 @@ class TestRapiflexReader:
         (folder / "sample.dat").write_bytes(b"\x00" * 100)
         (folder / "sample_info.txt").write_text("Rapiflex Info File\n")
 
-        with pytest.raises(ValueError, match="No .*_poslog.txt file found"):
+        with pytest.raises(ConversionRefused, match="No .*_poslog.txt file found"):
             RapiflexReader(folder)
 
     def test_get_common_mass_axis(self, create_mock_rapiflex_data):
@@ -407,7 +408,7 @@ class TestRapiflexFormatDetection:
         (folder / "sample_info.txt").write_text("info")
         (folder / "sample_poslog.txt").write_text("poslog")
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ConversionRefused):
             detect_format(folder)
 
 

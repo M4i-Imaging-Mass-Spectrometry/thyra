@@ -22,7 +22,7 @@ import subprocess
 import sys
 import warnings
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import List
 
 import numpy as np
@@ -31,6 +31,7 @@ from pyimzml.ImzMLParser import ImzMLParser
 
 from tests.fixtures.imzml_parser import production_parser
 from thyra.convert import convert_msi
+from thyra.errors import ConversionRefused
 from thyra.preview import preview_msi
 from thyra.readers.imzml.imzml_reader import ImzMLReader
 from thyra.resampling.data_characteristics import DataCharacteristics
@@ -359,10 +360,54 @@ class TestUnitNanometre:
         imzml = self._variant_with_unit(tmp_path, "UO:0000015", "centimeter")
         reader = ImzMLReader(imzml)
         try:
-            with pytest.raises(ValueError, match="UO:0000015"):
+            with pytest.raises(ConversionRefused, match="UO:0000015"):
                 reader.get_essential_metadata()
         finally:
             reader.close()
+
+    def test_the_xml_fallback_refuses_the_same_unit(self, tmp_path):
+        """The second call site refuses too, rather than degrading to None.
+
+        ``_extract_pixel_size_from_xml`` converts *outside* its ``try``, so a
+        refused unit propagates while a merely unparseable document still
+        returns None. Nothing asserted that, and the arrangement is one edit
+        away from being lost: move the two conversions inside the block and
+        the refusal becomes a warning and a missing pixel size.
+
+        The parser is stubbed because it has to be. pyimzml 1.5.5's
+        ``Metadata`` never assigns ``root`` -- verified, ``hasattr`` is False
+        on a real parser -- so the method returns None at its first guard for
+        every file, and the only way to reach the conversion at all is to hand
+        it the document root pyimzml declines to keep.
+        """
+        import xml.etree.ElementTree as ET
+
+        from thyra.metadata.extractors.imzml_extractor import ImzMLMetadataExtractor
+
+        imzml = self._variant_with_unit(tmp_path, "UO:0000015", "centimeter")
+        root = ET.parse(imzml).getroot()
+        extractor = ImzMLMetadataExtractor.__new__(ImzMLMetadataExtractor)
+        extractor.parser = SimpleNamespace(metadata=SimpleNamespace(root=root))
+        extractor.imzml_path = imzml
+
+        with pytest.raises(ConversionRefused, match="UO:0000015"):
+            extractor._extract_pixel_size_from_xml()
+
+    def test_the_xml_fallback_still_converts_a_unit_it_knows(self, tmp_path):
+        """The guard above must not be a method that refuses everything."""
+        import xml.etree.ElementTree as ET
+
+        from thyra.metadata.extractors.imzml_extractor import ImzMLMetadataExtractor
+
+        imzml = self._variant_with_unit(tmp_path, "UO:0000018", "nanometer")
+        root = ET.parse(imzml).getroot()
+        extractor = ImzMLMetadataExtractor.__new__(ImzMLMetadataExtractor)
+        extractor.parser = SimpleNamespace(metadata=SimpleNamespace(root=root))
+        extractor.imzml_path = imzml
+
+        assert extractor._extract_pixel_size_from_xml() == pytest.approx(
+            (4.40625, 4.40625)
+        )
 
     def test_the_unit_survives_on_the_param_group_path(self):
         """``cv_params`` keeps what ``imzmldict`` threw away.
@@ -497,7 +542,7 @@ class TestTwoPrecisionTerms:
         declaration wrong on a genuinely float32 file and it decodes as float64
         garbage at the correct length, with ``convert_msi`` returning ``True``.
         """
-        with pytest.raises(ValueError, match="declares 2 precision terms"):
+        with pytest.raises(ConversionRefused, match="declares 2 precision terms"):
             open_reader("two_precision_terms")
 
         # The bytes really are float64, so what is refused is the ambiguous

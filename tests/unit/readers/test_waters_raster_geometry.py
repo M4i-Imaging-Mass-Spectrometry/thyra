@@ -13,6 +13,7 @@ import math
 
 import pytest
 
+from thyra.errors import ConversionRefused
 from thyra.readers.waters.imaging_grid import (
     _grid_from_scan_map,
     _mm_to_um_key,
@@ -121,7 +122,9 @@ class TestReadingsThatAreNotARaster:
     def test_jitter_is_refused_rather_than_made_into_a_grid(self):
         # +-1 % of a 30 um pitch gave a 187x171 store with a 3 x 1.6 um
         # "pitch" and 200 of 31,977 pixels filled, silently.
-        with pytest.raises(ValueError, match="do not lie on a regular raster|only"):
+        with pytest.raises(
+            ConversionRefused, match="do not lie on a regular raster|only"
+        ):
             _grid_from_scan_map(_raster(20, 10, 30.0, jitter_um=0.3))
 
     def test_jitter_far_below_the_key_resolution_still_grids(self):
@@ -132,7 +135,7 @@ class TestReadingsThatAreNotARaster:
         assert grid.pixel_size_x == pytest.approx(30.0, abs=1e-6)
 
     def test_the_refusal_names_the_axis_and_the_pitch_it_fitted(self):
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(ConversionRefused) as excinfo:
             _grid_from_scan_map(_raster(20, 10, 30.0, jitter_um=0.3))
 
         assert "x axis" in str(excinfo.value) or "y axis" in str(excinfo.value)
@@ -235,7 +238,7 @@ class TestGridFromConvertedFunctionsOnly:
         # reader never offers it the chance by fitting the MS functions only.
         scan_map[(1, 0)] = _scan(11.0, 4.4)
 
-        with pytest.raises(ValueError, match="carry a reading"):
+        with pytest.raises(ConversionRefused, match="carry a reading"):
             _grid_from_scan_map(scan_map)
 
         without_spot = _grid_from_scan_map(scan_map, functions=[0])
