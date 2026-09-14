@@ -286,6 +286,11 @@ long output paths convert normally. A log line records when this happens.
     `<output>.zarr.failed` rather than left at the destination, which keeps it
     available for diagnosis and leaves the output path free for a retry.
 
+    This is not a CLI-only behaviour: it lives in `convert_msi`, so a Python
+    caller gets the same clearing. It used to live in the CLI alone, and a
+    library caller was left with a half-written store blocking its own retry
+    (issue #293).
+
 ### An imzML is refused before conversion starts
 
 Thyra checks what the imzML declares against the `.ibd` on disk before it reads

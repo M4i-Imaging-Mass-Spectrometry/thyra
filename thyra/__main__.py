@@ -3,16 +3,20 @@
 # Configure dependencies to suppress warnings BEFORE any imports
 import logging  # noqa: E402
 import os  # noqa: E402
-import sqlite3  # noqa: E402
 import warnings  # noqa: E402
 from math import isfinite  # noqa: E402
 from pathlib import Path  # noqa: E402
 from typing import Literal, Optional, Tuple  # noqa: E402
+from uuid import uuid4  # noqa: E402
 
 import click  # noqa: E402
 
 from thyra import __version__  # noqa: E402
-from thyra.convert import convert_msi, dataset_id_problem  # noqa: E402
+from thyra.convert import (  # noqa: E402
+    convert_msi,
+    dataset_id_problem,
+    quarantine_partial_output,
+)
 from thyra.core.registry import detect_format  # noqa: E402
 from thyra.resampling.mobility_grid import MOBILITY_CHANNELS  # noqa: E402
 from thyra.utils.logging_config import setup_logging  # noqa: E402
@@ -38,49 +42,6 @@ warnings.filterwarnings(
     message="The legacy Dask DataFrame implementation is deprecated",
     category=FutureWarning,
 )
-
-
-def _get_calibration_states(bruker_path: Path) -> list[dict]:
-    """Read calibration states from calibration.sqlite.
-
-    Args:
-        bruker_path: Path to Bruker .d directory
-
-    Returns:
-        List of calibration state dictionaries with id, datetime, and version info
-    """
-    cal_file = bruker_path / "calibration.sqlite"
-    if not cal_file.exists():
-        return []
-
-    try:
-        conn = sqlite3.connect(str(cal_file))
-        cursor = conn.cursor()
-
-        # Query calibration states
-        cursor.execute("""
-            SELECT cs.Id, ci.DateTime
-            FROM CalibrationState cs
-            LEFT JOIN CalibrationInfo ci ON cs.Id = ci.StateId
-            ORDER BY cs.Id
-            """)
-
-        states = []
-        for row in cursor.fetchall():
-            state_id, datetime_str = row
-            states.append(
-                {
-                    "id": state_id,
-                    "datetime": datetime_str or "Unknown",
-                    "version": state_id,
-                }
-            )
-
-        conn.close()
-        return states
-
-    except Exception:
-        return []
 
 
 def _is_usable_number(value: float) -> bool:
@@ -262,8 +223,59 @@ def _validate_output_path(output: Path) -> None:
             "The output is a Zarr store, which is a directory tree, so every "
             "part of its path above it has to be a directory."
         )
-    if not os.access(ancestor, os.W_OK):
-        raise click.BadParameter(f"Cannot write {output}: {ancestor} is not writable")
+    _refuse_an_unwritable_directory(output, ancestor)
+
+
+def _refuse_an_unwritable_directory(output: Path, ancestor: Path) -> None:
+    """Refuse now if the store cannot be created under ``ancestor``.
+
+    The check is an actual ``mkdir``, not ``os.access(W_OK)``. On Windows
+    ``os.access`` consults the read-only *attribute* and not the ACL, so
+    it answers True for a directory the user has no write permission on
+    -- measured here on a directory denied ``(WD,AD)`` via ``icacls``:
+    ``os.access(W_OK) -> True``, ``st_mode -> 0o40777``, and both
+    ``mkdir`` and ``open(w)`` raise ``PermissionError`` errno 13. So the
+    refusal could never fire on the one platform this project is
+    developed on, and the failure surfaced instead from deep inside the
+    conversion, as "Error during conversion" plus a traceback out of the
+    CSC scratch allocation, after the metadata scan (issue #312).
+
+    ``mkdir`` rather than a temporary file because the thing being
+    refused is a directory tree: the store and its scratch are both
+    directories.
+
+    Not ``tempfile.TemporaryDirectory(dir=ancestor)``, which is what the
+    issue proposed: ``mkdtemp`` retries ``PermissionError`` when
+    ``os.name == 'nt' and os.path.isdir(dir) and os.access(dir, W_OK)``
+    -- gated on the very predicate that is broken here. It would spin
+    ``TMP_MAX`` times (2,147,483,647 on this build, extrapolating to
+    days) and then raise ``FileExistsError``, which is neither the right
+    exception nor a usable wait.
+
+    Raises:
+        click.BadParameter: When the directory cannot be written.
+    """
+    probe = ancestor / f".thyra-write-probe-{uuid4().hex}"
+    try:
+        probe.mkdir()
+    except OSError as e:
+        raise click.BadParameter(
+            f"Cannot write {output}: {ancestor} is not writable " f"({e.strerror or e})"
+        ) from e
+    try:
+        probe.rmdir()
+    except OSError as e:
+        # The directory is writable, which is the whole question, so a
+        # failure to tidy up must not refuse the conversion. It is still
+        # said out loud: an indexer or scanner holding the directory
+        # would otherwise leave one of these behind per invocation with
+        # nobody told.
+        logger.warning(
+            "Left the write probe %s behind (%s); it is an empty directory "
+            "and safe to delete.",
+            probe,
+            e,
+        )
 
 
 def _display_calibration_info(input: Path, use_recalibrated: bool) -> None:
@@ -272,29 +284,36 @@ def _display_calibration_info(input: Path, use_recalibrated: bool) -> None:
     Note: This is informational only. Full interactive selection
     will be implemented in the future (see GitHub issue #54).
     """
-    states = _get_calibration_states(input)
+    from thyra.readers.bruker.timstof.timstof_reader import read_calibration_states
+
+    states = read_calibration_states(input)
     if not states:
         return
+
+    # A recalibration adds a state, so the count is a property of the
+    # dataset, not of a state. It used to be printed per row as
+    # ``state["id"] - 1``, which made a three-state file claim the
+    # second state had been recalibrated once and the third twice.
+    n_recalibrations = len(states) - 1
+    active_id = states[-1]["id"]
 
     click.echo("\n" + "=" * 60)
     click.echo("Calibration Information (Display Only)")
     click.echo("=" * 60)
-    for state in states:
-        is_active = state["id"] == max(s["id"] for s in states)
-        active_marker = " (active/will be used)" if is_active else ""
-        recal_info = (
-            f" - recalibrated {state['version'] - 1} times"
-            if state["version"] > 1
-            else ""
-        )
+    if n_recalibrations:
         click.echo(
-            f"  State {state['id']}: {state['datetime']}{recal_info}{active_marker}"
+            f"  Recalibrated {n_recalibrations} time"
+            f"{'s' if n_recalibrations > 1 else ''} since acquisition"
+        )
+    for state in states:
+        active_marker = " (active/will be used)" if state["id"] == active_id else ""
+        click.echo(
+            f"  State {state['id']}: {state['datetime']} "
+            f"[{state['source']}]{active_marker}"
         )
 
     if use_recalibrated:
-        click.echo(
-            f"\nUsing active calibration state (State {max(s['id'] for s in states)})"
-        )
+        click.echo(f"\nUsing active calibration state (State {active_id})")
     else:
         click.echo("\nUsing original calibration (--no-recalibrated flag set)")
 
@@ -514,44 +533,19 @@ def _parse_streaming_option(streaming: str) -> bool | Literal["auto"]:
 def _quarantine_partial_output(output: Path) -> None:
     """Move a partially written store aside after a failed conversion.
 
-    A conversion that fails part-way through writing leaves an
-    incomplete ``.zarr`` at the destination. That store cannot be opened
-    (``spatialdata.read_zarr()`` raises), but it looks like a plausible
-    artifact, and it also blocks a retry because the CLI refuses to write
-    to an existing path. Rename it to a sibling ``.failed`` path so the
-    destination is clear while the partial store remains available for
-    diagnosis.
+    A thin delegation: the move itself lives in
+    :func:`thyra.convert.quarantine_partial_output`, because
+    ``convert_msi`` is the public entry point and a library caller --
+    Ousia converts through it, never through this CLI -- used to get no
+    cleanup at all (issue #293).
 
-    The CLI validates that the output path does not exist before
-    converting, so anything present at this point was written by this
-    run and is safe to move.
+    Kept as a call rather than deleted because ``convert_msi`` resolves
+    and may extend the output path (``prepare_zarr_output_path``) while
+    the CLI still holds the path the user typed. It is idempotent: a
+    store already moved aside does not exist here, so this returns
+    immediately.
     """
-    if not output.exists():
-        return
-
-    quarantine = output.with_name(f"{output.name}.failed")
-    attempt = 1
-    while quarantine.exists():
-        attempt += 1
-        quarantine = output.with_name(f"{output.name}.failed{attempt}")
-
-    try:
-        output.rename(quarantine)
-    except OSError as e:
-        logger.error(
-            "The incomplete output was left at %s because it could not be "
-            "moved aside (%s). It will not open with "
-            "spatialdata.read_zarr(); delete it before retrying.",
-            output,
-            e,
-        )
-        return
-
-    logger.error(
-        "The incomplete output was moved to %s. It will not open with "
-        "spatialdata.read_zarr(); delete it once you no longer need it.",
-        quarantine,
-    )
+    quarantine_partial_output(output)
 
 
 def _handle_post_conversion(success: bool, output: Path) -> bool:

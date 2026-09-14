@@ -175,6 +175,57 @@ def _validate_paths(input_path: Path, output_path: Path) -> bool:
     return True
 
 
+def quarantine_partial_output(output: Path) -> None:
+    """Move a partially written store aside after a failed conversion.
+
+    A conversion that fails part-way through writing leaves an
+    incomplete ``.zarr`` at the destination. That store cannot be opened
+    (``spatialdata.read_zarr()`` raises), but it looks like a plausible
+    artifact, and it also blocks a retry because
+    :func:`_validate_paths` refuses to write to an existing path -- so
+    the run that failed is the run that makes the same command fail
+    again, with a message about the destination rather than about what
+    went wrong. Rename it to a sibling ``.failed`` path so the
+    destination is clear while the partial store remains available for
+    diagnosis.
+
+    This lives in ``convert_msi`` rather than in the CLI because
+    ``convert_msi`` is the public entry point, and a library caller --
+    Ousia converts through it, not through the CLI -- got no cleanup at
+    all. The CLI's own call is kept and is idempotent, so a store already
+    moved aside here is not moved twice (issue #293).
+
+    Only called once the destination has been validated as not existing,
+    so anything present is this run's own output and is safe to move.
+    """
+    if not output.exists():
+        return
+
+    quarantine = output.with_name(f"{output.name}.failed")
+    attempt = 1
+    while quarantine.exists():
+        attempt += 1
+        quarantine = output.with_name(f"{output.name}.failed{attempt}")
+
+    try:
+        output.rename(quarantine)
+    except OSError as e:
+        logger.error(
+            "The incomplete output was left at %s because it could not be "
+            "moved aside (%s). It will not open with "
+            "spatialdata.read_zarr(); delete it before retrying.",
+            output,
+            e,
+        )
+        return
+
+    logger.error(
+        "The incomplete output was moved to %s. It will not open with "
+        "spatialdata.read_zarr(); delete it once you no longer need it.",
+        quarantine,
+    )
+
+
 def _create_reader(
     input_path: Path,
     reader_options: Optional[Dict[str, Any]] = None,
@@ -499,6 +550,20 @@ def convert_msi(
         whole explanation and its traceback kept for ``DEBUG`` (issue
         #234), so a caller that wants the exception itself has to use the
         converter classes directly.
+
+        **On failure the destination is cleared.** Anything written to
+        ``output_path`` by this call is renamed to a sibling
+        ``<name>.failed`` (``.failed2`` and so on if one is already
+        there), so the same call can be retried without the caller
+        deleting a directory first, and a half-written store is not left
+        where a finished one is expected -- it would not open, but it
+        looks like one. When the rename itself fails -- a live handle on
+        the directory is the usual reason on Windows -- the partial store
+        stays put and the failure says so at ``ERROR``, naming the path
+        to delete; a retry is then refused until it is gone. An
+        ``output_path`` that already existed when the call started is
+        refused untouched, never renamed. See
+        :func:`quarantine_partial_output` (issue #293).
     """
     # Validate input parameters
     if not _validate_input_parameters(
@@ -537,6 +602,10 @@ def convert_msi(
     # so a legal-looking output path can still blow the Windows 260
     # character limit part-way through the write. No-op elsewhere.
     output_path = prepare_zarr_output_path(output_path, dataset_id)
+    # Past this line the destination has been validated as not existing,
+    # so anything that appears there is this run's own output and this
+    # run is responsible for clearing it away if it fails.
+    succeeded = False
 
     # Merge region into reader_options if provided
     if region is not None:
@@ -579,7 +648,8 @@ def convert_msi(
         )
 
         # Perform conversion with cleanup
-        return _perform_conversion_with_cleanup(converter, reader)
+        succeeded = _perform_conversion_with_cleanup(converter, reader)
+        return succeeded
 
     except ConversionRefused as e:
         # A refusal Thyra wrote: the message is the whole explanation, and
@@ -621,3 +691,9 @@ def convert_msi(
                 reader.close()
             except Exception as close_error:  # pragma: no cover - defensive
                 logger.debug("Could not close the reader: %s", str(close_error))
+
+        # After the reader is closed, so the move cannot race a handle the
+        # source still holds. Covers all five ``return False`` paths past
+        # the path validation plus anything that escapes this function.
+        if not succeeded:
+            quarantine_partial_output(output_path)

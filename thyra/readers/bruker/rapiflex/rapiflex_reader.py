@@ -30,7 +30,7 @@ from ....core.registry import register_reader
 from ....errors import ConversionRefused
 from ....metadata.types import ComprehensiveMetadata, EssentialMetadata
 from ..base_bruker_reader import BrukerBaseMSIReader
-from ..mis_parser import parse_mis_file
+from ..mis_parser import find_mis_file_for_d_folder, parse_mis_file
 
 logger = logging.getLogger(__name__)
 
@@ -253,8 +253,11 @@ class RapiflexReader(BrukerBaseMSIReader):
         if not folder.is_dir():
             raise ConversionRefused(f"Rapiflex path must be a directory: {folder}")
 
-        # Find .dat file
-        dat_files = list(folder.glob("*.dat"))
+        # Every pick here is sorted: these decide which raster, which
+        # acquisition geometry and which .mis describe the run, and
+        # ``glob`` order is the filesystem's business, not a rule
+        # (issue #303).
+        dat_files = sorted(folder.glob("*.dat"))
         if not dat_files:
             raise ConversionRefused(f"No .dat file found in {folder}")
         if len(dat_files) > 1:
@@ -262,23 +265,41 @@ class RapiflexReader(BrukerBaseMSIReader):
         self._dat_path = dat_files[0]
 
         # Find _info.txt file
-        info_files = list(folder.glob("*_info.txt"))
+        info_files = sorted(folder.glob("*_info.txt"))
         if info_files:
+            if len(info_files) > 1:
+                logger.warning(
+                    f"Multiple *_info.txt files found, using first: " f"{info_files[0]}"
+                )
             self._info_path = info_files[0]
         else:
             raise ConversionRefused(f"No *_info.txt file found in {folder}")
 
         # Find _poslog.txt file
-        poslog_files = list(folder.glob("*_poslog.txt"))
+        poslog_files = sorted(folder.glob("*_poslog.txt"))
         if poslog_files:
+            if len(poslog_files) > 1:
+                logger.warning(
+                    f"Multiple *_poslog.txt files found, using first: "
+                    f"{poslog_files[0]}"
+                )
             self._poslog_path = poslog_files[0]
         else:
             raise ConversionRefused(f"No *_poslog.txt file found in {folder}")
 
-        # Find .mis file (optional)
-        mis_files = list(folder.glob("*.mis"))
-        if mis_files:
-            self._mis_path = mis_files[0]
+        # Find .mis file (optional). The shared locator, so a Rapiflex
+        # folder carrying its own .mis plus a slide-level one prefers the
+        # stem match instead of taking whichever came first -- this pick
+        # had no stem preference at all.
+        #
+        # ``search_paths`` is the data folder alone, which is where
+        # Rapiflex writes it and all this pick ever looked. The locator's
+        # default also searches the parent, and letting that apply here
+        # would silently widen the search: an acquisition with no .mis of
+        # its own would adopt a lone slide-level one, putting a foreign
+        # acquisition's teaching points and raster step into this store's
+        # metadata.
+        self._mis_path = find_mis_file_for_d_folder(folder, search_paths=[folder])
 
         logger.debug(
             f"Found files - dat: {self._dat_path}, info: {self._info_path}, "

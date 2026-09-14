@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
@@ -29,6 +30,7 @@ else:
     )
 
 from ....core.base_extractor import MetadataExtractor
+from ....core.drop_tally import DropTally
 from ....core.mobility import (
     INVERSE_REDUCED_MOBILITY_ACCESSION,
     MOBILITY_KIND_NAMES,
@@ -46,6 +48,7 @@ from ....utils.bruker_exceptions import DataError, FileFormatError, SDKError
 from ..base_bruker_reader import BrukerBaseMSIReader
 from ..folder_structure import BrukerFolderStructure, BrukerFormat
 from ..mis_parser import parse_mis_file
+from ..vendor_db import open_read_only
 from .sdk.dll_manager import DLLManager
 from .sdk.sdk_functions import (
     DEFAULT_TDF_SPECTRUM,
@@ -174,7 +177,7 @@ def _get_frame_coordinates(
         found
     """
     try:
-        with sqlite3.connect(str(db_path)) as conn:
+        with closing(open_read_only(db_path)) as conn:
             cursor = conn.cursor()
 
             # Check if this is MALDI data
@@ -217,23 +220,85 @@ def _optional_int(value: Any) -> Optional[int]:
     return None if value is None else int(value)
 
 
+def read_calibration_states(data_path: Path) -> List[Dict[str, Any]]:
+    """Every calibration state of a Bruker ``.d``, oldest first.
+
+    The state with the highest ``Id`` is the active one -- the SDK reads
+    the most recent calibration -- so ``states[-1]`` is what a conversion
+    will use and ``len(states) - 1`` is how many times the acquisition
+    has been recalibrated since.
+
+    This is a plain file read rather than a method, because the CLI
+    displays it before any reader exists; constructing a
+    :class:`BrukerReader` to answer it would load the vendor DLL and
+    open the SDK just to print three lines.
+
+    Args:
+        data_path: The ``.d`` directory.
+
+    Returns:
+        One dict per state with ``id``, ``datetime`` and ``source``.
+        Empty when the file is absent or unreadable -- a missing
+        calibration is not an error here, it is simply nothing to show.
+    """
+    cal_file = data_path / "calibration.sqlite"
+    if not cal_file.exists():
+        return []
+
+    try:
+        with closing(open_read_only(cal_file)) as conn:
+            rows = conn.execute(
+                "SELECT Id, DateTime, Source FROM CalibrationState ORDER BY Id"
+            ).fetchall()
+        # Inside the guard: a NULL or non-integer ``Id`` would otherwise
+        # escape as a TypeError through the click callback, where the
+        # code this replaced returned an empty list and the CLI carried
+        # on. A calibration listing is informational; it must not be the
+        # thing that ends a run.
+        return [
+            {
+                "id": int(state_id),
+                "datetime": datetime_str or "Unknown",
+                "source": source or "Unknown",
+            }
+            for state_id, datetime_str, source in rows
+        ]
+    except (sqlite3.Error, TypeError, ValueError) as e:
+        logger.debug(f"Could not read calibration states from {cal_file}: {e}")
+        return []
+
+
 def _get_frame_count(db_path: Path) -> int:
     """Get total frame count directly from database.
+
+    A database that cannot be read is refused rather than reported as
+    zero frames. Zero is a real answer -- it is what an empty
+    acquisition has -- and returning it for an unreadable file made the
+    two indistinguishable: the caller got the empty-conversion refusal,
+    which blames the user's data, for a file that was merely open in
+    DataAnalysis. The count is also cached by ``BrukerReader``, so a
+    zero read under a transient lock was never retried.
 
     Args:
         db_path: Path to the SQLite database file
 
     Returns:
         Total number of frames
+
+    Raises:
+        ConversionRefused: When the database cannot be read.
     """
     try:
-        with sqlite3.connect(str(db_path)) as conn:
+        with closing(open_read_only(db_path)) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM Frames")
             return int(cursor.fetchone()[0])
-    except Exception as e:
-        logger.error(f"Error getting frame count: {e}")
-        return 0
+    except sqlite3.Error as e:
+        raise ConversionRefused(
+            f"Cannot read the frame table of {db_path}: {e}. The file may be "
+            "open in another program (DataAnalysis holds it exclusively), or "
+            "it may be truncated."
+        ) from e
 
 
 class TdfFrameScans:
@@ -683,81 +748,91 @@ class BrukerReader(BrukerBaseMSIReader):
             return None
 
         try:
-            conn = sqlite3.connect(cal_file)
-            cursor = conn.cursor()
-
-            # Count total calibration versions
-            cursor.execute("SELECT COUNT(*) FROM CalibrationState")
-            num_versions = cursor.fetchone()[0]
-
-            # Get ACTIVE calibration (highest ID = most recent)
-            cursor.execute("""
-                SELECT Id, Key, DateTime, Source
-                FROM CalibrationState
-                ORDER BY Id DESC LIMIT 1
-            """)
-            cal_id, cal_uuid, cal_datetime, cal_source = cursor.fetchone()
-
-            # Get original calibration if recalibrated
-            original_datetime = None
-            if num_versions > 1:
-                cursor.execute("""
-                    SELECT DateTime FROM CalibrationState
-                    ORDER BY Id ASC LIMIT 1
-                """)
-                original_datetime = cursor.fetchone()[0]
-
-            # Get additional metadata from CalibrationInfo
-            cursor.execute(
-                """
-                SELECT KeyName, Value
-                FROM CalibrationInfo
-                WHERE CalibrationState = ?
-                AND KeyName IN ('CalibrationSoftwareVersion', 'CalibrationUser')
-            """,
-                (cal_id,),
-            )
-
-            extra_info = dict(cursor.fetchall())
-
-            conn.close()
-
-            metadata = {
-                "calibration_id": cal_id,
-                "calibration_uuid": cal_uuid,
-                "calibration_datetime": cal_datetime,
-                "calibration_source": cal_source,
-                "calibration_software_version": extra_info.get(
-                    "CalibrationSoftwareVersion"
-                ),
-                "calibration_user": extra_info.get("CalibrationUser"),
-                "num_calibration_versions": num_versions,
-                "recalibrated": num_versions > 1,
-                "original_calibration_datetime": original_datetime,
-                "calibration_file_size": cal_file.stat().st_size,
-            }
-
-            # Log which calibration is being used
-            if self.use_recalibrated_state:
-                recal_info = (
-                    f" (recalibrated {num_versions} times)" if num_versions > 1 else ""
-                )
-                logger.info(
-                    f"Using active calibration state {cal_id} from {cal_datetime}"
-                    f"{recal_info}"
-                )
-            else:
-                active_info = f", active state is {cal_id}" if num_versions > 1 else ""
-                logger.info(
-                    f"Using original calibration (use_recalibrated_state=False)"
-                    f"{active_info}"
-                )
-
-            return metadata
-
+            # ``closing``, not ``with conn``: a sqlite connection used as
+            # a context manager commits a transaction and leaves the
+            # handle open. The old bare open closed only on the happy
+            # path, so any raise inside this block leaked a handle on a
+            # vendor file.
+            with closing(open_read_only(cal_file)) as conn:
+                return self._parse_calibration_state(conn, cal_file)
+        except ConversionRefused:
+            raise
         except Exception as e:
             logger.error(f"Failed to read calibration metadata: {e}")
             return None
+
+    def _parse_calibration_state(
+        self, conn: sqlite3.Connection, cal_file: Path
+    ) -> Dict:
+        """The active calibration state and its history, from an open db."""
+        cursor = conn.cursor()
+
+        # Count total calibration versions
+        cursor.execute("SELECT COUNT(*) FROM CalibrationState")
+        num_versions = cursor.fetchone()[0]
+
+        # Get ACTIVE calibration (highest ID = most recent)
+        cursor.execute("""
+            SELECT Id, Key, DateTime, Source
+            FROM CalibrationState
+            ORDER BY Id DESC LIMIT 1
+        """)
+        cal_id, cal_uuid, cal_datetime, cal_source = cursor.fetchone()
+
+        # Get original calibration if recalibrated
+        original_datetime = None
+        if num_versions > 1:
+            cursor.execute("""
+                SELECT DateTime FROM CalibrationState
+                ORDER BY Id ASC LIMIT 1
+            """)
+            original_datetime = cursor.fetchone()[0]
+
+        # Get additional metadata from CalibrationInfo
+        cursor.execute(
+            """
+            SELECT KeyName, Value
+            FROM CalibrationInfo
+            WHERE CalibrationState = ?
+            AND KeyName IN ('CalibrationSoftwareVersion', 'CalibrationUser')
+        """,
+            (cal_id,),
+        )
+
+        extra_info = dict(cursor.fetchall())
+
+        metadata = {
+            "calibration_id": cal_id,
+            "calibration_uuid": cal_uuid,
+            "calibration_datetime": cal_datetime,
+            "calibration_source": cal_source,
+            "calibration_software_version": extra_info.get(
+                "CalibrationSoftwareVersion"
+            ),
+            "calibration_user": extra_info.get("CalibrationUser"),
+            "num_calibration_versions": num_versions,
+            "recalibrated": num_versions > 1,
+            "original_calibration_datetime": original_datetime,
+            "calibration_file_size": cal_file.stat().st_size,
+        }
+
+        # Log which calibration is being used
+        if self.use_recalibrated_state:
+            recal_info = (
+                f" (recalibrated {num_versions} times)" if num_versions > 1 else ""
+            )
+            logger.info(
+                f"Using active calibration state {cal_id} from {cal_datetime}"
+                f"{recal_info}"
+            )
+        else:
+            active_info = f", active state is {cal_id}" if num_versions > 1 else ""
+            logger.info(
+                f"Using original calibration (use_recalibrated_state=False)"
+                f"{active_info}"
+            )
+
+        return metadata
 
     def _initialize_sdk(self) -> None:
         """Initialize the Bruker SDK with error handling."""
@@ -786,12 +861,12 @@ class BrukerReader(BrukerBaseMSIReader):
     def _initialize_database(self) -> None:
         """Initialize database connection with optimizations."""
         try:
-            # Open database in read-only mode to avoid locking issues
-            # This allows reading from network drives and concurrent access
-            db_uri = f"file:{self.db_path}?mode=ro&immutable=1"
-            self.conn = sqlite3.connect(
-                db_uri, uri=True, timeout=30.0, check_same_thread=False
-            )
+            # Open database in read-only mode to avoid locking issues.
+            # The URI is built rather than interpolated: a mapped network
+            # drive resolves to a UNC path, whose leading "//" reads as a
+            # URI authority and is rejected ("invalid uri authority").
+            # This connection is shared across threads.
+            self.conn = open_read_only(self.db_path, check_same_thread=False)
 
             # Apply read-only compatible SQLite optimizations
             # Note: journal_mode and synchronous are not needed for read-only access
@@ -1165,16 +1240,20 @@ class BrukerReader(BrukerBaseMSIReader):
         :meth:`_iter_frames` selects. A frame whose read fails is logged
         and skipped; a frame that reads empty is skipped silently.
         """
+        tally = DropTally(logger, "frames whose spectrum could not be read")
+        n_seen = 0
         for frame_id, coords in self._iter_frames():
+            n_seen += 1
             try:
                 mzs, intensities = self._read_frame_spectrum(frame_id)
                 # Apply intensity threshold filtering if configured
                 mzs, intensities = self._apply_intensity_filter(mzs, intensities)
             except Exception as e:
-                logger.warning(f"Error reading spectrum for frame {frame_id}: {e}")
+                tally.drop(f"frame {frame_id}", e)
                 continue
             if mzs.size > 0 and intensities.size > 0:
                 yield coords, mzs, intensities
+        tally.summarise(n_seen)
 
     def _iter_frames(
         self,
@@ -1205,14 +1284,16 @@ class BrukerReader(BrukerBaseMSIReader):
                 frame_ids = range(1, total + 1)
 
         coordinate_offsets = self._get_coordinate_offsets()
+        tally = DropTally(logger, "frames with no coordinates")
         for frame_id in frame_ids:
             coords = self._get_frame_coordinates_cached(frame_id, coordinate_offsets)
             if coords is None:
-                logger.warning(f"No coordinates found for frame {frame_id}")
+                tally.drop(f"frame {frame_id}, which has no coordinates")
                 continue
             yield frame_id, coords
             if self.progress_callback:
                 self.progress_callback(frame_id, total)
+        tally.summarise(total)
 
     # ------------------------------------------------------------------
     # Ion mobility (TDF only)
@@ -1474,17 +1555,21 @@ class BrukerReader(BrukerBaseMSIReader):
             )
         values, n_axis = self._mobility_values()
 
+        tally = DropTally(logger, "frames whose mobility scans could not be read")
+        n_seen = 0
         for frame_id, coords in self._iter_frames():
+            n_seen += 1
             try:
                 frame = TdfFrameScans(self, frame_id, coords)
                 points = self._mobility_points_from(frame, values, n_axis)
+            except ConversionRefused:
+                raise
             except Exception as e:
-                logger.warning(
-                    f"Error reading mobility scans for frame {frame_id}: {e}"
-                )
+                tally.drop(f"frame {frame_id}", e)
                 continue
             if points is not None:
                 yield coords, points[0], points[1], points[2]
+        tally.summarise(n_seen)
 
     def _mobility_values(self) -> Tuple[NDArray[np.float64], int]:
         """The per-scan 1/K0 values and their count, for the point cloud."""
@@ -1644,18 +1729,22 @@ class BrukerReader(BrukerBaseMSIReader):
 
         scan_map = self._precursor_scan_map(schedule.windows)
         n_windows = len(schedule.windows)
+        tally = DropTally(logger, "frames whose precursor scans could not be read")
+        n_seen = 0
         for frame_id, coords in self._iter_frames():
+            n_seen += 1
             try:
                 frame = TdfFrameScans(self, frame_id, coords)
+            except ConversionRefused:
+                raise
             except Exception as e:
-                logger.warning(
-                    f"Error reading scans for frame {frame_id}: {e}",
-                )
+                tally.drop(f"frame {frame_id}", e)
                 continue
             for window_index, mzs, intensities in self._precursor_spectra_from(
                 frame, scan_map, n_windows
             ):
                 yield coords, window_index, mzs, intensities
+        tally.summarise(n_seen)
 
     def _precursor_context(self) -> Optional[Tuple[NDArray[np.int64], int]]:
         """``(scan -> window map, window count)``, or ``None`` when not separable.
@@ -1744,13 +1833,17 @@ class BrukerReader(BrukerBaseMSIReader):
             raise NotImplementedError(
                 "Frame records need a TDF file read through the Bruker library"
             )
+        tally = DropTally(logger, "frames whose scans could not be read")
+        n_seen = 0
         for frame_id, coords in self._iter_frames():
+            n_seen += 1
             try:
                 frame = TdfFrameScans(self, frame_id, coords)
             except Exception as e:
-                logger.warning(f"Error reading scans for frame {frame_id}: {e}")
+                tally.drop(f"frame {frame_id}", e)
                 continue
             yield frame
+        tally.summarise(n_seen)
 
     def _get_maldi_frame_ids(self) -> Optional[List[int]]:
         """Get sorted frame IDs from MaldiFrameInfo table.
@@ -1859,7 +1952,7 @@ class BrukerReader(BrukerBaseMSIReader):
                 y += y_offset
                 z += z_offset
 
-            with sqlite3.connect(str(self.db_path)) as conn:
+            with closing(open_read_only(self.db_path)) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT Frame FROM MaldiFrameInfo WHERE "
@@ -1969,7 +2062,7 @@ class BrukerReader(BrukerBaseMSIReader):
             else "SELECT Id, NumPeaks, NULL FROM Frames ORDER BY Id"
         )
         try:
-            with sqlite3.connect(str(self.db_path)) as conn:
+            with closing(open_read_only(self.db_path)) as conn:
                 cursor = conn.cursor()
                 cursor.execute(query)
 
@@ -2076,11 +2169,22 @@ class BrukerReader(BrukerBaseMSIReader):
         return essential_metadata.mass_range
 
     def __repr__(self) -> str:
-        """String representation of the reader."""
+        """String representation of the reader.
+
+        The frame count can refuse now (an unreadable database is no
+        longer reported as zero frames), and a ``__repr__`` that raises
+        replaces a useful traceback with a confusing one -- this is
+        called from debuggers and from logging of other failures. So the
+        refusal is shown here rather than propagated.
+        """
+        try:
+            frames: object = self._get_frame_count()
+        except ConversionRefused:
+            frames = "unreadable"
         return (
             f"BrukerReader(path={self.data_path}, "
             f"type={self.file_type.upper()}, "
-            f"frames={self._get_frame_count()})"
+            f"frames={frames})"
         )
 
     @property

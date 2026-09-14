@@ -261,3 +261,180 @@ def test_internal_subset_dtd_still_parses(tmp_path: Path) -> None:
 """)
 
     assert parse_mis_file(mis)["raster"] == [5, 5]
+
+
+class TestTheMisPickIsDeterministic:
+    """Issue #303: four locators, three of them order-dependent.
+
+    ``list(glob("*.mis"))[0]`` made the pick depend on directory listing
+    order, and the pick decides the pixel pitch -- ``_resolve_pixel_size_um``
+    prefers the .mis ``<Raster>`` over ``BeamScanSize`` -- and the
+    acquisition areas ``--region`` resolves against. The same dataset
+    could convert two ways on two machines.
+
+    The locators also searched different directories, which needed no
+    unlucky ordering at all: a .mis inside the .d was visible to the
+    areas lookup and invisible to the pitch lookup.
+    """
+
+    def test_the_pick_does_not_depend_on_listing_order(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        d_folder = tmp_path / "sample.d"
+        d_folder.mkdir()
+        _write_mis(tmp_path, "a_other.mis", raster="5,5")
+        _write_mis(tmp_path, "z_other.mis", raster="50,50")
+        # Two non-matching candidates: refused rather than guessed at.
+        assert find_mis_file_for_d_folder(d_folder) is None
+
+        _write_mis(tmp_path, "sample.mis", raster="9,9")
+        first = find_mis_file_for_d_folder(d_folder)
+
+        real_glob = Path.glob
+        monkeypatch.setattr(
+            Path, "glob", lambda self, p: reversed(list(real_glob(self, p)))
+        )
+        assert find_mis_file_for_d_folder(d_folder) == first
+        assert first is not None and first.name == "sample.mis"
+
+    def test_several_non_matching_candidates_are_refused_not_guessed(
+        self, tmp_path: Path, thyra_logs
+    ) -> None:
+        """An arbitrary pick writes a *wrong* pitch into the store.
+
+        ``None`` falls back to ``BeamScanSize``, which is at least the
+        instrument's own answer. This is what the solariX reader already
+        did.
+        """
+        d_folder = tmp_path / "sample.d"
+        d_folder.mkdir()
+        _write_mis(tmp_path, "other_a.mis", raster="5,5")
+        _write_mis(tmp_path, "other_b.mis", raster="50,50")
+
+        with thyra_logs("thyra.readers.bruker.mis_parser", logging.WARNING) as records:
+            assert find_mis_file_for_d_folder(d_folder) is None
+        assert any("refusing to guess" in r.getMessage() for r in records)
+
+    def test_a_lone_non_matching_candidate_is_still_accepted(
+        self, tmp_path: Path
+    ) -> None:
+        """There is nothing to guess between."""
+        d_folder = tmp_path / "sample.d"
+        d_folder.mkdir()
+        other = _write_mis(tmp_path, "different_name.mis", raster="7,7")
+        assert find_mis_file_for_d_folder(d_folder) == other
+
+    def test_a_mis_inside_the_d_is_found(self, tmp_path: Path) -> None:
+        """Rapiflex writes it there; the pitch lookup could not see it."""
+        d_folder = tmp_path / "sample.d"
+        d_folder.mkdir()
+        inside = _write_mis(d_folder, "sample.mis", raster="5,5")
+        assert find_mis_file_for_d_folder(d_folder) == inside
+
+    def test_the_pitch_and_the_areas_resolve_to_the_same_file(
+        self, tmp_path: Path
+    ) -> None:
+        """The two lookups disagreed by construction: one searched the
+        data folder first, the other searched only the parent."""
+        from thyra.readers.bruker.folder_structure import BrukerFolderStructure
+
+        d_folder = tmp_path / "sample.d"
+        d_folder.mkdir()
+        (d_folder / "analysis.tsf").write_text("")
+        _write_mis(d_folder, "inside.mis", raster="5,5")
+        _write_mis(tmp_path, "outside.mis", raster="50,50")
+
+        pitch_pick = find_mis_file_for_d_folder(d_folder)
+        areas_pick = BrukerFolderStructure(d_folder)._find_teaching_points_file(
+            d_folder
+        )
+        assert pitch_pick == areas_pick
+
+
+class TestTheOtherBrukerPicksAreSorted:
+    """The same defect in the non-.mis picks of the same folder."""
+
+    def test_which_d_folder_is_converted_does_not_depend_on_order(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """This pick decides which dataset gets converted, and what
+        format it is called."""
+        from thyra.readers.bruker.folder_structure import BrukerFolderStructure
+
+        for name in ("b_second.d", "a_first.d"):
+            d = tmp_path / name
+            d.mkdir()
+            (d / "analysis.tsf").write_text("")
+
+        first = BrukerFolderStructure(tmp_path)._detect_format()[1]
+
+        real_glob = Path.glob
+        monkeypatch.setattr(
+            Path, "glob", lambda self, p: reversed(list(real_glob(self, p)))
+        )
+        assert BrukerFolderStructure(tmp_path)._detect_format()[1] == first
+        assert first.name == "a_first.d"
+
+    def test_strays_in_one_path_do_not_veto_the_stem_match_in_another(
+        self, tmp_path: Path
+    ) -> None:
+        """The stem match is the pick this function is named for.
+
+        Refusing path-by-path let two unrelated .mis inside the .d end
+        the search before ``sample.mis`` next to ``sample.d`` was ever
+        looked at -- a worse answer than the arbitrary pick it replaced.
+        """
+        d_folder = tmp_path / "sample.d"
+        d_folder.mkdir()
+        _write_mis(d_folder, "stray_a.mis", raster="5,5")
+        _write_mis(d_folder, "stray_b.mis", raster="6,6")
+        expected = _write_mis(tmp_path, "sample.mis", raster="9,9")
+
+        assert find_mis_file_for_d_folder(d_folder) == expected
+
+    def test_the_rapiflex_pick_does_not_reach_into_the_parent(
+        self, tmp_path: Path
+    ) -> None:
+        """Rapiflex writes its .mis inside the data folder, and its pick
+        only ever looked there. Adopting a lone slide-level one would put
+        a foreign acquisition's teaching points and raster step into this
+        store.
+
+        Driven through ``_find_data_files``, not by calling the locator
+        with search paths the test supplies itself -- that version passes
+        whatever ``rapiflex_reader`` does, including deleting it.
+        """
+        from thyra.readers.bruker.rapiflex.rapiflex_reader import RapiflexReader
+
+        folder = tmp_path / "run"
+        folder.mkdir()
+        (folder / "run.dat").write_bytes(b"")
+        (folder / "run_info.txt").write_text("")
+        (folder / "run_poslog.txt").write_text("")
+        _write_mis(tmp_path, "whole_slide.mis", raster="50,50")
+
+        reader = RapiflexReader.__new__(RapiflexReader)
+        reader.data_path = folder
+        reader._mis_path = None
+        reader._find_data_files()
+
+        assert reader._mis_path is None
+
+    def test_the_rapiflex_pick_still_finds_its_own_mis(self, tmp_path: Path) -> None:
+        """The other half: the .mis it does own is still picked up."""
+        from thyra.readers.bruker.rapiflex.rapiflex_reader import RapiflexReader
+
+        folder = tmp_path / "run"
+        folder.mkdir()
+        (folder / "run.dat").write_bytes(b"")
+        (folder / "run_info.txt").write_text("")
+        (folder / "run_poslog.txt").write_text("")
+        mine = _write_mis(folder, "run.mis", raster="5,5")
+        _write_mis(tmp_path, "whole_slide.mis", raster="50,50")
+
+        reader = RapiflexReader.__new__(RapiflexReader)
+        reader.data_path = folder
+        reader._mis_path = None
+        reader._find_data_files()
+
+        assert reader._mis_path == mine

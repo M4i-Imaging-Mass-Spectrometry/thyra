@@ -16,7 +16,7 @@ from thyra.core.registry import detect_format, get_reader_class
 from thyra.errors import ConversionRefused
 from thyra.preview import preview_msi
 from thyra.readers.bruker import BrukerFolderStructure, BrukerFormat, SolarixReader
-from thyra.readers.bruker.solarix.solarix_reader import _read_only_uri
+from thyra.readers.bruker.vendor_db import read_only_uri
 from thyra.resampling.types import AxisType, ResamplingMethod
 
 # Properties as found in a real acquisition (ftmsControl 2.2, schema
@@ -573,27 +573,34 @@ class TestSolarixDecisionTree:
 
 
 class TestSolarixReadOnlyUri:
-    """The URI builder behind ``_open_peaks_db``."""
+    """The URI builder behind ``_open_peaks_db``.
+
+    It moved to ``bruker/vendor_db`` when the timsTOF opens were
+    made read-only, rather than being copied there (#290/#303).
+    solariX passes ``immutable=False``, as this builder always was.
+    """
 
     def test_unc_path_keeps_the_authority_empty(self):
         # What a mapped network drive resolves to on Windows. With a single
         # pair of slashes sqlite reads "server" as a URI authority and
         # refuses the open.
-        uri = _read_only_uri(Path("//server/share/run.d/peaks.sqlite"))
+        uri = read_only_uri(Path("//server/share/run.d/peaks.sqlite"), immutable=False)
         assert uri == "file:////server/share/run.d/peaks.sqlite?mode=ro"
 
     def test_drive_and_posix_paths_are_untouched(self):
         assert (
-            _read_only_uri(Path("C:/data/run.d/peaks.sqlite"))
+            read_only_uri(Path("C:/data/run.d/peaks.sqlite"), immutable=False)
             == "file:C%3A/data/run.d/peaks.sqlite?mode=ro"
         )
         assert (
-            _read_only_uri(Path("/data/run.d/peaks.sqlite"))
+            read_only_uri(Path("/data/run.d/peaks.sqlite"), immutable=False)
             == "file:/data/run.d/peaks.sqlite?mode=ro"
         )
 
     def test_built_uri_opens_the_store_read_only(self, solarix_d):
-        conn = sqlite3.connect(_read_only_uri(solarix_d / "peaks.sqlite"), uri=True)
+        conn = sqlite3.connect(
+            read_only_uri(solarix_d / "peaks.sqlite", immutable=False), uri=True
+        )
         try:
             assert conn.execute("SELECT COUNT(*) FROM Spectra").fetchone()[0] == 3
             with pytest.raises(sqlite3.OperationalError, match="readonly"):

@@ -52,6 +52,17 @@ RETIRED_KEYWORDS = {
 }
 
 
+def _no_mis(self: Path) -> bool:
+    """``Path.exists`` for fixtures that carry no optical alignment.
+
+    ``return_value=True`` answered for every path, so the .mis locator's
+    stem probe (``<d-stem>.mis``, added when the four locators were
+    unified in #303) found a file that is not there and the parse then
+    hit the real filesystem.
+    """
+    return not str(self).endswith(".mis")
+
+
 class TestRetiredConstructorKeywords:
     """The three retired keywords are answered rather than swallowed.
 
@@ -142,7 +153,7 @@ class TestRetiredConstructorKeywords:
         mock_sdk.open_file.return_value = MagicMock()
 
         with (
-            patch.object(Path, "exists", return_value=True),
+            patch.object(Path, "exists", new=_no_mis),
             patch.object(Path, "is_dir", return_value=True),
             patch("sqlite3.connect") as mock_connect,
         ):
@@ -174,7 +185,7 @@ class TestRetiredConstructorKeywords:
             return None
 
         with (
-            patch.object(Path, "exists", return_value=True),
+            patch.object(Path, "exists", new=_no_mis),
             patch.object(Path, "is_dir", return_value=True),
             patch("sqlite3.connect") as mock_connect,
         ):
@@ -204,7 +215,7 @@ class TestBrukerReader:
         mock_sdk.open_file.return_value = MagicMock()
 
         with (
-            patch.object(Path, "exists", return_value=True),
+            patch.object(Path, "exists", new=_no_mis),
             patch.object(Path, "is_dir", return_value=True),
             patch("sqlite3.connect") as mock_connect,
         ):
@@ -253,7 +264,7 @@ class TestBrukerReader:
         # Mock database connection
         with (
             patch("sqlite3.connect") as mock_connect,
-            patch.object(Path, "exists", return_value=True),
+            patch.object(Path, "exists", new=_no_mis),
             patch.object(Path, "is_dir", return_value=True),
         ):
 
@@ -357,7 +368,11 @@ class TestDirectCoordinateExtraction:
         with patch("sqlite3.connect") as mock_connect:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
-            mock_connect.return_value.__enter__.return_value = mock_conn
+            # Not ``__enter__``: the opens go through
+            # ``closing(open_read_only(...))`` now, because
+            # ``with sqlite3.connect(...)`` commits without closing
+            # and opened the vendor file read-write (issue #290).
+            mock_connect.return_value = mock_conn
             mock_conn.cursor.return_value = mock_cursor
 
             # Mock MALDI coordinate query
@@ -381,7 +396,11 @@ class TestDirectCoordinateExtraction:
         with patch("sqlite3.connect") as mock_connect:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
-            mock_connect.return_value.__enter__.return_value = mock_conn
+            # Not ``__enter__``: the opens go through
+            # ``closing(open_read_only(...))`` now, because
+            # ``with sqlite3.connect(...)`` commits without closing
+            # and opened the vendor file read-write (issue #290).
+            mock_connect.return_value = mock_conn
             mock_conn.cursor.return_value = mock_cursor
 
             # Mock MALDI coordinate query
@@ -404,7 +423,11 @@ class TestDirectCoordinateExtraction:
         with patch("sqlite3.connect") as mock_connect:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
-            mock_connect.return_value.__enter__.return_value = mock_conn
+            # Not ``__enter__``: the opens go through
+            # ``closing(open_read_only(...))`` now, because
+            # ``with sqlite3.connect(...)`` commits without closing
+            # and opened the vendor file read-write (issue #290).
+            mock_connect.return_value = mock_conn
             mock_conn.cursor.return_value = mock_cursor
 
             # Mock no MALDI table
@@ -425,7 +448,11 @@ class TestDirectCoordinateExtraction:
         with patch("sqlite3.connect") as mock_connect:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
-            mock_connect.return_value.__enter__.return_value = mock_conn
+            # Not ``__enter__``: the opens go through
+            # ``closing(open_read_only(...))`` now, because
+            # ``with sqlite3.connect(...)`` commits without closing
+            # and opened the vendor file read-write (issue #290).
+            mock_connect.return_value = mock_conn
             mock_conn.cursor.return_value = mock_cursor
 
             # Mock frame count query
@@ -462,7 +489,7 @@ class TestReaderInterface:
 
         with (
             patch("sqlite3.connect") as mock_connect,
-            patch.object(Path, "exists", return_value=True),
+            patch.object(Path, "exists", new=_no_mis),
             patch.object(Path, "is_dir", return_value=True),
         ):
 
@@ -502,7 +529,7 @@ class TestIntensityThresholdFiltering:
 
         with (
             patch("sqlite3.connect") as mock_connect,
-            patch.object(Path, "exists", return_value=True),
+            patch.object(Path, "exists", new=_no_mis),
             patch.object(Path, "is_dir", return_value=True),
         ):
 
@@ -547,7 +574,7 @@ class TestIntensityThresholdFiltering:
 
         with (
             patch("sqlite3.connect") as mock_connect,
-            patch.object(Path, "exists", return_value=True),
+            patch.object(Path, "exists", new=_no_mis),
             patch.object(Path, "is_dir", return_value=True),
         ):
 

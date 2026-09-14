@@ -32,7 +32,6 @@ import sqlite3
 import xml.etree.ElementTree as ET  # nosec B405 - trusted local instrument files
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, Tuple
-from urllib.parse import quote
 
 import numpy as np
 from numpy.typing import NDArray
@@ -43,25 +42,9 @@ from ....core.registry import register_reader
 from ....errors import ConversionRefused
 from ..base_bruker_reader import BrukerBaseMSIReader
 from ..mis_parser import parse_mis_file
+from ..vendor_db import read_only_uri
 
 logger = logging.getLogger(__name__)
-
-
-def _read_only_uri(path: Path) -> str:
-    """The sqlite URI that opens ``path`` strictly read-only.
-
-    A UNC path -- which is what a mapped network drive resolves to on
-    Windows -- starts with ``//server/share``; inside a ``file:`` URI that
-    reads as an authority, which sqlite rejects ("invalid uri authority").
-    Doubling the leading slashes leaves the authority empty and the path
-    intact, so ``file:////server/share/...`` opens where
-    ``file://server/share/...`` does not. Drive-letter and POSIX paths
-    are unaffected.
-    """
-    posix = path.as_posix()
-    if posix.startswith("//"):
-        posix = "//" + posix
-    return f"file:{quote(posix)}?mode=ro"
 
 
 @register_reader("solarix")
@@ -182,11 +165,23 @@ class SolarixReader(BrukerBaseMSIReader):
     def _open_peaks_db(self) -> sqlite3.Connection:
         """Open peaks.sqlite strictly read-only.
 
-        The URI form with ``mode=ro`` guarantees sqlite never creates
-        journal/WAL side files next to the database, which matters when the
-        data sits on a read-only network share.
+        ``mode=ro`` keeps sqlite from writing to the database itself,
+        which matters when the data sits on a read-only network share.
+        It is not a guarantee of no side files -- measured, a read-only
+        open of a WAL database still creates a ``-shm`` and a ``-wal``
+        and leaves them; ``immutable=1`` is the spelling that creates
+        neither, and see ``bruker/vendor_db`` for why it is not used
+        unconditionally. A solariX ``peaks.sqlite`` has not been seen in
+        WAL mode.
+
+        The URI builder used to live here, and ``bruker/vendor_db`` was
+        written from it when the timsTOF opens were made read-only. That
+        left two copies of the rule, which is what #303 was filed about
+        one directory over. ``immutable`` stays off, as it was here: this
+        connection is long-lived and the caller does not need the lock
+        bypass.
         """
-        uri = _read_only_uri(self._peaks_path)
+        uri = read_only_uri(self._peaks_path, immutable=False)
         try:
             return sqlite3.connect(uri, uri=True)
         except sqlite3.Error as exc:

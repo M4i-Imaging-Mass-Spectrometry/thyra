@@ -62,7 +62,7 @@ from .csc_assembly import (
     remove_scratch,
     scratch_directory,
 )
-from .mobility_heatmap import Coords, scan_mobility
+from .mobility_heatmap import Coords, scan_mobility, usable_intensities
 
 logger = logging.getLogger(__name__)
 
@@ -316,9 +316,30 @@ def _shared_axis_row(
     mobility: NDArray[np.float64],
     intensities: NDArray[np.float64],
 ) -> Tuple[NDArray[np.int64], NDArray[np.float64]]:
-    """One pixel's ``(column, value)`` entries, collapsed, zeros left out."""
+    """One pixel's ``(column, value)`` entries, collapsed, zeros left out.
+
+    A point whose intensity is not a measurement is dropped by the same
+    rule the summed table and the grid tables apply
+    (:func:`~.mobility_heatmap.usable_intensities`, issue #248). This
+    route is the third row builder and it was the one left out: a NaN and
+    a negative both survive ``intensities != 0``, so they reached ``X``
+    unfiltered on every shared-axis source.
+
+    The mask goes on the *columns*, after they are resolved, rather than
+    on ``mzs``/``mobility`` beforehand. Masking the inputs would forfeit
+    the ``mzs.size == n_source`` identity fast path in
+    :meth:`_SharedFeatureAxis.columns` on every pixel of a file that
+    carries one unusable value, and pay a ``searchsorted`` per pixel for
+    it. The kept entries are identical either way -- an m/z always comes
+    from the shared block here, so a dropped point cannot be the one that
+    fails the on-axis check.
+    """
     columns = features.columns(coords, mzs, mobility)
     intensities = np.asarray(intensities, dtype=np.float64)
+    usable = usable_intensities(intensities)
+    if usable is not None:
+        columns = columns[usable]
+        intensities = intensities[usable]
     nonzero = intensities != 0
     if not np.all(nonzero):
         columns = columns[nonzero]

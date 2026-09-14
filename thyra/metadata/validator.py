@@ -108,12 +108,13 @@ class ImzMLOntologyValidator:
                 reverse=True,
             )
             for accession, count in sorted_terms[:15]:
+                # ``get_term`` returns ``(name, data_type)``, so the name
+                # is [0]. Reading [1] printed the XSD type -- "xsd:string"
+                # for IMS:1000080, ``None`` for MS:1000040 -- where the
+                # term's name belongs. Nothing caught it because this
+                # summary was never printed (issue #299).
                 term_details = ONTOLOGY.get_term(accession)
-                term_name = (
-                    term_details[1]
-                    if term_details and len(term_details) > 1
-                    else "Unknown Term"
-                )
+                term_name = term_details[0] if term_details else "Unknown Term"
                 lines.append(f"- {accession} ({term_name}): {count} times")
 
         if results["unknown_list"]:

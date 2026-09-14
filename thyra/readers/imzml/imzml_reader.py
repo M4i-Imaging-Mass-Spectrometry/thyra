@@ -19,6 +19,7 @@ from tqdm import tqdm
 
 from ...core.base_extractor import MetadataExtractor
 from ...core.base_reader import BaseMSIReader
+from ...core.drop_tally import DropTally
 from ...core.mobility import MobilityAxis, classify_mobility_array
 from ...core.registry import register_reader
 from ...errors import ConversionRefused
@@ -1443,7 +1444,7 @@ class ImzMLReader(BaseMSIReader):
         return mzs, np.frombuffer(data, dtype=parser.intensityPrecision)
 
     def _process_single_spectrum(
-        self, parser: ImzMLParser, idx: int, pbar
+        self, parser: ImzMLParser, idx: int, pbar, tally: DropTally
     ) -> Optional[
         Tuple[Tuple[int, int, int], NDArray[np.float64], NDArray[np.float64]]
     ]:
@@ -1461,8 +1462,13 @@ class ImzMLReader(BaseMSIReader):
 
             pbar.update(1)
             return None
+        except ConversionRefused:
+            # A refusal is a decision, not a bad spectrum. It subclasses
+            # ValueError, so the broad clause below would have demoted it
+            # to one warning among thousands (#308).
+            raise
         except Exception as e:
-            logger.warning(f"Error processing spectrum {idx}: {e}")
+            tally.drop(f"spectrum {idx}", e)
             pbar.update(1)
             return None
 
@@ -1474,10 +1480,12 @@ class ImzMLReader(BaseMSIReader):
         None,
     ]:
         """Process spectra one at a time."""
+        tally = DropTally(logger, "spectra that could not be read")
         for idx in range(total_spectra):
-            result = self._process_single_spectrum(parser, idx, pbar)
+            result = self._process_single_spectrum(parser, idx, pbar, tally)
             if result is not None:
                 yield result
+        tally.summarise(total_spectra)
 
     def _iter_spectra_batch(
         self, parser: ImzMLParser, total_spectra: int, batch_size: int, pbar
@@ -1487,15 +1495,17 @@ class ImzMLReader(BaseMSIReader):
         None,
     ]:
         """Process spectra in batches."""
+        tally = DropTally(logger, "spectra that could not be read")
         for batch_start in range(0, total_spectra, batch_size):
             batch_end = min(batch_start + batch_size, total_spectra)
             batch_size_actual = batch_end - batch_start
 
             for offset in range(batch_size_actual):
                 idx = batch_start + offset
-                result = self._process_single_spectrum(parser, idx, pbar)
+                result = self._process_single_spectrum(parser, idx, pbar, tally)
                 if result is not None:
                     yield result
+        tally.summarise(total_spectra)
 
     def iter_spectra(self, batch_size: Optional[int] = None) -> Generator[
         Tuple[Tuple[int, int, int], NDArray[np.float64], NDArray[np.float64]],
@@ -1763,6 +1773,7 @@ class ImzMLReader(BaseMSIReader):
             unit="spectrum",
             disable=getattr(self, "_quiet_mode", False),
         ) as pbar:
+            tally = DropTally(logger, "mobility spectra that could not be read")
             for idx in range(total_spectra):
                 try:
                     coords = self._get_spectrum_coordinates(parser, idx)
@@ -1783,10 +1794,18 @@ class ImzMLReader(BaseMSIReader):
                         )
                     if mzs.size > 0:
                         yield coords, mzs, mobility, intensities
+                except ConversionRefused:
+                    # The length-mismatch refusal raised a dozen lines
+                    # above is a decision about the file, not a bad
+                    # spectrum. ConversionRefused subclasses ValueError,
+                    # so the broad clause below silently demoted it to a
+                    # per-spectrum warning (#308).
+                    raise
                 except Exception as e:
-                    logger.warning(f"Error processing mobility spectrum {idx}: {e}")
+                    tally.drop(f"mobility spectrum {idx}", e)
                 finally:
                     pbar.update(1)
+            tally.summarise(total_spectra)
 
     def read(self) -> Dict[str, Any]:
         """Read the entire imzML file and return a structured data dictionary.

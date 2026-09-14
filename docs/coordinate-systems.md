@@ -60,7 +60,7 @@ zarr.attrs["coordinate_systems"] = {
 | Field | Meaning |
 |-------|---------|
 | ``unit`` | Unit of one step in ``"global"`` -- either ``"micrometer"`` or ``"pixel"``. |
-| ``pixel_size_um_x``, ``pixel_size_um_y`` | Conversion factor: micrometers per one ``"global"`` unit. ``1.0`` when ``unit="micrometer"``; physical pixel size when ``unit="pixel"``. ``None`` if the producer cannot calibrate (e.g. an uncalibrated optical photo). |
+| ``pixel_size_um_x``, ``pixel_size_um_y`` | The MSI raster pitch in micrometers -- the spacing between two acquisition positions, which is the same scale ``raster_to_global_affine`` carries. Written **only when ``unit="micrometer"``**; ``None`` when ``unit="pixel"``, because there the field would have to describe the *optical photo's* um-per-pixel calibration and FlexImaging photos do not generally carry one. It is **not** a factor to multiply a ``"global"`` coordinate by. |
 | ``reference_element`` | Key of the canonical raster element that defines pixel space, as it appears in ``sdata.images``, when ``unit="pixel"``. ``None`` otherwise -- including when ``unit="pixel"`` but this store does not hold that element (optical images not included, or its pixels could not be read): ``"global"`` is still that image's pixel grid, there is just no element here that is it. Which *file* that was is in [``optical_images``](output-format.md#which-image-is-which-attrsoptical_images). |
 | ``convention_version`` | Schema version; bump when the shape of this attr changes. Currently ``1``. |
 | ``produced_by`` | ``"thyra/<version>"`` for Thyra-produced zarrs. |
@@ -196,7 +196,27 @@ pixel grid*, because the photo can be drawn with no transform.
   ``None`` because FlexImaging photos do not generally carry a
   um-per-pixel calibration.
 
-Note that the two modes pick the right convention for what is
+### Mode B with the alignment declined
+
+A caller can pass ``apply_optical_alignment=False`` to
+:func:`~thyra.convert_msi` on data that *has* FlexImaging alignment.
+That is what a downstream tool computing its own MSI-to-target
+registration wants: the alignment Thyra could apply is not the
+canonical one, so applying it first would have to be undone.
+
+The result is **Mode A** -- ``unit="micrometer"``, ``pixel_size_um_x/y``
+filled with the raster pitch, ``reference_element`` null, and the
+pixel-size ``raster_to_global_affine``. The MSI table, the TIC image and
+the pixel polygons are all in micrometers, and the optical photo is
+carried in alongside them by the *inverse* of the alignment affine
+rather than being the frame everything else is expressed in.
+
+So the alignment matrix existing does not by itself mean the store is in
+optical pixels; whether it was applied does. Thyra used to read only the
+former when writing this attr, and declared ``unit="pixel"`` on stores
+whose every element was in micrometers (issue #288).
+
+Note that the modes pick the right convention for what is
 actually known about the data; consumers should look at
 ``unit`` rather than assuming Thyra always uses one or the other.
 
@@ -219,10 +239,20 @@ print(f"reference element:  {cs['reference_element']}")
 print(f"schema version:     {cs['convention_version']}")
 ```
 
-To resolve a ``"global"`` coordinate to micrometers, multiply by the
-``pixel_size_um_x/y`` factors. When ``unit="micrometer"`` those
-factors are ``1.0`` and the multiplication is a no-op; when
-``unit="pixel"`` they perform the px-to-um conversion.
+``pixel_size_um_x/y`` is not a conversion factor, and multiplying a
+``"global"`` coordinate by it is wrong in both variants. Read ``unit``
+instead:
+
+- ``unit="micrometer"`` -- ``"global"`` already *is* micrometers, so
+  nothing is applied. ``pixel_size_um_x/y`` is the raster pitch, which
+  is what ``raster_to_global_affine`` scales the TIC indices by;
+  multiplying a resolved coordinate by it applies that scale a second
+  time.
+- ``unit="pixel"`` -- ``"global"`` is the primary optical photo's pixel
+  grid, and ``pixel_size_um_x/y`` is ``None``. The um-per-pixel
+  calibration of that photo is genuinely unknown to Thyra, so there is
+  no factor to recover from the store; a consumer that needs
+  micrometers here has to supply the calibration itself.
 
 ---
 

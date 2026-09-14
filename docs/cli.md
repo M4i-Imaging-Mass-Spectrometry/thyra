@@ -414,7 +414,8 @@ Bruker data is what usually needs it.
 # Use raw (non-recalibrated) m/z values
 thyra data.d output.zarr --no-recalibrated
 
-# Interactively choose calibration state
+# List the calibration states the file carries (display only -- the
+# active state is always the one used; choosing one is issue #54)
 thyra data.d output.zarr --interactive-calibration
 
 # Filter low-intensity signals (useful for continuous-mode Bruker data)
