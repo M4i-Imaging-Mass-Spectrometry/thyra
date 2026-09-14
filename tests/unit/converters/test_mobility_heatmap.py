@@ -360,7 +360,7 @@ class MobilityStubReader(BaseMSIReader):
     def get_common_mass_axis(self) -> NDArray[np.float64]:
         return MASS_AXIS.copy()
 
-    def iter_spectra(self, batch_size: Optional[int] = None) -> Generator:
+    def iter_spectra(self) -> Generator:
         for p, (x, y) in enumerate(PIXELS):
             mzs, it = _summed(p)
             yield (x, y, 0), mzs, it
@@ -380,7 +380,7 @@ class MobilityStubReader(BaseMSIReader):
             source="stub",
         )
 
-    def iter_mobility_spectra(self, batch_size: Optional[int] = None) -> Generator:
+    def iter_mobility_spectra(self) -> Generator:
         self.mobility_passes += 1
         for p, (x, y) in enumerate(PIXELS):
             mzs, mob, it = _cloud(p)

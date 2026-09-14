@@ -734,7 +734,7 @@ class MzPeakReader(BaseMSIReader):
             column = column.chunk(0)
         return column.field(field).to_numpy(zero_copy_only=False)
 
-    def iter_spectra(self, batch_size: Optional[int] = None) -> Generator[
+    def iter_spectra(self) -> Generator[
         Tuple[Tuple[int, int, int], NDArray[np.float64], NDArray[np.float64]],
         None,
         None,
@@ -748,21 +748,13 @@ class MzPeakReader(BaseMSIReader):
         ``spectrum_index`` appears -- which is why the emit happens on
         transition rather than per row group.
 
-        Args:
-            batch_size: Accepted for interface parity and ignored. Row groups
-                already define the read granularity; a second batching layer
-                on top would only fragment them.
+        Row groups define the read granularity; a second batching layer on
+        top would only fragment them, which is why no batch size is taken.
 
         Yields:
             ``((x, y, z), mzs, intensities)`` with 0-based coordinates,
             ``z`` always 0, and both arrays float64.
         """
-        if batch_size is not None:
-            logger.debug(
-                "mzPeak reads are row-group sized; ignoring batch_size=%s",
-                batch_size,
-            )
-
         # Per iteration, not per reader. Every conversion reads the source
         # twice (issue #226), and a counter carried across the passes made
         # the second pass report the sum of both -- 12 dropped points, then

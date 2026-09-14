@@ -146,15 +146,12 @@ class BaseMSIReader(ABC):
         return False
 
     @abstractmethod
-    def iter_spectra(self, batch_size: Optional[int] = None) -> Generator[
+    def iter_spectra(self) -> Generator[
         Tuple[Tuple[int, int, int], NDArray[np.float64], NDArray[np.float64]],
         None,
         None,
     ]:
         """Iterate through spectra with optional batch processing.
-
-        Args:
-            batch_size: Optional batch size for spectrum iteration
 
         Yields:
             Tuple containing:
@@ -292,9 +289,7 @@ class BaseMSIReader(ABC):
         """Whether :meth:`iter_frame_scans` is available on this source."""
         return False
 
-    def iter_frame_scans(
-        self, batch_size: Optional[int] = None
-    ) -> Generator["FrameScans", None, None]:
+    def iter_frame_scans(self) -> Generator["FrameScans", None, None]:
         """Iterate the frames as records that derive every view of a pixel.
 
         Yields one :class:`~thyra.core.frames.FrameScans` per frame, in
@@ -352,7 +347,7 @@ class BaseMSIReader(ABC):
         """
         return None
 
-    def iter_mobility_spectra(self, batch_size: Optional[int] = None) -> Generator[
+    def iter_mobility_spectra(self) -> Generator[
         Tuple[
             Tuple[int, int, int],
             NDArray[np.float64],
@@ -368,9 +363,6 @@ class BaseMSIReader(ABC):
         raw (m/z, mobility) point cloud, unbinned, with the three arrays
         parallel. Readers whose source has no mobility dimension do not
         implement this.
-
-        Args:
-            batch_size: Optional batch size hint, as for :meth:`iter_spectra`.
 
         Raises:
             NotImplementedError: If the reader exposes no mobility dimension.
@@ -398,7 +390,7 @@ class BaseMSIReader(ABC):
         """
         return None
 
-    def iter_precursor_spectra(self, batch_size: Optional[int] = None) -> Generator[
+    def iter_precursor_spectra(self) -> Generator[
         Tuple[
             Tuple[int, int, int],
             int,
@@ -422,9 +414,6 @@ class BaseMSIReader(ABC):
         A pixel-precursor pair with no ion current is not yielded.
         :meth:`iter_spectra` is unaffected and keeps yielding the summed
         spectrum.
-
-        Args:
-            batch_size: Optional batch size hint, as for :meth:`iter_spectra`.
 
         Raises:
             NotImplementedError: If the reader cannot separate precursors.

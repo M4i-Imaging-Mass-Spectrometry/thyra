@@ -2857,8 +2857,22 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         """
         if indices.size < 2:
             return indices, intensities
-        diffs = np.diff(indices)
-        if bool(np.all(diffs > 0)):
+        # Compared pairwise rather than through ``np.diff``. Measured at
+        # 331k bins, which is a realistic axis: 0.521 ms -> 0.060 ms hot
+        # (8.8x), 0.630 -> 0.147 cold (4.3x). This runs once per spectrum
+        # on the whole axis, for every spectrum of a --no-resample
+        # conversion (issue #311).
+        #
+        # The reason is the temporary, not short-circuiting. ``np.diff``
+        # materialises an 8-byte intp array the length of the axis where
+        # the comparison writes a 1-byte bool -- measured, 2,647,992 bytes
+        # against 330,999. Stopping early buys almost nothing by
+        # comparison (1.06-1.13x between a duplicate at the front and a
+        # fully ascending run), and on the memoised arange this mostly
+        # runs against there is no False to stop at anyway.
+        #
+        # The answer is identical: same predicate, same pairs.
+        if bool((indices[1:] > indices[:-1]).all()):
             return indices, intensities
         unique, inverse = np.unique(indices, return_inverse=True)
         summed = np.bincount(

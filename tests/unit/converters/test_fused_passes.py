@@ -152,7 +152,7 @@ class FusedStubReader(BaseMSIReader):
     def get_common_mass_axis(self) -> NDArray[np.float64]:
         return np.array([100.0, 200.0, 300.0, 400.0, 500.0])
 
-    def iter_spectra(self, batch_size: Optional[int] = None) -> Generator:
+    def iter_spectra(self) -> Generator:
         for p, (x, y) in enumerate(PIXELS):
             mzs, intensities = _summed(p)
             yield (x, y, 0), mzs, intensities
@@ -178,7 +178,7 @@ class FusedStubReader(BaseMSIReader):
             source="stub",
         )
 
-    def iter_mobility_spectra(self, batch_size: Optional[int] = None) -> Generator:
+    def iter_mobility_spectra(self) -> Generator:
         self.mobility_passes += 1
         for p, (x, y) in enumerate(PIXELS):
             mzs, mobility, intensities = _cloud(p)
@@ -189,7 +189,7 @@ class FusedStubReader(BaseMSIReader):
     def get_fragmentation(self) -> Optional[FragmentationSchedule]:
         return SCHEDULE
 
-    def iter_precursor_spectra(self, batch_size: Optional[int] = None) -> Generator:
+    def iter_precursor_spectra(self) -> Generator:
         self.precursor_passes += 1
         for p, (x, y) in enumerate(PIXELS):
             for window, mzs, intensities in _precursors(p):
@@ -201,7 +201,7 @@ class FusedStubReader(BaseMSIReader):
     def has_frame_scans(self) -> bool:
         return self.frame_scans
 
-    def iter_frame_scans(self, batch_size: Optional[int] = None) -> Generator:
+    def iter_frame_scans(self) -> Generator:
         self.frame_passes += 1
         for p, (x, y) in enumerate(PIXELS):
             yield _Frame(p, (x, y, 0))
@@ -217,7 +217,7 @@ class UnfusedStubReader(FusedStubReader):
 class IndexedStubReader(FusedStubReader):
     """The same source whose records hand their points over indexed."""
 
-    def iter_frame_scans(self, batch_size: Optional[int] = None) -> Generator:
+    def iter_frame_scans(self) -> Generator:
         self.frame_passes += 1
         for p, (x, y) in enumerate(PIXELS):
             yield _IndexedFrame(p, (x, y, 0))

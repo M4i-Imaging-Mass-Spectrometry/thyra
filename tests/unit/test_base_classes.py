@@ -130,7 +130,7 @@ class TestBaseMSIConverter:
             def get_common_mass_axis(self):
                 return np.array([])
 
-            def iter_spectra(self, batch_size=None):
+            def iter_spectra(self):
                 yield ((0, 0, 0), np.array([]), np.array([]))
 
             def close(self):
@@ -211,7 +211,7 @@ class TestBaseMSIConverter:
             def get_common_mass_axis(self):
                 return np.array([100.0, 200.0, 300.0])
 
-            def iter_spectra(self, batch_size=None):
+            def iter_spectra(self):
                 for x in range(2):
                     for y in range(2):
                         yield (

@@ -1,9 +1,14 @@
 # thyra/tools/make_example_data.py
 """Generate a small synthetic MSI dataset for tutorials and smoke tests.
 
-The generated imzML/ibd pair is deterministic for a given seed and small
-enough to convert in seconds, so it can be used to verify an installation
-end to end without downloading vendor data.
+The spectra are deterministic for a given seed -- same m/z axis, same
+intensities -- and the pair is small enough to convert in seconds, so it
+can be used to verify an installation end to end without downloading
+vendor data.
+
+The *files* are not byte-identical across runs: the imzML carries a fresh
+UUID and the SHA-1 taken over it, the way a real acquisition does. Only
+the ``.ibd`` past its 16-byte UUID header is reproducible byte for byte.
 
 The phantom is a sagittal brain-like section with two internal structures
 that carry distinct peak sets, so TIC images and single-ion images show
@@ -152,6 +157,19 @@ def generate_example_imzml(
     with ImzMLWriter(
         str(output_path), mode="continuous", spec_type="profile"
     ) as writer:
+        # pyimzML derives the ``<run id=...>`` from the same argument it
+        # derives the two filenames from, so the generated imzML carried
+        # the caller's *absolute output path* -- measured, a real one read
+        # `id="C:\...\Temp\thyradet_zzj3cggn\runC\synthetic_brain"`. This
+        # file is what the tutorial tells people to share, which puts it
+        # in the same class as the paths PR #221 cleaned out of the repo,
+        # and it also made the output differ between two machines that ran
+        # the same command.
+        #
+        # Assigning after construction is safe and the only way to do it:
+        # both file handles are already open by then, and ``run_id`` is
+        # not consumed until the template renders at close.
+        writer.run_id = output_path.stem
         for y in range(n_y):
             for x in range(n_x):
                 spectrum = np.zeros(n_mz_bins, dtype=np.float64)

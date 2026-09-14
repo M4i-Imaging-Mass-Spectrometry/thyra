@@ -70,9 +70,9 @@ class _ScaledByPlane(MockMSIReader):
     vector cannot pass for any of them.
     """
 
-    def iter_spectra(self, batch_size=None):
+    def iter_spectra(self):
         plane_zero: dict = {}
-        for coords, mzs, intensities in super().iter_spectra(batch_size):
+        for coords, mzs, intensities in super().iter_spectra():
             x, y, z = coords
             if z == 0:
                 plane_zero[(x, y)] = (mzs, intensities)
@@ -83,9 +83,9 @@ class _ScaledByPlane(MockMSIReader):
 class _DroppedRowAndRepeat(MockMSIReader):
     """Plane 0 loses a row to an all-zero spectrum, plane 1 repeats a pixel."""
 
-    def iter_spectra(self, batch_size=None):
+    def iter_spectra(self):
         extra = None
-        for coords, mzs, intensities in super().iter_spectra(batch_size):
+        for coords, mzs, intensities in super().iter_spectra():
             if coords == (0, 0, 0):
                 yield coords, mzs, np.zeros_like(intensities)
                 continue
@@ -198,9 +198,9 @@ class TestThePerRegionMeans:
         """The denominator is rows, so the summed row counts once."""
 
         class _RegionsWithRepeat(_TwoRegions):
-            def iter_spectra(self, batch_size=None):
+            def iter_spectra(self):
                 extra = None
-                for coords, mzs, intensities in super().iter_spectra(batch_size):
+                for coords, mzs, intensities in super().iter_spectra():
                     if coords == (0, 0, 0):
                         extra = mzs[:2]
                     yield coords, mzs, intensities

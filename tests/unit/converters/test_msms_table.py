@@ -56,7 +56,7 @@ RAMP = np.linspace(1.5, 0.6, 240)
 
 
 def _reader(schedule=SCHEDULE, spectra=SPECTRA, ramp=None):
-    def iter_precursor_spectra(batch_size=None):
+    def iter_precursor_spectra():
         for coords, window, mzs, intensities in spectra:
             yield (
                 coords,

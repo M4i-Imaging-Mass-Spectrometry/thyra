@@ -55,27 +55,27 @@ def _converter(reader, output: Path) -> StreamingSpatialDataConverter:
 
 
 class _NoSpectraAtAll(MockMSIReader):
-    def iter_spectra(self, batch_size=None):
+    def iter_spectra(self):
         return iter(())
 
 
 class _EverySpectrumEmpty(MockMSIReader):
-    def iter_spectra(self, batch_size=None):
-        for coords, _mzs, _intensities in super().iter_spectra(batch_size):
+    def iter_spectra(self):
+        for coords, _mzs, _intensities in super().iter_spectra():
             yield coords, np.array([]), np.array([])
 
 
 class _EveryCoordinateOffTheGrid(MockMSIReader):
-    def iter_spectra(self, batch_size=None):
-        for _coords, mzs, intensities in super().iter_spectra(batch_size):
+    def iter_spectra(self):
+        for _coords, mzs, intensities in super().iter_spectra():
             yield (N_X + 3, N_Y + 3, 0), mzs, intensities
 
 
 class _OnlyThePlaneInTheMiddle(MockMSIReader):
     """Planes 0 and 2 carry nothing; plane 1 is a full raster."""
 
-    def iter_spectra(self, batch_size=None):
-        for coords, mzs, intensities in super().iter_spectra(batch_size):
+    def iter_spectra(self):
+        for coords, mzs, intensities in super().iter_spectra():
             if coords[2] != 1:
                 continue
             yield coords, mzs, intensities
@@ -121,9 +121,9 @@ class TestNothingToWriteIsRefused:
         passes = []
         original = reader.iter_spectra
 
-        def counted(batch_size=None):
+        def counted():
             passes.append(1)
-            return original(batch_size)
+            return original()
 
         reader.iter_spectra = counted  # type: ignore[method-assign]
         assert _converter(reader, tmp_path / "e.zarr").convert() is False

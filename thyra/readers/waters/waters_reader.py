@@ -757,7 +757,7 @@ class WatersReader(BaseMSIReader):
         )
         return self._common_mass_axis_cache
 
-    def iter_spectra(self, batch_size: Optional[int] = None) -> Generator[
+    def iter_spectra(self) -> Generator[
         Tuple[Tuple[int, int, int], NDArray[np.float64], NDArray[np.float64]],
         None,
         None,
@@ -766,9 +766,6 @@ class WatersReader(BaseMSIReader):
 
         Only yields spectra from MS functions (skips LOCKMASS, MRM, IMS, NOT_MS).
         Skips scans without valid laser positions.
-
-        Args:
-            batch_size: Ignored (included for interface compatibility).
 
         Yields:
             Tuple of ((x, y, z), mzs, intensities) where coordinates are

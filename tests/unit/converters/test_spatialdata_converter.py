@@ -83,7 +83,7 @@ def create_mock_reader_with_dimensions(dimensions):
         def get_common_mass_axis(self):
             return np.linspace(100, 1000, 100)
 
-        def iter_spectra(self, batch_size=None):
+        def iter_spectra(self):
             return _generate_spectrum_data(self._dimensions)
 
         def close(self):

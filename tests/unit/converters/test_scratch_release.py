@@ -209,8 +209,8 @@ class TestAnInterrupt:
         """Not only the write: the scatter is where a long run spends its time."""
 
         class _InterruptingReader(MockMSIReader):
-            def iter_spectra(self, batch_size=None):
-                for n, spectrum in enumerate(super().iter_spectra(batch_size)):
+            def iter_spectra(self):
+                for n, spectrum in enumerate(super().iter_spectra()):
                     if self._scattering and n == 2:
                         raise KeyboardInterrupt
                     yield spectrum

@@ -631,10 +631,14 @@ thyra-example-data big.imzML --pixels-x 200 --pixels-y 150 --mz-bins 2000
 ```
 
 !!! note "`--seed` is what makes the tutorial reproducible"
-    Generation is deterministic given the seed, so the default `--seed 0`
-    produces byte-identical data on every machine -- which is why the
-    tutorial can print exact numbers and expect yours to match. Change the
-    seed and the numbers change with it.
+    The seed fixes the *data*: the same `--seed` gives the same m/z axis and
+    the same intensities on every machine, which is why the tutorial can
+    print exact numbers and expect yours to match. Change the seed and the
+    numbers change with it.
+
+    It does not make the files byte-identical, and is not meant to. Each
+    imzML gets a fresh UUID and the SHA-1 of its own `.ibd`, as a real
+    acquisition would.
 
 ### `thyra-check-ontology`
 

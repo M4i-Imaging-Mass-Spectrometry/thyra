@@ -55,7 +55,7 @@ class TestRegistry:
             def get_common_mass_axis(self):
                 pass
 
-            def iter_spectra(self, batch_size=None):
+            def iter_spectra(self):
                 pass
 
             def close(self):

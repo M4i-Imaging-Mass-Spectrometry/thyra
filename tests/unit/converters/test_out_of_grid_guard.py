@@ -64,8 +64,8 @@ class _OutOfGridReader(MockMSIReader):
     an off-by-one in base convention produces.
     """
 
-    def iter_spectra(self, batch_size=None):
-        for coords, mzs, intensities in super().iter_spectra(batch_size):
+    def iter_spectra(self):
+        for coords, mzs, intensities in super().iter_spectra():
             yield (
                 _OUT_OF_GRID if coords == _RELOCATED_FROM else coords
             ), mzs, intensities

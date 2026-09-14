@@ -1236,15 +1236,12 @@ class BrukerReader(BrukerBaseMSIReader):
         logger.info(f"Built raw mass axis with {len(mass_axis)} unique m/z values")
         return mass_axis
 
-    def iter_spectra(self, batch_size: Optional[int] = None) -> Generator[
+    def iter_spectra(self) -> Generator[
         Tuple[Tuple[int, int, int], NDArray[np.float64], NDArray[np.float64]],
         None,
         None,
     ]:
         """Iterate through all spectra sequentially.
-
-        Args:
-            batch_size: Ignored, maintained for compatibility
 
         Yields:
             Tuples of (coordinates, mz_array, intensity_array)
@@ -1540,7 +1537,7 @@ class BrukerReader(BrukerBaseMSIReader):
         )
         return (), True
 
-    def iter_mobility_spectra(self, batch_size: Optional[int] = None) -> Generator[
+    def iter_mobility_spectra(self) -> Generator[
         Tuple[
             Tuple[int, int, int],
             NDArray[np.float64],
@@ -1560,9 +1557,6 @@ class BrukerReader(BrukerBaseMSIReader):
         ordered by scan, then by index; the three arrays are parallel.
         Same frames, same order and same coordinates as
         :meth:`iter_spectra`, which keeps yielding the summed spectrum.
-
-        Args:
-            batch_size: Ignored, maintained for interface compatibility.
 
         Raises:
             NotImplementedError: On a TSF file, which has no mobility.
@@ -1691,7 +1685,7 @@ class BrukerReader(BrukerBaseMSIReader):
             scan_map[int(window.scan_begin) : int(window.scan_end)] = index
         return scan_map
 
-    def iter_precursor_spectra(self, batch_size: Optional[int] = None) -> Generator[
+    def iter_precursor_spectra(self) -> Generator[
         Tuple[
             Tuple[int, int, int],
             int,
@@ -1721,9 +1715,6 @@ class BrukerReader(BrukerBaseMSIReader):
         Yields ``((x, y, z), window_index, mzs, intensities)``, where
         ``window_index`` is the position of the precursor in
         ``get_fragmentation().windows`` and ``mzs`` is ascending.
-
-        Args:
-            batch_size: Ignored, maintained for interface compatibility.
 
         Raises:
             NotImplementedError: On a TSF file, or when the acquisition
@@ -1844,9 +1835,7 @@ class BrukerReader(BrukerBaseMSIReader):
             and bool(self.handle)
         )
 
-    def iter_frame_scans(
-        self, batch_size: Optional[int] = None
-    ) -> Generator["TdfFrameScans", None, None]:
+    def iter_frame_scans(self) -> Generator["TdfFrameScans", None, None]:
         """Every frame as a :class:`TdfFrameScans`: one ``tims_read_scans_v2`` each.
 
         Same frames, same order and same coordinates as

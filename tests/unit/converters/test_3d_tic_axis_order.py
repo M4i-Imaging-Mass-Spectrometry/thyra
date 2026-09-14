@@ -138,7 +138,7 @@ class _AxisProbeReader(BaseMSIReader):
     def reset(self) -> None:
         """Spectra are a pure function of the coordinate; nothing to reset."""
 
-    def iter_spectra(self, batch_size: Optional[int] = None) -> Generator[
+    def iter_spectra(self) -> Generator[
         Tuple[Tuple[int, int, int], NDArray[np.float64], NDArray[np.float64]],
         None,
         None,

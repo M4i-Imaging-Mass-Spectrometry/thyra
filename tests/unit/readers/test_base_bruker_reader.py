@@ -30,7 +30,7 @@ class ConcreteBrukerReader(BrukerBaseMSIReader):
         """Return mock mass axis."""
         return np.linspace(100, 1000, 100)
 
-    def iter_spectra(self, batch_size=None) -> Generator[
+    def iter_spectra(self) -> Generator[
         Tuple[Tuple[int, int, int], NDArray[np.float64], NDArray[np.float64]],
         None,
         None,

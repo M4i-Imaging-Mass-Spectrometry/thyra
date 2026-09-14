@@ -175,8 +175,8 @@ def test_a_volume_carries_both_planes_with_a_z_term(tmp_path):
 class _PlaneStrippedReader(MockMSIReader):
     """Declares two planes but acquires only the first."""
 
-    def iter_spectra(self, batch_size=None):
-        for coords, mzs, intensities in super().iter_spectra(batch_size):
+    def iter_spectra(self):
+        for coords, mzs, intensities in super().iter_spectra():
             if coords[2] == 0:
                 yield coords, mzs, intensities
 

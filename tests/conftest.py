@@ -263,7 +263,7 @@ def mock_reader():
         def get_common_mass_axis(self):
             return np.linspace(100, 1000, 100)  # 100 mass values
 
-        def iter_spectra(self, batch_size=None):
+        def iter_spectra(self):
             mass_axis = self.get_common_mass_axis()
             for x in range(3):
                 for y in range(3):

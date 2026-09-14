@@ -82,7 +82,7 @@ class MockMSIReader:
         return mock
 
     def iter_spectra(
-        self, batch_size: Optional[int] = None
+        self,
     ) -> Generator[Tuple[Tuple[int, int, int], np.ndarray, np.ndarray], None, None]:
         """Yield mock spectra for all pixels.
 
@@ -729,7 +729,7 @@ class MockMSIReaderWithControlledIntensities(MockMSIReader):
         self._fixed_mzs = self.get_common_mass_axis()[: self.peaks_per_spectrum]
         self._intensity_threshold = intensity_threshold
 
-    def iter_spectra(self, batch_size=None):
+    def iter_spectra(self):
         """Generate spectra with alternating low/high intensities.
 
         Applies intensity_threshold filtering if set (simulating reader-level filtering).

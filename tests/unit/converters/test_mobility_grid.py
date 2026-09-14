@@ -253,7 +253,7 @@ class GridStubReader(BaseMSIReader):
     def get_common_mass_axis(self) -> NDArray[np.float64]:
         return self._mass_axis.copy()
 
-    def iter_spectra(self, batch_size: Optional[int] = None) -> Generator:
+    def iter_spectra(self) -> Generator:
         for p, (x, y) in enumerate(PIXELS):
             mzs, intensities = _summed(p)
             yield (x, y, 0), mzs, intensities
@@ -277,7 +277,7 @@ class GridStubReader(BaseMSIReader):
             source="stub",
         )
 
-    def iter_mobility_spectra(self, batch_size: Optional[int] = None) -> Generator:
+    def iter_mobility_spectra(self) -> Generator:
         self.mobility_passes += 1
         for p, (x, y) in enumerate(PIXELS):
             mzs, mobility, intensities = _cloud(p)

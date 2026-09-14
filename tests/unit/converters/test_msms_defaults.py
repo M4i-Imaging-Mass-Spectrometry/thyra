@@ -85,7 +85,7 @@ class MsmsStubReader(BaseMSIReader):
     def get_common_mass_axis(self) -> NDArray[np.float64]:
         return np.array([100.0, 200.0, 300.0, 400.0, 500.0])
 
-    def iter_spectra(self, batch_size: Optional[int] = None) -> Generator:
+    def iter_spectra(self) -> Generator:
         for p, (x, y) in enumerate(PIXELS):
             summed: dict = {}
             for _window, mzs, intensities in SPLIT[p]:
@@ -97,7 +97,7 @@ class MsmsStubReader(BaseMSIReader):
     def get_fragmentation(self) -> Optional[FragmentationSchedule]:
         return SCHEDULE
 
-    def iter_precursor_spectra(self, batch_size: Optional[int] = None) -> Generator:
+    def iter_precursor_spectra(self) -> Generator:
         for p, (x, y) in enumerate(PIXELS):
             for window, mzs, intensities in SPLIT[p]:
                 yield (
