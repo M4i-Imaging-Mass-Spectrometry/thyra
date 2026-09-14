@@ -314,7 +314,7 @@ class PhiReader(BaseMSIReader):
         )
         return peaks
 
-    def iter_spectra(self, batch_size: Optional[int] = None) -> Generator[
+    def iter_spectra(self) -> Generator[
         Tuple[Tuple[int, int, int], NDArray[np.float64], NDArray[np.float64]],
         None,
         None,
@@ -322,9 +322,6 @@ class PhiReader(BaseMSIReader):
         """Iterate occupied pixels in raster order.
 
         Pixels that recorded no ions are skipped entirely.
-
-        Args:
-            batch_size: Ignored; present for interface compatibility.
 
         Yields:
             ``((x, y, z), mzs, intensities)`` with 0-based coordinates.

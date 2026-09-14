@@ -469,9 +469,7 @@ class BaseMSIConverter(ABC):
         with tqdm(
             total=total_spectra, desc="Converting spectra", unit="spectrum"
         ) as pbar:
-            for coords, mzs, intensities in self.reader.iter_spectra(
-                batch_size=self._buffer_size
-            ):
+            for coords, mzs, intensities in self.reader.iter_spectra():
                 self._process_single_spectrum(data_structures, coords, mzs, intensities)
                 pbar.update(1)
 

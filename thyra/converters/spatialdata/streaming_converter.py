@@ -531,13 +531,11 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         which is what their own pass would have shown them.
         """
         if passes is None or passes.empty:
-            for coords, mzs, intensities in self.reader.iter_spectra(
-                batch_size=self._buffer_size
-            ):
+            for coords, mzs, intensities in self.reader.iter_spectra():
                 yield coords, mzs, intensities, None
             return
         feed = getattr(passes, phase)
-        for frame in self.reader.iter_frame_scans(batch_size=self._buffer_size):
+        for frame in self.reader.iter_frame_scans():
             spectrum = frame.spectrum()
             if spectrum is None:
                 feed(frame, None)

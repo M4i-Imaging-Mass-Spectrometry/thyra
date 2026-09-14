@@ -106,8 +106,8 @@ class BrukerBaseMSIReader(BaseMSIReader):
         pass
 
     @abstractmethod
-    def iter_spectra(self, batch_size=None):
-        """Iterate through spectra with optional batch processing.
+    def iter_spectra(self):
+        """Iterate through spectra.
 
         Must be implemented by subclasses.
         """

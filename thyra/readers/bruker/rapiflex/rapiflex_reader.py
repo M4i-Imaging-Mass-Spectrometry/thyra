@@ -552,7 +552,7 @@ class RapiflexReader(BrukerBaseMSIReader):
             data = f.read(self.n_datapoints * 4)
             return np.frombuffer(data, dtype=np.float32).copy()
 
-    def iter_spectra(self, batch_size: Optional[int] = None) -> Generator[
+    def iter_spectra(self) -> Generator[
         Tuple[Tuple[int, int, int], NDArray[np.float64], NDArray[np.float64]],
         None,
         None,
@@ -560,9 +560,6 @@ class RapiflexReader(BrukerBaseMSIReader):
         """Iterate through spectra with coordinates.
 
         Only yields spectra that have data (offset > 0).
-
-        Args:
-            batch_size: Ignored, maintained for API compatibility
 
         Yields:
             Tuple containing:

@@ -69,9 +69,9 @@ class _RepeatedCoordinate(MockMSIReader):
     arrays cannot represent twice.
     """
 
-    def iter_spectra(self, batch_size=None):
+    def iter_spectra(self):
         extra = None
-        for coords, mzs, intensities in super().iter_spectra(batch_size):
+        for coords, mzs, intensities in super().iter_spectra():
             if coords == (1, 0, 0):
                 extra = mzs[:2]
             yield coords, mzs, intensities
@@ -90,9 +90,9 @@ class _ScaledSecondPass(MockMSIReader):
         super().reset()
         self._pass += 1
 
-    def iter_spectra(self, batch_size=None):
+    def iter_spectra(self):
         scale = 2.0 if self._pass else 1.0
-        for coords, mzs, intensities in super().iter_spectra(batch_size):
+        for coords, mzs, intensities in super().iter_spectra():
             yield coords, mzs, intensities * scale
 
 
@@ -107,8 +107,8 @@ class _SwappedPixels(MockMSIReader):
         super().reset()
         self._pass += 1
 
-    def iter_spectra(self, batch_size=None):
-        spectra = list(super().iter_spectra(batch_size))
+    def iter_spectra(self):
+        spectra = list(super().iter_spectra())
         if self._pass:
             first, second = spectra[0], spectra[1]
             spectra[0] = (first[0], second[1], second[2])
@@ -227,8 +227,8 @@ class TestTheSecondPassMustRepeatTheFirst:
                 super().reset()
                 self._pass += 1
 
-            def iter_spectra(self, batch_size=None):
-                for coords, mzs, intensities in super().iter_spectra(batch_size):
+            def iter_spectra(self):
+                for coords, mzs, intensities in super().iter_spectra():
                     if self._pass and coords == (1, 0, 0):
                         intensities = intensities * 3.0
                     yield coords, mzs, intensities

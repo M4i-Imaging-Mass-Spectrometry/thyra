@@ -35,7 +35,7 @@ raster order would turn every assertion above into a tautology.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Generator, Optional, Tuple
+from typing import Generator, Tuple
 
 import numpy as np
 import zarr
@@ -66,13 +66,13 @@ class ShuffledMockMSIReader(MockMSIReader):
     contract every two-pass converter relies on.
     """
 
-    def iter_spectra(self, batch_size: Optional[int] = None) -> Generator[
+    def iter_spectra(self) -> Generator[
         Tuple[Tuple[int, int, int], NDArray[np.float64], NDArray[np.float64]],
         None,
         None,
     ]:
         """Yield every spectrum, in the same shuffled order each time."""
-        spectra = list(super().iter_spectra(batch_size=batch_size))
+        spectra = list(super().iter_spectra())
         order = np.random.default_rng(SHUFFLE_SEED).permutation(len(spectra))
         for position in order:
             yield spectra[position]

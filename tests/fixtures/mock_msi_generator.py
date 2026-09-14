@@ -205,7 +205,7 @@ class MockMSIReader(BaseMSIReader):
         """
         self._rng = np.random.default_rng(self._seed)
 
-    def iter_spectra(self, batch_size: Optional[int] = None) -> Generator[
+    def iter_spectra(self) -> Generator[
         Tuple[Tuple[int, int, int], NDArray[np.float64], NDArray[np.float64]],
         None,
         None,

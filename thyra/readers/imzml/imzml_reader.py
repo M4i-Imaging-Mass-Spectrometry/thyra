@@ -210,6 +210,69 @@ def _read_spectrum_mzs(parser: Any, idx: int) -> Optional[NDArray[Any]]:
     return mzs if mzs.size else None
 
 
+#: Keywords this reader used to take and no longer does. ``batch_size``
+#: selected between two spectrum-iteration paths that read the file the
+#: same way and returned the same output, so it configured nothing; the
+#: branch went with it (issue #309).
+#:
+#: Refused rather than swallowed. Dropping it from the signature alone
+#: would land it in ``**kwargs``, which forwards to ``BaseMSIReader``,
+#: which never reads kwargs -- silently accepted and no longer
+#: documented, which is what D10's Python-API half says a keyword must
+#: not be. ``BrukerReader`` already refuses this same name
+#: (``RETIRED_INIT_KEYWORDS``); it was accepted here and ignored, so one
+#: keyword had two answers.
+RETIRED_INIT_KEYWORDS = ("batch_size",)
+
+#: Said after a type refusal on the parameter that moved up.
+_POSITIONAL_SHIFT_NOTE = (
+    "batch_size was removed from the ImzMLReader constructor, so every "
+    "positional argument after it moved up one slot. A keyword refusal "
+    "cannot see a positional call, so this is what catches one."
+)
+
+
+def _refuse_retired_keywords(passed: Dict[str, Any]) -> None:
+    """Answer a keyword this reader used to take.
+
+    Raises:
+        ConversionRefused: When a retired keyword is passed.
+    """
+    retired = [name for name in RETIRED_INIT_KEYWORDS if name in passed]
+    if not retired:
+        return
+    named = ", ".join(retired)
+    raise ConversionRefused(
+        f"{named} was removed: it chose between two spectrum-iteration "
+        "paths that read the file one spectrum at a time either way and "
+        "returned identical output, so it selected nothing. Delete the "
+        "argument; there is no replacement keyword, because what it "
+        "configured did not exist."
+    )
+
+
+def _refuse_shifted_cache_coordinates(cache_coordinates: object) -> None:
+    """Answer a value ``cache_coordinates`` never accepted.
+
+    It is the parameter that moved into ``batch_size``'s slot, so a
+    positional call written against the old signature lands an int here.
+    ``ImzMLReader(path, 50)`` would otherwise mean
+    ``cache_coordinates=50``, which is truthy and silently wrong rather
+    than an error.
+
+    Typed ``object`` so mypy, which is told this parameter is a bool,
+    does not call the check unreachable.
+
+    Raises:
+        ConversionRefused: When it is not a bool.
+    """
+    if not isinstance(cache_coordinates, bool):
+        raise ConversionRefused(
+            "cache_coordinates takes True or False, got "
+            f"{type(cache_coordinates).__name__}. {_POSITIONAL_SHIFT_NOTE}"
+        )
+
+
 @register_reader("imzml")
 class ImzMLReader(BaseMSIReader):
     """Reader for imzML format files with optimizations for performance."""
@@ -217,7 +280,6 @@ class ImzMLReader(BaseMSIReader):
     def __init__(
         self,
         data_path: Path,
-        batch_size: int = 50,
         cache_coordinates: bool = True,
         **kwargs,
     ) -> None:
@@ -225,7 +287,6 @@ class ImzMLReader(BaseMSIReader):
 
         Args:
             data_path: Path to the imzML file
-            batch_size: Default batch size for spectrum iteration
             cache_coordinates: Whether to cache coordinates upfront
             **kwargs: Additional arguments. ``max_mass_axis_length`` caps the
                 number of unique m/z values the processed-mode raw axis may
@@ -242,9 +303,11 @@ class ImzMLReader(BaseMSIReader):
                 ``MS:1000128``, and contradicting a declaration is logged as a
                 warning. Defaults to ``None`` (detect).
         """
+        _refuse_retired_keywords(kwargs)
+        _refuse_shifted_cache_coordinates(cache_coordinates)
+
         super().__init__(data_path, **kwargs)
         self.filepath: Optional[Union[str, Path]] = data_path
-        self.batch_size: int = batch_size
         self.cache_coordinates: bool = cache_coordinates
         # Overrides BaseMSIReader, which takes the same keyword for every
         # reader but leaves it uncapped; this is the one format with a
@@ -339,7 +402,9 @@ class ImzMLReader(BaseMSIReader):
             imzml_path: Path to the imzML file to parse
 
         Raises:
-            ConversionRefused: If the corresponding .ibd file is not found or
+            ConversionRefused: If ``batch_size`` is passed, if
+                ``cache_coordinates`` is given a value its declared type
+                does not allow, or if the corresponding .ibd file is not found or
                 metadata parsing fails
             Exception: If parser initialization fails
         """
@@ -1166,39 +1231,15 @@ class ImzMLReader(BaseMSIReader):
                 yield result
         tally.summarise(total_spectra)
 
-    def _iter_spectra_batch(
-        self, parser: ImzMLParser, total_spectra: int, batch_size: int, pbar
-    ) -> Generator[
+    def iter_spectra(self) -> Generator[
         Tuple[Tuple[int, int, int], NDArray[np.float64], NDArray[np.float64]],
         None,
         None,
     ]:
-        """Process spectra in batches."""
-        tally = DropTally(logger, "spectra that could not be read")
-        for batch_start in range(0, total_spectra, batch_size):
-            batch_end = min(batch_start + batch_size, total_spectra)
-            batch_size_actual = batch_end - batch_start
-
-            for offset in range(batch_size_actual):
-                idx = batch_start + offset
-                result = self._process_single_spectrum(parser, idx, pbar, tally)
-                if result is not None:
-                    yield result
-        tally.summarise(total_spectra)
-
-    def iter_spectra(self, batch_size: Optional[int] = None) -> Generator[
-        Tuple[Tuple[int, int, int], NDArray[np.float64], NDArray[np.float64]],
-        None,
-        None,
-    ]:
-        """Iterate through spectra with progress monitoring and batch processing.
+        """Iterate through spectra with progress monitoring.
 
         Maps m/z values to the common mass axis using searchsorted for
         accurate representation in the output data structures.
-
-        Args:
-            batch_size: Number of spectra to process in each batch (None for
-                default)
 
         Yields:
             Tuple containing:
@@ -1211,9 +1252,6 @@ class ImzMLReader(BaseMSIReader):
                 available
         """
         self._ensure_parser_initialized()
-
-        if batch_size is None:
-            batch_size = self.batch_size
 
         parser = cast(ImzMLParser, self.parser)
         total_spectra = len(parser.coordinates)
@@ -1230,12 +1268,12 @@ class ImzMLReader(BaseMSIReader):
             unit="spectrum",
             disable=getattr(self, "_quiet_mode", False),
         ) as pbar:
-            if batch_size <= 1:
-                yield from self._iter_spectra_single(parser, total_spectra, pbar)
-            else:
-                yield from self._iter_spectra_batch(
-                    parser, total_spectra, batch_size, pbar
-                )
+            # One loop. The "batch" form was a nested loop over the same
+            # flat range calling the same per-spectrum function, so both
+            # branches read the file one spectrum at a time and returned
+            # identical output -- verified on a real fixture before the
+            # branch was removed (#309).
+            yield from self._iter_spectra_single(parser, total_spectra, pbar)
 
     def _deduplicated_shared_axis(
         self, mzs: NDArray[np.float64]
@@ -1419,7 +1457,7 @@ class ImzMLReader(BaseMSIReader):
             )
         return np.asarray(mzs, dtype=np.float64), mobility
 
-    def iter_mobility_spectra(self, batch_size: Optional[int] = None) -> Generator[
+    def iter_mobility_spectra(self) -> Generator[
         Tuple[
             Tuple[int, int, int],
             NDArray[np.float64],

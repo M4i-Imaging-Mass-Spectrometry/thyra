@@ -538,15 +538,12 @@ class SolarixReader(BrukerBaseMSIReader):
             dtype, copy=True
         )
 
-    def iter_spectra(self, batch_size: Optional[int] = None) -> Generator[
+    def iter_spectra(self) -> Generator[
         Tuple[Tuple[int, int, int], NDArray[np.float64], NDArray[np.float64]],
         None,
         None,
     ]:
         """Iterate spectra in acquisition order.
-
-        Args:
-            batch_size: Ignored; present for interface compatibility.
 
         Yields:
             ``((x, y, z), mzs, intensities)`` with 0-based coordinates
