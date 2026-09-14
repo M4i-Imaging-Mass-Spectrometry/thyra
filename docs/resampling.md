@@ -164,8 +164,9 @@ catch-all default. This table is the actual observed behaviour of that chain:
     since the native channel grid is the instrument's own measurement and
     nothing is interpolated either way. On the tuned axis it should not:
     the resampled store is 22% smaller, has 8.4x fewer columns, opens about
-    four times faster, and comes out *better* correlated with the vendor's
-    peak images than the unresampled one. Its remaining recovery spread is
+    1.8x faster (0.61 s against 1.08 s, medians of four alternating warm
+    reads), and comes out *better* correlated with the vendor's peak images
+    than the unresampled one. Its remaining recovery spread is
     window-edge quantisation -- the vendor's windows span 3 to 10 bins, and
     their edges fall mid-bin -- not lost peak shape; the windows with the
     fewest bins are exactly the ones with the worst recovery. Use

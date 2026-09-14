@@ -1583,8 +1583,10 @@ consults a detector's width -- it would be dead code. Same reasoning as
 **Why resampling stays on by default.** `--no-resample` was the other
 candidate, and on the *old* axis it was the better store. On this one it is
 not: the resampled store is 22% smaller, has 8.4x fewer columns, opens about
-four times faster (0.62 s against 2.70 s), and comes out better correlated with
-the vendor's peak images than the unresampled one. Its remaining recovery
+1.8x faster (0.61 s against 1.08 s, medians of four alternating warm reads --
+the first cold read of the native store took 3.0 s, which is not a fair
+comparison and is not the number used here), and comes out better correlated
+with the vendor's peak images than the unresampled one. Its remaining recovery
 spread is window-edge quantisation -- the vendor's windows span 3 to 10 bins
 and their edges fall mid-bin, and the windows with the fewest bins are exactly
 the ones with the worst recovery -- rather than lost peak shape. `--no-resample`
