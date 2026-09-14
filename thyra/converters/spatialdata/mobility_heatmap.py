@@ -388,7 +388,7 @@ def prepare_mobility_heatmap(
     no range to bin over (a per-pixel mobility source without a shared
     axis), or when the common mass axis is empty.
     """
-    if not getattr(reader, "has_ion_mobility", False):
+    if not reader.has_ion_mobility:
         return None
     mobility_range = _mobility_range(reader)
     if mobility_range is None:

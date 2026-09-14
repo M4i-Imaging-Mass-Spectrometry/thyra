@@ -96,6 +96,10 @@ class MsmsStubReader(BaseMSIReader):
     def get_fragmentation(self) -> Optional[FragmentationSchedule]:
         return SCHEDULE
 
+    @property
+    def has_precursor_spectra(self) -> bool:
+        return True
+
     def iter_precursor_spectra(self) -> Generator:
         for p, (x, y) in enumerate(PIXELS):
             for window, mzs, intensities in SPLIT[p]:
