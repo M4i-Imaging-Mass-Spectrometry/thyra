@@ -29,7 +29,8 @@ from math import isfinite
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
-from .core.base_converter import PixelSizeSource
+from .core.base_converter import BaseMSIConverter, PixelSizeSource
+from .core.base_reader import BaseMSIReader
 from .core.registry import detect_format, get_converter_class, get_reader_class
 from .errors import ConversionRefused
 from .utils.windows_paths import prepare_zarr_output_path
@@ -140,7 +141,7 @@ def _validate_numeric_parameters(
     return True
 
 
-def _validate_streaming(streaming: Any) -> bool:
+def _validate_streaming(streaming: object) -> bool:
     """Validate the ``streaming`` argument, which selects nothing.
 
     A no-op argument still has to say when it was misspelled. ``"yes"``,
@@ -174,7 +175,7 @@ def _validate_input_parameters(
     dataset_id: str,
     pixel_size_um: Optional[float],
     z_spacing_um: Optional[float] = None,
-    streaming: Any = "auto",
+    streaming: object = "auto",
 ) -> bool:
     """Validate all input parameters for convert_msi function."""
     return (
@@ -253,7 +254,7 @@ def _create_reader(
     input_path: Path,
     reader_options: Optional[Dict[str, Any]] = None,
     lossless_tables: Optional[List[str]] = None,
-) -> Tuple[Any, str]:
+) -> Tuple[BaseMSIReader, str]:
     """Create and return a reader for the input format.
 
     Args:
@@ -339,7 +340,7 @@ def _lossless_spectrum_for(kwargs: Dict[str, Any]) -> List[str]:
 
 
 def _determine_pixel_size(
-    reader: Any, pixel_size_um: Optional[float], input_format: str
+    reader: BaseMSIReader, pixel_size_um: Optional[float], input_format: str
 ) -> Tuple[float, PixelSizeSource, Dict[str, Any]]:
     """Determine pixel size either from metadata or user input."""
     if pixel_size_um is not None:
@@ -378,7 +379,7 @@ def _determine_pixel_size(
 
 def _create_converter(
     format_type: str,
-    reader: Any,
+    reader: BaseMSIReader,
     output_path: Path,
     dataset_id: str,
     pixel_size_um: float,
@@ -391,7 +392,7 @@ def _create_converter(
     streaming: Union[bool, Literal["auto"]] = "auto",
     z_spacing_um: Optional[float] = None,
     **kwargs: Any,
-) -> Any:
+) -> BaseMSIConverter:
     """Create and return a converter for the specified format.
 
     ``streaming`` used to choose between an in-memory converter and a
@@ -441,7 +442,9 @@ def _create_converter(
     return converter_class(reader, output_path, **converter_kwargs)
 
 
-def _perform_conversion_with_cleanup(converter: Any, reader: Any) -> bool:
+def _perform_conversion_with_cleanup(
+    converter: BaseMSIConverter, reader: BaseMSIReader
+) -> bool:
     """Perform the conversion and handle reader cleanup."""
     try:
         logger.info("Starting conversion...")
