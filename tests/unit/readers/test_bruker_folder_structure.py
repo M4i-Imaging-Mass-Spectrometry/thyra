@@ -1,6 +1,8 @@
 # tests/unit/readers/test_bruker_folder_structure.py
 """Tests for BrukerFolderStructure abstraction."""
 
+from pathlib import Path
+
 import pytest
 
 from thyra.readers.bruker.folder_structure import (
@@ -8,6 +10,28 @@ from thyra.readers.bruker.folder_structure import (
     BrukerFolderStructure,
     BrukerFormat,
 )
+
+
+def _rapiflex_folder(tmp_path: Path, name: str = "data") -> Path:
+    """The three files that make a folder look like a Rapiflex acquisition."""
+    data_dir = tmp_path / name
+    data_dir.mkdir()
+    (data_dir / "sample.dat").touch()
+    (data_dir / "sample_poslog.txt").touch()
+    (data_dir / "sample_info.txt").touch()
+    return data_dir
+
+
+def _write_mis(path: Path, image_file=None, original_image=None) -> Path:
+    """A minimal FlexImaging .mis naming (or not naming) an optical image."""
+    body = ['<?xml version="1.0"?>', '<ImagingSequence flexImagingVersion="5.0.0">']
+    if image_file is not None:
+        body.append(f"  <ImageFile>{image_file}</ImageFile>")
+    if original_image is not None:
+        body.append(f"  <OriginalImage>{original_image}</OriginalImage>")
+    body.append("</ImagingSequence>")
+    path.write_text("\n".join(body) + "\n", encoding="utf-8")
+    return path
 
 
 class TestBrukerFormat:
@@ -143,6 +167,111 @@ class TestBrukerFolderStructure:
 
         assert len(info.optical_images) == 1
         assert "optical.tif" in str(info.optical_images[0])
+
+    def test_find_optical_images_non_tiff(self, tmp_path):
+        """JPEG, PNG and BMP are optical images too, not just TIFF."""
+        data_dir = _rapiflex_folder(tmp_path)
+        for name in ("scan_0000.jpg", "scan_0001.jpeg", "map.png", "slide.bmp"):
+            (data_dir / name).touch()
+        (data_dir / "notes.txt").touch()
+
+        info = BrukerFolderStructure(data_dir).analyze()
+
+        assert sorted(p.name for p in info.optical_images) == [
+            "map.png",
+            "scan_0000.jpg",
+            "scan_0001.jpeg",
+            "slide.bmp",
+        ]
+
+    def test_find_optical_images_ignores_suffix_case(self, tmp_path):
+        """An upper-case suffix is found, and found exactly once."""
+        data_dir = _rapiflex_folder(tmp_path)
+        (data_dir / "scan.JPG").touch()
+        (data_dir / "overview.TIFF").touch()
+
+        info = BrukerFolderStructure(data_dir).analyze()
+
+        assert sorted(p.name for p in info.optical_images) == [
+            "overview.TIFF",
+            "scan.JPG",
+        ]
+
+    def test_mis_named_image_wins_over_the_glob(self, tmp_path):
+        """A folder with several JPEGs: the .mis says which one is the image."""
+        data_dir = _rapiflex_folder(tmp_path)
+        for name in ("slide_overview.jpg", "sample_0000.jpg", "sample_0001.jpg"):
+            (data_dir / name).touch()
+        _write_mis(data_dir / "sample.mis", image_file="sample_0000.jpg")
+
+        info = BrukerFolderStructure(data_dir).analyze()
+
+        assert info.primary_optical_image == data_dir / "sample_0000.jpg"
+        # First, so the converter sizes the others against it.
+        assert info.optical_images[0] == data_dir / "sample_0000.jpg"
+        # And still listed exactly once, not twice.
+        assert sorted(p.name for p in info.optical_images) == [
+            "sample_0000.jpg",
+            "sample_0001.jpg",
+            "slide_overview.jpg",
+        ]
+
+    def test_original_image_is_provenance_only(self, tmp_path):
+        """<OriginalImage> is an absolute path from another machine: never opened."""
+        data_dir = _rapiflex_folder(tmp_path)
+        (data_dir / "sample_0000.jpg").touch()
+        _write_mis(
+            data_dir / "sample.mis",
+            image_file="sample_0000.jpg",
+            original_image="Z:\\FlexImaging\\Runs\\2026\\sample_0000.jpg",
+        )
+
+        info = BrukerFolderStructure(data_dir).analyze()
+
+        # Resolved from <ImageFile>, against the acquisition folder.
+        assert info.primary_optical_image == data_dir / "sample_0000.jpg"
+        assert all(p.is_file() for p in info.optical_images)
+
+    def test_no_image_file_element_means_no_primary(self, tmp_path):
+        """<OriginalImage> alone names nothing Thyra will resolve."""
+        data_dir = _rapiflex_folder(tmp_path)
+        (data_dir / "sample_0000.jpg").touch()
+        _write_mis(
+            data_dir / "sample.mis",
+            image_file=None,
+            original_image="Z:\\FlexImaging\\Runs\\2026\\sample_0000.jpg",
+        )
+
+        info = BrukerFolderStructure(data_dir).analyze()
+
+        assert info.primary_optical_image is None
+        # The glob still finds what is actually there.
+        assert [p.name for p in info.optical_images] == ["sample_0000.jpg"]
+
+    def test_mis_names_an_image_that_is_not_there(self, tmp_path, caplog):
+        """Named but missing: say so, and fall back to whatever is present."""
+        import logging
+
+        data_dir = _rapiflex_folder(tmp_path)
+        (data_dir / "slide_overview.jpg").touch()
+        _write_mis(data_dir / "sample.mis", image_file="sample_0000.jpg")
+
+        with caplog.at_level(logging.WARNING):
+            info = BrukerFolderStructure(data_dir).analyze()
+
+        assert info.primary_optical_image is None
+        assert [p.name for p in info.optical_images] == ["slide_overview.jpg"]
+        assert any("sample_0000.jpg" in record.message for record in caplog.records)
+
+    def test_mis_image_file_with_a_windows_directory_part(self, tmp_path):
+        """Only the filename is used, wherever Thyra runs."""
+        data_dir = _rapiflex_folder(tmp_path)
+        (data_dir / "sample_0000.jpg").touch()
+        _write_mis(data_dir / "sample.mis", image_file=r"images\sample_0000.jpg")
+
+        info = BrukerFolderStructure(data_dir).analyze()
+
+        assert info.primary_optical_image == data_dir / "sample_0000.jpg"
 
     def test_find_teaching_points_file(self, tmp_path):
         """Test finding .mis teaching points file."""
