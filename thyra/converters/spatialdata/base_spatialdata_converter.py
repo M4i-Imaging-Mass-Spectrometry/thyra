@@ -1436,13 +1436,9 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         """
         if not self._fragmentation_read:
             self._fragmentation_read = True
-            # getattr, not a direct call: a reader predating this part of
-            # the contract simply has nothing to say, which is the same
-            # answer as ``None`` and not worth a warning.
-            describe = getattr(self.reader, "get_fragmentation", None)
-            if callable(describe):
+            if self.reader.has_fragmentation:
                 try:
-                    self._fragmentation_schedule = describe()
+                    self._fragmentation_schedule = self.reader.get_fragmentation()
                 except Exception as e:  # pragma: no cover - reader-defined
                     logger.warning("Could not describe the fragmentation: %s", str(e))
                     self._fragmentation_schedule = None
@@ -1506,7 +1502,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         versioned, this one carries arrays.
         """
         try:
-            if not getattr(self.reader, "has_ion_mobility", False):
+            if not self.reader.has_ion_mobility:
                 return
             axis = self.reader.get_mobility_axis()
         except Exception as e:  # pragma: no cover - reader-defined
@@ -1545,7 +1541,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         if not self._mobility_heatmap_enabled:
             return None
         try:
-            if not getattr(self.reader, "has_ion_mobility", False):
+            if not self.reader.has_ion_mobility:
                 return None
         except Exception as e:  # pragma: no cover - reader-defined
             logger.warning("Could not inspect the mobility axis: %s", str(e))
@@ -1583,7 +1579,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         if not self._write_mobility_table:
             return None
         try:
-            if not getattr(self.reader, "has_ion_mobility", False):
+            if not self.reader.has_ion_mobility:
                 return None
             shared = bool(self.reader.has_shared_mobility_axis)
         except Exception as e:  # pragma: no cover - reader-defined
@@ -1710,7 +1706,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             return
         self._grid_discovery = None
         try:
-            if not getattr(self.reader, "has_ion_mobility", False):
+            if not self.reader.has_ion_mobility:
                 return
         except Exception as e:  # pragma: no cover - reader-defined
             logger.warning("Could not inspect the mobility axis: %s", str(e))
@@ -1796,7 +1792,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         passes read the summed spectra as they always did and
         :meth:`_prepare_sibling_scans` scans on its own later.
         """
-        if not getattr(self.reader, "has_frame_scans", False):
+        if not self.reader.has_frame_scans:
             return None
         if self._common_mass_axis is None or self._dimensions is None:
             return None
@@ -2029,16 +2025,22 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             return None
         from .msms_table import demultiplex_refusal, msms_table_key
 
-        if not callable(getattr(self.reader, "iter_precursor_spectra", None)):
+        # Order matters: the schedule-specific refusal is the one a user can
+        # act on ("a single precursor", "the windows carry no scan range"),
+        # while the capability check can only name the reader. Ask for the
+        # specific reason first and fall back to the generic one, or an
+        # acquisition whose precursors are merely uninteresting gets told
+        # its reader is incapable.
+        refusal = demultiplex_refusal(self._fragmentation())
+        if refusal is not None:
+            logger.info("No demultiplexed MS/MS table: %s", refusal)
+            return None
+        if not self.reader.has_precursor_spectra:
             logger.info(
                 "No demultiplexed MS/MS table: %s cannot separate the "
                 "precursors of a pixel",
                 type(self.reader).__name__,
             )
-            return None
-        refusal = demultiplex_refusal(self._fragmentation())
-        if refusal is not None:
-            logger.info("No demultiplexed MS/MS table: %s", refusal)
             return None
         # The fragment axis is the summed table's axis whatever that axis
         # is (design decision D6): resampled, it is the grid the user chose

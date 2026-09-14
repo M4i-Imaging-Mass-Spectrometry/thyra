@@ -566,6 +566,16 @@ class WatersReader(BaseMSIReader):
         }
         return sorted(values)
 
+    @property
+    def has_fragmentation(self) -> bool:
+        """Always True: MassLynx reports the precursor of every function.
+
+        ``has_precursor_spectra`` stays False -- Waters stores one spectrum
+        per function per position, so there is nothing within a pixel to
+        separate; the functions were already separated at acquisition.
+        """
+        return True
+
     def get_fragmentation(self) -> Optional[FragmentationSchedule]:
         """What the stored spectra are: MS1, or the fragment spectra of what.
 

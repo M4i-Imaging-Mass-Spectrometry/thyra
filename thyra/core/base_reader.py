@@ -24,12 +24,29 @@ whether the vendor library loaded and a handle is still open, so it can go
 from True to False over one reader's lifetime. Ask the instance, never the
 type.
 
-The conventions for declining are not yet uniform -- a predicate plus a
-raising iterator for frame scans, a predicate plus a ``None``-returning
-getter for mobility, a ``None``-returning describer for fragmentation --
-and issue #275 tracks unifying them. ``tests/unit/readers/
-test_reader_conformance.py`` pins what they currently are, for all seven
-readers at once, so the next change to them is a visible one.
+**One convention for declining** (issue #275). Every optional capability
+is gated by a ``has_*`` predicate, and the predicate decides what the rest
+of the capability does:
+
+* a **getter** describing the capability returns ``None`` when the
+  predicate is False -- absence is a describable answer;
+* an **iterator** producing data raises ``NotImplementedError`` when the
+  predicate is False -- there is no empty-but-valid iteration, and
+  yielding nothing would write an empty table instead of refusing.
+
+So a caller reads one flag and knows both. Before this there were three
+conventions -- a predicate with a raising iterator for frame scans, a
+predicate with ``None``-returning getters for mobility, and for
+fragmentation no predicate at all -- and callers hedged with
+``getattr(reader, "has_ion_mobility", False)`` against an attribute the
+ABC already guaranteed, because there was no rule to trust.
+
+Note that ``has_fragmentation`` and ``has_precursor_spectra`` are two
+capabilities and not a synonym: knowing the MS level and being able to
+split a pixel into one spectrum per precursor are different things.
+
+``tests/unit/readers/test_reader_conformance.py`` asserts this convention
+for all seven readers at once, so the next change to it is a visible one.
 """
 
 import logging
@@ -389,12 +406,40 @@ class BaseMSIReader(ABC):
     # the axis itself cannot.
     # ------------------------------------------------------------------
 
+    @property
+    def has_fragmentation(self) -> bool:
+        """Whether this source can say anything about fragmentation at all.
+
+        False means "cannot tell", which is not "MS1": a reader with no way
+        to tell says nothing rather than claiming the acquisition was
+        unfragmented. When True, :meth:`get_fragmentation` returns a
+        schedule -- possibly ``ms_level=1`` with no windows, which is the
+        positive statement that the run is unfragmented.
+
+        Derived from the getter rather than defaulting to False, so a
+        reader that implements :meth:`get_fragmentation` and nothing else
+        cannot silently lose the capability by forgetting the predicate.
+        Override it where the answer is cheaper than building the schedule.
+        """
+        return self.get_fragmentation() is not None
+
+    @property
+    def has_precursor_spectra(self) -> bool:
+        """Whether :meth:`iter_precursor_spectra` can separate precursors.
+
+        A separate capability from :attr:`has_fragmentation`, not a synonym
+        for it. Knowing the MS level and being able to split a pixel into
+        one spectrum per precursor are different things: Waters reports a
+        schedule it cannot demultiplex, and an MS1 TDF file reports a
+        schedule with no windows to demultiplex. Both have
+        ``has_fragmentation`` True and this False.
+        """
+        return False
+
     def get_fragmentation(self) -> Optional["FragmentationSchedule"]:
         """Describe the fragmentation, or ``None`` when the reader cannot.
 
-        ``None`` means "not reported", which is not the same as "MS1": a
-        reader that has no way to tell says nothing rather than claiming
-        the acquisition was unfragmented.
+        ``None`` exactly when :attr:`has_fragmentation` is False.
         """
         return None
 

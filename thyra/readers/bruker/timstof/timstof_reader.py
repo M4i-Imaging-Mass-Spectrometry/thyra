@@ -1434,6 +1434,22 @@ class BrukerReader(BrukerBaseMSIReader):
     # ``FrameMsMsInfo``.
     # ------------------------------------------------------------------
 
+    @property
+    def has_precursor_spectra(self) -> bool:
+        """True only when the windows are there and mobility-resolved.
+
+        The same three conditions :meth:`iter_precursor_spectra` checks
+        before it will run, so the predicate and the iterator cannot
+        disagree. An MS1 TDF reports a schedule with no windows, which is
+        describable but not separable.
+        """
+        if self.file_type != "tdf":
+            return False
+        schedule = self.get_fragmentation()
+        if schedule is None or not schedule.windows:
+            return False
+        return all(w.is_mobility_resolved for w in schedule.windows)
+
     def get_fragmentation(self) -> Optional[FragmentationSchedule]:
         """The precursor schedule of a TDF acquisition, or ``None``.
 

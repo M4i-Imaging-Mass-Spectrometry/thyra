@@ -206,51 +206,68 @@ class TestTheCommonMassAxis:
 
 
 class TestCapabilityConventions:
-    """A predicate that says yes must be backed by a method that works.
+    """One rule, asserted against every reader (issue #275).
 
-    These pin the conventions as they stand. #275 proposes replacing them
-    with capability ``Protocol``s; this class is the net under that change,
-    and the assertions it has to rewrite are exactly the inconsistency.
+    Every optional capability is gated by a ``has_*`` predicate. When it is
+    False, a getter describing the capability returns ``None`` and an
+    iterator producing data raises ``NotImplementedError``. These tests are
+    what stops that drifting back into three conventions.
     """
 
-    def test_frame_scans_predicate_matches_the_method(self, reader):
+    def test_frame_scans_predicate_matches_the_iterator(self, reader):
         if reader.has_frame_scans:
             next(iter(reader.iter_frame_scans()), None)
         else:
             with pytest.raises(NotImplementedError):
                 next(iter(reader.iter_frame_scans()), None)
 
-    def test_ion_mobility_predicate_matches_the_methods(self, reader):
+    def test_ion_mobility_predicate_matches_getter_and_iterator(self, reader):
         if reader.has_ion_mobility:
             assert reader.get_mobility_axis() is not None
             next(iter(reader.iter_mobility_spectra()), None)
         else:
             assert reader.get_mobility_axis() is None
+            with pytest.raises(NotImplementedError):
+                next(iter(reader.iter_mobility_spectra()), None)
 
-    def test_fragmentation_predicate_matches_the_method(self, reader):
-        """``get_fragmentation`` is not the demultiplexing predicate.
+    def test_shared_mobility_features_need_a_shared_axis(self, reader):
+        if not reader.has_shared_mobility_axis:
+            assert reader.get_shared_mobility_features() is None
 
-        #275 lists this as "returns ``None``, and ``iter_precursor_spectra``
-        raises", which reads as one capability. It is two. A non-``None``
-        schedule means *the MS level is known*: an MS1 acquisition returns
-        ``FragmentationSchedule(ms_level=1)`` with no windows, which is a
-        real answer and not a promise that precursors can be separated.
-        The demultiplexing capability is ``schedule.windows`` being
-        non-empty. The synthetic TDF fixture is MS1, so it takes the second
-        branch -- and asserting the naive reading here fails against it.
+    def test_fragmentation_predicate_matches_the_getter(self, reader):
+        assert (reader.get_fragmentation() is not None) is reader.has_fragmentation
+
+    def test_precursor_spectra_is_a_second_capability(self, reader):
+        """Describing fragmentation and separating precursors are not one thing.
+
+        A non-``None`` schedule means *the MS level is known*: an MS1
+        acquisition returns ``FragmentationSchedule(ms_level=1)`` with no
+        windows, which is a real answer and not a promise that precursors
+        can be separated. Waters reports a schedule it cannot demultiplex;
+        the synthetic TDF fixture is MS1. Both have ``has_fragmentation``
+        True and ``has_precursor_spectra`` False, and #275 described them
+        as a single convention.
         """
-        schedule = reader.get_fragmentation()
-
-        if schedule is not None and schedule.windows:
+        if reader.has_precursor_spectra:
+            assert reader.has_fragmentation, "separable implies describable"
             next(iter(reader.iter_precursor_spectra()), None)
         else:
             with pytest.raises(NotImplementedError):
                 next(iter(reader.iter_precursor_spectra()), None)
 
-    def test_shared_mass_axis_is_a_bool(self, reader):
-        assert isinstance(reader.has_shared_mass_axis, bool)
-        assert isinstance(reader.has_ion_mobility, bool)
-        assert isinstance(reader.has_frame_scans, bool)
+    @pytest.mark.parametrize(
+        "predicate",
+        [
+            "has_shared_mass_axis",
+            "has_ion_mobility",
+            "has_shared_mobility_axis",
+            "has_frame_scans",
+            "has_fragmentation",
+            "has_precursor_spectra",
+        ],
+    )
+    def test_every_predicate_is_a_bool(self, reader, predicate):
+        assert isinstance(getattr(reader, predicate), bool)
 
 
 class TestLifetime:

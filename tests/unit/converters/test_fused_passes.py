@@ -188,6 +188,10 @@ class FusedStubReader(BaseMSIReader):
     def get_fragmentation(self) -> Optional[FragmentationSchedule]:
         return SCHEDULE
 
+    @property
+    def has_precursor_spectra(self) -> bool:
+        return True
+
     def iter_precursor_spectra(self) -> Generator:
         self.precursor_passes += 1
         for p, (x, y) in enumerate(PIXELS):
