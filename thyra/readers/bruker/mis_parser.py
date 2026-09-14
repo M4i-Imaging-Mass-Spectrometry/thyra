@@ -83,34 +83,40 @@ def find_mis_file_for_d_folder(
     """
     if search_paths is None:
         search_paths = [data_path, data_path.parent]
+    present = [p for p in search_paths if p.exists()]
 
-    for search_path in search_paths:
-        if not search_path.exists():
-            continue
-
+    # The stem match is looked for across *every* search path before any
+    # fallback runs. Doing it path-by-path let strays in an earlier
+    # directory veto the exact match in a later one: two unrelated .mis
+    # inside a .d would refuse, and the `sample.mis` sitting next to
+    # `sample.d` -- the pick this function is named for -- was never
+    # reached. That is a worse answer than the one it replaced.
+    for search_path in present:
         matching = search_path / f"{data_path.stem}.mis"
         if matching.exists():
             return matching
 
+    for search_path in present:
         candidates = sorted(search_path.glob("*.mis"))
+        if not candidates:
+            continue
         if len(candidates) == 1:
             logger.info(
-                "No .mis matching stem '%s' in %s; using the only candidate %s",
+                "No .mis matching stem '%s'; using the only candidate %s in %s",
                 data_path.stem,
-                search_path,
                 candidates[0].name,
+                search_path,
             )
             return candidates[0]
-        if candidates:
-            logger.warning(
-                "No .mis matching stem '%s' and %d non-matching candidates "
-                "in %s -- refusing to guess which one describes this "
-                "acquisition",
-                data_path.stem,
-                len(candidates),
-                search_path,
-            )
-            return None
+        logger.warning(
+            "No .mis matching stem '%s' and %d non-matching candidates "
+            "in %s -- refusing to guess which one describes this "
+            "acquisition",
+            data_path.stem,
+            len(candidates),
+            search_path,
+        )
+        return None
     return None
 
 

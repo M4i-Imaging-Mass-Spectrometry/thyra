@@ -287,11 +287,19 @@ class RapiflexReader(BrukerBaseMSIReader):
         else:
             raise ConversionRefused(f"No *_poslog.txt file found in {folder}")
 
-        # Find .mis file (optional). The shared locator, so a
-        # Rapiflex folder carrying its own .mis plus a slide-level one
-        # prefers the stem match instead of taking whichever came
-        # first -- this pick had no stem preference at all.
-        self._mis_path = find_mis_file_for_d_folder(folder)
+        # Find .mis file (optional). The shared locator, so a Rapiflex
+        # folder carrying its own .mis plus a slide-level one prefers the
+        # stem match instead of taking whichever came first -- this pick
+        # had no stem preference at all.
+        #
+        # ``search_paths`` is the data folder alone, which is where
+        # Rapiflex writes it and all this pick ever looked. The locator's
+        # default also searches the parent, and letting that apply here
+        # would silently widen the search: an acquisition with no .mis of
+        # its own would adopt a lone slide-level one, putting a foreign
+        # acquisition's teaching points and raster step into this store's
+        # metadata.
+        self._mis_path = find_mis_file_for_d_folder(folder, search_paths=[folder])
 
         logger.debug(
             f"Found files - dat: {self._dat_path}, info: {self._info_path}, "

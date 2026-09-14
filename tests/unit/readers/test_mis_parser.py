@@ -380,3 +380,36 @@ class TestTheOtherBrukerPicksAreSorted:
         )
         assert BrukerFolderStructure(tmp_path)._detect_format()[1] == first
         assert first.name == "a_first.d"
+
+    def test_strays_in_one_path_do_not_veto_the_stem_match_in_another(
+        self, tmp_path: Path
+    ) -> None:
+        """The stem match is the pick this function is named for.
+
+        Refusing path-by-path let two unrelated .mis inside the .d end
+        the search before ``sample.mis`` next to ``sample.d`` was ever
+        looked at -- a worse answer than the arbitrary pick it replaced.
+        """
+        d_folder = tmp_path / "sample.d"
+        d_folder.mkdir()
+        _write_mis(d_folder, "stray_a.mis", raster="5,5")
+        _write_mis(d_folder, "stray_b.mis", raster="6,6")
+        expected = _write_mis(tmp_path, "sample.mis", raster="9,9")
+
+        assert find_mis_file_for_d_folder(d_folder) == expected
+
+    def test_the_rapiflex_pick_does_not_reach_into_the_parent(
+        self, tmp_path: Path
+    ) -> None:
+        """Rapiflex writes its .mis inside the data folder, and its pick
+        only ever looked there. Adopting a lone slide-level one would put
+        a foreign acquisition's teaching points into this store."""
+        from thyra.readers.bruker.rapiflex.rapiflex_reader import (
+            find_mis_file_for_d_folder as locator,
+        )
+
+        folder = tmp_path / "run"
+        folder.mkdir()
+        _write_mis(tmp_path, "whole_slide.mis", raster="50,50")
+
+        assert locator(folder, search_paths=[folder]) is None

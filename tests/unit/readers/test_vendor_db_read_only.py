@@ -5,7 +5,11 @@ connection was ``sqlite3.connect(path)``, which opens **read-write**.
 Three consequences, all measured:
 
 - a ``.tdf`` in WAL mode gained a ``-wal`` and a ``-shm`` next to it on
-  the first read, inside the user's acquisition directory;
+  the first read, inside the user's acquisition directory. A *clean*
+  read-write close checkpoints and removes them; these opens did not
+  close (see the third point), so they stayed. Plain ``mode=ro`` creates
+  them too and never removes them, which is why the opener asks for
+  ``immutable=1`` where it safely can;
 - a database another program held open lost to the lock, and
   ``_get_frame_count`` reported the failure as **zero frames** -- which
   is indistinguishable from a genuinely empty acquisition, so the caller
@@ -81,6 +85,63 @@ class TestTheUri:
         """
         uri = read_only_uri(r"\\server\share\run.d\analysis.tdf")
         assert uri.startswith("file:////server/share/")
+
+    def test_immutable_is_downgraded_when_a_wal_sits_beside_the_file(self, tmp_path):
+        """Immutability is a promise the file will not change. A ``-wal``
+        holding committed rows contradicts it, and an immutable open
+        would skip them."""
+        db = tmp_path / "analysis.tdf"
+        db.write_bytes(b"")
+        assert "immutable=1" in read_only_uri(db)
+
+        db.with_name(db.name + "-wal").write_bytes(b"")
+        assert "immutable" not in read_only_uri(db).rsplit("?", 1)[1]
+
+
+class TestAWalIsNotSkipped:
+    """``immutable=1`` skips the write-ahead log as well as the locking.
+
+    On a database whose ``-wal`` holds committed rows -- which is what a
+    file a writer still has open looks like -- it returns the state
+    before them, with no error. A short frame count read as the whole
+    acquisition is the defect this module exists to remove.
+    """
+
+    def _wal_with_uncheckpointed_rows(self, tmp_path):
+        """50 rows checkpointed, 50 more live only in the ``-wal``."""
+        db = tmp_path / "analysis.tdf"
+        writer = sqlite3.connect(db)
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("CREATE TABLE Frames (Id INTEGER PRIMARY KEY)")
+        writer.executemany(
+            "INSERT INTO Frames VALUES (?)", [(i,) for i in range(1, 51)]
+        )
+        writer.commit()
+        writer.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        writer.executemany(
+            "INSERT INTO Frames VALUES (?)", [(i,) for i in range(51, 101)]
+        )
+        writer.commit()
+        # The writer stays open: nothing has checkpointed rows 51..100.
+        return db, writer
+
+    def test_the_whole_table_is_read(self, tmp_path):
+        db, writer = self._wal_with_uncheckpointed_rows(tmp_path)
+        try:
+            assert _get_frame_count(db) == 100
+        finally:
+            writer.close()
+
+    def test_an_immutable_open_is_what_would_have_lost_them(self, tmp_path):
+        """The control: this is the spelling the default used to be."""
+        db, writer = self._wal_with_uncheckpointed_rows(tmp_path)
+        try:
+            with closing(
+                sqlite3.connect(f"file:{db.as_posix()}?mode=ro&immutable=1", uri=True)
+            ) as conn:
+                assert conn.execute("SELECT COUNT(*) FROM Frames").fetchone()[0] == 50
+        finally:
+            writer.close()
 
 
 class TestTheVendorFileIsNotWrittenTo:

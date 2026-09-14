@@ -3322,8 +3322,19 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # apply_optical_alignment=False.  Opt-out leaves MSI in pure
         # micrometer coordinates so a downstream alignment step
         # (e.g. Ousia's EscDat registration) is the canonical mapping.
+        #
+        # The matrix is part of the condition, not just the alignment
+        # result, so this agrees with the TIC image and with the
+        # coordinate_systems attr. Gating on `_alignment_result` alone was
+        # not equivalent: `_build_tic_to_image_affine` returns early when
+        # `region_mappings` is empty, which `_compute_region_mappings` can
+        # produce from a real .mis whose areas match no region. In that
+        # state the attr and the TIC image took the micrometer branch
+        # while this took the alignment branch, `transform_point` returned
+        # None for every position, and the shapes element came out with
+        # zero polygons.
         use_msi_alignment = (
-            self._apply_optical_alignment and self._alignment_result is not None
+            self._msi_is_in_optical_pixel_space() and self._alignment_result is not None
         )
 
         if use_msi_alignment:
@@ -4022,6 +4033,14 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         transform, the pixel polygons and the attr each spelled the
         condition out separately and one of the three spelled it
         differently; this is the one place it is written.
+
+        The polygons additionally require `_alignment_result`, which they
+        need for the transform itself rather than for the decision. They
+        are not gated on it *alone*: the matrix is only built when
+        `region_mappings` is non-empty, so a .mis whose areas match no
+        region left the polygons on the alignment branch while everything
+        else took the micrometer one, and every position failed to
+        transform.
         """
         return self._apply_optical_alignment and self._tic_to_image_matrix is not None
 

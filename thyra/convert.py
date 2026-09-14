@@ -550,6 +550,16 @@ def convert_msi(
         whole explanation and its traceback kept for ``DEBUG`` (issue
         #234), so a caller that wants the exception itself has to use the
         converter classes directly.
+
+        **On failure the destination is cleared.** Anything written to
+        ``output_path`` by this call is renamed to a sibling
+        ``<name>.failed`` (``.failed2`` and so on if one is already
+        there), so the same call can be retried without the caller
+        deleting a directory first, and a half-written store is never
+        left where a finished one is expected -- it would not open, but
+        it looks like one. An ``output_path`` that already existed when
+        the call started is refused untouched, never renamed. See
+        :func:`quarantine_partial_output` (issue #293).
     """
     # Validate input parameters
     if not _validate_input_parameters(

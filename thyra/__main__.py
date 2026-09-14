@@ -264,10 +264,18 @@ def _refuse_an_unwritable_directory(output: Path, ancestor: Path) -> None:
         ) from e
     try:
         probe.rmdir()
-    except OSError:
-        # The directory is writable, which is the whole question. A
-        # failure to tidy up must not refuse the conversion.
-        logger.debug(f"Could not remove the write probe {probe}")
+    except OSError as e:
+        # The directory is writable, which is the whole question, so a
+        # failure to tidy up must not refuse the conversion. It is still
+        # said out loud: an indexer or scanner holding the directory
+        # would otherwise leave one of these behind per invocation with
+        # nobody told.
+        logger.warning(
+            "Left the write probe %s behind (%s); it is an empty directory "
+            "and safe to delete.",
+            probe,
+            e,
+        )
 
 
 def _display_calibration_info(input: Path, use_recalibrated: bool) -> None:

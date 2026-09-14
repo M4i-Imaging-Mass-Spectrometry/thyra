@@ -314,5 +314,14 @@ class TestTheSummaryReachesTheUser:
         assert "IMS:1000080 (universally unique identifier)" in out
         assert "xsd:string" not in out
 
-    def test_the_unknown_term_is_named(self, tmp_path, capsys):
-        assert "IMS:9999999" in self._run(tmp_path, capsys)
+    def test_the_unknown_term_is_named_inside_the_summary(self, tmp_path, capsys):
+        """Within the summary block, not merely somewhere in the output.
+
+        The unknown-terms report printed the accession anyway, so
+        asserting it appears at all passes without the summary ever being
+        reached.
+        """
+        out = self._run(tmp_path, capsys)
+        summary = out.split("Found 1 unknown terms:")[0]
+        assert "Unknown Terms:" in summary
+        assert "IMS:9999999" in summary

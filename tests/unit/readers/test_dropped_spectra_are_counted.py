@@ -20,6 +20,7 @@ already use (``msms_table``'s ``n_dropped``).
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 
 import pytest
 
@@ -131,31 +132,88 @@ class TestTheFrameLoopUsesIt:
 
 class TestARefusalIsNotDemotedToADrop:
     """``ConversionRefused`` subclasses ``ValueError``, so the broad
-    ``except Exception`` in the imzML loops caught the deliberate
+    ``except Exception`` in these loops caught the deliberate
     mobility/m-z length-mismatch refusal and logged it as one bad
-    spectrum among thousands."""
+    spectrum among thousands.
 
-    def test_the_imzml_spectrum_loop_re_raises_it(self):
-        import inspect
+    Driven, not read: asserting that the source text contains
+    ``except ConversionRefused:`` passes on a clause that is unreachable,
+    on one that re-raises the wrong thing, and on a comment that happens
+    to contain the string.
+    """
 
+    def test_the_imzml_mobility_loop_lets_it_out(self, monkeypatch, tmp_path):
+        """The mismatch refusal is raised inside the loop's own ``try``."""
         from thyra.readers.imzml import imzml_reader
 
-        source = inspect.getsource(imzml_reader.ImzMLReader._process_single_spectrum)
-        assert "except ConversionRefused:" in source
-        assert source.index("except ConversionRefused:") < source.index(
-            "except Exception"
+        reader = imzml_reader.ImzMLReader.__new__(imzml_reader.ImzMLReader)
+        refusal = ConversionRefused("3 mobility values for 5 m/z values")
+
+        def explode(self, *args, **kwargs):
+            raise refusal
+
+        monkeypatch.setattr(
+            imzml_reader.ImzMLReader, "_ensure_parser_initialized", lambda self: None
+        )
+        monkeypatch.setattr(
+            imzml_reader.ImzMLReader, "_mobility", object(), raising=False
+        )
+        monkeypatch.setattr(
+            imzml_reader.ImzMLReader,
+            "_get_spectrum_coordinates",
+            explode,
+            raising=False,
         )
 
-    def test_the_imzml_mobility_loop_re_raises_it(self):
-        import inspect
+        parser = SimpleNamespace(coordinates=[(1, 1, 1), (2, 1, 1)])
+        monkeypatch.setattr(imzml_reader.ImzMLReader, "parser", parser, raising=False)
+        monkeypatch.setattr(
+            imzml_reader.ImzMLReader, "is_continuous", False, raising=False
+        )
+        monkeypatch.setattr(
+            imzml_reader.ImzMLReader, "_quiet_mode", True, raising=False
+        )
 
+        with pytest.raises(ConversionRefused, match="mobility values"):
+            list(reader.iter_mobility_spectra())
+
+    def test_the_imzml_spectrum_loop_lets_it_out(self, monkeypatch):
+        """The same clause on the summed route."""
         from thyra.readers.imzml import imzml_reader
 
-        source = inspect.getsource(imzml_reader.ImzMLReader.iter_mobility_spectra)
-        assert "except ConversionRefused:" in source
-        assert source.index("except ConversionRefused:") < source.index(
-            "except Exception"
+        reader = imzml_reader.ImzMLReader.__new__(imzml_reader.ImzMLReader)
+        monkeypatch.setattr(
+            imzml_reader.ImzMLReader,
+            "_get_spectrum_coordinates",
+            lambda self, parser, idx: (_ for _ in ()).throw(
+                ConversionRefused("refused")
+            ),
+            raising=False,
         )
+        tally = DropTally(logging.getLogger("tests.refusal"), "spectra")
+        pbar = SimpleNamespace(update=lambda n: None)
+
+        with pytest.raises(ConversionRefused, match="refused"):
+            reader._process_single_spectrum(object(), 0, pbar, tally)
+        # And it was not counted as a bad spectrum on the way out.
+        assert tally.n_dropped == 0
+
+    def test_an_ordinary_failure_is_still_counted(self, monkeypatch):
+        """The broad clause still does its job for everything else."""
+        from thyra.readers.imzml import imzml_reader
+
+        reader = imzml_reader.ImzMLReader.__new__(imzml_reader.ImzMLReader)
+        monkeypatch.setattr(
+            imzml_reader.ImzMLReader,
+            "_get_spectrum_coordinates",
+            lambda self, parser, idx: (_ for _ in ()).throw(OSError("truncated")),
+            raising=False,
+        )
+        tally = DropTally(logging.getLogger("tests.refusal"), "spectra")
+        pbar = SimpleNamespace(update=lambda n: None)
+
+        assert reader._process_single_spectrum(object(), 0, pbar, tally) is None
+        assert tally.n_dropped == 1
 
     def test_conversion_refused_really_is_a_value_error(self):
         """The premise. If this ever stops holding, the guards above can
@@ -163,23 +221,74 @@ class TestARefusalIsNotDemotedToADrop:
         assert issubclass(ConversionRefused, ValueError)
 
 
-@pytest.mark.parametrize(
-    "module_name, attribute",
-    [
-        ("thyra.readers.bruker.timstof.timstof_reader", "_iter_frames"),
-        ("thyra.readers.bruker.timstof.timstof_reader", "_iter_spectra_raw"),
-        ("thyra.readers.bruker.timstof.timstof_reader", "iter_frame_scans"),
-        ("thyra.readers.imzml.imzml_reader", "_iter_spectra_single"),
-        ("thyra.readers.imzml.imzml_reader", "_iter_spectra_batch"),
-        ("thyra.readers.imzml.imzml_reader", "iter_mobility_spectra"),
-    ],
-)
-def test_every_drop_loop_summarises(module_name, attribute):
-    """Each loop that can drop a spectrum reports its total once."""
+def _reader_functions():
+    """Every method of the two readers, as ``(label, ast node, source)``."""
+    import ast
     import importlib
     import inspect
 
-    module = importlib.import_module(module_name)
-    owner = module.BrukerReader if "timstof" in module_name else module.ImzMLReader
-    source = inspect.getsource(getattr(owner, attribute))
-    assert "tally.summarise(" in source, f"{attribute} counts drops but never says so"
+    out = []
+    for module_name, owner_name in (
+        ("thyra.readers.bruker.timstof.timstof_reader", "BrukerReader"),
+        ("thyra.readers.imzml.imzml_reader", "ImzMLReader"),
+    ):
+        module = importlib.import_module(module_name)
+        owner = getattr(module, owner_name)
+        tree = ast.parse(inspect.getsource(module))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not hasattr(owner, node.name):
+                continue
+            out.append((f"{owner_name}.{node.name}", node, ast.unparse(node)))
+    return out
+
+
+def _swallowing_generators():
+    """Generators that catch an exception and carry on to the next spectrum.
+
+    This is the exact shape the issue is about: one warning per dropped
+    spectrum, a total nowhere. Discovered rather than listed, because a
+    hardcoded list can only confirm the loops that were fixed -- two TDF
+    mobility loops were missed on the first pass for precisely that
+    reason, and a listed parametrisation could never have noticed.
+
+    A handler that re-raises is not swallowing, and a function that does
+    not yield is not handing the caller the rest of the run:
+    ``_isolation_windows`` continues past a ``sqlite3.OperationalError``
+    but is probing which schema variant the file has, not discarding
+    data.
+    """
+    import ast
+
+    found = []
+    for label, node, source in _reader_functions():
+        if not any(isinstance(n, (ast.Yield, ast.YieldFrom)) for n in ast.walk(node)):
+            continue
+        for handler in (n for n in ast.walk(node) if isinstance(n, ast.ExceptHandler)):
+            body = list(ast.walk(handler))
+            if any(isinstance(s, ast.Raise) for s in body):
+                continue  # re-raises: a decision, not a drop
+            found.append((label, source))
+            break
+    return found
+
+
+@pytest.mark.parametrize(
+    "label, source",
+    _swallowing_generators(),
+    ids=lambda v: v if isinstance(v, str) else "",
+)
+def test_a_loop_that_swallows_counts_what_it_swallowed(label, source):
+    assert "tally.drop(" in source, f"{label} drops spectra without counting them"
+
+
+@pytest.mark.parametrize(
+    "label, source",
+    [(lbl, src) for lbl, _, src in _reader_functions() if "DropTally(" in src],
+    ids=lambda v: v if isinstance(v, str) else "",
+)
+def test_whoever_opens_a_tally_closes_it(label, source):
+    """Counting without reporting is the half of the defect that is easy
+    to reintroduce: the loop looks fixed and still says nothing."""
+    assert "tally.summarise(" in source, f"{label} counts drops but never reports them"

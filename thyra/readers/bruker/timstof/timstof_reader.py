@@ -250,18 +250,22 @@ def read_calibration_states(data_path: Path) -> List[Dict[str, Any]]:
             rows = conn.execute(
                 "SELECT Id, DateTime, Source FROM CalibrationState ORDER BY Id"
             ).fetchall()
-    except sqlite3.Error as e:
+        # Inside the guard: a NULL or non-integer ``Id`` would otherwise
+        # escape as a TypeError through the click callback, where the
+        # code this replaced returned an empty list and the CLI carried
+        # on. A calibration listing is informational; it must not be the
+        # thing that ends a run.
+        return [
+            {
+                "id": int(state_id),
+                "datetime": datetime_str or "Unknown",
+                "source": source or "Unknown",
+            }
+            for state_id, datetime_str, source in rows
+        ]
+    except (sqlite3.Error, TypeError, ValueError) as e:
         logger.debug(f"Could not read calibration states from {cal_file}: {e}")
         return []
-
-    return [
-        {
-            "id": int(state_id),
-            "datetime": datetime_str or "Unknown",
-            "source": source or "Unknown",
-        }
-        for state_id, datetime_str, source in rows
-    ]
 
 
 def _get_frame_count(db_path: Path) -> int:
@@ -1555,17 +1559,21 @@ class BrukerReader(BrukerBaseMSIReader):
             )
         values, n_axis = self._mobility_values()
 
+        tally = DropTally(logger, "frames whose mobility scans could not be read")
+        n_seen = 0
         for frame_id, coords in self._iter_frames():
+            n_seen += 1
             try:
                 frame = TdfFrameScans(self, frame_id, coords)
                 points = self._mobility_points_from(frame, values, n_axis)
+            except ConversionRefused:
+                raise
             except Exception as e:
-                logger.warning(
-                    f"Error reading mobility scans for frame {frame_id}: {e}"
-                )
+                tally.drop(f"frame {frame_id}", e)
                 continue
             if points is not None:
                 yield coords, points[0], points[1], points[2]
+        tally.summarise(n_seen)
 
     def _mobility_values(self) -> Tuple[NDArray[np.float64], int]:
         """The per-scan 1/K0 values and their count, for the point cloud."""
@@ -1725,18 +1733,22 @@ class BrukerReader(BrukerBaseMSIReader):
 
         scan_map = self._precursor_scan_map(schedule.windows)
         n_windows = len(schedule.windows)
+        tally = DropTally(logger, "frames whose precursor scans could not be read")
+        n_seen = 0
         for frame_id, coords in self._iter_frames():
+            n_seen += 1
             try:
                 frame = TdfFrameScans(self, frame_id, coords)
+            except ConversionRefused:
+                raise
             except Exception as e:
-                logger.warning(
-                    f"Error reading scans for frame {frame_id}: {e}",
-                )
+                tally.drop(f"frame {frame_id}", e)
                 continue
             for window_index, mzs, intensities in self._precursor_spectra_from(
                 frame, scan_map, n_windows
             ):
                 yield coords, window_index, mzs, intensities
+        tally.summarise(n_seen)
 
     def _precursor_context(self) -> Optional[Tuple[NDArray[np.int64], int]]:
         """``(scan -> window map, window count)``, or ``None`` when not separable.

@@ -17,19 +17,48 @@ consequences none of them wanted:
 ``mode=ro`` alone fixes the first and third but not the second: a
 read-only connection still waits on the writer's lock. ``immutable=1``
 is what steps past it -- it promises sqlite the file will not change
-underneath, so no locking is attempted and no journal is consulted. That
-promise is the right one here because Thyra never writes to a ``.d`` and
-an acquisition being actively rewritten is not a dataset to convert.
+underneath, so no locking is attempted and no journal is consulted.
+
+**That promise has to be checked, not assumed.** "No journal is
+consulted" includes the write-ahead log, so on a database whose ``-wal``
+holds committed rows, ``immutable=1`` returns the state before them --
+silently, with no error to notice. Measured, 50 rows checkpointed and 50
+more committed into the ``-wal`` of a file a writer still holds open::
+
+    truth                : 100
+    mode=ro              : 100
+    mode=ro&immutable=1  :  50
+
+A short frame count read as if it were the whole acquisition is the
+defect this module exists to remove, not one to introduce, so the
+immutable promise is made only when there is no ``-wal`` beside the file
+to contradict it. When there is one, the file is being written or was
+not closed cleanly, and plain ``mode=ro`` is used: it reads the log
+correctly, and the side files it needs are already there.
+
+That leaves ``immutable=1`` covering the ordinary case, which is what a
+vendor ``.d`` actually is -- the committed TDF fixture's journal mode is
+``delete``, not ``wal``. Measured on a WAL-mode database with no side
+files present::
+
+    read-write           during=[tdf, -shm, -wal]  after=[tdf]
+    mode=ro              during=[tdf, -shm, -wal]  after=[tdf, -shm, -wal]
+    mode=ro&immutable=1  during=[tdf]              after=[tdf]
+
+so plain ``mode=ro`` is the one spelling that leaves litter behind.
 
 The URI is built rather than interpolated because of UNC paths, which is
 what a mapped network drive resolves to on Windows and where this lab's
 data lives.
 """
 
+import logging
 import sqlite3
 from pathlib import Path
 from typing import Union
 from urllib.parse import quote
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["read_only_uri", "open_read_only"]
 
@@ -47,15 +76,26 @@ def read_only_uri(path: Union[str, Path], immutable: bool = True) -> str:
 
     Args:
         path: The database file.
-        immutable: Add ``immutable=1``, which makes the open skip
-            locking entirely. Correct for a vendor file Thyra only ever
-            reads; leave it off for a database something else may be
-            legitimately writing.
+        immutable: Ask for ``immutable=1``, which makes the open skip
+            locking entirely. It is **downgraded to plain** ``mode=ro``
+            when a ``-wal`` sits beside the file, because immutability
+            also skips the write-ahead log and would return the database
+            as it stood before the log's committed rows. See the module
+            docstring for the measurement.
 
     Returns:
         A ``file:`` URI for :func:`sqlite3.connect` with ``uri=True``.
     """
-    posix = Path(path).as_posix()
+    path = Path(path)
+    if immutable and path.with_name(path.name + "-wal").exists():
+        logger.debug(
+            "%s has a -wal beside it, so it is opened read-only but not "
+            "immutable: an immutable open would skip the log's committed rows.",
+            path,
+        )
+        immutable = False
+
+    posix = path.as_posix()
     if posix.startswith("//"):
         posix = "//" + posix
     suffix = "&immutable=1" if immutable else ""
@@ -73,9 +113,10 @@ def open_read_only(
 
     Args:
         path: The database file.
-        immutable: See :func:`read_only_uri`.
-        timeout: Seconds to wait for a lock. Only reachable with
-            ``immutable=False``; an immutable open takes no locks.
+        immutable: See :func:`read_only_uri`, including when it is
+            downgraded.
+        timeout: Seconds to wait for a lock. Reached whenever the open
+            is not immutable, which includes the downgraded case.
         check_same_thread: Passed through; the TDF reader shares one
             connection across threads and sets this False.
 
