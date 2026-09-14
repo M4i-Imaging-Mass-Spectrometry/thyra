@@ -226,6 +226,26 @@ jobs:
         cd /tmp
         thyra --version
         thyra --help
+    - name: Verify the installed distribution ships the PEP 561 marker
+      # pyproject.toml declares "Typing :: Typed", which is a promise a type
+      # checker reads. Without thyra/py.typed inside the INSTALLED
+      # distribution, PEP 561 requires a checker to ignore every inline
+      # annotation and hand the consumer `Any` for every thyra symbol -- so a
+      # 94%-annotated package buys that consumer nothing and the classifier
+      # PyPI shows is false. The marker is a zero-byte file that no test, lint
+      # or import failure can notice, so only an assertion like this one
+      # catches a build-config change that drops it.
+      #
+      # Run from outside the checkout for the same reason as the step above:
+      # this must read the installed distribution and cannot be allowed to
+      # fall back to the repo's ./thyra. That is why no pytest assertion can
+      # do this job -- the last step of this job runs `PYTHONPATH=.`, which
+      # puts the repo ahead of site-packages, and the lockfile job installs
+      # thyra editable, so in every pytest lane `files("thyra")` resolves to
+      # the repo tree.
+      run: |
+        cd /tmp
+        python -c "from importlib.resources import files; assert (files('thyra') / 'py.typed').is_file(), 'thyra/py.typed is missing from the installed distribution; the Typing :: Typed classifier in pyproject.toml is false'"
     - name: Install the test-only dependencies
       run: pip install pytest pytest-cov mock
     - name: Verify save / read-back round-trip on the resolved set

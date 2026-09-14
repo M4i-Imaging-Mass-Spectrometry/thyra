@@ -62,6 +62,16 @@ We use automated tools to maintain consistent code style:
 ### Type Hints
 - Use type hints for all public functions
 - Follow PEP 484 conventions
+- `thyra/py.typed` is the PEP 561 marker, so those annotations are part of the
+  published API rather than an internal convenience: a type checker in a
+  downstream project reads them instead of resolving every thyra symbol to
+  `Any`. The marker and the `Typing :: Typed` classifier in `pyproject.toml`
+  stand or fall together, and the `clean-venv-install` CI job asserts the
+  installed distribution carries it.
+- `disallow_untyped_defs` and `disallow_incomplete_defs` are still off under
+  `[tool.mypy]`, so a function left unannotated is not caught here -- it is
+  published as implicit `Any` inside a package that advertises itself as
+  typed. That is what makes the first bullet a rule rather than a preference.
 
 ### Running Code Quality Checks
 
