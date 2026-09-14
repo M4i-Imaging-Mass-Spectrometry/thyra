@@ -73,7 +73,6 @@ class _MockMetadataExtractor(MetadataExtractor):
 
     def _extract_essential_impl(self) -> EssentialMetadata:
         cfg = self._config
-        n_pixels = cfg.n_x * cfg.n_y * cfg.n_z
         avg_peaks = sum(cfg.peaks_per_spectrum) // 2
         return EssentialMetadata(
             dimensions=(cfg.n_x, cfg.n_y, cfg.n_z),
@@ -87,7 +86,6 @@ class _MockMetadataExtractor(MetadataExtractor):
             pixel_size=(cfg.pixel_size_um, cfg.pixel_size_um),
             n_spectra=self._n_spectra,
             total_peaks=self._n_spectra * avg_peaks,
-            estimated_memory_gb=n_pixels * 150 * 8 / (1024**3),
             source_path="mock_msi_data",
             # Deliberately a value from the vocabulary the real extractors
             # produce ("centroid spectrum" / "profile spectrum"), and
@@ -190,10 +188,6 @@ class MockMSIReader(BaseMSIReader):
     def get_optical_image_paths(self) -> List[Path]:
         """Return configured optical image paths (empty by default)."""
         return list(self._optical_image_paths)
-
-    def get_peak_counts_per_pixel(self) -> Optional[NDArray[np.int32]]:
-        """Return None to exercise the two-pass counting fallback."""
-        return None
 
     def reset(self) -> None:
         """Reset reader state for re-iteration.

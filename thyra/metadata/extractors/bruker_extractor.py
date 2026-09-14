@@ -221,7 +221,6 @@ class BrukerMetadataExtractor(MetadataExtractor):
             mass_range = (float(min_mass), float(max_mass))
             _, _, _, _, frame_count = frame_result
             n_spectra = int(frame_count) if frame_count else 0
-            estimated_memory = self._estimate_memory_from_frames(n_spectra)
 
             return EssentialMetadata(
                 dimensions=dimensions,
@@ -230,7 +229,6 @@ class BrukerMetadataExtractor(MetadataExtractor):
                 pixel_size=pixel_size,
                 n_spectra=n_spectra,
                 total_peaks=total_peaks,
-                estimated_memory_gb=estimated_memory,
                 source_path=str(self.data_path),
                 coordinate_offsets=imaging_area_offsets,
             )
@@ -340,21 +338,6 @@ class BrukerMetadataExtractor(MetadataExtractor):
         y_range = int(max_y - min_y) + 1 if max_y > min_y else 1
 
         return (max(1, x_range), max(1, y_range), 1)  # Assume 2D data (z=1)
-
-    def _estimate_memory_from_frames(self, frame_count: int) -> float:
-        """Estimate memory usage from frame count."""
-        if frame_count <= 0:
-            return 0.0
-
-        # Rough estimate for Bruker data:
-        # - Average ~2000 peaks per frame
-        # - 8 bytes per float64 value
-        # - mz + intensity arrays
-        avg_peaks_per_frame = 2000
-        bytes_per_value = 8
-        estimated_bytes = frame_count * avg_peaks_per_frame * 2 * bytes_per_value
-
-        return estimated_bytes / (1024**3)  # Convert to GB
 
     def _extract_bruker_specific(self) -> Dict[str, Any]:
         """Extract Bruker format-specific metadata."""

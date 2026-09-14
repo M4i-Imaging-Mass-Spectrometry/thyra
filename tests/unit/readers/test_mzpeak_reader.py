@@ -246,27 +246,6 @@ class TestNullPairPadding:
 
         assert essential.total_peaks == delivered == 12
 
-    def test_per_pixel_counts_declined_when_padded(self, tmp_path):
-        """Per-pixel counts are withheld rather than reported inflated.
-
-        The padding cannot be attributed to individual spectra without a full
-        pass over the point data, which is the pass these counts exist to
-        avoid, so the reader declines and the converter measures instead.
-        """
-        spectra = grid_spectra(2, 1, n_points=6)
-        padded = build_mzpeak(
-            tmp_path / "padded_ppp.mzpeak", spectra, null_pair_after=3
-        )
-        clean = build_mzpeak(tmp_path / "clean_ppp.mzpeak", spectra)
-
-        with MzPeakReader(padded) as reader:
-            assert reader.get_peak_counts_per_pixel() is None
-        with MzPeakReader(clean) as reader:
-            counts = reader.get_peak_counts_per_pixel()
-
-        assert counts is not None
-        np.testing.assert_array_equal(counts, [6, 6])
-
 
 class TestIndexTolerance:
     """The index vocabulary is parsed as tolerantly as the reference parser."""

@@ -22,7 +22,6 @@ def _comprehensive(format_specific):
         pixel_size=(20.0, 20.0),
         n_spectra=6,
         total_peaks=492,
-        estimated_memory_gb=0.0,
         source_path="synthetic_tims.d",
     )
     return ComprehensiveMetadata(

@@ -12,7 +12,6 @@ def _essential(source_path: str = "input.imzML") -> EssentialMetadata:
         pixel_size=(20.0, 25.0),
         n_spectra=100,
         total_peaks=1000,
-        estimated_memory_gb=0.1,
         source_path=source_path,
         spectrum_type="centroid spectrum",
     )

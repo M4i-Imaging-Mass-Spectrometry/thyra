@@ -144,7 +144,6 @@ class BaseMSIConverter(ABC):
         # Essential metadata properties (loaded during initialization)
         self._coordinate_bounds: Optional[Tuple[float, float, float, float]] = None
         self._n_spectra: Optional[int] = None
-        self._estimated_memory_gb: Optional[float] = None
 
     def convert(self) -> bool:
         """Template method defining the conversion workflow.
@@ -225,7 +224,6 @@ class BaseMSIConverter(ABC):
             # Store essential metadata for use throughout conversion
             self._coordinate_bounds = essential.coordinate_bounds
             self._n_spectra = essential.n_spectra
-            self._estimated_memory_gb = essential.estimated_memory_gb
 
             # Override pixel size only if using default value and metadata
             # is available
@@ -247,7 +245,6 @@ class BaseMSIConverter(ABC):
             logger.info(f"Dataset dimensions: {self._dimensions}")
             logger.info(f"Coordinate bounds: {self._coordinate_bounds}")
             logger.info(f"Total spectra: {self._n_spectra}")
-            logger.info(f"Estimated memory: {self._estimated_memory_gb:.2f} GB")
             logger.info(f"Common mass axis length: {len(self._common_mass_axis)}")
         except ConversionRefused:
             # Said once, by whoever catches it. Re-prefixing a refusal
@@ -591,9 +588,6 @@ class BaseMSIConverter(ABC):
                 "mass_range": comprehensive_metadata.essential.mass_range,
                 "pixel_size": comprehensive_metadata.essential.pixel_size,
                 "n_spectra": comprehensive_metadata.essential.n_spectra,
-                "estimated_memory_gb": (
-                    comprehensive_metadata.essential.estimated_memory_gb
-                ),
                 "source_path": comprehensive_metadata.essential.source_path,
                 "is_3d": comprehensive_metadata.essential.is_3d,
                 "has_pixel_size": (comprehensive_metadata.essential.has_pixel_size),
@@ -611,7 +605,6 @@ class BaseMSIConverter(ABC):
                     else 0
                 ),
                 "coordinate_bounds": self._coordinate_bounds,
-                "estimated_memory_gb": self._estimated_memory_gb,
             },
         }
 

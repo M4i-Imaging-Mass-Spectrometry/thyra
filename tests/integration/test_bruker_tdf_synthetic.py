@@ -151,10 +151,6 @@ class TestSyntheticFixture:
         assert np.all(np.diff(k0) < 0)
         assert 0.5 < k0.min() < k0.max() < 2.5
 
-    def test_no_per_pixel_peak_counts_for_tdf(self):
-        with _open("scan_sum") as reader:
-            assert reader.get_peak_counts_per_pixel() is None
-
     def test_mobility_axis_is_the_per_scan_calibration(self, expected):
         with _open("scan_sum") as reader:
             assert reader.has_ion_mobility is True

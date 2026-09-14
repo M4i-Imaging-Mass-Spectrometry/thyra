@@ -301,8 +301,16 @@ class PhiReader(BaseMSIReader):
         """
         return {"tof_us": self.mass_axis.tof_us}
 
-    def get_peak_counts_per_pixel(self) -> Optional[NDArray[np.int32]]:
-        """Return occupied channels per pixel, for CSR ``indptr`` construction."""
+    def occupied_channel_counts(self) -> NDArray[np.int32]:
+        """Occupied time channels per pixel, indexed ``z*(n_x*n_y) + y*n_x + x``.
+
+        PHI-specific, and not part of the reader contract: it exists because
+        a PHI file is a stream of ion events rather than a list of spectra,
+        so the only way to say how many pixels carry a spectrum -- and how
+        many points there are in total -- is to aggregate the events.
+        :class:`PhiMetadataExtractor` is the only caller, and it reduces
+        this to those two scalars (issue #240).
+        """
         self._aggregate()
         assert self._pixel_ids is not None
         assert self._group_starts is not None and self._group_ends is not None

@@ -256,14 +256,11 @@ class TestSolarixReader:
             assert reader.dimensions == (2, 2, 1)
 
     def test_sparse_raster_pixel_absent(self, solarix_d):
-        """The (1239, 167) cell was never acquired: no yield, zero count."""
+        """The (1239, 167) cell was never acquired, so nothing is yielded for it."""
         with SolarixReader(solarix_d) as reader:
             coords = {c[:2] for c, _, _ in reader.iter_spectra()}
-            counts = reader.get_peak_counts_per_pixel()
 
         assert (0, 1) not in coords
-        # pixel_idx = y * n_x + x with n_x = 2
-        np.testing.assert_array_equal(counts, np.array([3, 2, 0, 1]))
 
     def test_truncated_mz_blob_is_refused(self, tmp_path):
         """A blob shorter than NumPeaks * itemsize must not decode silently."""

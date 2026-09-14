@@ -316,7 +316,7 @@ than a fixed spacing: whatever `k` puts a bin of that width at
 
 `preview_msi` promises that no spectra are decoded, and passes
 `metadata_only=True` to the reader to keep that promise. `PhiReader` used to
-swallow the kwarg, and the extractor called `get_peak_counts_per_pixel()`,
+swallow the kwarg, and the extractor called `occupied_channel_counts()`,
 which walks every 8-byte event in the file: 0.16 s for a 16 MB acquisition with
 2.02 M events, 0.14 s for a 14 MB one -- linear, so previewing a multi-gigabyte
 SmartSoft file cost what converting it costs.

@@ -22,7 +22,6 @@ class ConcreteMetadataExtractor(MetadataExtractor):
             pixel_size=(25.0, 25.0),
             n_spectra=200,
             total_peaks=400000,
-            estimated_memory_gb=1.5,
             source_path="/test/path",
         )
 
@@ -199,7 +198,6 @@ class TestMetadataExtractorPerformance:
                     pixel_size=(25.0, 25.0),
                     n_spectra=200,
                     total_peaks=400000,
-                    estimated_memory_gb=1.5,
                     source_path="/test/path",
                 )
 

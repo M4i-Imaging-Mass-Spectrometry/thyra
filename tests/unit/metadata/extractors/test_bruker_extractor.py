@@ -144,7 +144,6 @@ class TestBrukerMetadataExtractor:
         assert essential.pixel_size == (25.0, 25.0)
         assert essential.n_spectra == 400
         assert essential.source_path == str(data_path)
-        assert essential.estimated_memory_gb > 0
 
     def test_extract_essential_no_pixel_size(self):
         """Test essential metadata extraction when pixel size is not available."""
@@ -360,33 +359,7 @@ class TestBrukerMetadataExtractor:
         expected_y = int((25 - 5)) + 1  # 21
         assert essential.dimensions == (expected_x, expected_y, 1)
 
-    def test_memory_estimation(self):
-        """Test memory estimation calculation."""
-        # Mock data with larger dataset
-        sample_data = {
-            "essential": (
-                10.0,
-                10.0,
-                1.0,
-                0,
-                1000,
-                0,
-                1000,
-                10000,
-                100.0,
-                2000.0,
-            ),  # Large dataset
-            "comprehensive": [],
-        }
-        mock_conn = self.create_mock_connection(sample_data)
-        data_path = Path("/test/data.d")
-
-        extractor = BrukerMetadataExtractor(mock_conn, data_path)
-        essential = extractor.get_essential()
-
         # Should estimate reasonable memory usage based on spectra count and mass range
-        assert essential.estimated_memory_gb > 0
-        assert essential.estimated_memory_gb < 1000  # Sanity check
 
     def test_caching_behavior(self):
         """Test that extraction results are properly cached."""

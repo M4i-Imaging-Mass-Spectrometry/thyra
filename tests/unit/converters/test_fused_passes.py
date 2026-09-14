@@ -116,7 +116,6 @@ class _StubExtractor(MetadataExtractor):
             pixel_size=(10.0, 10.0),
             n_spectra=4,
             total_peaks=12,
-            estimated_memory_gb=0.0,
             source_path="stub_fused",
             spectrum_type="centroid spectrum",
         )

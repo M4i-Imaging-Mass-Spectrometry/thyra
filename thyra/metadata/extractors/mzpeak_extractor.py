@@ -94,11 +94,9 @@ class MzPeakMetadataExtractor(MetadataExtractor):
             pixel_size=self._pixel_size(),
             n_spectra=n_spectra,
             total_peaks=total_peaks,
-            estimated_memory_gb=self._estimated_memory_gb(dimensions, total_peaks),
             source_path=str(self.data_path),
             coordinate_offsets=(index.offsets[0], index.offsets[1], 0),
             spectrum_type=self._spectrum_type(),
-            peak_counts_per_pixel=self._peak_counts_per_pixel(dimensions),
         )
 
     def _mass_range(self) -> Tuple[float, float]:
@@ -258,44 +256,6 @@ class MzPeakMetadataExtractor(MetadataExtractor):
         if not nulls:
             return declared
         return max(0, declared - int(nulls))
-
-    def _peak_counts_per_pixel(
-        self, dimensions: Tuple[int, int, int]
-    ) -> Optional[np.ndarray]:
-        """Per-pixel point counts for the streaming converter's CSR indptr.
-
-        Returns ``None`` when the archive contains null-pair padding. The
-        per-spectrum counts the file records include that padding, and
-        attributing it back to individual spectra would need a full pass over
-        the point data -- which is exactly the pass this method exists to
-        avoid. Handing the converter counts that are too high would size the
-        CSR ``indptr`` wrongly, so the honest answer is to decline and let it
-        take its two-pass path.
-        """
-        if self.archive.null_count():
-            logger.info(
-                "%s uses null-pair padding, so its per-spectrum point counts "
-                "include points that carry no value; declining to supply "
-                "per-pixel counts so the converter measures them itself",
-                self.data_path.name,
-            )
-            return None
-
-        index = self.archive.spatial_index()
-        n_x = dimensions[0]
-        counts = np.zeros(n_x * dimensions[1], dtype=np.int32)
-        flat = index.coordinates[:, 1] * n_x + index.coordinates[:, 0]
-        counts[flat] = index.point_counts.astype(np.int32, copy=False)
-        return counts
-
-    @staticmethod
-    def _estimated_memory_gb(
-        dimensions: Tuple[int, int, int], total_peaks: int
-    ) -> float:
-        """Rough dense footprint, used only to pick a conversion strategy."""
-        del dimensions
-        # 8 bytes of m/z plus 8 of intensity per stored point.
-        return float(total_peaks * 16) / (1024.0**3)
 
     # ------------------------------------------------------------------
     # Comprehensive

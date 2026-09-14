@@ -100,13 +100,8 @@ class WatersMetadataExtractor(MetadataExtractor):
             pixel_size = (grid.pixel_size_x, grid.pixel_size_y)
 
         # Scan all MS spectra for mass range, spectrum count, peak counts
-        observed_range, n_spectra, total_peaks, peak_counts = self._scan_all_ms_spectra(
-            dimensions
-        )
+        observed_range, n_spectra, total_peaks = self._scan_all_ms_spectra(dimensions)
         mass_range = self._axis_mass_range(observed_range)
-
-        # Memory estimate: total_peaks * 2 values (mz + intensity) * 8 bytes
-        estimated_memory_gb = (total_peaks * 2 * 8) / (1024**3)
 
         # Spectrum type -- determine from first MS function
         spectrum_type = self._detect_spectrum_type()
@@ -118,10 +113,8 @@ class WatersMetadataExtractor(MetadataExtractor):
             pixel_size=pixel_size,
             n_spectra=n_spectra,
             total_peaks=total_peaks,
-            estimated_memory_gb=estimated_memory_gb,
             source_path=str(self._data_path),
             spectrum_type=spectrum_type,
-            peak_counts_per_pixel=peak_counts,
         )
 
     def _axis_mass_range(self, observed: Tuple[float, float]) -> Tuple[float, float]:
@@ -262,26 +255,28 @@ class WatersMetadataExtractor(MetadataExtractor):
         n_x, n_y = stats["n_x"], stats["n_y"]
         pixel_idx = z * (n_x * n_y) + y * n_x + x
         if 0 <= pixel_idx < stats["n_pixels"]:
-            # Accumulate, and count pixels rather than scans. Two scans can
-            # report the same stage position -- the registry's 100 um MALDI
-            # set has 1275 positioned scans on 1274 pixels, the stage having
-            # stopped between two acquisitions 40 ms apart -- and the
-            # converter sums them into the one pixel. This used to overwrite
-            # with the last scan's count while ``n_spectra`` counted both, so
-            # the per-pixel counts and the totals that size the memory
-            # estimate described two different datasets (issue #233).
-            if stats["peak_counts"][pixel_idx] == 0:
+            # Count pixels rather than scans. Two scans can report the same
+            # stage position -- the registry's 100 um MALDI set has 1275
+            # positioned scans on 1274 pixels, the stage having stopped
+            # between two acquisitions 40 ms apart -- and the converter sums
+            # them into the one pixel, so counting scans here would claim one
+            # more spectrum than the store holds (issue #233).
+            if not stats["seen"][pixel_idx]:
                 stats["n_spectra"] += 1
-            stats["peak_counts"][pixel_idx] += n_peaks
+                stats["seen"][pixel_idx] = True
 
     def _scan_all_ms_spectra(
         self,
         dimensions: Tuple[int, int, int],
-    ) -> Tuple[Tuple[float, float], int, int, Optional[NDArray[np.int32]]]:
-        """Single pass over all MS scans for mass range, counts, per-pixel peak counts.
+    ) -> Tuple[Tuple[float, float], int, int]:
+        """Single pass over all MS scans for mass range and counts.
+
+        The occupancy bitmap built during the pass is not returned: it
+        exists only so ``n_spectra`` counts occupied pixels rather than
+        scans (issue #233).
 
         Returns:
-            (mass_range, n_spectra, total_peaks, peak_counts_per_pixel)
+            (mass_range, n_spectra, total_peaks)
 
         Raises:
             ValueError: If no scan yielded a mass range. This used to
@@ -298,7 +293,7 @@ class WatersMetadataExtractor(MetadataExtractor):
             "max_mass": float("-inf"),
             "total_peaks": 0,
             "n_spectra": 0,
-            "peak_counts": np.zeros(n_pixels, dtype=np.int32),
+            "seen": np.zeros(n_pixels, dtype=bool),
             "n_x": n_x,
             "n_y": n_y,
             "n_pixels": n_pixels,
@@ -338,7 +333,6 @@ class WatersMetadataExtractor(MetadataExtractor):
             (stats["min_mass"], stats["max_mass"]),
             stats["n_spectra"],
             stats["total_peaks"],
-            stats["peak_counts"],
         )
 
     def _extract_comprehensive_impl(self) -> ComprehensiveMetadata:

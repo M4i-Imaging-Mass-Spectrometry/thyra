@@ -31,16 +31,10 @@ class MockEssentialMetadata:
         self.mass_range = mass_range
         self.pixel_size = pixel_size
         self.coordinate_bounds = (0, dimensions[0], 0, dimensions[1])
-        self.estimated_memory_gb = 0.1
         self.source_path = Path("/mock/path.imzML")
         self.total_peaks = n_spectra * peaks_per_spectrum
         self.is_3d = dimensions[2] > 1  # 3D if z > 1
         self.has_pixel_size = pixel_size is not None
-        # Per-pixel peak counts for streaming converter
-        n_pixels = dimensions[0] * dimensions[1] * dimensions[2]
-        self.peak_counts_per_pixel = np.full(
-            n_pixels, peaks_per_spectrum, dtype=np.int32
-        )
 
 
 class MockMSIReader:
@@ -124,13 +118,6 @@ class MockMSIReader:
         min_mz, max_mz = self.mass_range
         # Create a common mass axis with reasonable resolution
         return np.linspace(min_mz, max_mz, 10000)
-
-    def get_peak_counts_per_pixel(self) -> np.ndarray:
-        """Return per-pixel peak counts for CSR indptr construction."""
-        n_x, n_y, n_z = self.dimensions
-        n_pixels = n_x * n_y * n_z
-        # All pixels have the same number of peaks
-        return np.full(n_pixels, self.peaks_per_spectrum, dtype=np.int32)
 
     def get_region_map(self):
         """Return None (single-region mock)."""

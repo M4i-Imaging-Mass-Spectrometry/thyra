@@ -98,7 +98,6 @@ class _VolumeProbeExtractor(MetadataExtractor):
             pixel_size=None,
             n_spectra=n_spectra,
             total_peaks=n_spectra * len(_MASS_AXIS),
-            estimated_memory_gb=0.001,
             source_path="z_spacing_probe",
             z_spacing_um=self._z_spacing_um,
         )
@@ -137,9 +136,6 @@ class _VolumeProbeReader(BaseMSIReader):
 
     def get_optical_image_paths(self) -> List[Path]:
         return []
-
-    def get_peak_counts_per_pixel(self) -> Optional[NDArray[np.int32]]:
-        return None
 
     def reset(self) -> None:
         """Spectra are a pure function of the coordinate; nothing to reset."""

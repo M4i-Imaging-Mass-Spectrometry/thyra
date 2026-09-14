@@ -45,7 +45,6 @@ class _Meta:
         self.mass_range = (100.0, 1000.0)
         self.n_spectra = 6
         self.pixel_size = (20.0, 20.0)
-        self.estimated_memory_gb = 1.0
         self.coordinate_bounds = (0, 2, 0, 3)
         self.is_3d = False
         self.has_mass_axis = True
@@ -53,7 +52,6 @@ class _Meta:
         self.total_peaks = 60
         self.coordinate_offsets = (0, 0, 0)
         self.spectrum_type = "centroid spectrum"
-        self.peak_counts_per_pixel = None
         self.z_spacing_um = None
 
 

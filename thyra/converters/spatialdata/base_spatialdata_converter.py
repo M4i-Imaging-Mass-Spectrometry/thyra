@@ -2602,7 +2602,6 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             # Store essential metadata for use throughout conversion
             self._coordinate_bounds = essential.coordinate_bounds
             self._n_spectra = essential.n_spectra
-            self._estimated_memory_gb = essential.estimated_memory_gb
 
             # Override pixel size only if using default and metadata is available
             self._adopt_detected_pixel_size(essential)
@@ -2653,7 +2652,6 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             logger.info(f"Dataset dimensions: {self._dimensions}")
             logger.info(f"Coordinate bounds: {self._coordinate_bounds}")
             logger.info(f"Total spectra: {self._n_spectra}")
-            logger.info(f"Estimated memory: {self._estimated_memory_gb:.2f} GB")
             if self._common_mass_axis is None:
                 raise RuntimeError("Common mass axis is None after initialization")
             logger.info(f"Common mass axis length: {len(self._common_mass_axis)}")
