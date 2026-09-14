@@ -32,10 +32,14 @@ Thank you for your interest in contributing to Thyra! This document provides gui
    uv sync
    ```
 
-3. **Install Pre-commit Hooks** (Recommended)
+3. **Install Pre-commit Hooks**
    ```bash
    uv run pre-commit install
    ```
+
+   CI runs `pre-commit run --all-files` on every pull request, so skipping this
+   step does not skip the checks. It only moves the failure from your machine
+   to the PR.
 
 4. **Verify Installation**
    ```bash
@@ -60,6 +64,19 @@ We use automated tools to maintain consistent code style:
 - Follow PEP 484 conventions
 
 ### Running Code Quality Checks
+
+One command reproduces the CI lint job exactly, because CI runs this command:
+
+```bash
+uv run pre-commit run --all-files
+```
+
+It applies black, isort, flake8, mypy, bandit and pydocstyle with the settings
+in `.flake8` and `pyproject.toml`, plus the file-hygiene and lab-share-path
+hooks. **`--all-files` skips untracked files**, so `git add -A` first or a new
+file you have just written is not checked.
+
+The individual tools are still there if you want to run one on its own:
 
 ```bash
 # Format code
@@ -118,11 +135,13 @@ uv run bandit -r thyra/
 
 3. **Run Quality Checks**
    ```bash
-   uv run black .
-   uv run isort .
-   uv run flake8
+   git add -A                            # --all-files skips untracked files
+   uv run pre-commit run --all-files
    uv run pytest
    ```
+
+   The last two are what the CI `lint` and `test` jobs run. Running them here
+   is the only way to see a red check before a reviewer does.
 
 4. **Commit Your Changes**
    - Use clear, descriptive commit messages

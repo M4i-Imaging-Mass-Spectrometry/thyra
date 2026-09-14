@@ -61,6 +61,87 @@ jobs:
         name: codecov-umbrella
         fail_ci_if_error: false
 
+  # Six lint, type and security tools are configured across .flake8,
+  # .pre-commit-config.yaml and pyproject.toml, and until this job existed not
+  # one of them ran anywhere but a local hook a contributor may never install.
+  # A fork PR, a `git commit --no-verify`, or any session that edits files
+  # without hooks merged unlinted, untyped and unscanned with every check
+  # green. The repo-local no-lab-share-paths and no-user-home-paths guards --
+  # the ones that exist to keep colleague names and share layouts out of a
+  # PUBLIC repository -- were unenforced by the same gap, which is the part
+  # that actually matters.
+  #
+  # One `pre-commit run --all-files` rather than six tool invocations: it
+  # applies exactly the settings the local hook applies, so CI and a developer
+  # machine cannot diverge. That is the same reason .flake8 keeps its settings
+  # in .flake8 and out of the hook's args, and it is why adding a seventh tool
+  # to .pre-commit-config.yaml joins this gate with no edit here.
+  #
+  # This job is named nowhere, so its PR check context is `lint` -- not
+  # `Tests / lint`. That string is what a branch-protection rule would have to
+  # list (issue #224, D18), and this job is that rule's prerequisite: branch
+  # protection can only require checks that exist, and no lint check did.
+  #
+  # Living in tests.yml couples lint to the release. release.yml gates the
+  # PyPI publish on a completed successful run of the workflow named `Tests`
+  # for the exact release SHA and fails closed (see its GATE_WORKFLOW block),
+  # and that comment says the gate is on tests specifically so an ADVISORY
+  # workflow cannot veto a release. Lint is not advisory: a red lint on main
+  # should stop a publish, so the coupling is accepted deliberately rather
+  # than inherited. The cost is that a hook-repo clone failure also blocks
+  # that SHA until a new commit lands. If that ever becomes intolerable, the
+  # fix is to move this job to its own workflow with the same `on:` block, not
+  # to weaken release.yml.
+  lint:
+    runs-on: ubuntu-latest
+    env:
+      # One version, referenced by both the interpreter and the cache key
+      # below, so the two can never describe different things. Pinned rather
+      # than left to the runner image because pre-commit builds each hook's
+      # isolated venv with the interpreter it finds, and black's
+      # `language_version: python3` resolves against it: a runner default that
+      # moved would silently rebuild all twenty hook envs on another version.
+      LINT_PYTHON_VERSION: '3.12'
+
+    steps:
+    - uses: actions/checkout@v5
+    - name: Install uv
+      uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      with:
+        python-version: ${{ env.LINT_PYTHON_VERSION }}
+        enable-cache: true
+        # See the test job: pin the lean pre-v9 pruning behaviour.
+        prune-cache: true
+    - name: Install dependencies
+      # --only-group, not the `--no-default-groups --group dev` the jobs above
+      # use, because `dev` IS uv's default group here (there is no [tool.uv]
+      # section), so that spelling is the long form of a plain `uv sync` and
+      # would install spatialdata, dask, zarr, Jupyter and matplotlib for a job
+      # whose one need is pre-commit. --only-group drops the project and its
+      # runtime tree while still reading the pre-commit version out of uv.lock,
+      # which keeps the lockfile the single source of it. Revisit on a measured
+      # install time, not in advance.
+      run: uv sync --locked --only-group dev
+    - name: Cache the pre-commit hook environments
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pre-commit
+        key: pre-commit-${{ runner.os }}-py${{ env.LINT_PYTHON_VERSION }}-${{ hashFiles('.pre-commit-config.yaml') }}
+        # Warm from the previous entry when the config changes, so editing one
+        # hook rebuilds one env instead of twenty.
+        restore-keys: |
+          pre-commit-${{ runner.os }}-py${{ env.LINT_PYTHON_VERSION }}-
+    - name: Run every hook
+      # --no-sync: the step above deliberately installed only one group, and a
+      # bare `uv run` would re-sync the project back in before running.
+      #
+      # --show-diff-on-failure is what makes the four in-place rewriters
+      # (the three whitespace hooks and fix-byte-order-marker) useful here.
+      # They exit non-zero having already written the fix into a checkout
+      # nobody will ever look at, so without this the log says a file was
+      # modified and never says how.
+      run: uv run --no-sync pre-commit run --all-files --show-diff-on-failure
+
   # The integration lane, which `addopts` in pyproject.toml deselects from every
   # default `pytest` run. It is its own job rather than one more step in `test`
   # so that it appears as a separately named check: the lane sat with 15 of its
