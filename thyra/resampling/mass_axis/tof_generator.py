@@ -18,13 +18,16 @@ instrument              A           B            fitted from
 ======================  ==========  ===========  ============================
 SELECT SERIES MRT       0.0185      9.1e-6       229 peaks, m/z 300-1000
 timsTOF fleX            0.0877      8.74e-4      180 peaks, m/z 300-1000
+PHI nanoTOF             0.454       0.0284       311 peaks, m/z 12-377, over
+                                                 12 acquisitions
 ======================  ==========  ===========  ============================
 
 Refitted here from the same peak lists by least squares on ``FWHM^2 = A m +
 B m^2``: the MRT pair reproduces 2.97 / 3.79 / 4.54 mDa at m/z 400 / 600 /
 800, where the log-log fit of the same peaks gave an exponent of 0.67 --
 between the 0.5 and 1.0 the two single-term laws allow, which is why
-neither of them fits an MRT centroid list exactly.
+neither of them fits an MRT centroid list exactly. The nanoTOF pair is
+fitted differently and :data:`PHI_NANOTOF_LAW` says why.
 
 The axis lays bins at ``FWHM(m) / k`` for ``k`` bins per peak width. The
 cumulative bin count ``N(m) = 1000 k * integral dm / sqrt(A m + B m^2)`` has
@@ -54,6 +57,32 @@ MRT_TOF_LAW: Tuple[float, float] = (0.0185, 9.1e-6)
 
 #: ``(A, B)`` fitted on 180 isolated peaks of a timsTOF fleX MALDI run.
 TIMSTOF_TOF_LAW: Tuple[float, float] = (0.0877, 8.74e-4)
+
+#: ``(A, B)`` for a PHI nanoTOF ToF-SIMS acquisition, fitted on 311 isolated
+#: peaks over m/z 12-377 drawn from 12 acquisitions spanning 2017 to 2026,
+#: both polarities, biological and polymer samples.
+#:
+#: Fitted by **quantile regression at q = 0.05** on ``FWHM^2 = A m + B m^2``,
+#: not by least squares, and the difference is the point. A least-squares fit
+#: runs through the middle of the corpus, so half of every acquisition's peaks
+#: come out narrower than it predicts and get fewer bins than intended -- 70%
+#: of the measured peaks would fall below three bins per peak width and 12%
+#: below two. Fitting the narrow edge instead inverts the error: an acquisition
+#: sharper than the law is the one case that loses peak shape, so the law is
+#: placed where only 5% of measured peaks are sharper than it, which leaves 6%
+#: under three bins and none under two. A peak broader than the law merely gets
+#: more bins than it needs, which costs store and nothing else.
+#:
+#: The corpus spans a factor of three in resolving power between tunes, and a
+#: C60 primary beam resolves about five times worse again (R 280-1200 against
+#: 1700-7100 for Bi3). Those acquisitions are deliberately oversampled by this
+#: law rather than averaged into it.
+#:
+#: Measured resolving power rises from about 2,200 at m/z 10 and levels off
+#: near 4,250 above m/z 60 -- the shape of a two-term law, and neither of the
+#: single-term limits: ``linear_tof`` has R climbing as ``sqrt(m)`` forever,
+#: ``reflector_tof`` has it flat from the start.
+PHI_NANOTOF_LAW: Tuple[float, float] = (0.454, 0.0284)
 
 #: Bins per peak width when the caller gives no width of their own.
 DEFAULT_BINS_PER_FWHM = 3.0
