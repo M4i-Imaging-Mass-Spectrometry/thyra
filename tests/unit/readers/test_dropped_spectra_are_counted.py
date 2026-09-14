@@ -292,7 +292,9 @@ def _swallowing_generators():
 @pytest.mark.parametrize(
     "label, source",
     _swallowing_generators(),
-    ids=lambda v: v if isinstance(v, str) else "",
+    # Label only. Letting pytest build an id from the source puts whole
+    # function bodies into the test id, and into every CI log line.
+    ids=[label for label, _ in _swallowing_generators()],
 )
 def test_a_loop_that_swallows_counts_what_it_swallowed(label, source):
     assert "tally.drop(" in source, f"{label} drops spectra without counting them"
@@ -301,7 +303,7 @@ def test_a_loop_that_swallows_counts_what_it_swallowed(label, source):
 @pytest.mark.parametrize(
     "label, source",
     [(lbl, src) for lbl, _, src in _reader_functions() if "DropTally(" in src],
-    ids=lambda v: v if isinstance(v, str) else "",
+    ids=[lbl for lbl, _, src in _reader_functions() if "DropTally(" in src],
 )
 def test_whoever_opens_a_tally_closes_it(label, source):
     """Counting without reporting is the half of the defect that is easy

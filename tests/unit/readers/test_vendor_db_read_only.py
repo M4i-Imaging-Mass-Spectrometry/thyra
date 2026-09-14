@@ -82,8 +82,16 @@ class TestTheUri:
 
         A mapped network drive resolves to a UNC path on Windows, which
         is where this lab's data lives.
+
+        Spelled with forward slashes so the test means the same thing on
+        both platforms. A backslash is not a separator on POSIX, so the
+        backslash spelling is one long filename there and ``as_posix``
+        hands it back percent-encoded -- which is what CI caught: the
+        guard passed on Windows and failed on Linux for a reason that
+        had nothing to do with the rule it guards. The solariX test this
+        one was modelled on always used forward slashes.
         """
-        uri = read_only_uri(r"\\server\share\run.d\analysis.tdf")
+        uri = read_only_uri(Path("//server/share/run.d/analysis.tdf"))
         assert uri.startswith("file:////server/share/")
 
     def test_immutable_is_downgraded_when_a_live_wal_sits_beside_the_file(
