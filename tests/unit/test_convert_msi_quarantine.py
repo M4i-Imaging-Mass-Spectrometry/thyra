@@ -45,9 +45,9 @@ def imzml(create_minimal_imzml):
 
 
 def _fail_after_writing(out: Path, how):
-    """A ``_perform_conversion_with_cleanup`` that writes, then fails."""
+    """A ``_perform_conversion`` that writes, then fails."""
 
-    def replacement(converter, reader):
+    def replacement(converter):
         _half_written_store(out)
         return how()
 
@@ -61,7 +61,7 @@ class TestTheDestinationIsCleared:
         out = tmp_path / "out.zarr"
         monkeypatch.setattr(
             convert_module,
-            "_perform_conversion_with_cleanup",
+            "_perform_conversion",
             _fail_after_writing(out, lambda: False),
         )
 
@@ -74,7 +74,7 @@ class TestTheDestinationIsCleared:
         out = tmp_path / "out.zarr"
         monkeypatch.setattr(
             convert_module,
-            "_perform_conversion_with_cleanup",
+            "_perform_conversion",
             _fail_after_writing(out, lambda: False),
         )
 
@@ -89,14 +89,12 @@ class TestTheDestinationIsCleared:
         out = tmp_path / "out.zarr"
         monkeypatch.setattr(
             convert_module,
-            "_perform_conversion_with_cleanup",
+            "_perform_conversion",
             _fail_after_writing(out, lambda: False),
         )
         convert_msi(str(imzml), str(out), pixel_size_um=25.0)
 
-        monkeypatch.setattr(
-            convert_module, "_perform_conversion_with_cleanup", lambda c, r: True
-        )
+        monkeypatch.setattr(convert_module, "_perform_conversion", lambda c: True)
         assert convert_msi(str(imzml), str(out), pixel_size_um=25.0) is True
 
     @pytest.mark.parametrize(
@@ -121,7 +119,7 @@ class TestTheDestinationIsCleared:
         out = tmp_path / "out.zarr"
         monkeypatch.setattr(
             convert_module,
-            "_perform_conversion_with_cleanup",
+            "_perform_conversion",
             _fail_after_writing(out, how),
         )
 
@@ -150,11 +148,11 @@ class TestItDoesNotTouchWhatItDoesNotOwn:
     ):
         out = tmp_path / "out.zarr"
 
-        def succeed(converter, reader):
+        def succeed(converter):
             _half_written_store(out)
             return True
 
-        monkeypatch.setattr(convert_module, "_perform_conversion_with_cleanup", succeed)
+        monkeypatch.setattr(convert_module, "_perform_conversion", succeed)
 
         assert convert_msi(str(imzml), str(out), pixel_size_um=25.0) is True
         assert out.is_dir()

@@ -230,6 +230,14 @@ class BaseMSIConverter(ABC):
             logger.error(f"Detailed traceback:\n{traceback.format_exc()}")
             return False
         finally:
+            # A second closer, deliberately. ``convert_msi`` owns the reader
+            # it opened and holds it in a ``with`` (issue #279), so for the
+            # front door this is redundant -- and harmless, because every
+            # reader's close() is idempotent. It stays for the caller who
+            # constructs a converter directly, which is how issue #245's
+            # guarantee is met on that path: an interrupt must release the
+            # reader's memory-mapped vendor files, or the scratch directory
+            # cannot be removed. ``test_the_reader_is_closed`` pins it.
             self.reader.close()
 
     def _initialize_conversion(self) -> None:

@@ -130,10 +130,24 @@ class TestAnUnregisteredOutputFormat:
 
     def _convert(self, tmp_path, monkeypatch, thyra_logs, format_type):
         class _StubReader:
-            """Enough reader for _create_converter to be reached."""
+            """Enough reader for _create_converter to be reached.
+
+            Including the context-manager protocol: ``convert_msi`` holds
+            the reader it opened in a ``with`` (issue #279), and every real
+            reader inherits ``__enter__``/``__exit__`` from
+            :class:`~thyra.core.base_reader.BaseMSIReader`. A stub without
+            them fails at the ``with`` before reaching the refusal this
+            test is about.
+            """
 
             def get_essential_metadata(self):
                 return SimpleNamespace(pixel_size=(25.0, 25.0))
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                self.close()
 
             def close(self):
                 pass
