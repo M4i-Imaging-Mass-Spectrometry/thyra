@@ -25,15 +25,22 @@ def _setup_logging(verbose: bool):
 
 
 def _print_file_results(results: dict, args, unknown_list: list):
-    """Print results for single file validation."""
+    """Print results for single file validation.
+
+    The summary is what the validator computed, not a banner and the
+    literal string "Test summary for file" -- which is what this printed
+    for every run without ``--verbose``, so the term counts, the
+    known/unknown split and the most common terms were all discarded
+    after being calculated (issue #299).
+
+    ``--verbose`` no longer gates it. The flag turns on INFO logging; it
+    is not a request for the tool's only output. ``_generate_summary``
+    emits its own "Ontology Validation Summary" banner as its first two
+    lines, so nothing needs to be printed around it.
+    """
     if not args.output:
-        if args.verbose and "summary" in results:
-            print(results["summary"])
-        else:
-            print("Ontology Validation Summary")
-            print("===========================")
-            print("Test summary for file")
-            print()
+        print(results.get("summary", "No summary available."))
+        print()
 
         if unknown_list:
             print(f"Found {len(unknown_list)} unknown terms:")
