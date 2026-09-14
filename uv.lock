@@ -3837,6 +3837,7 @@ test = [
     { name = "mock" },
     { name = "pytest" },
     { name = "pytest-cov" },
+    { name = "zstandard" },
 ]
 
 [package.metadata]
@@ -3892,6 +3893,7 @@ test = [
     { name = "mock", specifier = ">=4.0.0" },
     { name = "pytest", specifier = ">=7.0.0" },
     { name = "pytest-cov", specifier = ">=4.0.0" },
+    { name = "zstandard", specifier = ">=0.22" },
 ]
 
 [[package]]

@@ -4,7 +4,8 @@ Every other imzML the suite reads was produced by pyimzml's own
 ``ImzMLWriter``, so parser and writer agree on each other's mistakes and nine
 structural features of real vendor files are unreachable. These pairs were
 written out literally to break that loop; see the corpus README for what each
-one carries and for the two ways they can be destroyed without a test noticing.
+one carries and for the three ways they can be destroyed -- two of them without
+a test noticing.
 
 A number of assertions below pin behaviour that is **wrong**. Each carries a
 comment naming the audit finding it characterises and what a fix would turn it
@@ -13,10 +14,15 @@ discarding a nanometre unit, not a claim that 4406.25 um is the pixel size --
 the extractor compensates, which is what ``TestUnitNanometre`` now asserts.
 """
 
+import importlib.util
+import os
 import shutil
+import sqlite3
 import subprocess
+import sys
 import warnings
 from pathlib import Path
+from types import ModuleType
 from typing import List
 
 import numpy as np
@@ -56,6 +62,11 @@ READABLE_STEMS = [stem for stem in STEMS if stem != "two_precision_terms"]
 # terminated with CRLF, and every one of its line breaks is one.
 IONTOF_CRLF_COUNT = 174
 IONTOF_BYTE_COUNT = 11593
+
+# The hand-written Bruker TDF acquisition and the script that produces it.
+TDF_DIR_NAME = "synthetic_tims.d"
+TDF_FILES = ["analysis.tdf", "analysis.tdf_bin"]
+BUILD_SCRIPT_NAME = "build_tdf_fixture.py"
 
 
 def fixture_path(stem: str) -> Path:
@@ -672,6 +683,17 @@ class TestCommittedBytes:
     staging ``iontof_sparse.imzML`` rewrites all 174 CRLFs and the fixture stops
     testing anything -- with the suite green on both sides, because every other
     test in this module reads the worktree file. These read the blob.
+
+    The same questions are asked of ``synthetic_tims.d``, whose two files are
+    binary by ``.gitattributes:39`` and admitted only by a single ``.gitignore``
+    negation under a blanket ``*.d``. Blob equality cannot see that negation
+    being deleted -- .gitignore stops applying to a path once it is in the
+    index -- so ``check-ignore --no-index`` is asked separately, with a path one
+    directory up as the control.
+
+    Of the TDF cases only ``test_the_build_scripts_staging_trees_are_ignored``
+    could fail before the commit that added them; the rest pin configuration
+    that was already correct, so read them as coverage rather than as guards.
     """
 
     def test_crlf_survives_into_the_index(self):
@@ -754,6 +776,59 @@ class TestCommittedBytes:
         assert not _is_ignored("thyra/readers/imzml/a_new_module.py")
         assert not _is_ignored("thyra/readers/imzml/_a_private_module.py")
 
+    @pytest.mark.parametrize("name", TDF_FILES)
+    def test_the_tdf_blob_is_byte_identical_to_the_worktree(self, name):
+        """The TDF fixture gets the same guarantee the imzML corpus has.
+
+        Cannot fail before the change that added it: both files are already
+        clean in the index. It exists so that a rebuild committed from a
+        machine with a different zstd or SQLite shows up here rather than as
+        ``no such table: Frames`` in two unrelated modules.
+        """
+        repo_path = f"tests/data/fixtures/{TDF_DIR_NAME}/{name}"
+        blob = _blob(repo_path)
+
+        assert blob == (REPO_ROOT / repo_path).read_bytes()
+
+    @pytest.mark.parametrize("name", TDF_FILES)
+    def test_the_tdf_files_are_marked_binary(self, name):
+        """A SQLite database and a zstd frame store must never be read as text."""
+        attributes = _git(
+            "check-attr", "binary", "--", f"tests/data/fixtures/{TDF_DIR_NAME}/{name}"
+        )
+
+        assert attributes.strip().endswith("binary: set")
+
+    @pytest.mark.parametrize("name", TDF_FILES)
+    def test_gitignore_still_admits_the_tdf_fixture(self, name):
+        """``*.d`` ignores every acquisition directory; one negation admits this one.
+
+        Deleting that negation leaves every other test in the suite green --
+        the files are already tracked -- and breaks only the next person to
+        regenerate the fixture and try to add it back.
+        """
+        assert not _is_ignored(f"tests/data/fixtures/{TDF_DIR_NAME}/{name}")
+
+    def test_the_blanket_d_rule_is_still_live(self):
+        """The control: the same name outside the fixture directory is ignored.
+
+        Without it the test above would pass just as happily on a repository
+        that had dropped ``*.d`` altogether, which is not the one it describes.
+        """
+        assert _is_ignored("tests/data/scratch.d/analysis.tdf")
+
+    @pytest.mark.parametrize(
+        "prefix", [".synthetic_tims-build-", ".synthetic_tims-old-"]
+    )
+    def test_the_build_scripts_staging_trees_are_ignored(self, prefix):
+        """A run killed mid-swap must not leave something ``git add -A`` takes.
+
+        ``build_tdf_fixture.py`` writes into ``.synthetic_tims-build-*`` and
+        renames the old tree to ``.synthetic_tims-old-*``; both sit beside the
+        fixture, whose own negation would otherwise be the nearest rule.
+        """
+        assert _is_ignored(f"tests/data/fixtures/{prefix}abc123/analysis.tdf")
+
 
 class TestProductionResolvesTheIbdExplicitly:
     """The corpus is also the place to pin how the .ibd is found.
@@ -786,3 +861,157 @@ class TestProductionResolvesTheIbdExplicitly:
         inferred = ImzMLParser._infer_bin_filename(path)
 
         assert Path(inferred) == path.with_suffix(".ibd")
+
+
+def _copy_the_build_script(tmp_path: Path) -> Path:
+    """Copy ``build_tdf_fixture.py`` and the fixture it builds into ``tmp_path``.
+
+    The script resolves ``FIXTURE_DIR`` from its own ``__file__``, so a copy
+    acts entirely on the copied acquisition and the tracked one is never at
+    risk -- which is the only safe way to test a script whose failure mode is
+    destroying that acquisition.
+    """
+    script = tmp_path / BUILD_SCRIPT_NAME
+    shutil.copy2(FIXTURE_DIR / BUILD_SCRIPT_NAME, script)
+    shutil.copytree(FIXTURE_DIR / TDF_DIR_NAME, tmp_path / TDF_DIR_NAME)
+    return script
+
+
+def _load_the_build_script(tmp_path: Path) -> ModuleType:
+    """Import the copy, so ``FIXTURE_DIR`` resolves to ``tmp_path``."""
+    spec = importlib.util.spec_from_file_location(
+        "build_tdf_fixture_under_test", _copy_the_build_script(tmp_path)
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _fixture_bytes(tmp_path: Path) -> dict:
+    """Both files of the copied acquisition, by name."""
+    directory = tmp_path / TDF_DIR_NAME
+    return {name: (directory / name).read_bytes() for name in TDF_FILES}
+
+
+def _fail_before_the_connection(module: ModuleType, monkeypatch) -> None:
+    """Make ``sqlite3.connect`` raise, so nothing ever holds the database open."""
+
+    class _NoConnection:
+        @staticmethod
+        def connect(*args, **kwargs):
+            raise RuntimeError("injected in place of sqlite3.connect")
+
+    # The name binding on the copied module, not ``module.sqlite3.connect``:
+    # that attribute IS the stdlib module, shared with everything else in the
+    # process -- coverage.py stores its own data through it.
+    monkeypatch.setattr(module, "sqlite3", _NoConnection)
+
+
+def _fail_with_the_connection_open(module: ModuleType, monkeypatch) -> None:
+    """Break a DDL statement, so the failure lands mid-transaction.
+
+    This is the case ``contextlib.closing`` exists for: on Windows
+    ``shutil.rmtree(..., ignore_errors=True)`` silently declines to remove a
+    directory that still holds an open SQLite file, so a cleanup written
+    without it strands the staging tree here and nowhere else.
+    """
+    monkeypatch.setattr(module, "DDL", [*module.DDL, "CREATE TABLE Broken (oops"])
+
+
+class TestTdfBuildScript:
+    """Running the build script must not be able to damage what it rebuilds.
+
+    It could: ``import zstandard`` sat inside ``encode_frame``, which the build
+    reaches only after ``shutil.rmtree(OUT_DIR)``, so on a machine without the
+    module the script deleted ``analysis.tdf`` and left ``analysis.tdf_bin`` at
+    its 64-byte header before failing. Nothing in the fallout named the script:
+    it surfaces as 19 ``no such table: Frames`` failures in two modules that
+    only read the fixture.
+    """
+
+    def test_a_missing_zstandard_costs_no_bytes(self, tmp_path):
+        """The regression itself: refuse before opening or removing anything.
+
+        Deterministic whether or not zstandard is installed here -- a PYTHONPATH
+        entry holding a ``zstandard.py`` that raises shadows the real module,
+        which needs neither ``sitecustomize`` nor a ``sys.meta_path`` finder.
+        """
+        script = _copy_the_build_script(tmp_path)
+        before = _fixture_bytes(tmp_path)
+        blocker = tmp_path / "blocker"
+        blocker.mkdir()
+        (blocker / "zstandard.py").write_text(
+            "raise ModuleNotFoundError("
+            '"No module named \'zstandard\'", name="zstandard")\n',
+            encoding="utf-8",
+        )
+        environment = dict(os.environ)
+        environment["PYTHONPATH"] = str(blocker)
+
+        result = subprocess.run(
+            [sys.executable, str(script)],
+            cwd=str(tmp_path),
+            env=environment,
+            capture_output=True,
+            check=False,
+        )
+        message = result.stderr.decode("utf-8", errors="replace")
+
+        assert result.returncode != 0
+        assert "zstandard" in message
+        assert "uv sync --group test" in message
+        assert _fixture_bytes(tmp_path) == before
+
+    @pytest.mark.parametrize(
+        "inject, expected",
+        [
+            (_fail_before_the_connection, RuntimeError),
+            (_fail_with_the_connection_open, sqlite3.OperationalError),
+        ],
+        ids=["before the connection", "with the connection open"],
+    )
+    def test_a_failure_mid_build_leaves_the_fixture_and_no_debris(
+        self, tmp_path, monkeypatch, inject, expected
+    ):
+        """Any failure after the first byte is written must still be a no-op.
+
+        Two injection points, because the staging directory alone does not buy
+        this: one before the database is opened and one while it is open, which
+        is the half that also needs the connection closed on the way out.
+        """
+        pytest.importorskip("zstandard")
+        module = _load_the_build_script(tmp_path)
+        before = _fixture_bytes(tmp_path)
+        inject(module, monkeypatch)
+
+        with pytest.raises(expected):
+            module.build()
+
+        assert _fixture_bytes(tmp_path) == before
+        assert list(tmp_path.glob(".synthetic_tims-*")) == []
+
+    def test_a_complete_run_rebuilds_both_files(self, tmp_path):
+        """The promise the corpus README makes for the sibling script.
+
+        Deliberately not byte-equality: the module docstring records that the
+        SQLite bytes move with the SQLite version and the ``.tdf_bin`` bytes
+        with the zstd version. What has to hold is that a run leaves an
+        acquisition the SDK could open, and no staging tree behind.
+        """
+        pytest.importorskip("zstandard")
+        module = _load_the_build_script(tmp_path)
+
+        module.build()
+
+        rebuilt = tmp_path / TDF_DIR_NAME
+        assert sorted(p.name for p in rebuilt.iterdir()) == TDF_FILES
+        assert all((rebuilt / name).stat().st_size > 0 for name in TDF_FILES)
+        connection = sqlite3.connect(rebuilt / "analysis.tdf")
+        try:
+            frames = connection.execute("SELECT COUNT(*) FROM Frames").fetchone()[0]
+        finally:
+            connection.close()
+
+        assert frames > 0
+        assert list(tmp_path.glob(".synthetic_tims-*")) == []

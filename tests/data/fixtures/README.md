@@ -53,14 +53,27 @@ extraction on it. `synthetic_tims_expected.json` records what was written,
 pair by pair, so `tests/integration/test_bruker_tdf_synthetic.py` can check
 the reader against ground truth through the real SDK.
 
-Built by `build_tdf_fixture.py` (needs `zstandard`); the module docstring
-documents the frame-block layout and the SDK's intensity scaling that the
-fixture sidesteps by declaring a 100 ms accumulation time.
+Three more places read it, which is why corrupting it is expensive:
+`tests/unit/readers/test_bruker_fragmentation.py` and
+`test_bruker_precursor_spectra.py` copy the directory and rewrite the copy's
+SQLite to synthesise MS/MS acquisitions, and `docs/explore-the-output.ipynb`
+copies it into `example_data/` to build the notebook's PASEF demo. Only the
+integration module skips when it cannot open the fixture; the two unit modules
+drive the reader with a fake SDK and fail outright.
 
-## Two ways these files get destroyed
+Built by `build_tdf_fixture.py`, which needs `zstandard`. That is declared in
+the `test` dependency group, so `uv sync --group test` installs it — plain
+`uv sync`, which is what `docs/contributing.md` tells a contributor to run,
+does not. The module docstring documents the frame-block layout and the SDK's
+intensity scaling that the fixture sidesteps by declaring a 100 ms
+accumulation time. Both files are marked binary by `.gitattributes:39`, the
+same guarantee `.gitattributes:15` gives the imzML corpus.
 
-Neither leaves a mark on the worktree file that a reader would notice, and
-before `TestCommittedBytes` existed neither failed a single test.
+## Three ways these files get destroyed
+
+The first two leave no mark on the worktree file that a reader would notice,
+and before `TestCommittedBytes` existed neither failed a single test. The
+third is loud instead — and it is the one that actually happened.
 
 1. **Staging.** `.gitattributes:15` is `* text=auto eol=lf`. Without the
    `tests/data/fixtures/*.imzML -text` exemption, staging `iontof_sparse.imzML`
@@ -72,8 +85,19 @@ before `TestCommittedBytes` existed neither failed a single test.
 2. **Pre-commit.** `mixed-line-ending --fix=lf` does the same thing to the
    worktree file, and `trailing-whitespace` and `end-of-file-fixer` are free to
    move any byte. All three carry
-   `exclude: ^tests/data/fixtures/[^/]+\.(imzML|ibd)$`, scoped to the two
-   byte-exact extensions so this README and `build_fixtures.py` stay covered.
+   `exclude: ^tests/data/fixtures/([^/]+\.(imzML|ibd)|synthetic_tims\.d/.*)$`,
+   scoped to the byte-exact fixtures so this README and `build_fixtures.py`
+   stay covered.
+3. **The build script.** `build_tdf_fixture.py` used to `import zstandard`
+   inside `encode_frame`, which the build reaches only after
+   `shutil.rmtree(OUT_DIR)` has run and the new `analysis.tdf_bin` is open.
+   On a machine without the module — since `xarray-spatial` moved it behind an
+   extra, that is any freshly resolved environment — running the script deleted
+   `analysis.tdf` and left `analysis.tdf_bin` at its 64-byte header. The 19
+   tests that then fail say `no such table: Frames`, naming neither the script
+   nor the missing dependency. Closed twice over: the import is at module
+   scope, so it fails before a byte is touched, and the build now writes into a
+   staging directory that is renamed over the fixture only once complete.
 
 `.gitignore` also needs the negations: `*.imzML` and `*.ibd` ignore every file
 with those extensions, so without `!tests/data/fixtures/*.imzML` these files

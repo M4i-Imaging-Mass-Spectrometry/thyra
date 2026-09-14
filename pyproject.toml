@@ -237,6 +237,15 @@ test = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
     "mock>=4.0.0",
+    # tests/data/fixtures/build_tdf_fixture.py compresses the TDF frame blocks
+    # with it. It reaches CI today only by accident -- xarray-spatial 0.10.17,
+    # four levels down from spatialdata, depends on it unconditionally -- and
+    # 0.10.18 has already moved it behind `geotiff`/`tests` extras that
+    # spatialdata does not request. `build_command` below re-locks on every
+    # release, so the first resolve that takes 0.10.18 would delete zstandard
+    # from the test environment. `test` rather than `dev` because that is the
+    # group tests.yml installs.
+    "zstandard>=0.22",
 ]
 dev = [
     "black>=23.0.0",
