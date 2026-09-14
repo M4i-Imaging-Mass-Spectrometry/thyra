@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 from types import SimpleNamespace
+from unittest import mock
 
 import numpy as np
 import pytest
@@ -177,3 +178,63 @@ class TestTheSiblingTablesUseTheSameRule:
         from thyra.converters.spatialdata.mobility_heatmap import usable_intensities
 
         assert usable_intensities(np.asarray([1.0, 0.0, 3.0])) is None
+
+    def test_the_shared_axis_row_drops_them(self):
+        """The third row builder, the one the rule did not reach (#289).
+
+        ``intensities != 0`` is true of a NaN and of a negative, so the
+        shared-axis mobility table wrote both into ``X`` while the summed
+        table and the grid tables dropped them.
+        """
+        from thyra.converters.spatialdata.mobility_table import (
+            _shared_axis_row,
+            _SharedFeatureAxis,
+        )
+
+        features = _SharedFeatureAxis(
+            np.asarray([100.0, 200.0, 300.0]), np.asarray([1.0, 1.1, 1.2])
+        )
+        columns, values = _shared_axis_row(
+            features,
+            (0, 0, 0),
+            np.asarray([100.0, 200.0, 300.0]),
+            np.asarray([1.0, 1.1, 1.2]),
+            np.asarray([5.0, np.nan, -3.0]),
+        )
+        np.testing.assert_array_equal(columns, [0])
+        np.testing.assert_array_equal(values, [5.0])
+
+    def test_the_shared_axis_row_keeps_the_fast_path(self):
+        """A pixel carrying every source pair still resolves by identity.
+
+        The mask goes on the resolved columns, not on ``mzs``, so the
+        ``mzs.size == n_source`` branch is still taken and a source with
+        one unusable value does not start paying a ``searchsorted`` per
+        pixel.
+        """
+        from thyra.converters.spatialdata.mobility_table import (
+            _shared_axis_row,
+            _SharedFeatureAxis,
+        )
+
+        features = _SharedFeatureAxis(
+            np.asarray([100.0, 200.0, 300.0]), np.asarray([1.0, 1.1, 1.2])
+        )
+        calls = []
+        real = np.searchsorted
+
+        def counted(*args, **kwargs):
+            calls.append(1)
+            return real(*args, **kwargs)
+
+        with mock.patch.object(np, "searchsorted", counted):
+            columns, values = _shared_axis_row(
+                features,
+                (0, 0, 0),
+                np.asarray([100.0, 200.0, 300.0]),
+                np.asarray([1.0, 1.1, 1.2]),
+                np.asarray([5.0, np.nan, 7.0]),
+            )
+        np.testing.assert_array_equal(columns, [0, 2])
+        np.testing.assert_array_equal(values, [5.0, 7.0])
+        assert calls == []
