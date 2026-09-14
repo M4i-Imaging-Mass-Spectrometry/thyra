@@ -1,7 +1,7 @@
 """Five readers, one raw mass-axis builder (issue #294).
 
 Each of these built "the union of every spectrum's m/z" its own way, and
-three of the five did it badly:
+four of the five did it badly:
 
 - **Waters** and **solariX** appended every spectrum's array to a list and
   then paid ``np.concatenate`` + ``np.unique`` -- three payload-sized
@@ -11,19 +11,35 @@ three of the five did it badly:
   axis every group.
 - **timsTOF** accumulated into a ``set[float]``: O(unique) in elements but
   ~10x that in bytes, and it reported its own cost as ``len(unique) * 8``.
+  imzML, the fifth, is the one that was already right.
 
-What matters is that the *answer* is unchanged. Every one of these asserts
-the reader returns exactly what ``np.unique`` over its inputs returns, which
-is the contract every downstream consumer was already written against.
+What matters is that the *answer* is unchanged: ``np.unique`` over the
+inputs, which is the contract every downstream consumer was already written
+against.
+
+These tests assert that of the **accumulator**, plus an audit that no reader
+still builds an axis the old way. They do not construct readers -- the
+per-reader equivalence was established by driving each old builder and each
+new one over sixteen input shapes and comparing, which needs vendor handles
+these tests do not have. Each reader's own pre-filtering (Waters skipping
+empty reads, mzPeak dropping NaN padding, timsTOF's empty-source early
+return) is covered by that reader's own test file.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from thyra.core.mass_axis import MassAxisAccumulator
 from thyra.errors import ConversionRefused
+
+#: Anchored on this file, not on the process cwd: every other
+#: source-inspecting test here does the same, and a bare relative path
+#: makes the whole class fail when pytest is run from anywhere else.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 class TestTheFoldReturnsWhatNpUniqueReturned:
@@ -140,7 +156,7 @@ class TestTheCapStillWorks:
                 accumulator.add(np.asarray([float(i), i + 0.5], dtype=np.float64))
             accumulator.finish()
         message = str(excinfo.value)
-        assert "spectra" in message and " of " not in message.split("spectra")[0][-20:]
+        assert f"after {accumulator.n_seen:,} spectra" in message
 
     def test_no_cap_means_no_refusal(self):
         accumulator = MassAxisAccumulator()
@@ -152,26 +168,37 @@ class TestTheCapStillWorks:
 class TestEveryReaderUsesIt:
     """A completeness audit: a reader that builds a union axis must fold.
 
-    Discovered from the source rather than listed, for the reason the
-    drop-tally audit is: a hardcoded list can only confirm the builders
-    that were converted. `np.concatenate`/`np.union1d` over a per-spectrum
-    accumulation is the shape being removed.
+    Every reader module is discovered, not listed. A hardcoded list can
+    only confirm the builders that were converted, which is how #308's
+    equivalent audit missed two loops of the shape it was fixing. Three
+    modules here define ``get_common_mass_axis`` without building a union
+    -- Rapiflex and PHI derive theirs analytically, and the Bruker base
+    delegates -- and the audit covers them too, so a future rewrite of one
+    into a collect-then-unique is caught.
     """
 
-    READERS = [
-        "thyra/readers/waters/waters_reader.py",
-        "thyra/readers/bruker/solarix/solarix_reader.py",
-        "thyra/readers/mzpeak/mzpeak_reader.py",
-        "thyra/readers/bruker/timstof/timstof_reader.py",
-        "thyra/readers/imzml/imzml_reader.py",
-    ]
+    READERS = sorted(
+        str(p.relative_to(_REPO_ROOT).as_posix())
+        for p in (_REPO_ROOT / "thyra" / "readers").rglob("*.py")
+        if "get_common_mass_axis" in p.read_text(encoding="utf-8")
+        or "build_raw_mass_axis" in p.read_text(encoding="utf-8")
+    )
 
     @pytest.mark.parametrize("path", READERS, ids=lambda p: p.split("/")[-1])
-    def test_it_imports_the_shared_builder(self, path):
-        from pathlib import Path
+    def test_it_folds_or_does_not_build_a_union(self, path):
+        """A module that builds a union axis uses the shared accumulator.
 
-        source = Path(path).read_text(encoding="utf-8")
-        assert "MassAxisAccumulator" in source, f"{path} builds its own axis"
+        A module that derives its axis some other way -- Rapiflex from the
+        mass range, PHI from the calibration -- has nothing to fold and is
+        exempt. The point is that nobody accumulates spectra themselves.
+        """
+        source = (_REPO_ROOT / path).read_text(encoding="utf-8")
+        if "MassAxisAccumulator" in source:
+            return
+        builds_a_union = any(
+            marker in source for marker in ("np.union1d(", "np.concatenate(", "set()")
+        )
+        assert not builds_a_union, f"{path} accumulates an axis of its own"
 
     @pytest.mark.parametrize("path", READERS, ids=lambda p: p.split("/")[-1])
     def test_it_no_longer_collects_then_uniques(self, path):
@@ -186,7 +213,6 @@ class TestEveryReaderUsesIt:
         too. Only calls inside the functions that build an axis count.
         """
         import ast
-        from pathlib import Path
 
         builders = {
             "get_common_mass_axis",
@@ -200,7 +226,7 @@ class TestEveryReaderUsesIt:
                 return f.attr
             return f.id if isinstance(f, ast.Name) else ""
 
-        tree = ast.parse(Path(path).read_text(encoding="utf-8"))
+        tree = ast.parse((_REPO_ROOT / path).read_text(encoding="utf-8"))
         offenders = []
         for fn in ast.walk(tree):
             if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):

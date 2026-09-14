@@ -41,7 +41,6 @@ from .mobility_array import (
 
 logger = logging.getLogger(__name__)
 
-# Scratch buffer floor for the processed-mode mass axis build, in ELEMENTS.
 # mzML's XML namespace, spelled the way pyimzml spells it.
 _MZML_NS = "{http://psi.hupo.org/ms/mzml}"
 
@@ -247,8 +246,11 @@ class ImzMLReader(BaseMSIReader):
         self.filepath: Optional[Union[str, Path]] = data_path
         self.batch_size: int = batch_size
         self.cache_coordinates: bool = cache_coordinates
-        # Absent means "use the default"; an explicit None means "unlimited",
-        # so this cannot be a bare ``.get(...)`` with a None fallback.
+        # Overrides BaseMSIReader, which takes the same keyword for every
+        # reader but leaves it uncapped; this is the one format with a
+        # defensible default. Absent means "use the default"; an explicit
+        # None means "unlimited", so this cannot be a bare ``.get(...)``
+        # with a None fallback.
         self.max_mass_axis_length: Optional[int] = validate_max_mass_axis_length(
             kwargs.get("max_mass_axis_length", DEFAULT_MAX_MASS_AXIS_LENGTH)
         )
@@ -993,9 +995,7 @@ class ImzMLReader(BaseMSIReader):
         )
 
         total_spectra = len(parser.coordinates)
-        accumulator = MassAxisAccumulator(
-            total_spectra, getattr(self, "max_mass_axis_length", None)
-        )
+        accumulator = MassAxisAccumulator(total_spectra, self.max_mass_axis_length)
 
         with tqdm(
             total=total_spectra,

@@ -122,7 +122,8 @@ def build_raw_mass_axis(
     from tqdm import tqdm
 
     # A ``set[float]`` is O(unique) in elements but roughly ten times that
-    # in bytes: every value becomes a boxed CPython float (32 bytes each),
+    # in bytes: every value becomes a boxed CPython float (24 bytes, 32
+    # with pymalloc's block rounding),
     # plus the set's own table, plus the pointer list ``sorted()`` builds,
     # plus the output array. The progress line reported the cost as
     # ``len(unique_mzs) * 8``, which is the output array alone. The shared
@@ -159,7 +160,12 @@ def build_raw_mass_axis(
             if count % 10000 == 0:
                 pbar.set_postfix(
                     {
-                        "unique_mz": accumulator.n_unique,
+                        # A lower bound, not the exact count the set
+                        # gave: values still in the scratch buffer are
+                        # not folded yet, so this can sit up to a
+                        # buffer behind and jump. Named so nobody reads
+                        # it as exact.
+                        "unique_mz>=": accumulator.n_unique,
                         "total_peaks": total_peaks,
                     }
                 )

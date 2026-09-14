@@ -1,6 +1,6 @@
 """Building a raw mass axis: the union of every spectrum's m/z values.
 
-Five readers needed this and five wrote it, three of them badly (issue
+Five readers needed this and five wrote it, four of them badly (issue
 #294). The shapes were:
 
 - **imzML** folded each batch into a running axis, so its transient was
@@ -15,8 +15,9 @@ Five readers needed this and five wrote it, three of them badly (issue
   the whole axis every group -- O(unique) memory but quadratic work.
 - **timsTOF** accumulated into a ``set[float]``, which is O(unique) in
   elements but ~10x that in bytes: every value becomes a boxed CPython
-  float (32 bytes each), plus the set table, plus ``sorted()``'s pointer
-  list. It reported its own cost as ``len(unique) * 8``.
+  float (24 bytes, 32 with pymalloc's block rounding), plus the set
+  table, plus ``sorted()``'s pointer list. It reported its own cost as
+  ``len(unique) * 8``, the output array alone.
 
 Nothing downstream could make up for it. The converter refuses a
 too-wide axis, but only *after* ``get_common_mass_axis()`` has returned,
@@ -53,6 +54,8 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "DEFAULT_MAX_MASS_AXIS_LENGTH",
+    "MASS_AXIS_BATCH_VALUES",
+    "MASS_AXIS_PROBE_BLOCK",
     "MassAxisAccumulator",
     "dedupe_sorted",
     "filter_absent",

@@ -712,12 +712,13 @@ class WatersReader(BaseMSIReader):
         # trace, where every scan shares the same grid, so the unique count
         # is small and the concatenate is pure waste (#294).
         #
-        # No cap: ``max_mass_axis_length`` stays an imzML-only default, so
-        # no acquisition that converts today starts being refused. The
-        # plumbing reaches this reader now, one argument away.
-        accumulator = MassAxisAccumulator(
-            total, max_length=getattr(self, "max_mass_axis_length", None)
-        )
+        # ``max_mass_axis_length`` is honoured if the caller passes one
+        # (BaseMSIReader takes it for every reader now), but it has no
+        # default here -- only imzML sets one. So no acquisition that
+        # converts today starts being refused, and turning the cap on for
+        # this reader stays a defaults decision rather than a side effect
+        # of removing a duplicated builder.
+        accumulator = MassAxisAccumulator(total, max_length=self.max_mass_axis_length)
         n_spectra = 0
 
         with tqdm(total=total, desc="Building mass axis", unit="scan") as pbar:

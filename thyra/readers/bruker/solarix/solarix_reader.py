@@ -483,15 +483,12 @@ class SolarixReader(BrukerBaseMSIReader):
             # so the transient was the size of the whole peak payload
             # rather than of its distinct values -- three payload-sized
             # allocations live at once (#294). The fold's peak is O(unique).
-            # No cap here: ``max_mass_axis_length`` remains an imzML-only
-            # default (10M, SCiLS Lab's own limit). Turning it on for this
-            # reader would refuse acquisitions that convert today, which is
-            # a defaults decision rather than part of removing a duplicate
-            # builder. The cap plumbing reaches every reader now, so it is
-            # one argument away when that decision is taken.
-            accumulator = MassAxisAccumulator(
-                max_length=getattr(self, "max_mass_axis_length", None)
-            )
+            # Honoured if the caller passes one, but no default here:
+            # only imzML sets one (10M, SCiLS Lab's own limit). Turning it
+            # on for this reader would refuse acquisitions that convert
+            # today, which is a defaults decision rather than part of
+            # removing a duplicated builder.
+            accumulator = MassAxisAccumulator(max_length=self.max_mass_axis_length)
             cursor = self._conn.execute(
                 "SELECT Id, NumPeaks, PeakMzValues FROM Spectra ORDER BY Id"
             )

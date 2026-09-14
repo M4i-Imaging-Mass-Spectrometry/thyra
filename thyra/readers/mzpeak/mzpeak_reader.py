@@ -689,12 +689,15 @@ class MzPeakReader(BaseMSIReader):
         # length instead, so the number of merges is logarithmic in the
         # input (#294).
         #
-        # No cap: ``max_mass_axis_length`` stays an imzML-only default, so
-        # no archive that converts today starts being refused.
-        accumulator = MassAxisAccumulator(
-            data.metadata.num_row_groups,
-            max_length=getattr(self, "max_mass_axis_length", None),
-        )
+        # Honoured if the caller passes one, but no default here: only
+        # imzML sets one, so no archive that converts today starts being
+        # refused.
+        #
+        # ``total_spectra`` is left unset rather than given the row-group
+        # count: the refusal message counts *spectra*, and a row group holds
+        # many. Saying "after 3 of 12" about row groups would be a wrong
+        # denominator rather than a missing one.
+        accumulator = MassAxisAccumulator(max_length=self.max_mass_axis_length)
         for group in range(data.metadata.num_row_groups):
             table = data.read_row_group(group, columns=["point"])
             mzs = self._point_field(table, "mz")
@@ -706,7 +709,14 @@ class MzPeakReader(BaseMSIReader):
         try:
             axis = accumulator.finish()
         except ConversionRefused as e:
-            # Keep this reader's own wording, which names the archive.
+            # Keep this reader's own wording, which names the archive --
+            # but only for the empty-source refusal. An unconditional
+            # rewrite would relabel a max_mass_axis_length refusal, raised
+            # on the final fold, as "the archive has no usable signal
+            # data": the opposite of what happened, on an archive holding
+            # too much. Same guard solariX uses.
+            if "No spectra found" not in str(e) and "Failed to extract" not in str(e):
+                raise
             raise ConversionRefused(
                 f"{self.data_path} yielded no m/z values; the archive has no "
                 f"usable signal data."
