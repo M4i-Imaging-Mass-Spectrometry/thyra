@@ -59,6 +59,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from ...core.base_reader import BaseMSIReader
+from ...core.mass_axis import MassAxisAccumulator
 from ...core.registry import register_reader
 from ...errors import ConversionRefused
 
@@ -682,20 +683,44 @@ class MzPeakReader(BaseMSIReader):
             return self._common_axis
 
         data = self.archive.parquet("spectrum", "data_arrays")
-        axis = np.empty(0, dtype=np.float64)
+        # ``np.union1d`` per row group re-copied the entire axis every
+        # group, which is O(unique) memory but quadratic work over the
+        # archive. The shared accumulator's buffer capacity tracks the axis
+        # length instead, so the number of merges is logarithmic in the
+        # input (#294).
+        #
+        # Honoured if the caller passes one, but no default here: only
+        # imzML sets one, so no archive that converts today starts being
+        # refused.
+        #
+        # ``total_spectra`` is left unset rather than given the row-group
+        # count: the refusal message counts *spectra*, and a row group holds
+        # many. Saying "after 3 of 12" about row groups would be a wrong
+        # denominator rather than a missing one.
+        accumulator = MassAxisAccumulator(max_length=self.max_mass_axis_length)
         for group in range(data.metadata.num_row_groups):
             table = data.read_row_group(group, columns=["point"])
             mzs = self._point_field(table, "mz")
             # Null-pair padding carries no intensity; excluded so the
             # axis holds only channels that can actually take a value.
-            mzs = mzs[~np.isnan(mzs)]
-            axis = np.union1d(axis, np.unique(mzs))
+            accumulator.add(mzs[~np.isnan(mzs)])
+            mzs = None
 
-        if axis.size == 0:
+        try:
+            axis = accumulator.finish()
+        except ConversionRefused as e:
+            # Keep this reader's own wording, which names the archive --
+            # but only for the empty-source refusal. An unconditional
+            # rewrite would relabel a max_mass_axis_length refusal, raised
+            # on the final fold, as "the archive has no usable signal
+            # data": the opposite of what happened, on an archive holding
+            # too much. Same guard solariX uses.
+            if "No spectra found" not in str(e) and "Failed to extract" not in str(e):
+                raise
             raise ConversionRefused(
                 f"{self.data_path} yielded no m/z values; the archive has no "
                 f"usable signal data."
-            )
+            ) from e
         self._common_axis = axis.astype(np.float64, copy=False)
         return self._common_axis
 

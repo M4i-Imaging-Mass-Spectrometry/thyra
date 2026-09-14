@@ -25,8 +25,10 @@ from pathlib import Path
 import pytest
 
 from thyra.convert import _validate_streaming, convert_msi
+from thyra.core.mass_axis import (
+    validate_max_mass_axis_length as _validate_max_mass_axis_length,
+)
 from thyra.errors import ConversionRefused
-from thyra.readers.imzml.imzml_reader import _validate_max_mass_axis_length
 
 
 class TestStreaming:

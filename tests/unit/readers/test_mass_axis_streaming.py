@@ -30,14 +30,12 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from thyra.core import mass_axis as mod
+from thyra.core.mass_axis import dedupe_sorted as _dedupe_sorted
+from thyra.core.mass_axis import filter_absent as _filter_absent
+from thyra.core.mass_axis import merge_disjoint as _merge_disjoint
 from thyra.errors import ConversionRefused
-from thyra.readers.imzml import imzml_reader as mod
-from thyra.readers.imzml.imzml_reader import (
-    ImzMLReader,
-    _dedupe_sorted,
-    _filter_absent,
-    _merge_disjoint,
-)
+from thyra.readers.imzml.imzml_reader import ImzMLReader
 
 # Batch sizes small enough to force many folds, plus the real one.
 BATCH_SIZES = [1, 2, 3, 7, 1 << 20]
@@ -89,8 +87,8 @@ def _assert_bit_identical(got, ref):
 @pytest.fixture(params=BATCH_SIZES)
 def batch(request, monkeypatch):
     """Run each test at several batch sizes, including tiny ones."""
-    monkeypatch.setattr(mod, "_MASS_AXIS_BATCH_VALUES", request.param)
-    monkeypatch.setattr(mod, "_MASS_AXIS_PROBE_BLOCK", max(1, request.param))
+    monkeypatch.setattr(mod, "MASS_AXIS_BATCH_VALUES", request.param)
+    monkeypatch.setattr(mod, "MASS_AXIS_PROBE_BLOCK", max(1, request.param))
     return request.param
 
 
@@ -312,8 +310,8 @@ class TestFuzz:
     @pytest.mark.parametrize("seed", range(60))
     def test_random_runs_match_reference(self, seed, monkeypatch):
         rng = np.random.default_rng(seed)
-        monkeypatch.setattr(mod, "_MASS_AXIS_BATCH_VALUES", int(rng.integers(1, 16)))
-        monkeypatch.setattr(mod, "_MASS_AXIS_PROBE_BLOCK", int(rng.integers(1, 16)))
+        monkeypatch.setattr(mod, "MASS_AXIS_BATCH_VALUES", int(rng.integers(1, 16)))
+        monkeypatch.setattr(mod, "MASS_AXIS_PROBE_BLOCK", int(rng.integers(1, 16)))
 
         n_runs = int(rng.integers(0, 12))
         pool = rng.uniform(0.0, 50.0, 25)

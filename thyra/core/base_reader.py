@@ -15,6 +15,8 @@ if TYPE_CHECKING:
     from .mobility import MobilityAxis
     from .msms import FragmentationSchedule
 
+from .mass_axis import validate_max_mass_axis_length
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,11 +37,24 @@ class BaseMSIReader(ABC):
                 Values below this threshold are filtered out during iteration.
                 Useful for removing detector noise in continuous mode data.
                 Default: None (no filtering, include all values).
-            **kwargs: Additional reader-specific parameters
+            **kwargs: Additional reader-specific parameters.
+                ``max_mass_axis_length`` caps how many unique m/z values a
+                raw axis may reach before the build gives up. It lives here
+                rather than on one reader because five of them build such an
+                axis through the same accumulator (issue #294); it defaults
+                to ``None``, no cap, everywhere except imzML, which sets its
+                own documented default. A reader that does not build a raw
+                axis simply never consults it.
         """
         self.data_path = Path(data_path)
         self._intensity_threshold = intensity_threshold
         self._metadata_extractor: Optional["MetadataExtractor"] = None
+        # Validated here so a bad value fails while the caller is still
+        # looking at their own arguments, which is what the imzML reader
+        # already did with it.
+        self.max_mass_axis_length: Optional[int] = validate_max_mass_axis_length(
+            kwargs.get("max_mass_axis_length")
+        )
 
         if intensity_threshold is not None:
             logger.info(
