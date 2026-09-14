@@ -30,6 +30,7 @@ else:
     )
 
 from ....core.base_extractor import MetadataExtractor
+from ....core.drop_tally import DropTally
 from ....core.mobility import (
     INVERSE_REDUCED_MOBILITY_ACCESSION,
     MOBILITY_KIND_NAMES,
@@ -1239,16 +1240,20 @@ class BrukerReader(BrukerBaseMSIReader):
         :meth:`_iter_frames` selects. A frame whose read fails is logged
         and skipped; a frame that reads empty is skipped silently.
         """
+        tally = DropTally(logger, "frames whose spectrum could not be read")
+        n_seen = 0
         for frame_id, coords in self._iter_frames():
+            n_seen += 1
             try:
                 mzs, intensities = self._read_frame_spectrum(frame_id)
                 # Apply intensity threshold filtering if configured
                 mzs, intensities = self._apply_intensity_filter(mzs, intensities)
             except Exception as e:
-                logger.warning(f"Error reading spectrum for frame {frame_id}: {e}")
+                tally.drop(f"frame {frame_id}", e)
                 continue
             if mzs.size > 0 and intensities.size > 0:
                 yield coords, mzs, intensities
+        tally.summarise(n_seen)
 
     def _iter_frames(
         self,
@@ -1279,14 +1284,16 @@ class BrukerReader(BrukerBaseMSIReader):
                 frame_ids = range(1, total + 1)
 
         coordinate_offsets = self._get_coordinate_offsets()
+        tally = DropTally(logger, "frames with no coordinates")
         for frame_id in frame_ids:
             coords = self._get_frame_coordinates_cached(frame_id, coordinate_offsets)
             if coords is None:
-                logger.warning(f"No coordinates found for frame {frame_id}")
+                tally.drop(f"frame {frame_id}, which has no coordinates")
                 continue
             yield frame_id, coords
             if self.progress_callback:
                 self.progress_callback(frame_id, total)
+        tally.summarise(total)
 
     # ------------------------------------------------------------------
     # Ion mobility (TDF only)
@@ -1818,13 +1825,17 @@ class BrukerReader(BrukerBaseMSIReader):
             raise NotImplementedError(
                 "Frame records need a TDF file read through the Bruker library"
             )
+        tally = DropTally(logger, "frames whose scans could not be read")
+        n_seen = 0
         for frame_id, coords in self._iter_frames():
+            n_seen += 1
             try:
                 frame = TdfFrameScans(self, frame_id, coords)
             except Exception as e:
-                logger.warning(f"Error reading scans for frame {frame_id}: {e}")
+                tally.drop(f"frame {frame_id}", e)
                 continue
             yield frame
+        tally.summarise(n_seen)
 
     def _get_maldi_frame_ids(self) -> Optional[List[int]]:
         """Get sorted frame IDs from MaldiFrameInfo table.
