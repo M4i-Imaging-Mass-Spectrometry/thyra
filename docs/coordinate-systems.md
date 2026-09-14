@@ -60,7 +60,7 @@ zarr.attrs["coordinate_systems"] = {
 | Field | Meaning |
 |-------|---------|
 | ``unit`` | Unit of one step in ``"global"`` -- either ``"micrometer"`` or ``"pixel"``. |
-| ``pixel_size_um_x``, ``pixel_size_um_y`` | Conversion factor: micrometers per one ``"global"`` unit. ``1.0`` when ``unit="micrometer"``; physical pixel size when ``unit="pixel"``. ``None`` if the producer cannot calibrate (e.g. an uncalibrated optical photo). |
+| ``pixel_size_um_x``, ``pixel_size_um_y`` | The MSI raster pitch in micrometers -- the spacing between two acquisition positions, which is the same scale ``raster_to_global_affine`` carries. Written **only when ``unit="micrometer"``**; ``None`` when ``unit="pixel"``, because there the field would have to describe the *optical photo's* um-per-pixel calibration and FlexImaging photos do not generally carry one. It is **not** a factor to multiply a ``"global"`` coordinate by. |
 | ``reference_element`` | Name of the canonical raster element that defines pixel space, when ``unit="pixel"``. ``None`` otherwise. |
 | ``convention_version`` | Schema version; bump when the shape of this attr changes. Currently ``1``. |
 | ``produced_by`` | ``"thyra/<version>"`` for Thyra-produced zarrs. |
@@ -219,10 +219,20 @@ print(f"reference element:  {cs['reference_element']}")
 print(f"schema version:     {cs['convention_version']}")
 ```
 
-To resolve a ``"global"`` coordinate to micrometers, multiply by the
-``pixel_size_um_x/y`` factors. When ``unit="micrometer"`` those
-factors are ``1.0`` and the multiplication is a no-op; when
-``unit="pixel"`` they perform the px-to-um conversion.
+``pixel_size_um_x/y`` is not a conversion factor, and multiplying a
+``"global"`` coordinate by it is wrong in both variants. Read ``unit``
+instead:
+
+- ``unit="micrometer"`` -- ``"global"`` already *is* micrometers, so
+  nothing is applied. ``pixel_size_um_x/y`` is the raster pitch, which
+  is what ``raster_to_global_affine`` scales the TIC indices by;
+  multiplying a resolved coordinate by it applies that scale a second
+  time.
+- ``unit="pixel"`` -- ``"global"`` is the primary optical photo's pixel
+  grid, and ``pixel_size_um_x/y`` is ``None``. The um-per-pixel
+  calibration of that photo is genuinely unknown to Thyra, so there is
+  no factor to recover from the store; a consumer that needs
+  micrometers here has to supply the calibration itself.
 
 ---
 
