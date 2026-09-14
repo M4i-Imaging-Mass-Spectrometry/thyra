@@ -186,8 +186,26 @@ jobs:
       # `-m integration` on the command line overrides the `-m "not integration"`
       # that addopts supplies, so this is exactly the invocation documented in
       # tests/README.md -- which keeps that documentation honest.
+      #
+      # Coverage is measured here as well as in `test`, and not because this
+      # lane is a coverage lane. Eleven tests moved into it when membership
+      # became a matter of directory -- the six end-to-end CLI tests among
+      # them, which walk thyra/__main__.py from argv to a written store. Those
+      # lines stay covered by a run; they would simply stop being counted, and
+      # the reported figure would fall for a reason that has nothing to do
+      # with coverage. .codecov.yml declares no flags, so `integration` is
+      # created on first upload and joins the union with `unittests`.
       run: |
-        uv run pytest -m integration --disable-warnings
+        uv run pytest -m integration --disable-warnings --cov=thyra --cov-report=xml
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v7
+      with:
+        # See the test job: `file` is not an alias for `files`, it is ignored.
+        files: ./coverage.xml
+        flags: integration
+        name: codecov-integration
+        fail_ci_if_error: false
 
   # Installs thyra the way an end user does: a plain `pip install .` that
   # resolves dependencies fresh from PyPI, WITHOUT uv.lock. This is the
