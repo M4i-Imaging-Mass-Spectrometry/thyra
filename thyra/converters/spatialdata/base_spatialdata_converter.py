@@ -4006,6 +4006,25 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
     # Bump when the schema shape changes in a way consumers need to notice.
     _COORDINATE_SYSTEMS_SCHEMA_VERSION: int = 1
 
+    def _msi_is_in_optical_pixel_space(self) -> bool:
+        """Whether the MSI raster actually lands in optical-photo pixels.
+
+        Both halves matter. The affine is built whenever FlexImaging
+        alignment data exists, `apply_optical_alignment` or not -- it is
+        needed either way, because opting out uses its *inverse* to carry
+        the optical photo into micrometers. So the matrix being present
+        says only that an alignment is available, never that it was
+        applied to the raster.
+
+        Reading only the matrix is what let the store's own
+        `coordinate_systems` attr declare `unit="pixel"` on a store whose
+        every element was in micrometers (issue #288). The TIC image's
+        transform, the pixel polygons and the attr each spelled the
+        condition out separately and one of the three spelled it
+        differently; this is the one place it is written.
+        """
+        return self._apply_optical_alignment and self._tic_to_image_matrix is not None
+
     def _build_coordinate_systems_attr(self, thyra_version: str) -> Dict[str, Any]:
         """Build the structured coordinate-system contract attr.
 
@@ -4030,6 +4049,15 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
           (FlexImaging does not generally calibrate the optical photo
           to um); leave them null and let the consumer fill in.
 
+        - With alignment data but `apply_optical_alignment=False`: the
+          micrometer variant, exactly as the no-alignment case. The
+          matrix exists -- it is built whenever FlexImaging data is
+          present, because the opt-out path needs its inverse to carry
+          the optical photo into micrometers -- but it was not applied
+          to the raster, so nothing in the store is in optical pixels.
+          The condition is `_msi_is_in_optical_pixel_space()` rather
+          than the matrix alone for exactly this reason.
+
         Multi-slice volumes additionally get `z_spacing_um` and
         `z_spacing_source`. These are written **only** for volumes, so a
         2D store is byte-identical to what earlier versions produced and
@@ -4047,7 +4075,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             Dict suitable for storing under
             `zarr.attrs["coordinate_systems"]`.
         """
-        if self._tic_to_image_matrix is not None:
+        if self._msi_is_in_optical_pixel_space():
             unit = "pixel"
             pixel_size_um_x: Optional[float] = None
             pixel_size_um_y: Optional[float] = None
@@ -4082,7 +4110,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # physical equivalent, written only when "global" is in
         # micrometers so it cannot be misread in the optical-pixel
         # variant.
-        if self._tic_to_image_matrix is not None:
+        if self._msi_is_in_optical_pixel_space():
             global_cs["raster_to_global_affine"] = [
                 [float(v) for v in row] for row in self._tic_to_image_matrix
             ]

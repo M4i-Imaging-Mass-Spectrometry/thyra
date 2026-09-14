@@ -1068,7 +1068,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # the caller opts out (e.g. Ousia's wizard), MSI lands in pure
         # micrometer coordinates so downstream registration is the
         # canonical alignment step.
-        if self._apply_optical_alignment and self._tic_to_image_matrix is not None:
+        if self._msi_is_in_optical_pixel_space():
             transform = Affine(
                 self._tic_to_image_matrix,
                 input_axes=("x", "y"),

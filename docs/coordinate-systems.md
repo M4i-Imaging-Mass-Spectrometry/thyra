@@ -196,7 +196,27 @@ pixel grid*, because the photo can be drawn with no transform.
   because FlexImaging photos do not generally carry a um-per-pixel
   calibration.
 
-Note that the two modes pick the right convention for what is
+### Mode B with the alignment declined
+
+A caller can pass ``apply_optical_alignment=False`` to
+:func:`~thyra.convert_msi` on data that *has* FlexImaging alignment.
+That is what a downstream tool computing its own MSI-to-target
+registration wants: the alignment Thyra could apply is not the
+canonical one, so applying it first would have to be undone.
+
+The result is **Mode A** -- ``unit="micrometer"``, ``pixel_size_um_x/y``
+filled with the raster pitch, ``reference_element`` null, and the
+pixel-size ``raster_to_global_affine``. The MSI table, the TIC image and
+the pixel polygons are all in micrometers, and the optical photo is
+carried in alongside them by the *inverse* of the alignment affine
+rather than being the frame everything else is expressed in.
+
+So the alignment matrix existing does not by itself mean the store is in
+optical pixels; whether it was applied does. Thyra used to read only the
+former when writing this attr, and declared ``unit="pixel"`` on stores
+whose every element was in micrometers (issue #288).
+
+Note that the modes pick the right convention for what is
 actually known about the data; consumers should look at
 ``unit`` rather than assuming Thyra always uses one or the other.
 
