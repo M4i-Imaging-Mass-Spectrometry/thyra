@@ -1,4 +1,30 @@
-# thyra/metadata/types.py
+"""The two metadata records every format is reduced to.
+
+:class:`EssentialMetadata` is what a conversion needs before it can start:
+the grid, the extent, the mass range, the pitch, and the counts. Seven
+formats fill in the same frozen dataclass, so everything downstream is
+written against one shape rather than against whichever vendor produced
+the file. :class:`ComprehensiveMetadata` wraps it and adds what the source
+records for provenance, which is format-shaped by nature and stays in
+dictionaries.
+
+**A field here is a promise that survives to disk**, which is what makes
+the absences deliberate. ``n_spectra_counted`` exists because 0 spectra
+and "not counted" are different facts and a store that conflates them
+misreports a PHI preview (issue #240). ``pixel_size`` is the in-plane
+raster pitch and says nothing about z, which is why ``z_spacing_um`` is
+separate and usually ``None``. ``coordinate_offsets`` records what
+rebasing the file's coordinates subtracted, so a store can say where its
+origin came from.
+
+Two fields were removed rather than kept for symmetry:
+``peak_counts_per_pixel`` built a CSR ``indptr`` that went with D10, and
+``estimated_memory_gb`` fed a size-based router that went with D11. Both
+went on being computed and written into every store long after the thing
+that read them was deleted (issues #271, #272). A field nothing reads is
+not free here: it reaches disk and a consumer believes it.
+"""
+
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 

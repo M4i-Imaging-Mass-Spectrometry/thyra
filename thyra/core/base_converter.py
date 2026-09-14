@@ -1,3 +1,27 @@
+"""The conversion template, and the provenance of the numbers it guesses.
+
+:class:`BaseMSIConverter` is a template method: ``convert()`` runs
+initialise, create structures, process spectra, finalise, save, and each
+stage is a hook a format-specific converter fills in. The value of fixing
+the order here is that failure means the same thing everywhere --
+``convert()`` catches ``KeyboardInterrupt`` alongside the other failures
+so an interrupted run is a *failed* run, leaving the partial store to be
+renamed ``.failed`` and the output path free for a retry, rather than an
+unopenable store where a finished one belongs (issue #245).
+
+The other reason this module exists is that two of the numbers in every
+output are not always measured, and a consumer cannot tell by looking at
+them. The in-plane pitch is nearly always recoverable from the file; the
+slice-to-slice spacing usually is not, because it is a property of how
+the sections were physically cut rather than of the raster.
+:class:`PixelSizeSource` and :class:`ZSpacingSource` travel with those
+numbers to say which happened -- in particular ``ASSUMED_ISOTROPIC``,
+which records that nothing supplied a z spacing and the x pitch was
+reused. Both are written into the store, so "25 um because the file said
+so" and "25 um because we had nothing better" stay distinguishable after
+the conversion is over.
+"""
+
 import logging
 import math
 from abc import ABC, abstractmethod

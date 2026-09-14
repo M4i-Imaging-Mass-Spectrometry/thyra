@@ -1,4 +1,22 @@
-# thyra/__main__.py
+"""The command line, which is argument checking around one call.
+
+Every command here ends in :func:`thyra.convert.convert_msi` or one of its
+neighbours; the CLI adds no conversion behaviour of its own, so that the
+Python API and the command line cannot describe different products. What
+it does add is the part a library cannot: refusing bad input while the
+user is still looking at what they typed.
+
+Hence the number of ``_validate_*`` helpers below. A pixel size, an m/z
+range, a mobility grid and a ToF law can each be individually well formed
+and jointly meaningless, and a conversion is long enough that discovering
+this at write time is expensive. The output path is checked for
+writability before anything is read, for the same reason.
+
+The import block is ordered deliberately and carries ``# noqa: E402``: the
+dependency warning configuration has to run before the libraries that emit
+those warnings are imported, so the usual "imports first" rule is
+inverted on purpose here.
+"""
 
 # Configure dependencies to suppress warnings BEFORE any imports
 import logging  # noqa: E402
