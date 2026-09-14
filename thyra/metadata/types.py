@@ -2,9 +2,6 @@
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
-import numpy as np
-from numpy.typing import NDArray
-
 
 @dataclass(frozen=True)
 class EssentialMetadata:
@@ -30,16 +27,11 @@ class EssentialMetadata:
             that display a count must say so rather than print the zero.
         total_peaks: Total number of peaks across all spectra (used for
             sparse matrix pre-allocation).
-        estimated_memory_gb: Estimated dense memory footprint in GB.
         source_path: Absolute path to the source data.
         coordinate_offsets: Raw coordinate offsets ``(x, y, z)`` used to
             normalise coordinates to 0-based indexing.
         spectrum_type: Spectrum type string (e.g. ``"centroid spectrum"``),
             used to guide resampling decisions.
-        peak_counts_per_pixel: Per-pixel peak counts for CSR ``indptr``
-            construction in the streaming converter.  Array of size
-            ``n_pixels`` where ``arr[pixel_idx] = peak_count`` and
-            ``pixel_idx = z * (n_x * n_y) + y * n_x + x``.
         z_spacing_um: Distance between consecutive slices in micrometres,
             or ``None`` when the source cannot report it.  This is a
             *physical* distance set by how the sections were cut, and is
@@ -58,11 +50,9 @@ class EssentialMetadata:
     pixel_size: Optional[Tuple[float, float]]
     n_spectra: int
     total_peaks: int
-    estimated_memory_gb: float
     source_path: str
     coordinate_offsets: Optional[Tuple[int, int, int]] = None
     spectrum_type: Optional[str] = None
-    peak_counts_per_pixel: Optional[NDArray[np.int32]] = None
     z_spacing_um: Optional[float] = None
     n_spectra_counted: bool = True
 

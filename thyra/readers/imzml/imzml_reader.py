@@ -1636,18 +1636,3 @@ class ImzMLReader(BaseMSIReader):
         # Get mass range from essential metadata
         essential_metadata = self.get_essential_metadata()
         return essential_metadata.mass_range
-
-    def get_peak_counts_per_pixel(self) -> Optional[NDArray[np.int32]]:
-        """Get per-pixel peak counts for CSR indptr construction.
-
-        Returns peak counts collected during metadata extraction.
-        This enables optimized streaming conversion without a separate
-        counting pass.
-
-        Returns:
-            Array of size n_pixels where arr[pixel_idx] = peak_count.
-            pixel_idx = z * (n_x * n_y) + y * n_x + x
-            Returns None if not available.
-        """
-        essential_metadata = self.get_essential_metadata()
-        return essential_metadata.peak_counts_per_pixel

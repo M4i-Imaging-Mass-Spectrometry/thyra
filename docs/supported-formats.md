@@ -506,7 +506,6 @@ Optional overrides that are worth implementing when the format allows it:
 | Method | Buys you |
 |---|---|
 | `has_shared_mass_axis` | skips a full pass when the axis is fixed |
-| `get_peak_counts_per_pixel` | single-pass CSR build instead of two passes |
 | `get_mass_axis_annotations` | keeps a native non-m/z axis in `var` |
 | `get_region_map` / `get_region_info` | per-pixel region annotation |
 | `get_optical_image_paths` | optical images carried into the output |

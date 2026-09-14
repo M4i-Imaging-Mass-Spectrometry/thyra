@@ -33,7 +33,6 @@ def _create_mock_extractor(dims):
                 pixel_size=None,
                 n_spectra=n_spectra,
                 total_peaks=n_spectra * 100,  # 100 peaks per spectrum
-                estimated_memory_gb=0.001,
                 source_path="/mock/path",
             )
 

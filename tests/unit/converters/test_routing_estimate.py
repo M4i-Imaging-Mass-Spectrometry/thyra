@@ -47,7 +47,6 @@ class _Meta:
         self.mass_range = mass_range
         self.n_spectra = dimensions[0] * dimensions[1] * dimensions[2]
         self.pixel_size = (20.0, 20.0)
-        self.estimated_memory_gb = 1.0
         self.coordinate_bounds = (0, dimensions[0], 0, dimensions[1])
         self.is_3d = dimensions[2] > 1
         self.has_mass_axis = True

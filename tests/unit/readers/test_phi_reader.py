@@ -326,9 +326,9 @@ class TestPhiReader:
             for _, mzs, _ in reader.iter_spectra():
                 assert np.all(np.diff(mzs) > 0)
 
-    def test_peak_counts_match_iterated_spectra(self, simple_raw):
+    def test_occupied_channel_counts_match_iterated_spectra(self, simple_raw):
         with PhiReader(simple_raw) as reader:
-            counts = reader.get_peak_counts_per_pixel()
+            counts = reader.occupied_channel_counts()
             n_x = reader.dimensions[0]
             expected = np.zeros_like(counts)
             for (x, y, _), mzs, _ in reader.iter_spectra():

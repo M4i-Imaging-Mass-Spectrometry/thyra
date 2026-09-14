@@ -201,7 +201,7 @@ with ImzMLReader("sample.imzML") as reader:
     print(f"Grid: {meta.dimensions}")
     print(f"m/z range: {meta.mass_range}")
     print(f"Spectra: {meta.n_spectra}")
-    print(f"Est. memory: {meta.estimated_memory_gb:.1f} GB")
+    print(f"Peaks: {meta.total_peaks}")
 ```
 
 ::: thyra.metadata.types.EssentialMetadata
@@ -279,7 +279,6 @@ implementing and what each one buys you.
         - get_mass_axis_annotations
         - get_optical_image_paths
         - get_primary_optical_image_path
-        - get_peak_counts_per_pixel
         - iter_spectra
         - get_region_map
         - get_region_info

@@ -188,31 +188,6 @@ class BaseMSIReader(ABC):
         mask = intensities >= self._intensity_threshold
         return mzs[mask], intensities[mask]
 
-    def get_peak_counts_per_pixel(self) -> Optional[NDArray[np.int32]]:
-        """Get per-pixel peak counts for CSR indptr construction.
-
-        This method enables optimized streaming conversion by providing
-        pre-computed peak counts, avoiding the need for a separate counting pass.
-
-        Returns:
-            Array of size n_pixels where arr[pixel_idx] = peak_count.
-            pixel_idx = z * (n_x * n_y) + y * n_x + x
-            Returns None if not supported/available for this reader.
-
-        Note:
-            Override in subclass to enable optimized streaming conversion.
-            The default implementation returns None, which causes the
-            streaming converter to fall back to a two-pass approach.
-
-        Warning:
-            When intensity_threshold is set, the actual peak counts after
-            filtering may be lower than the values returned here, since this
-            method typically returns pre-computed counts from metadata that
-            don't account for intensity filtering. The streaming converter
-            handles this gracefully by using a two-pass approach.
-        """
-        return None
-
     @staticmethod
     def map_mz_to_common_axis(
         mzs: NDArray[np.float64],

@@ -82,23 +82,6 @@ class TestZBaseIsReadOffTheFile:
 
         assert len(set(coords)) == len(coords)
 
-    def test_peak_counts_land_on_their_own_row(self, tmp_path, z_values, description):
-        """These counts become the CSR ``indptr``.
-
-        With the base wrong, plane 1's counts overwrote plane 0's and the
-        second half of the array stayed zero -- so the matrix was built
-        with the wrong number of entries reserved per row.
-        """
-        path = _write_two_planes(tmp_path, f"counts_{z_values[0]}", z_values)
-        reader = ImzMLReader(path)
-        try:
-            counts = reader.get_peak_counts_per_pixel()
-        finally:
-            reader.close()
-
-        assert counts is not None
-        assert list(counts) == [len(_MZS)] * 4
-
 
 class TestZBaseWithoutTheCoordinateCache:
     """``cache_coordinates=False`` takes a different branch; it must agree."""

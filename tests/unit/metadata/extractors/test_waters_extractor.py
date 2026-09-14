@@ -210,8 +210,8 @@ class TestWatersMetadataExtractorEssential:
 
         assert e1 is e2
 
-    def test_peak_counts_per_pixel(self):
-        """Test per-pixel peak count array."""
+    def test_totals_cover_every_pixel(self):
+        """Every pixel's peaks reach ``total_peaks``."""
         n_peaks = 15
         mock_ml, handle, grid, ft, ms = _make_grid_and_ml(n_x=2, n_y=2, n_peaks=n_peaks)
         extractor = WatersMetadataExtractor(
@@ -219,9 +219,8 @@ class TestWatersMetadataExtractorEssential:
         )
         essential = extractor.get_essential()
 
-        assert essential.peak_counts_per_pixel is not None
-        assert len(essential.peak_counts_per_pixel) == 4
-        assert all(c == n_peaks for c in essential.peak_counts_per_pixel)
+        assert essential.n_spectra == 4
+        assert essential.total_peaks == 4 * n_peaks
 
 
 class TestWatersMetadataExtractorComprehensive:
@@ -477,12 +476,16 @@ class TestWatersResamplingDetection:
 class TestScansSharingAPixel:
     """Two scans on one stage position (issue #233).
 
-    ``n_spectra`` and ``total_peaks`` counted scans while
-    ``peak_counts_per_pixel`` kept only the last one, so the totals that
-    size the memory estimate and the per-pixel counts described two
-    different datasets. Real instance: the registry's 100 um MALDI set has
-    1275 positioned scans on 1274 distinct pixels, the stage having stopped
+    ``n_spectra`` counted scans, so it claimed one more spectrum than the
+    converter -- which sums both scans into the one pixel -- actually
+    writes. Real instance: the registry's 100 um MALDI set has 1275
+    positioned scans on 1274 distinct pixels, the stage having stopped
     between two acquisitions 40 ms apart.
+
+    ``total_peaks`` is the counterpart and counts *scans*: every peak read
+    reaches the store, including both scans' peaks on the shared pixel. The
+    two numbers answer different questions, and the test below pins that
+    they disagree by exactly the repeated scan.
     """
 
     def _extractor_with_a_repeated_position(self, n_peaks=5):
@@ -500,21 +503,14 @@ class TestScansSharingAPixel:
         # Five scans land on four pixels; four spectra are written.
         assert essential.n_spectra == 4
 
-    def test_the_per_pixel_counts_sum_to_the_total(self):
-        extractor = self._extractor_with_a_repeated_position(n_peaks=5)
-        essential = extractor.get_essential()
-        counts = extractor.get_essential().peak_counts_per_pixel
+    def test_the_shared_pixel_keeps_both_scans_peaks(self):
+        essential = self._extractor_with_a_repeated_position(n_peaks=5).get_essential()
 
-        assert counts is not None
-        assert int(counts.sum()) == essential.total_peaks
-
-    def test_the_shared_pixel_carries_both_scans(self):
-        extractor = self._extractor_with_a_repeated_position(n_peaks=5)
-        counts = extractor.get_essential().peak_counts_per_pixel
-
-        # Pixel (0, 0) holds two scans of five peaks each; the rest hold one.
-        assert counts[0] == 10
-        assert list(counts[1:]) == [5, 5, 5]
+        # Five scans of five peaks all reach the store, on four pixels: the
+        # shared pixel carries ten. Counting 4 x 5 here -- one scan per pixel
+        # -- would drop the repeated scan's peaks from the total.
+        assert essential.total_peaks == 25
+        assert essential.n_spectra == 4
 
     def test_a_clean_raster_is_unaffected(self):
         mock_ml, handle, grid, ft, ms = _make_grid_and_ml(n_x=2, n_y=2, n_peaks=5)

@@ -85,7 +85,6 @@ class TestImzMLMetadataExtractor:
         assert essential.mass_range == (100.0, 300.0)  # Full m/z range
         assert essential.n_spectra == 4
         assert essential.source_path == str(Path("/test/path.imzML"))
-        assert essential.estimated_memory_gb > 0
 
     @patch("thyra.metadata.extractors.imzml_extractor.ImzMLParser")
     def test_extract_essential_with_pixel_size(self, mock_imzml_parser_class):
@@ -200,31 +199,7 @@ class TestImzMLMetadataExtractor:
 
         assert essential.mass_range == (50.0, 400.0)
 
-    @patch("thyra.metadata.extractors.imzml_extractor.ImzMLParser")
-    def test_memory_estimation(self, mock_imzml_parser_class):
-        """Test memory estimation calculation."""
-        # Create larger dataset for meaningful memory estimation
-        large_coordinates = [
-            (x, y, 1) for x in range(1, 11) for y in range(1, 11)
-        ]  # 10x10 grid
-        large_mzs = [
-            [100.0 + i for i in range(1000)] for _ in range(100)
-        ]  # 1000 m/z values per spectrum
-        large_intensities = [[1000.0] * 1000 for _ in range(100)]
-
-        mock_parser = self.create_mock_parser(
-            coordinates=large_coordinates,
-            mzs_list=large_mzs,
-            intensities_list=large_intensities,
-        )
-        mock_imzml_parser_class.return_value = mock_parser
-
-        extractor = ImzMLMetadataExtractor(mock_parser, Path("/test/path.imzML"))
-        essential = extractor.get_essential()
-
         # Should estimate some reasonable memory usage
-        assert essential.estimated_memory_gb > 0
-        assert essential.estimated_memory_gb < 100  # Sanity check
 
     @patch("thyra.metadata.extractors.imzml_extractor.ImzMLParser")
     def test_coordinate_bounds_calculation(self, mock_imzml_parser_class):

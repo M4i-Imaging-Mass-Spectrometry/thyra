@@ -64,7 +64,6 @@ class SolarixMetadataExtractor(MetadataExtractor):
             pixel_size=reader.pixel_size_um,
             n_spectra=summary["n_spectra"],
             total_peaks=total_peaks,
-            estimated_memory_gb=(total_peaks * 2 * 8) / (1024**3),
             source_path=str(reader.data_path),
             # The absolute stage-raster origin subtracted by iter_spectra;
             # XIndexPos starts wherever the stage was, not at 0.

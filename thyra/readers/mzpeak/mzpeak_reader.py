@@ -884,15 +884,6 @@ class MzPeakReader(BaseMSIReader):
         """
         return self.get_essential_metadata().total_peaks
 
-    def get_peak_counts_per_pixel(self) -> Optional[NDArray[np.int32]]:
-        """Per-pixel point counts, for single-pass streaming conversion.
-
-        Delegated to the extractor, which is the one place that knows whether
-        the archive's recorded counts include null-pair padding. Computing
-        them here as well would give the converter a second, higher answer.
-        """
-        return self.get_essential_metadata().peak_counts_per_pixel
-
     def get_region_map(self) -> Optional[dict]:
         """Always ``None``.
 

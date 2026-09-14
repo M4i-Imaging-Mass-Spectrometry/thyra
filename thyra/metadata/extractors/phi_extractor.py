@@ -35,12 +35,11 @@ class PhiMetadataExtractor(MetadataExtractor):
             skip_event_aggregate: If True, answer from the acquisition
                 header and the block chain alone -- ``n_spectra`` and
                 ``total_peaks`` come back as 0 with
-                ``n_spectra_counted=False``, and ``peak_counts_per_pixel``
-                as None. Used by metadata-only callers (``preview_msi``)
-                to avoid the pass over every ion event that
-                :meth:`PhiReader.get_peak_counts_per_pixel` performs, which
-                is linear in file size and so made a preview cost what a
-                conversion costs (issue #240). The same role
+                ``n_spectra_counted=False``. Used by metadata-only callers
+                (``preview_msi``) to avoid the pass over every ion event
+                that :meth:`PhiReader.occupied_channel_counts` performs,
+                which is linear in file size and so made a preview cost
+                what a conversion costs (issue #240). The same role
                 ``skip_total_peaks`` plays for Bruker.
         """
         super().__init__(reader)
@@ -66,12 +65,10 @@ class PhiMetadataExtractor(MetadataExtractor):
         n_x, n_y, _ = dimensions
 
         if self._skip_event_aggregate:
-            peak_counts = None
             total_peaks = 0
             n_spectra = 0
         else:
-            peak_counts = reader.get_peak_counts_per_pixel()
-            assert peak_counts is not None
+            peak_counts = reader.occupied_channel_counts()
             total_peaks = int(peak_counts.sum())
             n_spectra = int(np.count_nonzero(peak_counts))
 
@@ -88,13 +85,11 @@ class PhiMetadataExtractor(MetadataExtractor):
             n_spectra=n_spectra,
             n_spectra_counted=not self._skip_event_aggregate,
             total_peaks=total_peaks,
-            estimated_memory_gb=(total_peaks * 2 * 8) / (1024**3),
             source_path=str(reader.data_path),
             coordinate_offsets=(0, 0, 0),
             # A sparse histogram on the detector's regular time-channel grid,
             # not a peak-picked list.
             spectrum_type="profile spectrum",
-            peak_counts_per_pixel=peak_counts,
         )
 
     def _extract_comprehensive_impl(self) -> ComprehensiveMetadata:

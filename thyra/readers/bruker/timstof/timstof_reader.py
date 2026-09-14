@@ -2058,7 +2058,7 @@ class BrukerReader(BrukerBaseMSIReader):
         ``(index, scan)`` pairs across the whole mobility ramp -- on real
         imaging runs routinely above 65,535 per frame -- and is only an
         upper bound on the summed spectrum's length, so it must not be
-        treated as a peak count (see :meth:`get_peak_counts_per_pixel`).
+        treated as a count of the peaks that reach the store.
 
         For TDF the same query also fills ``_num_scans_cache``: every
         frame read needs its ``NumScans`` to cover the full ramp.
@@ -2425,80 +2425,6 @@ class BrukerReader(BrukerBaseMSIReader):
         else:
             logger.info(f"Total peak count from NumPeaks cache: {total:,}")
         return total
-
-    def get_peak_counts_per_pixel(self) -> Optional[np.ndarray]:
-        """Get per-pixel peak counts for CSR indptr construction.
-
-        Converts the frame-indexed NumPeaks cache to pixel-indexed array
-        using coordinate mapping. When region filtering is active, only
-        includes frames from the selected region.
-
-        Returns:
-            Array of size n_pixels where arr[pixel_idx] = peak_count.
-            pixel_idx = z * (n_x * n_y) + y * n_x + x
-            Returns None if NumPeaks cache not available, and always for
-            TDF: there ``NumPeaks`` counts ``(index, scan)`` pairs across
-            the mobility ramp, which exceeds the summed spectrum's length
-            by a factor the database does not record, so the streaming
-            converter has to measure instead.
-        """
-        if self.file_type == "tdf":
-            logger.debug(
-                "TDF NumPeaks counts mobility scans separately; per-pixel peak "
-                "counts are left to the converter to measure"
-            )
-            return None
-        if not self._num_peaks_cache:
-            logger.warning("NumPeaks cache not available")
-            return None
-
-        # Get dimensions and coordinate offsets
-        metadata = self.get_essential_metadata()
-        n_x, n_y, n_z = metadata.dimensions
-        n_pixels = n_x * n_y * n_z
-        coordinate_offsets = metadata.coordinate_offsets
-
-        # Create output array
-        peak_counts = np.zeros(n_pixels, dtype=np.int32)
-
-        # Map frame_id -> pixel_idx using coordinate lookup
-        cursor = self.conn.cursor()
-        try:
-            if self._selected_region is not None:
-                cursor.execute(
-                    "SELECT Frame, XIndexPos, YIndexPos "
-                    "FROM MaldiFrameInfo "
-                    "WHERE RegionNumber = ?",
-                    (self._selected_region,),
-                )
-            else:
-                cursor.execute(
-                    "SELECT Frame, XIndexPos, YIndexPos " "FROM MaldiFrameInfo"
-                )
-            for frame_id, x, y in cursor.fetchall():
-                if frame_id not in self._num_peaks_cache:
-                    continue
-
-                # Apply coordinate offsets (normalize to 0-based)
-                if coordinate_offsets:
-                    x = int(x) - coordinate_offsets[0]
-                    y = int(y) - coordinate_offsets[1]
-                else:
-                    x, y = int(x), int(y)
-
-                # Calculate pixel index
-                z = 0  # Bruker MSI is typically 2D
-                pixel_idx = z * (n_x * n_y) + y * n_x + x
-
-                if 0 <= pixel_idx < n_pixels:
-                    peak_counts[pixel_idx] = self._num_peaks_cache[frame_id]
-
-        except Exception as e:
-            logger.warning(f"Error mapping peak counts to pixels: {e}")
-            return None
-
-        logger.info(f"Mapped peak counts for {n_pixels:,} pixels")
-        return peak_counts
 
     def __del__(self) -> None:
         """Destructor to ensure cleanup."""

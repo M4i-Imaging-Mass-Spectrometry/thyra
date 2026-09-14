@@ -4,7 +4,7 @@
 ``preview_msi`` promises "No spectra are decoded" and passes
 ``metadata_only=True`` for that purpose. ``PhiReader.__init__`` swallowed
 the kwarg through ``**kwargs``, and ``PhiMetadataExtractor`` called
-``get_peak_counts_per_pixel()``, which aggregates every 8-byte event in
+``occupied_channel_counts()``, which aggregates every 8-byte event in
 the stream to learn which pixels carry one. Measured at 0.16 s for a 16 MB
 file with 2.02 M events and linear in file size, so a multi-gigabyte
 SmartSoft acquisition previewed as slowly as it converted (issue #240).
@@ -78,12 +78,11 @@ class TestThePreviewNeverReachesTheEventStream:
         """
         reader = PhiReader(phi_raw)
         try:
-            counts = reader.get_peak_counts_per_pixel()
+            counts = reader.occupied_channel_counts()
         finally:
             reader.close()
 
         assert event_reads, "the counter never saw the aggregate"
-        assert counts is not None
         assert int(np.count_nonzero(counts)) == 2
 
 
@@ -141,7 +140,6 @@ class TestAFullReadIsUnchanged:
         # Two events in one channel of pixel (0, 0), one in pixel (1, 2):
         # two occupied channels in total.
         assert essential.total_peaks == 2
-        assert essential.peak_counts_per_pixel is not None
 
     def test_metadata_only_says_the_counts_are_absent(self, phi_raw):
         """0 with the flag down, never 0 pretending to be a measurement."""
@@ -154,7 +152,6 @@ class TestAFullReadIsUnchanged:
         assert essential.n_spectra_counted is False
         assert essential.n_spectra == 0
         assert essential.total_peaks == 0
-        assert essential.peak_counts_per_pixel is None
         # Header-derived, so still exact.
         assert essential.dimensions == (4, 4, 1)
         assert essential.coordinate_bounds == (0.0, 3.0, 0.0, 3.0)

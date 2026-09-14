@@ -137,7 +137,6 @@ def get_metadata_summary(extractor) -> dict:
         "mass_range": essential.mass_range,
         "pixel_size": essential.pixel_size,
         "n_spectra": essential.n_spectra,
-        "estimated_memory_gb": essential.estimated_memory_gb,
         "source_path": essential.source_path,
         "is_3d": essential.is_3d,
         "has_pixel_size": essential.has_pixel_size,

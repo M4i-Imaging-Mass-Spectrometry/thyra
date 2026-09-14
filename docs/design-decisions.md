@@ -1331,7 +1331,7 @@ the only format that takes it, and only under `metadata_only=True`.
 **The defect this replaces.** `preview_msi` promises "No spectra are
 decoded" and passes `metadata_only=True` for that purpose.
 `PhiReader.__init__` swallowed the kwarg through `**kwargs`, and
-`PhiMetadataExtractor` called `get_peak_counts_per_pixel()`, which
+`PhiMetadataExtractor` called `occupied_channel_counts()`, which
 aggregates every 8-byte event in the stream. Measured at 0.16 s for a
 16 MB file with 2.02 M events and 0.14 s for a 14 MB one — linear, so a
 multi-gigabyte SmartSoft acquisition previewed as slowly as it converted.

@@ -16,7 +16,6 @@ class TestEssentialMetadata:
             pixel_size=(25.0, 25.0),
             n_spectra=200,
             total_peaks=400000,
-            estimated_memory_gb=1.5,
             source_path="/path/to/data.imzML",
         )
 
@@ -26,7 +25,6 @@ class TestEssentialMetadata:
         assert metadata.pixel_size == (25.0, 25.0)
         assert metadata.n_spectra == 200
         assert metadata.total_peaks == 400000
-        assert metadata.estimated_memory_gb == 1.5
         assert metadata.source_path == "/path/to/data.imzML"
 
     def test_creation_with_optional_none_pixel_size(self):
@@ -38,7 +36,6 @@ class TestEssentialMetadata:
             pixel_size=None,
             n_spectra=200,
             total_peaks=400000,
-            estimated_memory_gb=1.5,
             source_path="/path/to/data.imzML",
         )
 
@@ -54,7 +51,6 @@ class TestEssentialMetadata:
             pixel_size=(25.0, 25.0),
             n_spectra=200,
             total_peaks=400000,
-            estimated_memory_gb=1.5,
             source_path="/path/to/data.imzML",
         )
         assert metadata_with_size.has_pixel_size is True
@@ -67,7 +63,6 @@ class TestEssentialMetadata:
             pixel_size=None,
             n_spectra=200,
             total_peaks=400000,
-            estimated_memory_gb=1.5,
             source_path="/path/to/data.imzML",
         )
         assert metadata_without_size.has_pixel_size is False
@@ -82,7 +77,6 @@ class TestEssentialMetadata:
             pixel_size=(25.0, 25.0),
             n_spectra=200,
             total_peaks=400000,
-            estimated_memory_gb=1.5,
             source_path="/path/to/data.imzML",
         )
         assert metadata_2d.is_3d is False
@@ -95,7 +89,6 @@ class TestEssentialMetadata:
             pixel_size=(25.0, 25.0),
             n_spectra=1000,
             total_peaks=2000000,
-            estimated_memory_gb=7.5,
             source_path="/path/to/data.imzML",
         )
         assert metadata_3d.is_3d is True
@@ -109,7 +102,6 @@ class TestEssentialMetadata:
             pixel_size=(25.0, 25.0),
             n_spectra=200,
             total_peaks=400000,
-            estimated_memory_gb=1.5,
             source_path="/path/to/data.imzML",
         )
 
@@ -133,7 +125,6 @@ class TestComprehensiveMetadata:
             pixel_size=(25.0, 25.0),
             n_spectra=200,
             total_peaks=400000,
-            estimated_memory_gb=1.5,
             source_path="/path/to/data.imzML",
         )
 
@@ -160,7 +151,6 @@ class TestComprehensiveMetadata:
             pixel_size=(25.0, 25.0),
             n_spectra=200,
             total_peaks=400000,
-            estimated_memory_gb=1.5,
             source_path="/path/to/data.imzML",
         )
 
@@ -186,7 +176,6 @@ class TestComprehensiveMetadata:
             pixel_size=None,
             n_spectra=200,
             total_peaks=400000,
-            estimated_memory_gb=1.5,
             source_path="/path/to/data.imzML",
         )
 
@@ -209,7 +198,6 @@ class TestComprehensiveMetadata:
             pixel_size=(25.0, 25.0),
             n_spectra=200,
             total_peaks=400000,
-            estimated_memory_gb=1.5,
             source_path="/path/to/data.imzML",
         )
 

@@ -603,17 +603,6 @@ class SolarixReader(BrukerBaseMSIReader):
         finally:
             pbar.close()
 
-    def get_peak_counts_per_pixel(self) -> Optional[NDArray[np.int32]]:
-        """Per-pixel peak counts from the NumPeaks column, no blob decode."""
-        index = self._load_spectra_index()
-        n_x, n_y, _ = self.dimensions
-        x_min, y_min, _ = self.coordinate_offsets
-
-        counts = np.zeros(n_x * n_y, dtype=np.int32)
-        pixel_idx = (index["y"] - y_min) * n_x + (index["x"] - x_min)
-        counts[pixel_idx] = index["num_peaks"]
-        return counts
-
     def get_region_map(self) -> Optional[dict]:
         """Map 0-based ``(x, y)`` to the RegionNumber recorded per scan."""
         index = self._load_spectra_index()

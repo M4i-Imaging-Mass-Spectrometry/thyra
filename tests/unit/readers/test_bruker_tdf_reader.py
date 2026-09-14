@@ -103,11 +103,6 @@ class TestTdfWiring:
         with pytest.raises(ConversionRefused, match="tdf_spectrum"):
             _make_reader("tdf", tdf_spectrum="bogus")
 
-    def test_tdf_reports_no_per_pixel_peak_counts(self):
-        reader, _, _ = _make_reader("tdf")
-        reader._num_peaks_cache = {1: 70000, 2: 80000}
-        assert reader.get_peak_counts_per_pixel() is None
-
     def test_num_peaks_above_65535_are_kept(self):
         reader, _, _ = _make_reader("tdf")
         conn = MagicMock()

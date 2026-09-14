@@ -189,13 +189,9 @@ class ImzMLMetadataExtractor(MetadataExtractor):
 
         dimensions = self._calculate_dimensions(coords)
         coordinate_bounds = self._calculate_bounds(coords)
-        # Pass dimensions to collect per-pixel peak counts during scan
-        mass_range, total_peaks, peak_counts = self._get_mass_range_complete(
-            dimensions=dimensions
-        )
+        mass_range, total_peaks = self._get_mass_range_complete()
         pixel_size = self._extract_pixel_size_fast()
         n_spectra = len(coords)
-        estimated_memory = self._estimate_memory(n_spectra)
 
         # Check for centroid spectrum
         spectrum_type = self._detect_centroid_spectrum()
@@ -207,7 +203,6 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             pixel_size=pixel_size,
             n_spectra=n_spectra,
             total_peaks=total_peaks,
-            estimated_memory_gb=estimated_memory,
             source_path=str(self.imzml_path),
             # What normalising the file's coordinates subtracted, so the
             # store can say where its origin came from: the converter
@@ -216,7 +211,6 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             # 0-based one -- see _coordinate_bases() (issue #244).
             coordinate_offsets=self._coordinate_bases(coords),
             spectrum_type=spectrum_type,
-            peak_counts_per_pixel=peak_counts,
         )
 
     def _extract_comprehensive_impl(self) -> ComprehensiveMetadata:
@@ -307,25 +301,16 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         except Exception:
             return False
 
-    def _get_mass_range_complete(
-        self,
-        dimensions: Optional[Tuple[int, int, int]] = None,
-    ) -> Tuple[Tuple[float, float], int, Optional[NDArray[np.int32]]]:
+    def _get_mass_range_complete(self) -> Tuple[Tuple[float, float], int]:
         """Complete mass range extraction.
 
         For continuous mode: reads only the first spectrum (all share same m/z axis).
         For processed mode: scans ALL spectra to find complete mass range.
 
-        Also counts total peaks for COO matrix pre-allocation and
-        optionally collects per-pixel peak counts for streaming conversion.
-
-        Args:
-            dimensions: Optional (n_x, n_y, n_z) grid dimensions.
-                If provided, per-pixel peak counts will be collected.
+        Also counts total peaks for COO matrix pre-allocation.
 
         Returns:
-            Tuple of ((min_mass, max_mass), total_peaks, peak_counts_per_pixel)
-            peak_counts_per_pixel is None if dimensions not provided.
+            Tuple of ((min_mass, max_mass), total_peaks).
 
         Raises:
             ValueError: If no spectrum yields a mass range. There is no
@@ -346,9 +331,9 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             is_continuous = self._is_continuous_mode()
 
             if is_continuous:
-                return self._get_mass_range_continuous(n_spectra, dimensions)
+                return self._get_mass_range_continuous(n_spectra)
             else:
-                return self._get_mass_range_processed(coords, n_spectra, dimensions)
+                return self._get_mass_range_processed(coords, n_spectra)
 
         except ValueError:
             # The two branches above raise this when they find no mass range.
@@ -364,8 +349,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
     def _get_mass_range_continuous(
         self,
         n_spectra: int,
-        dimensions: Optional[Tuple[int, int, int]] = None,
-    ) -> Tuple[Tuple[float, float], int, Optional[NDArray[np.int32]]]:
+    ) -> Tuple[Tuple[float, float], int]:
         """Get mass range for continuous mode - read only first spectrum.
 
         In continuous mode, all spectra share the same m/z axis, so we only
@@ -395,28 +379,17 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         max_mass = float(np.max(mzs))
         total_peaks = n_peaks_per_spectrum * n_spectra
 
-        # For continuous mode, all pixels have the same peak count
-        peak_counts = None
-        if dimensions is not None:
-            n_x, n_y, n_z = dimensions
-            n_pixels = n_x * n_y * n_z
-            peak_counts = np.full(n_pixels, n_peaks_per_spectrum, dtype=np.int32)
-            logger.info(
-                f"All {n_pixels:,} pixels have {n_peaks_per_spectrum:,} peaks (continuous mode)"
-            )
-
         logger.info(f"Mass range: {min_mass:.2f} - {max_mass:.2f} m/z")
         logger.info(
             f"Total peaks: {total_peaks:,} ({n_peaks_per_spectrum:,} per spectrum)"
         )
-        return ((min_mass, max_mass), total_peaks, peak_counts)
+        return ((min_mass, max_mass), total_peaks)
 
     def _get_mass_range_processed(
         self,
         coords: List,
         n_spectra: int,
-        dimensions: Optional[Tuple[int, int, int]] = None,
-    ) -> Tuple[Tuple[float, float], int, Optional[NDArray[np.int32]]]:
+    ) -> Tuple[Tuple[float, float], int]:
         """Get mass range for processed mode - scan all spectra.
 
         In processed mode, each spectrum can have different m/z values,
@@ -427,11 +400,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         """
         logger.info("Processed mode - scanning ALL spectra for complete mass range...")
 
-        peak_counts = self._init_peak_counts_array(dimensions)
-
-        min_mass, max_mass, total_peaks = self._scan_all_spectra(
-            coords, n_spectra, dimensions, peak_counts
-        )
+        min_mass, max_mass, total_peaks = self._scan_all_spectra(coords, n_spectra)
 
         if min_mass == float("inf"):
             raise ValueError(
@@ -442,40 +411,18 @@ class ImzMLMetadataExtractor(MetadataExtractor):
 
         logger.info(f"Complete mass range: {min_mass:.2f} - {max_mass:.2f} m/z")
         logger.info(f"Total peaks: {total_peaks:,}")
-        return ((min_mass, max_mass), total_peaks, peak_counts)
-
-    def _init_peak_counts_array(
-        self, dimensions: Optional[Tuple[int, int, int]]
-    ) -> Optional[NDArray[np.int32]]:
-        """Initialize per-pixel peak counts array if dimensions provided.
-
-        Args:
-            dimensions: Optional (n_x, n_y, n_z) grid dimensions.
-
-        Returns:
-            Array of zeros or None if dimensions not provided.
-        """
-        if dimensions is None:
-            return None
-        n_x, n_y, n_z = dimensions
-        n_pixels = n_x * n_y * n_z
-        logger.info(f"Collecting per-pixel peak counts ({n_pixels:,} pixels)")
-        return np.zeros(n_pixels, dtype=np.int32)
+        return ((min_mass, max_mass), total_peaks)
 
     def _scan_all_spectra(
         self,
         coords: List,
         n_spectra: int,
-        dimensions: Optional[Tuple[int, int, int]],
-        peak_counts: Optional[NDArray[np.int32]],
     ) -> Tuple[float, float, int]:
         """Scan all spectra to find mass range and count peaks.
 
         Args:
             coords: List of spectrum coordinates.
             n_spectra: Total number of spectra.
-            dimensions: Optional grid dimensions for pixel indexing.
-            peak_counts: Optional array to store per-pixel peak counts.
 
         Returns:
             Tuple of (min_mass, max_mass, total_peaks).
@@ -492,9 +439,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             unit="spectrum",
         ) as pbar:
             for idx in range(n_spectra):
-                result = self._process_spectrum_for_range(
-                    idx, coords, dimensions, peak_counts
-                )
+                result = self._process_spectrum_for_range(idx)
                 if result is not None:
                     spec_min, spec_max, n_peaks = result
                     min_mass = min(min_mass, spec_min)
@@ -511,17 +456,11 @@ class ImzMLMetadataExtractor(MetadataExtractor):
     def _process_spectrum_for_range(
         self,
         idx: int,
-        coords: List,
-        dimensions: Optional[Tuple[int, int, int]],
-        peak_counts: Optional[NDArray[np.int32]],
     ) -> Optional[Tuple[float, float, int]]:
         """Process a single spectrum for mass range and peak count.
 
         Args:
             idx: Spectrum index.
-            coords: List of spectrum coordinates.
-            dimensions: Optional grid dimensions.
-            peak_counts: Optional array for per-pixel counts.
 
         Returns:
             Tuple of (min_mz, max_mz, n_peaks) or None if failed.
@@ -534,12 +473,6 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             # to the documented getspectrum.
             mzs = read_spectrum_mzs_only(self.parser, idx)
             n_peaks = len(mzs)
-
-            # Store per-pixel count if tracking
-            if peak_counts is not None and dimensions is not None:
-                self._store_pixel_peak_count(
-                    idx, coords, dimensions, peak_counts, n_peaks
-                )
 
             if n_peaks > 0:
                 return (float(np.min(mzs)), float(np.max(mzs)), n_peaks)
@@ -554,9 +487,13 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         """The ``(x, y, z)`` values in this file that map onto index 0.
 
         The same rebasing :meth:`ImzMLReader._coordinate_bases` does, and
-        it has to agree with it: these counts become the CSR ``indptr``, so
-        a base the reader does not share lands a pixel's peak count on
-        another pixel's row. Both call
+        it has to agree with it: this base is what the store records as
+        ``coordinate_systems.global.coordinate_offsets_px``, while the
+        reader's base is what the emitted pixel coordinates were actually
+        measured from. A base the reader does not share leaves the store
+        declaring an origin its own coordinates were never rebased on, and
+        the whole image is offset against the source file by the
+        difference. Both call
         :func:`thyra.utils.imzml_coordinate_base.coordinate_bases`, which
         holds the rule and the reasoning -- a 0 folds down on x and y, z
         takes the smallest value present.
@@ -573,32 +510,6 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             self._coordinate_bases_value = coordinate_bases(coords)
         return self._coordinate_bases_value
 
-    def _store_pixel_peak_count(
-        self,
-        idx: int,
-        coords: List,
-        dimensions: Tuple[int, int, int],
-        peak_counts: NDArray[np.int32],
-        n_peaks: int,
-    ) -> None:
-        """Store peak count for a pixel.
-
-        Args:
-            idx: Spectrum index.
-            coords: List of spectrum coordinates.
-            dimensions: Grid dimensions (n_x, n_y, n_z).
-            peak_counts: Array to store counts.
-            n_peaks: Number of peaks in this spectrum.
-        """
-        # Every axis is rebased on the file -- see _coordinate_bases().
-        x, y, z = coords[idx]
-        x_base, y_base, z_base = self._coordinate_bases(coords)
-        x, y, z = x - x_base, y - y_base, z - z_base
-        n_x, n_y, n_z = dimensions
-        pixel_idx = z * (n_x * n_y) + y * n_x + x
-        if 0 <= pixel_idx < len(peak_counts):
-            peak_counts[pixel_idx] = n_peaks
-
     def get_mass_range_for_resampling(self) -> Tuple[float, float]:
         """Get accurate mass range required for resampling.
 
@@ -610,7 +521,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
                 deliberately: resampling is precisely the path that used to
                 turn the invented ``(0.0, 1000.0)`` into a real axis on disk.
         """
-        mass_range, _, _ = self._get_mass_range_complete()
+        mass_range, _ = self._get_mass_range_complete()
         return mass_range
 
     def _extract_pixel_size_fast(self) -> Optional[Tuple[float, float]]:
@@ -699,17 +610,6 @@ class ImzMLMetadataExtractor(MetadataExtractor):
                 f"UO:0000017 (micrometer), UO:0000018 (nanometer)."
             )
         return value * factor
-
-    def _estimate_memory(self, n_spectra: int) -> float:
-        """Estimate memory usage in GB."""
-        # Rough estimate: assume average 1000 peaks per spectrum,
-        # 8 bytes per float
-        avg_peaks_per_spectrum = 1000
-        bytes_per_value = 8  # float64
-        estimated_bytes = (
-            n_spectra * avg_peaks_per_spectrum * 2 * bytes_per_value
-        )  # mz + intensity
-        return estimated_bytes / (1024**3)  # Convert to GB
 
     def _extract_imzml_specific(self) -> Dict[str, Any]:
         """Extract ImzML format-specific metadata.
