@@ -2,6 +2,98 @@
 
 <!-- version list -->
 
+## v3.23.3 (2026-09-14)
+
+### Bug Fixes
+
+- **bruker**: Answer the three retired constructor keywords
+  ([`9a09cf1`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/9a09cf19da163139523455d00401420f63591a15))
+
+- **bruker**: Harden the shared .mis parser against entity expansion
+  ([`57e733e`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/57e733ea0f5b102db31dd92e823ad8790de006ec))
+
+- **bruker**: Refuse an entity-bearing .mis out loud, naming the file
+  ([`d1144ae`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/d1144aedc54521f9ac0772e09a647266b46a29b1))
+
+- **ci**: Catch user-home paths, which the lab-share guard structurally cannot
+  ([`9331c33`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/9331c337682d3206b03a90cea3165ca6a98cb41c))
+
+- **cli**: Hide --format, the flag with one legal value
+  ([`d56ed49`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/d56ed490c42838b8eef775c32ea884dca9c66a98))
+
+- **deps**: Import defusedxml unconditionally, drop the stdlib fallback
+  ([`e8e3896`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/e8e3896e32ba5e779aadcca0546b765567f015f2))
+
+- **deps**: Let a missing spatialdata fail at import instead of degrading
+  ([`c3f0c81`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/c3f0c816a0909393a51b44105f27f16a616e6047))
+
+- **resampling**: Gate tic_preserving on the axis the conversion builds
+  ([`a3e20c9`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a3e20c9d960bf3152b606ad6150f25a0de97404a))
+
+- **resampling**: Make the re-gate a module-level function, not a method
+  ([`5bb9228`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/5bb92287fbe71f3442b841a247873e380d6ec4f5))
+
+- **utils**: Resolve relative store paths so a fitting store cannot lose keys
+  ([`fba01ed`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/fba01edecc71d1526ba4b4aa84ea86b7aa39b2a0))
+
+### Documentation
+
+- Correct three pages that describe a tree that no longer exists
+  ([`1c7e48c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/1c7e48c97cf5aad69e285bc8e757f2c54e6ff24d))
+
+- Name ConversionRefused in the seven Raises: blocks within reach
+  ([`d53de2f`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/d53de2fc1c1d21aee20a311a16f6833582101eb5))
+
+- Warn that a relative path can lose an array, correct the depth figure
+  ([`fc4def9`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/fc4def961991a99b1795e40c72afd3eeafcd8526))
+
+- **bruker**: Say what each consumer does with the .mis refusal
+  ([`d060ee0`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/d060ee08f3d4bb00a280dc170b023b9608d737e9))
+
+- **converter**: Name the exception each docstring's code actually raises
+  ([`0668de2`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/0668de20859fa30345068bb23fca6ffcfc8cb210))
+
+- **converter**: The two Raises: blocks this branch left saying ValueError
+  ([`25d989c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/25d989c0443d5e2799872bc2450c5d816b6aef8b))
+
+- **resampling**: AxisType.UNKNOWN is not refused where the docstring said
+  ([`7f44105`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/7f44105fbac399dc0425e76d6751925bdba9d5f2))
+
+- **resampling**: Name ConversionRefused where the code refuses
+  ([`94e13ce`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/94e13ce10c7f75d7ccd999a338f9341b7a46be06))
+
+### Refactoring
+
+- Delete the timsTOF utils package nothing has imported
+  ([`bcc6ffd`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/bcc6ffdf0bc47f3d92087d80b650c3f4a14dddf1))
+
+- **bruker**: Parse a .mis in one place
+  ([`6f37c91`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/6f37c91aa32a95af25a45a6d14c31b44a499dbda))
+
+- **core**: Delete the LIL-matrix pair D10 and D11 left behind
+  ([`f4fe411`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f4fe411d55890eea5bebb2c1c4a40d75a7867f56))
+
+- **imzml**: Delete the dead _get_xml_parser defusedxml fallback
+  ([`87be482`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/87be4828eb396020aea25a1c7098079e9896ad72))
+
+- **resampling**: Extract the re-gate so the complexity gate stays green
+  ([`75fb516`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/75fb516543f6057b51fdc8bf9adb4460034387b5))
+
+### Testing
+
+- Assert absoluteness the way the running platform spells it
+  ([`5be3334`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/5be333487d2fe815a3275b98037ffec391059db5))
+
+- Delete two Bruker test files that execute nothing, gate the third
+  ([`07ef45e`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/07ef45e7c9b450b78ff4071a5c73126cf4f7d288))
+
+- **registry**: Pin the refusal convention on a format nobody registered
+  ([`18d2642`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/18d2642f80cf69fb59e1414f3f54b8a61f5827be))
+
+- **registry**: This assertion is not the only holder, the same commit added another
+  ([`e783927`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/e7839270a6bf6e56b2f2cdccf710ce13b00f41df))
+
+
 ## v3.23.2 (2026-09-09)
 
 ### Bug Fixes

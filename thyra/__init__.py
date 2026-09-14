@@ -36,7 +36,7 @@ warnings.filterwarnings(
     category=FutureWarning,
 )
 
-__version__ = "3.23.2"
+__version__ = "3.23.3"
 
 # Expose main API
 __all__ = [
