@@ -2,12 +2,16 @@
 Tests for the simplified format registry system.
 """
 
+import threading
+
 import pytest
 
 import thyra
+from thyra.core import registry as registry_module
 from thyra.core.base_converter import BaseMSIConverter
 from thyra.core.base_reader import BaseMSIReader
 from thyra.core.registry import (
+    _get_bruker_folder_structure,
     _registry,
     detect_format,
     get_converter_class,
@@ -286,6 +290,64 @@ def test_spatialdata_converter_is_registered_on_import():
     unconditional and a broken install fails at ``import thyra`` instead.
     """
     assert get_converter_class("spatialdata") is thyra.SpatialDataConverter
+
+
+class TestTheLazyImportHoldsNoState:
+    """Issue #284: the lock's blind spot is deleted, not locked.
+
+    ``_get_bruker_folder_structure`` used to memoise into the module global
+    ``_bruker_folder_structure_module`` under an unsynchronised
+    check-then-set -- the only mutable global state in ``core.registry``,
+    and the only part ``MSIRegistry._lock`` did not cover. The memo is gone:
+    ``sys.modules`` already caches the import, and the alternative the issue
+    floated -- extending the registry lock over it -- is a deadlock, not a
+    fix. These pin both halves of that.
+    """
+
+    def test_the_memoising_global_is_not_back(self):
+        assert not hasattr(registry_module, "_bruker_folder_structure_module")
+
+    def test_calling_it_adds_no_module_state(self):
+        """Any reintroduced memo would show up as a new module attribute."""
+        before = set(vars(registry_module))
+        _get_bruker_folder_structure()
+        assert set(vars(registry_module)) == before
+
+    def test_every_call_yields_the_same_two_objects(self):
+        """``sys.modules`` is the cache, so identity holds without a memo."""
+        first = _get_bruker_folder_structure()
+        second = _get_bruker_folder_structure()
+        assert first[0] is second[0]
+        assert first[1] is second[1]
+
+    def test_the_lazy_import_does_not_wait_on_the_registry_lock(self):
+        """The shape that deadlocks, encoded so it fails instead of hanging.
+
+        Holding ``_registry._lock`` across the import means a caller can own
+        the lock while waiting for the ``thyra.readers`` import lock, which a
+        thread part-way through importing that package holds while waiting
+        for the registry lock inside a ``@register_reader``. Measured on
+        CPython 3.13.3: both threads hang for good.
+
+        Here the main thread plays the registering thread and simply holds
+        the lock. If the lazy import is ever put under that lock, the worker
+        cannot finish and the wait expires -- a failure, not a hung run,
+        which is why the thread is a daemon and the wait has a timeout.
+        """
+        finished = threading.Event()
+
+        def call_it() -> None:
+            _get_bruker_folder_structure()
+            finished.set()
+
+        with _registry._lock:
+            worker = threading.Thread(target=call_it, daemon=True)
+            worker.start()
+            assert finished.wait(timeout=10), (
+                "_get_bruker_folder_structure blocked while another thread "
+                "held the registry lock: it is being taken under that lock, "
+                "which is the deadlock shape issue #284 measured"
+            )
 
 
 def test_spatialdata_converter_is_always_a_class():
