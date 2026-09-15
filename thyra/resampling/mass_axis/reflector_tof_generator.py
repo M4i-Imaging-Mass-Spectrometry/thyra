@@ -67,6 +67,7 @@ class ReflectorTOFAxisGenerator(BaseAxisGenerator):
             max_mz=float(mz_centers[-1]),
             num_bins=len(mz_centers),
             axis_type=AxisType.REFLECTOR_TOF,
+            linearisation=self._midpoint_linearisation(ln_values),
         )
 
     def calculate_width_at_mz(
@@ -92,6 +93,10 @@ class ReflectorTOFAxisGenerator(BaseAxisGenerator):
             Expected bin width at target m/z
         """
         return reference_width * (mz / reference_mz)
+
+    def forward(self, mz):
+        """``ln(m/z)``: the axis is uniform in log m/z (constant ppm)."""
+        return np.log(np.asarray(mz, dtype=np.float64))
 
     def get_axis_type(self) -> AxisType:
         """Return the axis type for Reflector TOF."""

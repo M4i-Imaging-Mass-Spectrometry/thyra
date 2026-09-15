@@ -1,8 +1,12 @@
 """Abstract base class for mass axis generators."""
 
 from abc import ABC, abstractmethod
+from typing import Any
 
-from ..types import AxisType, MassAxis
+import numpy as np
+import numpy.typing as npt
+
+from ..types import AxisLinearisation, AxisType, MassAxis
 
 
 class BaseAxisGenerator(ABC):
@@ -58,3 +62,26 @@ class BaseAxisGenerator(ABC):
     @abstractmethod
     def get_axis_type(self) -> AxisType:
         """Return the axis type this generator produces."""
+
+    @abstractmethod
+    def forward(self, mz: Any) -> npt.NDArray[np.float64]:
+        """The coordinate this generator's bins are uniform in, at ``mz``.
+
+        Strictly monotone in m/z. The axis is a uniform grid of bin
+        *edges* in this coordinate (a uniform grid of centres for
+        constant spacing), which is what lets a bin index be computed
+        rather than searched: see :class:`~thyra.resampling.types.AxisLinearisation`.
+        Vectorised over an array of m/z values.
+        """
+
+    def _midpoint_linearisation(self, u_edges: Any) -> AxisLinearisation:
+        """The linearisation of an axis whose centres are m/z midpoints of these edges.
+
+        ``u_edges`` is the uniform grid of ``target_bins + 1`` edge
+        coordinates the generator laid with ``np.linspace``. Centre ``i``
+        sits between edges ``i`` and ``i + 1``, so its linearised
+        coordinate is half a step past edge ``i``.
+        """
+        u_edges = np.asarray(u_edges, dtype=np.float64)
+        du = (float(u_edges[-1]) - float(u_edges[0])) / (u_edges.size - 1)
+        return AxisLinearisation(self.forward, float(u_edges[0]) + 0.5 * du, du)

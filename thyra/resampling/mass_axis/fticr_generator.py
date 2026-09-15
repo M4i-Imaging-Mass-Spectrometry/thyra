@@ -70,6 +70,7 @@ class FTICRAxisGenerator(BaseAxisGenerator):
             max_mz=float(mz_centers[-1]),
             num_bins=len(mz_centers),
             axis_type=AxisType.FTICR,
+            linearisation=self._midpoint_linearisation(inv_values),
         )
 
     def calculate_width_at_mz(
@@ -95,6 +96,10 @@ class FTICRAxisGenerator(BaseAxisGenerator):
             Expected bin width at target m/z
         """
         return reference_width * ((mz / reference_mz) ** 2)
+
+    def forward(self, mz):
+        """``1 / m/z``: the axis is uniform in cyclotron frequency."""
+        return 1.0 / np.asarray(mz, dtype=np.float64)
 
     def get_axis_type(self) -> AxisType:
         """Return the axis type for FT-ICR."""

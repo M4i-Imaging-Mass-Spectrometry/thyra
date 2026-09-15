@@ -180,7 +180,12 @@ class TOFAxisGenerator(BaseAxisGenerator):
             max_mz=float(centres[-1]),
             num_bins=len(centres),
             axis_type=AxisType.TOF,
+            linearisation=self._midpoint_linearisation(u),
         )
+
+    def forward(self, mz):
+        """The law's cumulative: the axis is uniform in it by construction."""
+        return self.cumulative(mz)
 
     def get_axis_type(self) -> AxisType:
         """Return the axis type this generator produces."""

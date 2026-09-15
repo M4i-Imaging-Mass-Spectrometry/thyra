@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 import numpy.typing as npt
@@ -71,6 +71,56 @@ class AxisType(Enum):
     UNKNOWN = "unknown"
 
 
+@dataclass(frozen=True)
+class AxisLinearisation:
+    """The coordinate a generated axis is uniform in: ``forward(axis[i]) ~= u0 + i * du``.
+
+    Every generator lays its bins uniformly in some analytic coordinate
+    ``u = forward(m/z)`` -- m/z itself for constant spacing; ``sqrt``,
+    ``ln``, ``1/sqrt`` and ``1/m`` for the single-term laws; the two-term
+    law's own cumulative for ``TOF``. The bin nearest a value is therefore
+    (nearly) ``(forward(mz) - u0) / du`` rounded, and the converter's
+    nearest-neighbour mapping computes it that way instead of binary
+    searching the axis (design decision D21).
+
+    "Nearly" because the physics generators lay a uniform grid of bin
+    *edges* and report the arithmetic midpoints in m/z, so
+    ``forward(centre_i)`` is not exactly ``u0 + i * du``. It is strictly
+    within half a step of it for any strictly monotone ``forward``: the
+    midpoint lies strictly between its two edges, so its image lies
+    strictly between the two edge coordinates. That bound is what makes a
+    +-1 repair around the rounded index exact, and :meth:`deviation`
+    measures the actual margin so the converter can check it before
+    relying on it.
+    """
+
+    forward: Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
+    u0: float
+    du: float
+
+    def positions(self, mzs: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        """Where each m/z falls on the axis, in bins, before rounding."""
+        u = np.asarray(
+            self.forward(np.asarray(mzs, dtype=np.float64)), dtype=np.float64
+        )
+        return (u - self.u0) / self.du
+
+    def deviation(self, axis: npt.NDArray[np.float64], chunk: int = 1 << 22) -> float:
+        """The worst ``|positions(axis[i]) - i|`` over the axis, in bins.
+
+        Chunked, because the axis can run to hundreds of millions of
+        entries and this is called once per conversion for one number.
+        """
+        axis = np.asarray(axis, dtype=np.float64)
+        worst = 0.0
+        for start in range(0, axis.size, chunk):
+            stop = min(start + chunk, axis.size)
+            off = self.positions(axis[start:stop])
+            off -= np.arange(start, stop, dtype=np.float64)
+            worst = max(worst, float(np.max(np.abs(off))))
+        return worst
+
+
 @dataclass
 class MassAxis:
     """Represents a mass axis with metadata."""
@@ -80,6 +130,9 @@ class MassAxis:
     max_mz: float
     num_bins: int
     axis_type: AxisType
+    #: How the generator laid the bins, when it laid them in a coordinate
+    #: with a closed form; ``None`` for an axis that was not generated.
+    linearisation: Optional[AxisLinearisation] = None
 
     @property
     def spacing(self) -> npt.NDArray[np.floating[Any]]:

@@ -67,6 +67,7 @@ class LinearTOFAxisGenerator(BaseAxisGenerator):
             max_mz=float(mz_centers[-1]),
             num_bins=len(mz_centers),
             axis_type=AxisType.LINEAR_TOF,
+            linearisation=self._midpoint_linearisation(sqrt_values),
         )
 
     def calculate_width_at_mz(
@@ -92,6 +93,10 @@ class LinearTOFAxisGenerator(BaseAxisGenerator):
             Expected bin width at target m/z
         """
         return float(reference_width * np.sqrt(mz / reference_mz))
+
+    def forward(self, mz):
+        """``sqrt(m/z)``: the axis is uniform in flight time."""
+        return np.sqrt(np.asarray(mz, dtype=np.float64))
 
     def get_axis_type(self) -> AxisType:
         """Return the axis type for Linear TOF."""
