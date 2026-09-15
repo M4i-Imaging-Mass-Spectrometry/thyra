@@ -39,6 +39,13 @@ from ...core.base_converter import BaseMSIConverter, PixelSizeSource
 from ...core.base_reader import BaseMSIReader
 from ...core.conversion_state import ConversionState
 from ...errors import ConversionRefused
+from ...metadata.schema import (
+    MSI_METADATA_UNS_KEY,
+    MSI_VAR_RESERVED_COLUMNS,
+    ProcessingStep,
+    SoftwareRef,
+    build_msi_metadata,
+)
 from ...metadata.types import ComprehensiveMetadata, EssentialMetadata
 from ...resampling import ResamplingDecisionTree, ResamplingMethod
 from ...resampling.gaps import zero_across_gaps
@@ -2112,8 +2119,6 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         for the storage contract and ``thyra validate`` for the
         consumer side.
         """
-        from thyra.metadata.schema import MSI_METADATA_UNS_KEY, build_msi_metadata
-
         try:
             info = self._pixel_size_detection_info or {}
             meta = build_msi_metadata(
@@ -2143,7 +2148,6 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         layout, the number of passes -- belongs here.
         """
         from thyra import __version__
-        from thyra.metadata.schema import ProcessingStep, SoftwareRef
 
         thyra_ref = SoftwareRef(name="thyra", version=__version__)
         conversion_parameters: Dict[str, Any] = {}
@@ -3245,8 +3249,6 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             detail = f"{type(exc).__name__}: {exc}"
             logger.warning("Reader failed to supply mass axis annotations: %s", detail)
             return {}
-
-        from thyra.metadata.schema import MSI_VAR_RESERVED_COLUMNS
 
         validated: Dict[str, Any] = {}
         for name, values in (annotations or {}).items():
