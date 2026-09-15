@@ -63,6 +63,31 @@ one, and never more than four attempts.
 Only a key written TWICE is exposed, which is why first writes never fail.
 CI is not affected and never has been -- 0 ``test (windows-latest)``
 failures in 60 runs. This is a developer-machine and end-user-machine fix.
+
+Deferring to a fixed Zarr
+-------------------------
+
+Zarr has since taken this retry upstream, in zarr-developers/zarr-python#4358
+(merged 2026-09-15; no release carries it yet, the newest being v3.3.0). On a
+Zarr that has it, ``install_windows_atomic_write_retry`` patches nothing and
+Zarr's own retry runs.
+
+That check is not politeness, it is necessary. This module does not *wrap*
+``_atomic_write``, it **substitutes** a copy of it -- it has to, because the
+rename to retry happens inside that function, after the caller has already
+written into the file it yielded. Substituting means it would go on overriding
+whatever else upstream does to that function, and something else is already
+queued: zarr-developers/zarr-python#4173 moves the ``.partial`` files out of
+the store into a configurable temporary directory. With the patch installed
+unconditionally, Thyra would silently keep writing them beside the
+destination, and nothing would fail to say so.
+
+Deferring costs only the exhaustion message logged below. The delays and the
+retried error codes are the same on both sides -- upstream's came from the
+measurements above.
+
+Removing this module outright is thyra#341, which needs the ``zarr`` ceiling
+in pyproject.toml raised past the release that carries #4358 first.
 """
 
 import contextlib
@@ -90,6 +115,16 @@ _TRANSIENT_WINERRORS = frozenset(
 # delays are headroom for a busier machine rather than an expected path.
 _RETRY_DELAYS = (0.0, 0.001, 0.005, 0.02, 0.05, 0.2)
 
+# The helper zarr-python#4358 added to zarr.storage._local to hold its own
+# version of this retry. Its presence is what tells us a Zarr needs nothing
+# from us. A name is a weak hinge, so it is chosen to be the sturdiest one
+# available: Zarr's own tests import it from there by name, so a rename
+# cannot pass upstream CI silently. If it is renamed anyway the check simply
+# does not fire and we patch as before, which is where we are today.
+_UPSTREAM_RETRY_HELPER = "_move_with_retry"
+
+# Whether the one-time decision below has been taken -- to patch, or to leave
+# a Zarr that retries for itself alone. Either way there is nothing to redo.
 _installed = False
 
 
@@ -189,6 +224,11 @@ def install_windows_atomic_write_retry() -> None:
     destination atomically and cannot hit this failure, and a no-op if
     called more than once.
 
+    Also a no-op on a Zarr that carries its own retry (zarr-python#4358),
+    so that a Zarr new enough to have been fixed keeps its own write path
+    instead of this module's copy of the old one. See the module docstring
+    for why that matters more than it looks.
+
     If Zarr's private atomic-write helpers are not shaped as expected -- a
     newer Zarr having reworked them -- nothing is patched and the caller
     keeps Zarr's own behaviour.
@@ -202,6 +242,14 @@ def install_windows_atomic_write_retry() -> None:
         import zarr.storage._local as zarr_local
     except ImportError:  # pragma: no cover - zarr is a hard dependency
         logger.debug("Could not import zarr.storage._local; not patching")
+        return
+
+    if hasattr(zarr_local, _UPSTREAM_RETRY_HELPER):
+        _installed = True
+        logger.debug(
+            "This Zarr retries its own atomic metadata writes; leaving its "
+            "write path untouched"
+        )
         return
 
     original = getattr(zarr_local, "_atomic_write", None)
