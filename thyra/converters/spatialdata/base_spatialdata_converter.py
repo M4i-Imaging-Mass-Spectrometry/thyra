@@ -353,6 +353,23 @@ _HEATMAP_TOLERANCE = 1e-4
 #: under ``--tdf-spectrum scan_sum``.
 _MARGINAL_TOLERANCE = 1e-9
 
+#: What a provenance block is allowed to fail with (issue #280).
+#:
+#: The blocks below are assembled from whatever shape a reader's extractor
+#: produced -- a missing attribute, a key the vendor did not write, a value
+#: of the wrong type -- so these four are the expected outcome of an
+#: unfamiliar source and cost the store one section. Everything else is
+#: Thyra breaking its own invariant, and a store missing a section it was
+#: asked to write is a worse outcome than a traceback, so the rest
+#: propagates.
+#:
+#: :class:`~thyra.errors.ConversionRefused` subclasses ``ValueError`` and is
+#: therefore *inside* this tuple. That is deliberate: none of the sites that
+#: use it calls anything that refuses. A site that does must re-raise the
+#: refusal ahead of the catch, because a refusal is addressed to the person
+#: who ran the conversion and a log line is not delivery.
+_MALFORMED_METADATA = (AttributeError, KeyError, TypeError, ValueError)
+
 
 def _current_ratio_block(
     table: Any, summed_key: str, summed: Any
@@ -1216,6 +1233,16 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         except Exception as exc:
             # Detection is advisory here. A source it cannot classify must
             # still convert with the method that was actually asked for.
+            #
+            # Broad on purpose, and it stays broad (issue #280). Narrowing
+            # it to the exceptions a detector chain can raise looks right
+            # and breaks ``test_a_source_the_detector_cannot_classify_
+            # still_converts``, which pins the stronger promise this
+            # docstring makes: *whatever* goes wrong in the advisory check,
+            # the method the caller asked for is still applied. A
+            # conversion that failed because an advisory check raised would
+            # be a worse defect than any this catch can hide, and the catch
+            # hides it at DEBUG rather than swallowing it silently.
             logger.debug(
                 "Could not check --resample-method against the detector: %s",
                 str(exc),
@@ -1275,7 +1302,13 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         return metadata
 
     def _extract_essential_metadata(self, metadata: Dict[str, Any]) -> None:
-        """Extract essential metadata for resampling decisions."""
+        """Extract essential metadata for resampling decisions.
+
+        The reader call keeps a broad catch: it is the boundary, and what
+        surfaces there was raised by a vendor SDK, an XML parser or sqlite.
+        Reading the result is narrowed, because that is Thyra's own code
+        against an object Thyra built (issue #280).
+        """
         try:
             # Use cached essential metadata if available
             if self._essential_metadata_cached is not None:
@@ -1283,7 +1316,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             else:
                 essential = self.reader.get_essential_metadata()
                 self._essential_metadata_cached = essential
+        except Exception as e:
+            logger.debug(f"Could not read essential metadata: {e}")
+            return
 
+        try:
             if hasattr(essential, "source_path"):
                 metadata["source_path"] = str(essential.source_path)
 
@@ -1296,11 +1333,17 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 "total_peaks": getattr(essential, "total_peaks", None),
                 "n_spectra": getattr(essential, "n_spectra", None),
             }
-        except Exception as e:
+        except _MALFORMED_METADATA as e:
             logger.debug(f"Could not extract essential metadata: {e}")
 
     def _extract_comprehensive_metadata(self, metadata: Dict[str, Any]) -> None:
-        """Extract comprehensive metadata including Bruker GlobalMetadata."""
+        """Extract comprehensive metadata including Bruker GlobalMetadata.
+
+        Split the same way :meth:`_extract_essential_metadata` is: the
+        reader call is the boundary and keeps its breadth, the two
+        extractions below it are Thyra reading an object Thyra built and
+        are narrowed (issue #280).
+        """
         try:
             # Use cached comprehensive metadata if available
             if self._comprehensive_metadata_cached is not None:
@@ -1308,10 +1351,14 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             else:
                 comp_meta = self.reader.get_comprehensive_metadata()
                 self._comprehensive_metadata_cached = comp_meta
+        except Exception as e:
+            logger.debug(f"Could not read comprehensive metadata: {e}")
+            return
 
+        try:
             self._extract_bruker_metadata(metadata, comp_meta)
             self._extract_instrument_info(metadata, comp_meta)
-        except Exception as e:
+        except _MALFORMED_METADATA as e:
             logger.debug(f"Could not extract comprehensive metadata: {e}")
 
     def _extract_bruker_metadata(self, metadata: Dict[str, Any], comp_meta) -> None:
@@ -1425,7 +1472,12 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             self._collect_essential_metadata(uns, comp_meta)
             self._collect_optional_sections(uns, comp_meta)
             self._collect_region_info(uns)
-        except Exception as e:
+        except (*_MALFORMED_METADATA, RecursionError) as e:
+            # Three Thyra methods reading an object a Thyra extractor built,
+            # so the breadth the reader call above has is not earned here
+            # (issue #280). ``RecursionError`` is in the set because
+            # _serialize_for_zarr walks ``vars()`` and a vendor object that
+            # points back at its parent has no bottom.
             logger.warning("Could not build the full uns provenance block: %s", str(e))
 
         self._collect_msi_metadata_block(uns, comp_meta)
@@ -1878,9 +1930,16 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         """Build the sibling tables of ``table_key`` and add them.
 
         No-op for a sibling :meth:`_plan_mobility_table` or
-        :meth:`_plan_msms_table` did not name for this slice. A failure
-        is logged and leaves the summed table untouched: the siblings are
-        additive, and a store without them is still complete.
+        :meth:`_plan_msms_table` did not name for this slice.
+
+        A sibling that *was* named is not additive, and this used to say
+        it was. The summed table's ``uns`` is built before the siblings
+        are, and it carries their keys, so a failure swallowed here leaves
+        a store whose summed table points at an element nobody wrote. A
+        failure therefore propagates now (issue #280). The builders can
+        still decline by returning ``None`` -- a decision, not a failure --
+        and that path leaves the same dangling key; it is a separate
+        defect from this one and is tracked as issue #343.
         """
         if self._common_mass_axis is None:
             return
@@ -1928,22 +1987,34 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             self._table_scratch.append(
                 (None if discovery is None else discovery.assembly, scratch)
             )
-        try:
-            return build_mobility_table(
-                self.reader,
-                obs,
-                self._common_mass_axis,
-                table_key,
-                region_key,
-                uns,
-                z_value=z_value,
-                grid=self._mobility_grid,
-                discovery=discovery,
-                scratch=scratch,
-            )
-        except Exception as e:
-            logger.error("Could not build the mobility-resolved table: %s", str(e))
-            return None
+        # Deliberately uncaught (issue #280). By the time this runs, the
+        # summed table's uns has already named this table, twice: in
+        # ``mobility_axis["resolved_table"]`` and in the versioned block at
+        # ``msi_metadata.ms_analysis.ion_mobility.resolved_table``. Turning
+        # a failure into a log line does not leave "a store without the
+        # sibling, still complete". It leaves a store pointing at an
+        # element that was never written (issue #343 has the measurement),
+        # and
+        # nothing downstream checks that the pointer resolves: no validator
+        # rule, no test. A ConversionRefused from the builder is a sentence
+        # addressed to whoever ran the conversion (csc_assembly's
+        # two-passes-disagree, mobility_table's off-axis pair); anything
+        # else is an invariant break whose traceback is the explanation.
+        # Neither is served by being swallowed here. Nothing is on disk yet
+        # at this point, so propagating costs a store that would have lied,
+        # not a store that was written.
+        return build_mobility_table(
+            self.reader,
+            obs,
+            self._common_mass_axis,
+            table_key,
+            region_key,
+            uns,
+            z_value=z_value,
+            grid=self._mobility_grid,
+            discovery=discovery,
+            scratch=scratch,
+        )
 
     def _build_msms_sibling(
         self,
@@ -1961,21 +2032,22 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         if scratch is None:
             scratch = self._new_sibling_scratch("msms")
             self._table_scratch.append((None, scratch))
-        try:
-            return build_msms_table(
-                self.reader,
-                obs,
-                self._common_mass_axis,
-                table_key,
-                region_key,
-                uns,
-                z_value=z_value,
-                scratch=scratch,
-                accumulator=accumulator,
-            )
-        except Exception as e:
-            logger.error("Could not build the demultiplexed MS/MS table: %s", str(e))
-            return None
+        # Deliberately uncaught, for the reason given in
+        # :meth:`_build_mobility_sibling`: the summed table's uns already
+        # names this table, in ``msms_schedule["resolved_table"]`` and at
+        # ``msi_metadata.ms_analysis.fragmentation.resolved_table``, which
+        # schema 0.5.0 added for exactly that purpose (issue #280).
+        return build_msms_table(
+            self.reader,
+            obs,
+            self._common_mass_axis,
+            table_key,
+            region_key,
+            uns,
+            z_value=z_value,
+            scratch=scratch,
+            accumulator=accumulator,
+        )
 
     @staticmethod
     def _record_mobility_marginal(table: Any, summed: Any, summed_key: str) -> None:
@@ -2002,7 +2074,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         """
         try:
             block = _current_ratio_block(table, summed_key, summed)
-        except Exception as e:  # pragma: no cover - defensive
+        except _MALFORMED_METADATA as e:  # pragma: no cover - defensive
+            # Two row sums over two memmaps (issue #280): a released memmap
+            # or a matrix that is not the shape it should be raises one of
+            # these. A comparison is the whole job here, so anything wider
+            # would hide the defect that broke it in a debug line.
             logger.debug("Could not compare the mobility marginal: %s", str(e))
             return
         if block is None:
@@ -2071,7 +2147,8 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         """
         try:
             block = _current_ratio_block(table, summed_key, summed)
-        except Exception as e:  # pragma: no cover - defensive
+        except _MALFORMED_METADATA as e:  # pragma: no cover - defensive
+            # Same two row sums, same reasoning as _record_mobility_marginal.
             logger.debug("Could not compare the demultiplexed current: %s", str(e))
             return
         if block is None:
@@ -2137,7 +2214,12 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 msms_resolved_table=self._msms_table_key,
             )
             uns[MSI_METADATA_UNS_KEY] = meta.to_uns_dict()
-        except Exception as e:
+        except _MALFORMED_METADATA as e:
+            # The schema builder is Thyra's, and so is everything handed to
+            # it, so its breadth was not earned (issue #280). What remains
+            # is the vendor-shaped part: a comp_meta section the builder
+            # reads positionally or by key and this source spells
+            # differently.
             logger.warning("Could not build the msi_metadata block: %s", str(e))
 
     def _processing_provenance(self) -> List[Any]:
@@ -2281,7 +2363,10 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         try:
             stored = float(np.asarray(spectrum, dtype=np.float64).sum())
             held = float(np.asarray(block["counts"], dtype=np.float64).sum())
-        except Exception as e:  # pragma: no cover - defensive
+        except _MALFORMED_METADATA as e:  # pragma: no cover - defensive
+            # A block without ``counts``, or counts that will not become a
+            # float array (issue #280). Two numpy sums cannot fail any
+            # other way that is not a defect.
             # str(e), not e: this is the finalize path, where a retained
             # record pins the memmaps the table is built on (issue #249).
             logger.debug("Could not compare the mobility heatmap: %s", str(e))
@@ -3495,7 +3580,13 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 f"Computed optical alignment with "
                 f"{len(self._alignment_result.region_mappings)} region mappings"
             )
-        except Exception as e:
+        except (KeyError, TypeError, ValueError) as e:
+            # Thyra arithmetic over Thyra's own parse of the .mis and the
+            # poslog (issue #280). What it can legitimately meet is a
+            # record those files did not fill: an Area without ``p1``, a
+            # position without ``region``, a corner that is not a pair.
+            # Not AttributeError -- nothing here reads an attribute, so one
+            # would be a defect in the aligner and must keep its traceback.
             logger.warning(f"Failed to compute optical alignment: {e}")
             self._alignment_result = None
 
