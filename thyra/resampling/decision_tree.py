@@ -37,20 +37,15 @@ class ResamplingDecisionTree:
     ) -> ResamplingMethod:
         """Automatically select appropriate resampling method.
 
-        Parameters
-        ----------
-        metadata : Optional[Dict[str, Any]]
-            Metadata dictionary containing instrument information
+        Args:
+            metadata: Metadata dictionary containing instrument information
 
-        Returns
-        -------
-        ResamplingMethod
+        Returns:
             Selected resampling strategy
 
-        Raises
-        ------
-        NotImplementedError
-            When metadata is None (cannot auto-detect without data)
+        Raises:
+            NotImplementedError: When metadata is None (cannot auto-detect
+                without data)
         """
         if metadata is None:
             raise NotImplementedError(
@@ -75,22 +70,16 @@ class ResamplingDecisionTree:
         picked, so the gate has to be asked again once the real axis is
         known.
 
-        Parameters
-        ----------
-        metadata : Optional[Dict[str, Any]]
-            Metadata dictionary containing instrument information
-        axis_type : AxisType
-            The axis the conversion will build
+        Args:
+            metadata: Metadata dictionary containing instrument information
+            axis_type: The axis the conversion will build
 
-        Returns
-        -------
-        ResamplingMethod
+        Returns:
             Selected resampling strategy for that axis
 
-        Raises
-        ------
-        NotImplementedError
-            When metadata is None (cannot auto-detect without data)
+        Raises:
+            NotImplementedError: When metadata is None (cannot auto-detect
+                without data)
         """
         if metadata is None:
             raise NotImplementedError(
@@ -106,14 +95,10 @@ class ResamplingDecisionTree:
     def select_axis_type(self, metadata: Optional[Dict[str, Any]] = None) -> AxisType:
         """Automatically select appropriate mass axis type.
 
-        Parameters
-        ----------
-        metadata : Optional[Dict[str, Any]]
-            Metadata dictionary containing instrument information
+        Args:
+            metadata: Metadata dictionary containing instrument information
 
-        Returns
-        -------
-        AxisType
+        Returns:
             Recommended axis type for the instrument
         """
         if metadata is None:
@@ -131,17 +116,13 @@ class ResamplingDecisionTree:
     ) -> Optional[ReferenceWidth]:
         """The bin width the detected instrument asks for, if any.
 
-        Parameters
-        ----------
-        metadata : Optional[Dict[str, Any]]
-            Metadata dictionary containing instrument information
+        Args:
+            metadata: Metadata dictionary containing instrument information
 
-        Returns
-        -------
-        Optional[ReferenceWidth]
-            ``(width_da, reference_mz)`` when the matching detector declares
-            a default, otherwise ``None`` and the converter's per-axis-type
-            defaults apply.
+        Returns:
+            ``(width_da, reference_mz)`` when the matching detector
+            declares a default, otherwise ``None`` and the converter's
+            per-axis-type defaults apply.
         """
         if metadata is None:
             return None
@@ -154,14 +135,10 @@ class ResamplingDecisionTree:
     ) -> Optional[Tuple[float, float]]:
         """The two-term TOF width law the detected instrument declares, if any.
 
-        Parameters
-        ----------
-        metadata : Optional[Dict[str, Any]]
-            Metadata dictionary containing instrument information
+        Args:
+            metadata: Metadata dictionary containing instrument information
 
-        Returns
-        -------
-        Optional[Tuple[float, float]]
+        Returns:
             ``(A, B)`` for ``AxisType.TOF``, or ``None``.
         """
         if metadata is None:

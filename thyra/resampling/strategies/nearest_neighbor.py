@@ -45,16 +45,11 @@ class NearestNeighborStrategy(ResamplingStrategy):
         at every target point nearest to it, so the sum grows with the
         target axis density. See the module docstring.
 
-        Parameters
-        ----------
-        spectrum : Spectrum
-            Input spectrum to resample
-        target_axis : npt.NDArray[np.floating[Any]]
-            Target mass axis values
+        Args:
+            spectrum: Input spectrum to resample
+            target_axis: Target mass axis values
 
-        Returns
-        -------
-        Spectrum
+        Returns:
             Resampled spectrum with target_axis as mz values
         """
         if len(spectrum.mz) == 0:
