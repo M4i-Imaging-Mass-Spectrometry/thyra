@@ -817,7 +817,9 @@ D4 is the guard on it.
 
 ## D9. One streaming route
 
-**Status:** Accepted (2026-09-08).
+**Status:** Implemented 2026-09-08. The COO route went with PR #220 on the
+same day this was accepted; `thyra/converters/spatialdata/` has held one
+route since, and the code refers to the old one in the past tense.
 
 The streaming converter had two write routes. PCS (pre-calculated scatter)
 counts entries per column in one pass and scatters straight into

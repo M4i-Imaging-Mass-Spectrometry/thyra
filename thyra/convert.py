@@ -29,7 +29,8 @@ from math import isfinite
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
-from .core.base_converter import PixelSizeSource
+from .core.base_converter import BaseMSIConverter, PixelSizeSource
+from .core.base_reader import BaseMSIReader
 from .core.registry import detect_format, get_converter_class, get_reader_class
 from .errors import ConversionRefused
 from .utils.windows_paths import prepare_zarr_output_path
@@ -140,7 +141,7 @@ def _validate_numeric_parameters(
     return True
 
 
-def _validate_streaming(streaming: Any) -> bool:
+def _validate_streaming(streaming: object) -> bool:
     """Validate the ``streaming`` argument, which selects nothing.
 
     A no-op argument still has to say when it was misspelled. ``"yes"``,
@@ -174,7 +175,7 @@ def _validate_input_parameters(
     dataset_id: str,
     pixel_size_um: Optional[float],
     z_spacing_um: Optional[float] = None,
-    streaming: Any = "auto",
+    streaming: object = "auto",
 ) -> bool:
     """Validate all input parameters for convert_msi function."""
     return (
@@ -253,7 +254,7 @@ def _create_reader(
     input_path: Path,
     reader_options: Optional[Dict[str, Any]] = None,
     lossless_tables: Optional[List[str]] = None,
-) -> Tuple[Any, str]:
+) -> Tuple[BaseMSIReader, str]:
     """Create and return a reader for the input format.
 
     Args:
@@ -339,7 +340,7 @@ def _lossless_spectrum_for(kwargs: Dict[str, Any]) -> List[str]:
 
 
 def _determine_pixel_size(
-    reader: Any, pixel_size_um: Optional[float], input_format: str
+    reader: BaseMSIReader, pixel_size_um: Optional[float], input_format: str
 ) -> Tuple[float, PixelSizeSource, Dict[str, Any]]:
     """Determine pixel size either from metadata or user input."""
     if pixel_size_um is not None:
@@ -378,7 +379,7 @@ def _determine_pixel_size(
 
 def _create_converter(
     format_type: str,
-    reader: Any,
+    reader: BaseMSIReader,
     output_path: Path,
     dataset_id: str,
     pixel_size_um: float,
@@ -391,7 +392,7 @@ def _create_converter(
     streaming: Union[bool, Literal["auto"]] = "auto",
     z_spacing_um: Optional[float] = None,
     **kwargs: Any,
-) -> Any:
+) -> BaseMSIConverter:
     """Create and return a converter for the specified format.
 
     ``streaming`` used to choose between an in-memory converter and a
@@ -441,16 +442,16 @@ def _create_converter(
     return converter_class(reader, output_path, **converter_kwargs)
 
 
-def _perform_conversion_with_cleanup(converter: Any, reader: Any) -> bool:
-    """Perform the conversion and handle reader cleanup."""
-    try:
-        logger.info("Starting conversion...")
-        result = converter.convert()
-        logger.info(f"Conversion {'completed successfully' if result else 'failed'}")
-        return bool(result)
-    finally:
-        if hasattr(reader, "close"):
-            reader.close()
+def _perform_conversion(converter: BaseMSIConverter) -> bool:
+    """Run the conversion and say how it went.
+
+    Closing the reader is not this function's job: ``convert_msi`` opened
+    it and holds it in a ``with`` (issue #279).
+    """
+    logger.info("Starting conversion...")
+    result = converter.convert()
+    logger.info(f"Conversion {'completed successfully' if result else 'failed'}")
+    return bool(result)
 
 
 def convert_msi(
@@ -635,7 +636,6 @@ def convert_msi(
         reader_options = dict(reader_options or {})
         reader_options["region"] = region
 
-    reader = None
     try:
         # Create reader with format-specific options. A mobility grid
         # table decides the summed spectrum's semantics, so it has to be
@@ -647,32 +647,38 @@ def convert_msi(
             lossless_tables=_lossless_spectrum_for(kwargs),
         )
 
-        # Determine pixel size
-        final_pixel_size, pixel_size_source, pixel_size_detection_info = (
-            _determine_pixel_size(reader, pixel_size_um, input_format)
-        )
+        # This function opened the reader, so this function closes it, on
+        # every path out -- including the ones that fail before the
+        # conversion starts. "Pixel size not found in metadata" is the
+        # common one, and it used to leave the source open until the
+        # garbage collector happened to reach it, which on Windows holds a
+        # lock on the file the user is about to retry with (issue #279).
+        with reader:
+            # Determine pixel size
+            final_pixel_size, pixel_size_source, pixel_size_detection_info = (
+                _determine_pixel_size(reader, pixel_size_um, input_format)
+            )
 
-        # Create converter
-        converter = _create_converter(
-            format_type,
-            reader,
-            output_path,
-            dataset_id,
-            final_pixel_size,
-            pixel_size_source,
-            handle_3d,
-            pixel_size_detection_info,
-            resampling_config,
-            include_optical=include_optical,
-            apply_optical_alignment=apply_optical_alignment,
-            streaming=streaming,
-            z_spacing_um=z_spacing_um,
-            **kwargs,
-        )
+            # Create converter
+            converter = _create_converter(
+                format_type,
+                reader,
+                output_path,
+                dataset_id,
+                final_pixel_size,
+                pixel_size_source,
+                handle_3d,
+                pixel_size_detection_info,
+                resampling_config,
+                include_optical=include_optical,
+                apply_optical_alignment=apply_optical_alignment,
+                streaming=streaming,
+                z_spacing_um=z_spacing_um,
+                **kwargs,
+            )
 
-        # Perform conversion with cleanup
-        succeeded = _perform_conversion_with_cleanup(converter, reader)
-        return succeeded
+            succeeded = _perform_conversion(converter)
+            return succeeded
 
     except ConversionRefused as e:
         # A refusal Thyra wrote: the message is the whole explanation, and
@@ -703,20 +709,9 @@ def convert_msi(
         return False
 
     finally:
-        # Only the conversion itself closed the reader, so anything that
-        # failed before it -- "Pixel size not found in metadata" is the
-        # common one -- left the source open until the garbage collector
-        # happened to reach it. On Windows that holds a lock on the file
-        # the user is about to retry with. Every reader's close() is
-        # idempotent, so the conversion's own close is not disturbed.
-        if reader is not None and hasattr(reader, "close"):
-            try:
-                reader.close()
-            except Exception as close_error:  # pragma: no cover - defensive
-                logger.debug("Could not close the reader: %s", str(close_error))
-
-        # After the reader is closed, so the move cannot race a handle the
-        # source still holds. Covers all five ``return False`` paths past
-        # the path validation plus anything that escapes this function.
+        # Runs after the ``with`` above has closed the reader, so the move
+        # cannot race a handle the source still holds. Covers all five
+        # ``return False`` paths past the path validation plus anything
+        # that escapes this function.
         if not succeeded:
             quarantine_partial_output(output_path)
