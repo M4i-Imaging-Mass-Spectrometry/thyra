@@ -105,10 +105,8 @@ def _check_law(a: float, b: float) -> None:
 class TOFAxisGenerator(BaseAxisGenerator):
     """Mass axis whose bin width tracks ``sqrt(A m + B m^2) / k``.
 
-    Parameters
-    ----------
-    a, b : float
-        The width law's coefficients (mDa^2/Da and dimensionless).
+    Args:
+        a, b: The width law's coefficients (mDa^2/Da and dimensionless).
     """
 
     def __init__(self, a: float, b: float) -> None:

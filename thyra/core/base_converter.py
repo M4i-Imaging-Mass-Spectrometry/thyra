@@ -185,8 +185,7 @@ class BaseMSIConverter(ABC):
         nothing came back to remove (issue #245).
 
         Returns:
-        --------
-        bool: True if conversion was successful, False otherwise.
+            True if the conversion succeeded, False otherwise.
         """
         try:
             self._initialize_conversion()
@@ -652,8 +651,7 @@ class BaseMSIConverter(ABC):
         """Create a DataFrame containing pixel coordinates.
 
         Returns:
-        --------
-        pd.DataFrame: DataFrame with pixel coordinates
+            A DataFrame with one row per pixel coordinate.
         """
         if self._dimensions is None:
             raise ValueError("Dimensions are not initialized.")
@@ -689,8 +687,7 @@ class BaseMSIConverter(ABC):
         """Create a DataFrame containing mass values.
 
         Returns:
-        --------
-        pd.DataFrame: DataFrame with mass values
+            A DataFrame with one row per mass value.
         """
         if self._common_mass_axis is None:
             raise ValueError("Common mass axis is not initialized.")

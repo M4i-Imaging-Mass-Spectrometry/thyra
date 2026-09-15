@@ -28,18 +28,12 @@ class CommonAxisBuilder:
         This is a placeholder implementation that will be expanded
         in Phase 4.
 
-        Parameters
-        ----------
-        min_mz : float
-            Minimum m/z value
-        max_mz : float
-            Maximum m/z value
-        num_bins : int
-            Number of bins
+        Args:
+            min_mz: Minimum m/z value
+            max_mz: Maximum m/z value
+            num_bins: Number of bins
 
-        Returns
-        -------
-        MassAxis
+        Returns:
             Generated mass axis
         """
         mz_values = np.linspace(min_mz, max_mz, num_bins)
@@ -64,33 +58,23 @@ class CommonAxisBuilder:
     ) -> MassAxis:
         """Create physics-based mass axis for specific analyzer types.
 
-        Parameters
-        ----------
-        min_mz : float
-            Minimum m/z value
-        max_mz : float
-            Maximum m/z value
-        num_bins : int
-            Number of bins
-        axis_type : AxisType
-            Type of mass analyzer
-        reference_mz : float
-            Reference m/z for width specification (default: 500.0)
-        reference_width : float
-            Mass width at reference m/z (default: 0.1)
-        tof_law : Optional[Tuple[float, float]]
-            ``(A, B)`` of the two-term width law; required for
-            ``AxisType.TOF`` and ignored otherwise.
+        Args:
+            min_mz: Minimum m/z value
+            max_mz: Maximum m/z value
+            num_bins: Number of bins
+            axis_type: Type of mass analyzer
+            reference_mz: Reference m/z for width specification (default:
+                500.0)
+            reference_width: Mass width at reference m/z (default: 0.1)
+            tof_law: ``(A, B)`` of the two-term width law; required for
+                ``AxisType.TOF`` and ignored otherwise.
 
-        Returns
-        -------
-        MassAxis
+        Returns:
             Generated mass axis with analyzer-specific spacing
 
-        Raises
-        ------
-        ConversionRefused
-            If axis_type is not supported, or is ``TOF`` without a law
+        Raises:
+            ConversionRefused: If axis_type is not supported, or is ``TOF``
+                without a law
         """
         if axis_type is AxisType.TOF:
             if tof_law is None:

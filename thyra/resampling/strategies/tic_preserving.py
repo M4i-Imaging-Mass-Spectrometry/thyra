@@ -50,16 +50,11 @@ class TICPreservingStrategy(ResamplingStrategy):
         for why the share is measured by integration rather than by counting
         the source points that fall in range.
 
-        Parameters
-        ----------
-        spectrum : Spectrum
-            Input spectrum to resample
-        target_axis : npt.NDArray[np.floating[Any]]
-            Target mass axis values
+        Args:
+            spectrum: Input spectrum to resample
+            target_axis: Target mass axis values
 
-        Returns
-        -------
-        Spectrum
+        Returns:
             Resampled spectrum with target_axis as mz values
         """
         if len(spectrum.mz) == 0:

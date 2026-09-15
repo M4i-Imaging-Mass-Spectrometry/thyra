@@ -24,25 +24,19 @@ class LinearAxisGenerator(BaseAxisGenerator):
     ) -> MassAxis:
         """Generate uniform mass axis with constant spacing.
 
-        Parameters
-        ----------
-        min_mz : float
-            Minimum m/z value
-        max_mz : float
-            Maximum m/z value
-        target_bins : int
-            Number of bins
-        reference_mz : float
-            Unused. Constant spacing has no reference-m/z dependence; the
-            parameter exists so every generator shares one signature.
-        reference_width : float
-            Unused, for the same reason. The realized width is
-            ``(max_mz - min_mz) / (target_bins - 1)``, and the caller sizes
-            ``target_bins`` to make that the width it wants.
+        Args:
+            min_mz: Minimum m/z value
+            max_mz: Maximum m/z value
+            target_bins: Number of bins
+            reference_mz: Unused. Constant spacing has no reference-m/z
+                dependence; the parameter exists so every generator shares
+                one signature.
+            reference_width: Unused, for the same reason. The realized
+                width is ``(max_mz - min_mz) / (target_bins - 1)``, and the
+                caller sizes ``target_bins`` to make that the width it
+                wants.
 
-        Returns
-        -------
-        MassAxis
+        Returns:
             Generated mass axis with uniform spacing
         """
         mz_values = np.linspace(min_mz, max_mz, target_bins)

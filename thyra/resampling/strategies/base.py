@@ -36,16 +36,11 @@ class ResamplingStrategy(ABC):
     ) -> Spectrum:
         """Resample spectrum to target mass axis.
 
-        Parameters
-        ----------
-        spectrum : Spectrum
-            Input spectrum to resample
-        target_axis : np.ndarray
-            Target mass axis values
+        Args:
+            spectrum: Input spectrum to resample
+            target_axis: Target mass axis values
 
-        Returns
-        -------
-        Spectrum
+        Returns:
             Resampled spectrum with target_axis as mz values
         """
         pass

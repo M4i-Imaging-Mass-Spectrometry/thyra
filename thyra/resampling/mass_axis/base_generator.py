@@ -33,25 +33,18 @@ class BaseAxisGenerator(ABC):
         binning and the stored ``var["mz"]`` column both require increasing
         m/z.
 
-        Parameters
-        ----------
-        min_mz : float
-            Minimum m/z value.
-        max_mz : float
-            Maximum m/z value.
-        target_bins : int
-            Number of bins to distribute.
-        reference_mz : float
-            Reference m/z the bin count was anchored to. Implementations
-            that need only the bin count to realize their spacing law may
-            ignore this.
-        reference_width : float
-            Bin width requested at ``reference_mz``. May likewise be
-            ignored when the bin count already determines the spacing.
+        Args:
+            min_mz: Minimum m/z value.
+            max_mz: Maximum m/z value.
+            target_bins: Number of bins to distribute.
+            reference_mz: Reference m/z the bin count was anchored to.
+                Implementations that need only the bin count to realize
+                their spacing law may ignore this.
+            reference_width: Bin width requested at ``reference_mz``. May
+                likewise be ignored when the bin count already determines
+                the spacing.
 
-        Returns
-        -------
-        MassAxis
+        Returns:
             The generated axis, ascending in m/z.
         """
 

@@ -24,22 +24,15 @@ class FTICRAxisGenerator(BaseAxisGenerator):
     ) -> MassAxis:
         """Generate FT-ICR mass axis with m/z^2 spacing.
 
-        Parameters
-        ----------
-        min_mz : float
-            Minimum m/z value
-        max_mz : float
-            Maximum m/z value
-        target_bins : int
-            Target number of bins
-        reference_mz : float
-            Reference m/z for width specification (default: 500.0)
-        reference_width : float
-            Mass width at reference m/z (default: 0.1)
+        Args:
+            min_mz: Minimum m/z value
+            max_mz: Maximum m/z value
+            target_bins: Target number of bins
+            reference_mz: Reference m/z for width specification
+                (default: 500.0)
+            reference_width: Mass width at reference m/z (default: 0.1)
 
-        Returns
-        -------
-        MassAxis
+        Returns:
             Generated mass axis with FT-ICR spacing
         """
         # For FT-ICR: bin_width = k * mz^2
@@ -80,18 +73,12 @@ class FTICRAxisGenerator(BaseAxisGenerator):
     ) -> float:
         """Calculate expected bin width at given m/z for FT-ICR.
 
-        Parameters
-        ----------
-        mz : float
-            Target m/z value
-        reference_mz : float
-            Reference m/z for width specification
-        reference_width : float
-            Width at reference m/z
+        Args:
+            mz: Target m/z value
+            reference_mz: Reference m/z for width specification
+            reference_width: Width at reference m/z
 
-        Returns
-        -------
-        float
+        Returns:
             Expected bin width at target m/z
         """
         return reference_width * ((mz / reference_mz) ** 2)
