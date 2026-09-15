@@ -324,3 +324,30 @@ class TestWiring:
             reader.close()
 
         assert getattr(zarr_local._atomic_write, "_thyra_retry_wrapped", False) is True
+
+    def test_constructing_a_streamed_optical_image_installs_the_retry(
+        self, pristine_zarr
+    ):
+        """The one write path that does not go through a converter.
+
+        ``StreamedOpticalImage.stream_pixels`` writes level-0 chunks
+        itself, and rewrites one whenever a band does not complete it --
+        straight onto the un-retried rename. A caller who builds the class
+        directly never constructs a converter, so the converter's install
+        does not cover them.
+        """
+        from thyra.converters.spatialdata.optical_image import StreamedOpticalImage
+
+        pristine_zarr._atomic_write = _unwrapped_stub
+
+        StreamedOpticalImage(
+            source=object(),  # __post_init__ does not touch the source
+            name="optical",
+            chunks=(1, 16, 16),
+            scale_factors=[2],
+            transformations={},
+        )
+
+        assert (
+            getattr(pristine_zarr._atomic_write, "_thyra_retry_wrapped", False) is True
+        )

@@ -22,6 +22,47 @@ conversion, which is why it surfaced as intermittent test failures and as
 The file handle is already closed before the rename, so there is nothing
 for Thyra to close earlier; the contention is on the destination. A
 bounded retry is the fix.
+
+Measured again 2026-09-15, because the paragraph above and the error text
+below both blamed a handle, and a handle is not what this is. With **pure
+stdlib, one thread, and zarr not imported**, a replace onto a destination
+that already exists fails 720 times in 20,000 (3.6%). At the instant of
+failure both paths still open (``rb`` and ``r+b`` on the destination,
+``rb`` on the ``.partial``), and ``psutil.Process().open_files()`` shows
+this process holding neither. Four arms then separate the conditions, 4,000
+replaces each:
+
+===================================================  ==============
+arm                                                  failures
+===================================================  ==============
+A same destination name, destination exists          221 (5.53%)
+B fresh destination name, destination exists         0
+C same destination name, destination absent          0
+D same name, exists, 20 ms before the replace        3 of 500 (0.6%)
+===================================================  ==============
+
+So the destination merely existing is not enough (B is clean), and the
+write pattern alone is not enough (C is clean). It takes **replacing the
+same name over and over**, and it eases when the freshly written source is
+given a moment (D). That is the signature of NTFS *file system
+tunnelling*, the cache that holds a name for a short while after it is
+deleted or renamed away -- and it is the explanation Microsoft's own thread
+on this reaches, having first ruled antivirus out by reproducing with it
+disabled and found the failure gone on Windows Server 2025:
+https://learn.microsoft.com/en-us/answers/questions/5559596/
+
+That matters because the antivirus story is the one everybody downstream
+tells -- zarr's own v2 fix is literally titled "Make DirectoryStore
+__setitem__ resilient against antivirus file locking" (#698) -- and it
+predicts arm B would fail too. It does not. The retry is still exactly the
+right fix; only the explanation was wrong.
+
+The same 20,000 replaces with the retry below: 0 unrecovered, 498 needing
+one, and never more than four attempts.
+
+Only a key written TWICE is exposed, which is why first writes never fail.
+CI is not affected and never has been -- 0 ``test (windows-latest)``
+failures in 60 runs. This is a developer-machine and end-user-machine fix.
 """
 
 import contextlib
@@ -94,9 +135,10 @@ def _move_with_retry(
             last_error = e
 
     logger.error(
-        "Zarr metadata rename to %s still blocked after %d attempts. "
-        "Something is holding the file open -- check for a Python session, "
-        "napari, or a notebook with the store loaded.",
+        "Zarr metadata rename to %s still blocked after %d attempts. The "
+        "transient form of this clears within a millisecond, so lasting "
+        "this long means something really does have the store open: look "
+        "for another Python session, napari, or a notebook holding it.",
         path,
         len(_RETRY_DELAYS),
     )
