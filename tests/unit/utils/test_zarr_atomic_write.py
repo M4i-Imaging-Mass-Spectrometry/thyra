@@ -15,6 +15,7 @@ import pytest
 
 from thyra.utils import zarr_atomic_write
 from thyra.utils.zarr_atomic_write import (
+    _UPSTREAM_RETRY_HELPER,
     _is_transient,
     _move_with_retry,
     install_windows_atomic_write_retry,
@@ -24,6 +25,19 @@ from thyra.utils.zarr_atomic_write import (
 def _unwrapped_stub(*_args, **_kwargs):
     """Stand-in for an unpatched zarr._atomic_write."""
     raise AssertionError("should not be called")
+
+
+def _rename_is_retried(zarr_local) -> bool:
+    """Whether a rename through Zarr's atomic write will be retried.
+
+    True either because Thyra patched it in, or because this Zarr carries
+    its own retry (zarr-python#4358) and Thyra deferred to it. Both satisfy
+    the thing the wiring is for; which one applies depends only on the
+    ``zarr`` pin in pyproject.toml.
+    """
+    return getattr(zarr_local._atomic_write, "_thyra_retry_wrapped", False) or hasattr(
+        zarr_local, _UPSTREAM_RETRY_HELPER
+    )
 
 
 def _oserror(winerror: int | None) -> OSError:
@@ -116,54 +130,119 @@ def pristine_zarr(monkeypatch):
     zarr_atomic_write._installed = False
 
 
+@pytest.fixture
+def unfixed_zarr(pristine_zarr, monkeypatch):
+    """A Zarr from before zarr-python#4358, whichever one is installed.
+
+    The tests below are about what Thyra does for a Zarr that does not
+    retry for itself. Once the ``zarr`` pin in pyproject.toml reaches one
+    that does, this keeps them testing that, instead of quietly inverting
+    into the deferral case and asserting nothing.
+    """
+    monkeypatch.delattr(pristine_zarr, _UPSTREAM_RETRY_HELPER, raising=False)
+    return pristine_zarr
+
+
 class TestInstall:
     """Installation must be idempotent and confined to Windows."""
 
-    def test_is_a_noop_off_windows(self, pristine_zarr, monkeypatch):
+    def test_is_a_noop_off_windows(self, unfixed_zarr, monkeypatch):
         monkeypatch.setattr(sys, "platform", "linux")
-        pristine_zarr._atomic_write = _unwrapped_stub
+        unfixed_zarr._atomic_write = _unwrapped_stub
         install_windows_atomic_write_retry()
 
-        assert pristine_zarr._atomic_write is _unwrapped_stub
+        assert unfixed_zarr._atomic_write is _unwrapped_stub
 
-    def test_patches_zarr_on_windows(self, pristine_zarr, monkeypatch):
+    def test_patches_zarr_on_windows(self, unfixed_zarr, monkeypatch):
         monkeypatch.setattr(sys, "platform", "win32")
-        pristine_zarr._atomic_write = _unwrapped_stub
+        unfixed_zarr._atomic_write = _unwrapped_stub
 
         install_windows_atomic_write_retry()
 
         assert (
-            getattr(pristine_zarr._atomic_write, "_thyra_retry_wrapped", False) is True
+            getattr(unfixed_zarr._atomic_write, "_thyra_retry_wrapped", False) is True
         )
 
-    def test_repeated_installs_do_not_stack_wrappers(self, pristine_zarr, monkeypatch):
+    def test_repeated_installs_do_not_stack_wrappers(self, unfixed_zarr, monkeypatch):
         monkeypatch.setattr(sys, "platform", "win32")
-        pristine_zarr._atomic_write = _unwrapped_stub
+        unfixed_zarr._atomic_write = _unwrapped_stub
 
         install_windows_atomic_write_retry()
-        first = pristine_zarr._atomic_write
+        first = unfixed_zarr._atomic_write
         zarr_atomic_write._installed = False
         install_windows_atomic_write_retry()
 
-        assert pristine_zarr._atomic_write is first
+        assert unfixed_zarr._atomic_write is first
 
-    def test_an_already_wrapped_zarr_is_left_alone(self, pristine_zarr, monkeypatch):
+    def test_an_already_wrapped_zarr_is_left_alone(self, unfixed_zarr, monkeypatch):
         monkeypatch.setattr(sys, "platform", "win32")
         already = zarr_atomic_write.make_atomic_write_with_retry(lambda s, d: None)
-        pristine_zarr._atomic_write = already
+        unfixed_zarr._atomic_write = already
 
         install_windows_atomic_write_retry()
 
-        assert pristine_zarr._atomic_write is already
+        assert unfixed_zarr._atomic_write is already
 
-    def test_missing_zarr_internals_leaves_zarr_alone(self, pristine_zarr, monkeypatch):
+    def test_missing_zarr_internals_leaves_zarr_alone(self, unfixed_zarr, monkeypatch):
         """A future Zarr that reworks _atomic_write must not be patched."""
         monkeypatch.setattr(sys, "platform", "win32")
-        monkeypatch.delattr(pristine_zarr, "_atomic_write", raising=False)
+        monkeypatch.delattr(unfixed_zarr, "_atomic_write", raising=False)
 
         install_windows_atomic_write_retry()
 
-        assert not hasattr(pristine_zarr, "_atomic_write")
+        assert not hasattr(unfixed_zarr, "_atomic_write")
+
+
+class TestDeferringToAFixedZarr:
+    """A Zarr that retries for itself must keep its own write path.
+
+    Substituting on top of one would pin Thyra's writes to this module's
+    copy of ``_atomic_write``, silently reverting whatever else upstream
+    changes there -- zarr-python#4173 moves the ``.partial`` files out of
+    the store, and would be reverted exactly that way.
+    """
+
+    @pytest.fixture
+    def fixed_zarr(self, pristine_zarr, monkeypatch):
+        """A Zarr carrying the retry helper zarr-python#4358 added."""
+        monkeypatch.setattr(
+            pristine_zarr, _UPSTREAM_RETRY_HELPER, lambda *a, **k: None, raising=False
+        )
+        return pristine_zarr
+
+    def test_zarrs_own_write_path_is_left_in_place(self, fixed_zarr, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "win32")
+        fixed_zarr._atomic_write = _unwrapped_stub
+
+        install_windows_atomic_write_retry()
+
+        assert fixed_zarr._atomic_write is _unwrapped_stub
+
+    def test_deferring_still_counts_as_decided(self, fixed_zarr, monkeypatch):
+        """Deferring is a decision, not a failure to be retried later."""
+        monkeypatch.setattr(sys, "platform", "win32")
+        fixed_zarr._atomic_write = _unwrapped_stub
+
+        install_windows_atomic_write_retry()
+
+        assert zarr_atomic_write._installed is True
+
+    def test_the_installed_zarr_really_uses_its_retry_helper(self):
+        """The marker must not be able to become a false positive.
+
+        Dormant until the pin reaches a Zarr that carries #4358, and the
+        point of it is the day it stops being dormant: if upstream keeps
+        the helper but stops calling it from ``_atomic_write``, deferring
+        would leave nothing retrying at all.
+        """
+        import inspect
+
+        import zarr.storage._local as zarr_local
+
+        if not hasattr(zarr_local, _UPSTREAM_RETRY_HELPER):
+            pytest.skip("installed zarr predates zarr-python#4358")
+
+        assert _UPSTREAM_RETRY_HELPER in inspect.getsource(zarr_local._atomic_write)
 
 
 class TestPatchedWriteBehaviour:
@@ -323,7 +402,7 @@ class TestWiring:
         finally:
             reader.close()
 
-        assert getattr(zarr_local._atomic_write, "_thyra_retry_wrapped", False) is True
+        assert _rename_is_retried(zarr_local)
 
     def test_constructing_a_streamed_optical_image_installs_the_retry(
         self, pristine_zarr
@@ -348,6 +427,4 @@ class TestWiring:
             transformations={},
         )
 
-        assert (
-            getattr(pristine_zarr._atomic_write, "_thyra_retry_wrapped", False) is True
-        )
+        assert _rename_is_retried(pristine_zarr)

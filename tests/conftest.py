@@ -30,12 +30,14 @@ def pytest_configure(config):
     Zarr renames each metadata document and each rewritten chunk over its
     destination (``zarr/storage/_local.py::_atomic_write``), and on Windows
     that rename has no atomic form: ``MoveFileEx`` must delete the
-    destination first, and for well under a millisecond after the file was
-    last written the on-access scanner still has it, so the delete comes
-    back ``[WinError 5] Access is denied``. Measured on this project's
-    Windows 11 machine with pure stdlib and nothing else imported: a
-    replace onto an EXISTING file fails 720 times in 20,000 (3.6%); onto an
-    absent one, never (0 in 3,000).
+    destination first, and for well under a millisecond after a name was
+    last used NTFS still holds it, so the delete comes back
+    ``[WinError 5] Access is denied``. Measured on this project's Windows 11
+    machine with pure stdlib and nothing else imported: a replace onto an
+    EXISTING file fails 720 times in 20,000 (3.6%); onto an absent one,
+    never (0 in 3,000); and onto a FRESH name, never either, which is what
+    rules the on-access scanner out. See ``thyra.utils.zarr_atomic_write``
+    for the full measurement.
 
     ``thyra.utils.zarr_atomic_write`` already fixes this for anything a
     converter writes, and :class:`StreamedOpticalImage` now installs it
