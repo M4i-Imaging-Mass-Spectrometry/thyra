@@ -60,7 +60,7 @@ from ...resampling.mobility_grid import (
     report_channel_width,
 )
 from ...resampling.tic import preserved_tic, rescale_to_preserved_tic
-from ...resampling.types import AxisType, ResamplingConfig
+from ...resampling.types import AxisLinearisation, AxisType, ResamplingConfig
 from ...utils.zarr_atomic_write import install_windows_atomic_write_retry
 from ._chunking import image_chunks, table_write_config
 from .optical_image import StreamedOpticalImage, probe_optical_source
@@ -453,13 +453,81 @@ def _kept_mz_range(
     )
 
 
+#: How far, in bins, a resampled axis may deviate from its own linearisation
+#: before the converter stops computing bin indices and searches for them
+#: instead. The +-1 repair in :func:`_nn_map_to_bins` is exact below 0.5
+#: (see :class:`~thyra.resampling.types.AxisLinearisation`); a quarter of a
+#: bin leaves float rounding in the position nowhere to matter. Real axes sit
+#: below 0.005: the deviation is second order in one bin's relative width.
+NN_LINEARISATION_MARGIN = 0.25
+
+
+def _usable_linearisation(
+    linearisation: Optional[AxisLinearisation],
+    axis: NDArray[np.float64],
+    min_gap: float,
+) -> Optional[AxisLinearisation]:
+    """The linearisation the nearest-neighbour mapping may compute indices from, or None.
+
+    Checked once, when the axis is built. The closed form is exact only on
+    a strictly ascending axis (a duplicated value must still map to its
+    first occurrence, which is what ``np.searchsorted`` does and the
+    repair does not) whose every centre lies within
+    :data:`NN_LINEARISATION_MARGIN` bins of ``u0 + i * du``. Any axis a
+    generator lays satisfies both by construction; the check is what turns
+    that argument into something the conversion has verified rather than
+    trusted, and it is what keeps ``--no-resample`` -- a raw union axis
+    with no law at all -- on the search.
+    """
+    if linearisation is None:
+        return None
+    if not (min_gap > 0):
+        logger.info(
+            "Nearest-neighbour bin index: axis is not strictly ascending, "
+            "keeping the binary search"
+        )
+        return None
+    deviation = linearisation.deviation(axis)
+    if not (deviation < NN_LINEARISATION_MARGIN):
+        logger.warning(
+            "Nearest-neighbour bin index: axis deviates from its linearisation "
+            "by %.3f bins (limit %.2f), keeping the binary search",
+            deviation,
+            NN_LINEARISATION_MARGIN,
+        )
+        return None
+    logger.info(
+        "Nearest-neighbour bin index: closed form, worst deviation %.2e bins",
+        deviation,
+    )
+    return linearisation
+
+
 def _nn_map_to_bins(
-    axis: NDArray[np.float64], mzs: NDArray[np.float64]
+    axis: NDArray[np.float64],
+    mzs: NDArray[np.float64],
+    linearisation: Optional[AxisLinearisation] = None,
 ) -> NDArray[np.int_]:
     """Map in-range m/z values to their nearest bin on ``axis``.
 
     Ties (a peak exactly between two bins) resolve to the right bin,
     matching the strict ``<`` comparison this code has always used.
+
+    With a ``linearisation`` -- the coordinate the generator laid the axis
+    uniformly in, checked by :func:`_usable_linearisation` -- the index is
+    computed: round the value's position in that coordinate, then take
+    the nearest of that bin and its two neighbours, comparing in m/z with
+    the same tie rule. The rounded position is within one bin of the
+    answer whenever the axis deviates from its linearisation by under
+    half a bin, which every generated axis does (design decision D21), so
+    the two routes return the same index for every value. They differ
+    only in cost, which is the point: ``np.searchsorted`` on an axis of
+    10^5 to 10^6 bins is a cache-missing binary search per peak, where
+    this is three linear reads.
+
+    Without one, the bin is found by binary search. That route stays for
+    any axis without a law: the raw union axis under ``--no-resample``,
+    an axis a caller passes bare, and the sibling tables' sinks.
 
     A module-level function rather than a method so the unbound-call test
     harnesses (a ``SimpleNamespace`` posing as the converter) keep working.
@@ -469,10 +537,14 @@ def _nn_map_to_bins(
         mzs: m/z values, all within the range :func:`_kept_mz_range`
             reports -- so within half a bin of ``axis``, not necessarily
             within ``[axis[0], axis[-1]]``.
+        linearisation: The axis's own, or None to search.
 
     Returns:
         The nearest-bin index of each m/z value, same length as ``mzs``.
     """
+    if linearisation is not None:
+        return _nn_computed_bins(axis, mzs, linearisation)
+
     # Find insertion points using vectorized binary search
     indices = np.searchsorted(axis, mzs)
 
@@ -497,6 +569,45 @@ def _nn_map_to_bins(
             use_left, indices_clipped[check_left] - 1, indices_clipped[check_left]
         )
     return indices_clipped
+
+
+def _nn_computed_bins(
+    axis: NDArray[np.float64],
+    mzs: NDArray[np.float64],
+    linearisation: AxisLinearisation,
+) -> NDArray[np.int_]:
+    """The closed-form route of :func:`_nn_map_to_bins`.
+
+    Why the rounded position is never more than one bin off. A value's
+    true nearest bin ``j`` has the value between the centres ``j - 1``
+    and ``j + 1``; ``forward`` is monotone, so its position lies between
+    those two centres' positions, each within ``d < 1/2`` of its own
+    index; so the position lies in ``(j - 3/2, j + 3/2)`` and rounds to
+    ``j - 1``, ``j`` or ``j + 1``. The comparison among those three is
+    then the reference's own comparison, so ties resolve as it resolves
+    them: to the right.
+
+    A value in the half-bin skirt beyond either end rounds to ``-1`` or
+    ``n``; the clip sends it to the edge bin, whose neighbour is then
+    compared like any other -- the same answer the search's clip gives.
+    """
+    n = axis.size
+    k = np.rint(linearisation.positions(mzs)).astype(np.intp)
+    np.clip(k, 0, n - 1, out=k)
+    left = np.maximum(k - 1, 0)
+    right = np.minimum(k + 1, n - 1)
+    d_left = np.abs(axis[left] - mzs)
+    d_k = np.abs(axis[k] - mzs)
+    d_right = np.abs(axis[right] - mzs)
+    # Start from the right neighbour and move left only on a strict
+    # improvement, so an exact tie keeps the right-hand bin.
+    best = right
+    best_d = d_right
+    closer = d_k < best_d
+    best = np.where(closer, k, best)
+    best_d = np.where(closer, d_k, best_d)
+    closer = d_left < best_d
+    return np.where(closer, left, best)
 
 
 def _nn_accumulate(
@@ -1115,6 +1226,10 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # share an axis, stop checking". See _nearest_neighbor_resample.
         self._nn_shared_cache: Any = None
         self._nn_cache_misses: int = 0
+        # The resampled axis's own linearisation, once _build_resampled_mass_axis()
+        # has built the axis and _usable_linearisation() has checked it;
+        # None means the nearest-neighbour mapping searches (D21).
+        self._nn_linearisation: Optional[AxisLinearisation] = None
 
         # Optical-MSI alignment (computed from FlexImaging Area definitions)
         self._alignment_result: Optional[AreaAlignmentResult] = None
@@ -2666,6 +2781,13 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # axis is another float64 array of its length -- 1.6 GB on a 200M
         # bin axis, allocated for two numbers in one INFO line (#251).
         min_bin_size, max_bin_size = _bin_width_range(self._common_mass_axis)
+
+        # A positive narrowest gap is "strictly ascending", which the
+        # closed-form bin index needs and this log line already computed.
+        self._nn_linearisation = _usable_linearisation(
+            mass_axis.linearisation, self._common_mass_axis, min_bin_size
+        )
+
         min_bin_size *= 1000  # Convert to mDa
         max_bin_size *= 1000
 
@@ -3056,7 +3178,8 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         axis = self._common_mass_axis
 
         # Shared-axis fast path: when every spectrum carries the same m/z
-        # array (continuous imzML, Rapiflex, Waters, PHI), the peak-to-bin
+        # array -- continuous imzML; every other reader, Waters and PHI
+        # included, reports has_shared_mass_axis = False -- the peak-to-bin
         # mapping is a property of the axis pair, not of the spectrum. It is
         # computed once; each later spectrum only proves its m/z array is
         # the same one -- an exact array comparison, which is far cheaper
@@ -3079,7 +3202,10 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             if mzs.size == 0:
                 return np.array([], dtype=np.int_), np.array([], dtype=np.float64)
 
-        return _nn_accumulate(_nn_map_to_bins(axis, mzs), intensities)
+        return _nn_accumulate(
+            _nn_map_to_bins(axis, mzs, getattr(self, "_nn_linearisation", None)),
+            intensities,
+        )
 
     def _build_nn_shared_cache(
         self, axis: NDArray[np.float64], mzs: NDArray[np.float64]
@@ -3114,7 +3240,9 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             cache.bins = np.array([], dtype=np.int_)
             return cache
 
-        idx = _nn_map_to_bins(axis, mzs[lo:hi])
+        idx = _nn_map_to_bins(
+            axis, mzs[lo:hi], getattr(self, "_nn_linearisation", None)
+        )
         # Ascending m/z onto an ascending axis gives non-decreasing bins,
         # so equal bins form contiguous runs.
         starts = np.concatenate(([0], np.flatnonzero(np.diff(idx)) + 1))

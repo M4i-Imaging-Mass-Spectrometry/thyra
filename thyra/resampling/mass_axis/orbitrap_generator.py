@@ -65,6 +65,7 @@ class OrbitrapAxisGenerator(BaseAxisGenerator):
             max_mz=float(mz_centers[-1]),
             num_bins=len(mz_centers),
             axis_type=AxisType.ORBITRAP,
+            linearisation=self._midpoint_linearisation(inv_sqrt_values),
         )
 
     def calculate_width_at_mz(
@@ -84,6 +85,10 @@ class OrbitrapAxisGenerator(BaseAxisGenerator):
             Expected bin width at target m/z
         """
         return float(reference_width * ((mz / reference_mz) ** 1.5))
+
+    def forward(self, mz):
+        """``1 / sqrt(m/z)``: the axis is uniform in axial frequency."""
+        return 1.0 / np.sqrt(np.asarray(mz, dtype=np.float64))
 
     def get_axis_type(self) -> AxisType:
         """Return the axis type for Orbitrap."""
