@@ -1652,3 +1652,135 @@ not the model line. A second instrument would be worth measuring before
 treating these two numbers as a nanoTOF constant. The high-mass end rests on
 few peaks -- 8 above m/z 200, all from polystyrene standards -- so `B` is
 anchored mostly by the m/z 60-200 plateau.
+
+---
+
+## D21. The nearest-neighbour bin index is computed, not searched
+
+**Status:** Implemented (2026-09-15).
+
+**Decision.** Every axis generator records the coordinate it lays its bins
+in -- `forward()` on `BaseAxisGenerator`, carried as an `AxisLinearisation`
+on the `MassAxis` it returns -- and the converter keeps that beside the
+common mass axis. At the two converter call sites of `_nn_map_to_bins`
+(`_nearest_neighbor_resample` and `_build_nn_shared_cache`) the nearest bin
+of a peak is then computed: round its position `(forward(mz) - u0) / du`,
+take the nearest of that bin and its two neighbours with the search's own
+comparison and tie rule. The four sibling-table sites (the heatmap, the
+mobility grid's discovery and scatter, the MS/MS split) keep
+`np.searchsorted`. At axis-build time the converter measures how far the
+axis deviates from its own linearisation and uses the closed form only
+under a quarter of a bin on a strictly ascending axis; otherwise, and for
+every axis that has no law (`--no-resample`, an axis passed bare), it
+searches. Issue #295.
+
+**Why the repair is exact, for every law.** The objection raised against
+the issue's proposal was right on its facts: only `constant` is a
+`np.linspace` in its own coordinate. The five physics generators lay a
+uniform grid of bin *edges* `u_i = u_0 + i du` in `u = forward(m/z)` and
+report centres `c_i = (m_i + m_{i+1}) / 2` -- arithmetic midpoints in m/z,
+not in `u` -- so `forward(c_i)` is not `u_0 + (i + 1/2) du`, and a
+rounded position can be off by one. The empirical worst deviation found
+then, 0.478 of a bin on an FT-ICR axis of 1,000 bins over `[1, 10^6]`, sat
+4.5 percent from the half-bin cliff past which a +-1 repair returns a
+wrong bin, and nothing in the conversion would notice.
+
+The cliff is unreachable, and the reason is one line. `m_i < c_i <
+m_{i+1}` strictly, and `forward` is strictly monotone, so `forward(c_i)`
+lies strictly between `u_i` and `u_{i+1}`: strictly within half a step of
+the linearised centre, for every bin of every axis any of these generators
+can lay. Per law the deviation has a closed form in the edge ratio
+`t = m_{i+1} / m_i`, verified symbolically (sympy) and numerically on
+541 million probes over 305 configurations:
+
+| law | `forward` | deviation / `du` | limit as `t -> inf` |
+|---|---|---|---|
+| constant | `m` | 0 (float rounding only) | 0 |
+| linear_tof | `sqrt(m)` | `(sqrt((1 + t^2) / 2) - (1 + t) / 2) / (t - 1)` | `1/sqrt(2) - 1/2 = 0.207` |
+| reflector_tof | `ln(m)` | `ln(cosh(h)) / (2h)`, `h = ln(t) / 2` | 1/2 |
+| orbitrap | `1 / sqrt(m)` | `((1 + t) / 2 - sqrt(2) t / sqrt(1 + t^2)) / (t - 1)` | 1/2 |
+| fticr | `1 / m` | `(t - 1) / (2 (t + 1))` | 1/2 |
+| tof | `(2 / sqrt(B)) asinh(sqrt(B m / A))` | the general bound | 1/2 |
+
+Every entry is strictly below 1/2 for `t > 1`, and approaches it only as
+one bin spans an unbounded ratio -- two bins over `[1, 10^8]` gives
+`0.5 - 2 x 10^-8`. On a real axis the deviation is second order in one
+bin's relative width: `4 x 10^-3` at worst over the realistic
+configurations swept, `6 x 10^-7` on the reflector-TOF axes the corpus
+resolves to.
+
+The composed index error follows. A value's true nearest bin `j` has the
+value in `[c_{j-1}, c_{j+1}]`; `forward` is monotone, so its position lies
+between those two centres' positions, each within `d < 1/2` of its own
+index; so the position lies in `(j - 3/2, j + 3/2)` and rounds to `j - 1`,
+`j` or `j + 1`. Among those three the closed form makes the reference's
+own comparison in m/z, moving left only on a strict improvement, so a tie
+resolves to the right as it always has. A value in the half-bin skirt
+beyond either end rounds to `-1` or `n` and is clipped to the edge bin,
+which is where the search's clip sends it too.
+
+**Why a guard anyway.** The proof is about the generators; the converter
+should not have to trust that a `MassAxis` came from one. So
+`_usable_linearisation` measures the deviation on the axis actually built
+and requires it under `NN_LINEARISATION_MARGIN = 0.25` bins, on a strictly
+ascending axis (a duplicated value must still map to its first occurrence,
+which is what `np.searchsorted` does and the repair does not). The margin
+is not the proof's bound but a quarter of it, so float rounding in the
+position has nowhere to matter; it refuses two bins over six decades and
+nothing an instrument asks for. The check is chunked like the bin-width
+log line beside it, for the same 200-million-bin reason (#251).
+
+**Measured** (2026-09-15/16, this machine, every dataset in the local
+corpus, medians of warm runs, first run of each pair excluded as the page
+cache's first touch; every run's store hashed and identical across
+variants; `handouts/closed-form-bin-index.md` has the harness, the
+spread and every run):
+
+| dataset | bins | mean pts/spectrum | current | two sites | gain | six sites | gain |
+|---|---|---|---|---|---|---|---|
+| `20240826_xenium_0041899.imzML` (Xenium, centroid) | 313,713 | 1,273 | 414 s | 276 s | +33% | 276 s | +33% |
+| `20240826_Xenium_0041899.d` (timsTOF, TIMS off) | 313,723 | 1,273 | 626 s | 477 s | +24% | 478 s | +24% |
+| `pea.imzML` (flex, centroid) | 460,495 | 4,722 | 15.1 s | 9.7 s | +36% | 9.7 s | +36% |
+| `20231109_PEA_NEDC.d` (timsTOF, TIMS off) | 541,610 | 2,321 | 31.7 s | 22.5 s | +29% | 22.3 s | +30% |
+| `bellini.imzML` (ToF-SIMS, centroid) | 2,373,513 | 2,220 | 18.8 s | 9.3 s | +50% | 9.4 s | +50% |
+| `06_glycans_highmass_66k_px` (TIMS slide) | 240,794 | 66,488 | 2,002 s | 1,716 s | +14% | 1,633 s | +18% |
+| `05_maldi2_shortramp_26k_px` (TIMS slide) | 138,629 | 34,243 | 366 s | 327 s | +11% | 314 s | +14% |
+| `04_ratbrain_71k_px_9990_scans` (TIMS slide) | 183,258 | 1,433 | 128 s | 118 s | +7% | 114 s | +11% |
+| `03_biofilm_maldi_vs_maldi2_20um` (TIMS) | 92,861 | 6,868 | 80 s | 72 s | +10% | 69 s | +13% |
+| `02_tiny_longramp_1465px`, `01_tiny_msms_315px` | 21k, 599k | | 27 s | 27 s | +1 to +2% | 26 s | +2 to +4% |
+
+Every set resolved to `reflector_tof`, so the other five laws were forced
+on `pea.imzML` and the biofilm set: all six convert bit-identically, and
+gain in proportion to their bin count (+22 percent for `linear_tof` at
+44k bins on pea, +36 for `fticr` at 1.8M). The issue's own mock at Xenium
+density reproduces the 2026-09-14 sanity point: 17.7 s to 13.4 s, +24
+percent against the +27 reported then.
+
+**Why not the four sibling sites.** Profiled on the current tree, warm,
+the two converter sites are 11 to 16 percent of a TIMS whole-slide wall
+clock and 30 to 40 percent of an imzML or mobility-free TDF conversion;
+the sibling sites are 5 to 7 percent of a TIMS slide and nothing anywhere
+else, because they map each frame's unique m/z once (pass 1, for the
+heatmap) where the summed table maps it twice. The closed form there is
+worth 3 to 4 points on a slide (the six-site column above), through one
+optional argument on `SiblingPasses`, `MsmsAccumulator` and the three
+mapping helpers. It is left out of this change for a better reason than
+size: under `scan_sum` a TDF frame's summed spectrum *is* its `unique_mz`,
+so the sinks re-map an array the summed table has just mapped, and
+sharing that mapping per frame would remove the sibling search rather
+than speed it up. Both are recorded on #295.
+
+**Strongest objection.** That the win was measured on a mock ten to forty
+times sparser than the corpus, and was a net loss there. It was: at 124
+peaks per spectrum the closed form's fixed cost -- three gathers and two
+comparisons over every probe -- exceeds the search it replaces, and the
+issue's own "10 percent of conversion CPU" came from that mock. The numbers
+above are the corpus, and at the corpus's peak counts the search is 85
+percent of the mapping and the mapping is a quarter to a third of the
+conversion. The premise objection -- "not a linspace, and 4.5 percent from
+a cliff" -- is answered above by derivation rather than by more sampling.
+
+**Known limit.** A `MassAxis` built by hand carries no linearisation and
+searches. The sibling tables search. `--no-resample` maps through a
+different function altogether (`_map_mass_to_indices`, an exact-match
+search over the raw union axis) and is untouched.

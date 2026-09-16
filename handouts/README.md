@@ -30,6 +30,7 @@ gets written, which is the subject of half these handouts.
 | H | [loose-ends-after-scils-alignment.md](loose-ends-after-scils-alignment.md) | one per item | `../Thyra-loose` | items 3 and 4 shipped; item 2 is **BLOCKED**; item 1 is not Thyra's |
 | I | [spatialdata-table-sharding.md](spatialdata-table-sharding.md) | *upstream* | *scverse/spatialdata* | **OPEN upstream** -- scverse/spatialdata#1178, design comment posted 2026-09-01, awaiting reply |
 | J | [zarr-4304-rank0-shard-hang.md](zarr-4304-rank0-shard-hang.md) | *upstream* | *zarr-developers/zarr-python* | **OPEN upstream** -- zarr-python#4304 filed 2026-09-01, fix not written |
+| K | [closed-form-bin-index.md](closed-form-bin-index.md) | `perf/closed-form-bin-index` | *worktree* | **MEASURED and SHIPPED** -- thyra#295, D21; 268 bit-identical conversions, +24 to +50% on imzML, +7 to +14% on TIMS slides |
 
 Handout H is what was found *around* G and deliberately not folded into it.
 Three of its four items are settled, so do not read it front-to-back:

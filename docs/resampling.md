@@ -296,6 +296,16 @@ stay sharp and stay put, and no intensity is invented between them. This is the
 right choice for **centroid** data, where a peak is a single discrete mass and
 smearing it across neighbouring bins would be wrong.
 
+The bin a peak lands in is computed, not searched for: every axis type is
+laid uniformly in one analytic coordinate (m/z itself, `sqrt`, `ln`,
+`1/sqrt`, `1/m`, or the `tof` law's own cumulative), so the nearest bin is
+the peak's position in that coordinate rounded, checked against its two
+neighbours. It is the same bin the binary search found, for every peak --
+[design decision D21](design-decisions.md#d21-the-nearest-neighbour-bin-index-is-computed-not-searched)
+has the argument and the measurements -- and a quarter to a half of the
+conversion time less on a centroid dataset of a few thousand peaks per
+spectrum.
+
 Consequence worth knowing: on a target axis finer than the source spacing, most
 bins receive nothing. A dataset resampled from 4,000 source points onto 190,000
 bins has exactly 4,000 populated bins per spectrum, and the rest are zero. This
