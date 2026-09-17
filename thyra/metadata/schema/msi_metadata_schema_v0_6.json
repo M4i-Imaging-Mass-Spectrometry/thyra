@@ -1,5 +1,91 @@
 {
   "$defs": {
+    "Acquisition": {
+      "additionalProperties": false,
+      "description": "When the acquisition was run and with what laser settings.\n\nEvery field is optional and left unset when the source does not\nreport it, so an absent field means \"not reported\", never \"none\".\nThe values are normalised: one timestamp format, one unit per\nquantity, where the raw ``uns[\"acquisition_params\"]`` dict keeps the\nvendor's own spelling and unit next to this block.",
+      "properties": {
+        "acquisition_datetime": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "When the acquisition started, as an ISO 8601 date and time (YYYY-MM-DDThh:mm:ss, optionally with fractional seconds). Carries a UTC offset when the source records one and none when it does not; no time zone is ever assumed.",
+          "title": "Acquisition Datetime"
+        },
+        "laser_frequency_hz": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "IMS:1006000",
+            "name": "repetition rate"
+          },
+          "default": null,
+          "description": "Laser repetition rate in hertz.",
+          "title": "Laser Frequency Hz"
+        },
+        "laser_power_percent": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Laser power as the percentage of the laser's range that the vendor's acquisition software shows, e.g. 70.0.",
+          "title": "Laser Power Percent"
+        },
+        "method_file": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "File name of the acquisition method the run was recorded with, e.g. 'imaging_pos.m' or 'neg_FastDDA.EXP'. The name only, never a path.",
+          "title": "Method File"
+        },
+        "shots_per_pixel": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "IMS:1006001",
+            "name": "laser shots per spectrum"
+          },
+          "default": null,
+          "description": "Laser shots summed into one pixel's spectrum.",
+          "title": "Shots Per Pixel"
+        }
+      },
+      "title": "Acquisition",
+      "type": "object"
+    },
     "Fragmentation": {
       "additionalProperties": false,
       "description": "Whether, and how, the acquisition fragmented its ions.\n\nAn MS/MS imaging run measures fragments, so the m/z axis of the table\nmeans fragment m/z. Nothing about the axis says so, which is why this\nblock exists: without it an MS/MS store is indistinguishable from an\nMS1 one.\n\nThe MSI table sums a frame that isolated several precursors into one\nspectrum. ``merges_precursors`` says when that has happened, so a\nconsumer knows the spectrum is a chimera rather than discovering it\nfrom the peaks, and ``resolved_table`` names the sibling table that\nholds those precursors split apart when one was written.",
@@ -888,8 +974,20 @@
     }
   },
   "additionalProperties": false,
-  "description": "The versioned MSI metadata document.\n\n``sample`` and ``preparation`` cannot be auto-populated from raw\nfiles and default to empty; ``ms_analysis`` and ``provenance`` are\nwritten by the converter for every store.",
+  "description": "The versioned MSI metadata document.\n\n``sample`` and ``preparation`` cannot be auto-populated from raw\nfiles and default to empty; ``ms_analysis`` and ``provenance`` are\nwritten by the converter for every store; ``acquisition`` is written\nwhen the reader reports at least one of its facts and is absent --\nnot empty -- otherwise.",
   "properties": {
+    "acquisition": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Acquisition"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "When the acquisition was run and with what laser settings; auto-populated from the vendor metadata where a reader has the facts, absent when it has none of them."
+    },
     "ms_analysis": {
       "$ref": "#/$defs/MSAnalysis",
       "description": "How the data was acquired; auto-populated where possible."
@@ -915,7 +1013,7 @@
       "description": "What the sample is; user-supplied."
     },
     "schema_version": {
-      "default": "0.5.0",
+      "default": "0.6.0",
       "description": "Semantic version of the schema this document conforms to.",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
       "title": "Schema Version",

@@ -44,8 +44,11 @@ class TestBrukerMetadataExtractor:
 
             query = last_call[0][0] if last_call[0] else ""
 
-            if "LaserPower, LaserFrequency" in query:
-                return (100.0, 10.0, 25.0, 25.0, 50.0)
+            if "MIN(LaserPower)" in query:
+                # (LaserPower, NumLaserShots, LaserRepRate) min/max pairs
+                return (100.0, 100.0, 10, 10, 2000.0, 2000.0)
+            elif "'MethodName'" in query:
+                return ("D:\\Methods\\imaging_pos.m",)
             elif "BeamScanSizeX, BeamScanSizeY, SpotSize" in query:
                 return sample_data.get("laser_info", (25.0, 25.0, 1.0))
             elif "MIN(XIndexPos)" in query and "COUNT(*)" in query:
@@ -306,13 +309,72 @@ class TestBrukerMetadataExtractor:
         assert "database_path" in comprehensive.format_specific
 
         # Check acquisition parameters
-        assert "laser_power" in comprehensive.acquisition_params
-        assert "beam_scan_size_x" in comprehensive.acquisition_params
-        assert "beam_scan_size_y" in comprehensive.acquisition_params
+        params = comprehensive.acquisition_params
+        assert params["laser_power"] == 100.0
+        assert params["num_laser_shots"] == 10
+        assert params["laser_frequency"] == 2000.0
+        assert "beam_scan_size_x" in params
+        assert "beam_scan_size_y" in params
+        # The method is recorded as a path on the acquisition PC; only
+        # its name reaches the raw dict.
+        assert params["method_name"] == "imaging_pos.m"
 
         # Check raw metadata
         assert "frame_info" in comprehensive.raw_metadata
         assert len(comprehensive.raw_metadata["frame_info"]) == 4
+
+    def test_laser_parameters_come_off_a_real_tdf_schema(self):
+        """The hand-written TDF fixture has the real table layout.
+
+        ``LaserPower``, ``NumLaserShots`` and ``LaserRepRate`` are columns
+        of ``MaldiFrameInfo``, not ``MaldiFrameLaserInfo``; the mock above
+        cannot tell the two apart, and the query used to name the wrong
+        table, so this is the test that would have caught it.
+        """
+        fixture = (
+            Path(__file__).resolve().parents[3]
+            / "data"
+            / "fixtures"
+            / "synthetic_tims.d"
+        )
+        uri = "file:" + (fixture / "analysis.tdf").as_posix() + "?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
+        try:
+            params = (
+                BrukerMetadataExtractor(conn, fixture)
+                .get_comprehensive()
+                .acquisition_params
+            )
+        finally:
+            conn.close()
+
+        assert params["laser_power"] == 70.0
+        assert params["num_laser_shots"] == 50
+        assert params["laser_frequency"] == 1000.0
+        assert params["beam_scan_size_x"] == 16.0
+        assert params["laser_spot_size"] == 20.0
+        assert params["acquisition_datetime"] == "2026-01-01T00:00:00.000+00:00"
+        assert params["method_name"] == "synthetic.m"
+
+    def test_a_varying_per_frame_value_is_reported_as_a_range(self):
+        mock_conn = self.create_mock_connection()
+        cursor = mock_conn.cursor.return_value
+        original = cursor.fetchone.side_effect
+
+        def fetchone_side_effect():
+            query = cursor.execute.call_args[0][0]
+            if "MIN(LaserPower)" in query:
+                return (60.0, 70.0, 50, 50, 1000.0, 1000.0)
+            return original()
+
+        cursor.fetchone.side_effect = fetchone_side_effect
+        params = (
+            BrukerMetadataExtractor(mock_conn, Path("/test/data.d"))
+            .get_comprehensive()
+            .acquisition_params
+        )
+        assert params["laser_power"] == [60.0, 70.0]
+        assert params["num_laser_shots"] == 50
 
     def _create_special_dimensions_mock(self):
         """Create mock connection with special coordinate ranges."""

@@ -33,6 +33,7 @@ _MODEL_CLASSES = {
     "MobilityGrid": models.MobilityGrid,
     "Fragmentation": models.Fragmentation,
     "IsolationWindow": models.IsolationWindow,
+    "Acquisition": models.Acquisition,
     "SoftwareRef": models.SoftwareRef,
     "ProcessingStep": models.ProcessingStep,
     "Provenance": models.Provenance,

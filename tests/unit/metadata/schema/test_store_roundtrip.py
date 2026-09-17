@@ -78,6 +78,104 @@ class TestStoreRoundTrip:
         result = CliRunner().invoke(validate_command, [str(store)])
         assert result.exit_code == 0, result.output
 
+    def test_the_mock_reader_reports_no_acquisition_facts_so_the_section_is_absent(
+        self, store
+    ):
+        for block in read_msi_metadata_blocks(store).values():
+            assert "acquisition" not in block
+
+
+class _ReaderWithAcquisitionFacts(MockMSIReader):
+    """The mock reader with the acquisition keys a Bruker tsf/tdf extractor writes."""
+
+    def _create_metadata_extractor(self):
+        from dataclasses import replace
+
+        extractor = super()._create_metadata_extractor()
+        implementation = extractor._extract_comprehensive_impl
+
+        def with_acquisition_params():
+            return replace(
+                implementation(),
+                acquisition_params={
+                    "acquisition_datetime": "2025-04-22T08:59:34.395+02:00",
+                    "laser_power": 70.0,
+                    "laser_frequency": 1000.0,
+                    "num_laser_shots": 50,
+                    "method_name": "imaging_pos.m",
+                },
+            )
+
+        extractor._extract_comprehensive_impl = with_acquisition_params
+        return extractor
+
+
+@pytest.fixture(scope="module")
+def store_with_acquisition(tmp_path_factory):
+    from thyra.converters.spatialdata import SpatialDataConverter
+
+    output = tmp_path_factory.mktemp("schema_store_acq") / "out.zarr"
+    converter = SpatialDataConverter(
+        reader=_ReaderWithAcquisitionFacts(
+            MockMSIConfig(n_x=4, n_y=4, n_mz_bins=200, peaks_per_spectrum=(10, 20))
+        ),
+        output_path=output,
+        dataset_id="mock",
+        pixel_size_um=10.0,
+    )
+    assert converter.convert() is True
+    return output
+
+
+class TestAcquisitionSectionRoundTrip:
+    """The section survives the store as plain scalars and validates back."""
+
+    def test_the_section_reads_back_as_written(self, store_with_acquisition):
+        blocks = read_msi_metadata_blocks(store_with_acquisition)
+        assert blocks
+        for block in blocks.values():
+            # No laser_power_percent: the converter driven directly reports
+            # no source format, and a percentage is only trusted for the
+            # formats whose unit was verified (see builder.py).
+            assert block["acquisition"] == {
+                "acquisition_datetime": "2025-04-22T08:59:34.395+02:00",
+                "laser_frequency_hz": 1000.0,
+                "shots_per_pixel": 50,
+                "method_file": "imaging_pos.m",
+            }
+            # Plain strings stay plain strings: the JSON encoding the store
+            # applies to string *lists* must not have touched them.
+            assert isinstance(block["acquisition"]["acquisition_datetime"], str)
+            assert isinstance(block["acquisition"]["method_file"], str)
+            meta, issues = validate_document(block)
+            assert meta is not None and meta.acquisition is not None
+            assert not [i for i in issues if i.severity == "error"]
+
+    def test_the_uns_group_holds_scalars_not_encoded_strings(
+        self, store_with_acquisition
+    ):
+        import spatialdata as sd
+
+        from thyra.metadata import sanitize_uns_string_arrays
+
+        sdata = sd.read_zarr(store_with_acquisition)
+        for table in sdata.tables.values():
+            uns = sanitize_uns_string_arrays(table.uns)
+            section = uns["msi_metadata"]["acquisition"]
+            assert section["acquisition_datetime"] == "2025-04-22T08:59:34.395+02:00"
+            assert section["shots_per_pixel"] == 50
+            # Nothing in the section is a JSON string to decode.
+            assert not any(
+                isinstance(v, str) and v.startswith(("[", "{"))
+                for v in section.values()
+            )
+
+    def test_validate_cli_passes_with_the_section_present(self, store_with_acquisition):
+        from thyra.metadata.schema.cli import validate_command
+
+        result = CliRunner().invoke(validate_command, [str(store_with_acquisition)])
+        assert result.exit_code == 0, result.output
+
     def test_export_metaspace_cli_works_on_a_real_store(self, store, tmp_path):
         from thyra.metadata.schema.cli import export_metaspace_command
 

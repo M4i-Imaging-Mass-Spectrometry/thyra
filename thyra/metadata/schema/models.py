@@ -28,9 +28,10 @@ module and kept in sync by a unit test; regenerate it with
 """
 
 import json
+from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # The schema version this code implements and writes.
 # 0.2.0: added the optional ``ms_analysis.ion_mobility`` block (additive).
@@ -39,7 +40,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 # 0.5.0: ``fragmentation`` gained ``resolved_table`` (additive), so the
 #        demultiplexed MS/MS sibling is discoverable from this block the
 #        same way ``ion_mobility.resolved_table`` names the mobility one.
-MSI_METADATA_SCHEMA_VERSION = "0.5.0"
+# 0.6.0: added the optional top-level ``acquisition`` section (additive):
+#        start timestamp, laser power, laser repetition rate, shots per
+#        pixel and the method file name, normalised across the vendor
+#        spellings the raw ``acquisition_params`` dict keeps (issue #67).
+MSI_METADATA_SCHEMA_VERSION = "0.6.0"
 
 # Where the block lives inside a converted store:
 # ``table.uns["msi_metadata"]``.  This location is a stable contract
@@ -48,7 +53,7 @@ MSI_METADATA_SCHEMA_VERSION = "0.5.0"
 MSI_METADATA_UNS_KEY = "msi_metadata"
 
 # The committed JSON Schema artifact for this schema version.
-SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_5.json"
+SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_6.json"
 
 # Fixed var column conventions for the MSI table.  ``mz`` is required
 # and written by every converter; the remaining names are reserved for
@@ -125,6 +130,21 @@ CANDIDATE_CV_CONCEPTS = (
     (
         "mass axis resampling provenance (method, axis law, target bins)",
         "processing steps",
+    ),
+    (
+        "acquisition start timestamp (mzML carries it only as the run's "
+        "startTimeStamp attribute; MS:1000747 is the completion time)",
+        "acquisition.acquisition_datetime",
+    ),
+    (
+        "laser power as a percentage of the instrument's range (MS:1000846 "
+        "pulse energy is in joules; MS:1000848 attenuation is a filter)",
+        "acquisition.laser_power_percent",
+    ),
+    (
+        "acquisition method identity (MS:1002128 names a method file "
+        "format, not the method itself)",
+        "acquisition.method_file",
     ),
 )
 
@@ -565,6 +585,90 @@ class MSAnalysis(_SchemaModel):
         return self
 
 
+class Acquisition(_SchemaModel):
+    """When the acquisition was run and with what laser settings.
+
+    Every field is optional and left unset when the source does not
+    report it, so an absent field means "not reported", never "none".
+    The values are normalised: one timestamp format, one unit per
+    quantity, where the raw ``uns["acquisition_params"]`` dict keeps the
+    vendor's own spelling and unit next to this block.
+    """
+
+    acquisition_datetime: Optional[str] = Field(
+        default=None,
+        description=(
+            "When the acquisition started, as an ISO 8601 date and time "
+            "(YYYY-MM-DDThh:mm:ss, optionally with fractional seconds). "
+            "Carries a UTC offset when the source records one and none "
+            "when it does not; no time zone is ever assumed."
+        ),
+    )
+    laser_power_percent: Optional[float] = Field(
+        default=None,
+        ge=0,
+        le=100,
+        description=(
+            "Laser power as the percentage of the laser's range that the "
+            "vendor's acquisition software shows, e.g. 70.0."
+        ),
+    )
+    laser_frequency_hz: Optional[float] = Field(
+        default=None,
+        gt=0,
+        description="Laser repetition rate in hertz.",
+        json_schema_extra=_cv("IMS:1006000", "repetition rate"),
+    )
+    shots_per_pixel: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Laser shots summed into one pixel's spectrum.",
+        json_schema_extra=_cv("IMS:1006001", "laser shots per spectrum"),
+    )
+    method_file: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "File name of the acquisition method the run was recorded "
+            "with, e.g. 'imaging_pos.m' or 'neg_FastDDA.EXP'. The name "
+            "only, never a path."
+        ),
+    )
+
+    @field_validator("acquisition_datetime")
+    @classmethod
+    def _is_an_iso_8601_datetime(cls, value: Optional[str]) -> Optional[str]:
+        """A date without a time, or a vendor format, is not accepted here.
+
+        The builder parses what each vendor writes and passes the
+        normalised form; a document that carries anything else was not
+        written by it, and a consumer must be able to parse the field
+        without guessing.
+        """
+        if value is None:
+            return value
+        if "T" not in value:
+            raise ValueError(
+                f"acquisition_datetime {value!r} must be an ISO 8601 date and "
+                "time separated by 'T'"
+            )
+        try:
+            datetime.fromisoformat(value)
+        except ValueError as e:
+            raise ValueError(
+                f"acquisition_datetime {value!r} is not an ISO 8601 datetime"
+            ) from e
+        return value
+
+    @field_validator("method_file")
+    @classmethod
+    def _is_a_name_not_a_path(cls, value: Optional[str]) -> Optional[str]:
+        """A path names the machine the data was acquired on; a store is shared."""
+        if value is not None and ("/" in value or "\\" in value):
+            raise ValueError(f"method_file {value!r} must be a file name, not a path")
+        return value
+
+
 class SoftwareRef(_SchemaModel):
     """A software agent, the way mzQC records analysis software."""
 
@@ -633,7 +737,9 @@ class MSIMetadata(_SchemaModel):
 
     ``sample`` and ``preparation`` cannot be auto-populated from raw
     files and default to empty; ``ms_analysis`` and ``provenance`` are
-    written by the converter for every store.
+    written by the converter for every store; ``acquisition`` is written
+    when the reader reports at least one of its facts and is absent --
+    not empty -- otherwise.
     """
 
     schema_version: str = Field(
@@ -652,6 +758,14 @@ class MSIMetadata(_SchemaModel):
     ms_analysis: MSAnalysis = Field(
         description="How the data was acquired; auto-populated where possible."
     )
+    acquisition: Optional[Acquisition] = Field(
+        default=None,
+        description=(
+            "When the acquisition was run and with what laser settings; "
+            "auto-populated from the vendor metadata where a reader has the "
+            "facts, absent when it has none of them."
+        ),
+    )
     processing: List[ProcessingStep] = Field(
         default_factory=list,
         description="Ordered processing history, oldest first (mzQC-style).",
@@ -663,7 +777,8 @@ class MSIMetadata(_SchemaModel):
     def to_uns_dict(self) -> Dict[str, Any]:
         """Serialise for storage in ``table.uns``.
 
-        ``None`` fields are dropped, and the ``sample`` / ``preparation``
+        ``None`` fields are dropped (which is what leaves an unset
+        ``acquisition`` section out), and the ``sample`` / ``preparation``
         / ``processing`` sections are omitted entirely when empty --
         following the store convention that a section the source has
         nothing for is omitted rather than written empty, so consumers

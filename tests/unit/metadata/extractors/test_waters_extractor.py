@@ -574,3 +574,37 @@ class TestTheResampledAxisRange:
 
         assert "so nothing is dropped" not in records.text
         assert "widened" in records.text
+
+
+class TestTheMsMethodName:
+    """``$$ MS Method`` in ``_header.txt`` reaches the raw dict as a name."""
+
+    def _params(self, data_path):
+        mock_ml, handle, grid, ft, ms = _make_grid_and_ml()
+        extractor = WatersMetadataExtractor(mock_ml, handle, data_path, grid, ft, ms)
+        return extractor.get_comprehensive().acquisition_params
+
+    def test_the_path_masslynx_recorded_is_reduced_to_the_file_name(self, tmp_path):
+        raw = tmp_path / "run.raw"
+        raw.mkdir()
+        (raw / "_HEADER.TXT").write_text(
+            "$$ Acquired Name: run\n"
+            "$$ Acquired Date: 07-Nov-2019\n"
+            "$$ Acquired Time: 14:09:44\n"
+            "$$ MS Method: E:\\workshop2019.PRO\\ACQUDB\\neg_FastDDA.EXP\n",
+            encoding="latin-1",
+        )
+        assert self._params(raw)["ms_method"] == "neg_FastDDA.EXP"
+
+    def test_no_header_means_no_key(self, tmp_path):
+        raw = tmp_path / "run.raw"
+        raw.mkdir()
+        assert "ms_method" not in self._params(raw)
+
+    def test_a_header_without_the_line_means_no_key(self, tmp_path):
+        raw = tmp_path / "run.raw"
+        raw.mkdir()
+        (raw / "_HEADER.TXT").write_text(
+            "$$ Acquired Name: run\n$$ MS Method: \n", encoding="latin-1"
+        )
+        assert "ms_method" not in self._params(raw)

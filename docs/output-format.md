@@ -1017,8 +1017,8 @@ Beside it, when the source format provides them:
 
 | Key | Contents |
 |-----|----------|
-| `format_specific` | Vendor metadata (imzML file mode and UUID, FlexImaging areas, teaching points) |
-| `acquisition_params` | Polarity, scan range, laser settings |
+| `format_specific` | Vendor metadata (imzML file mode and UUID; FlexImaging areas and teaching points for solariX and rapiflex, whose `.mis` the extractor reads -- the tsf/tdf extractor does not carry them) |
+| `acquisition_params` | Polarity, scan range, laser settings, timestamp and method name, in the vendor's spelling and unit |
 | `instrument_info` | Instrument model, serial, software version |
 | `raw_metadata` | Source metadata as read, for round-trip fidelity |
 | `regions` | Acquisition region summary, as a JSON string (see [Regions](#regions)) |
@@ -1072,10 +1072,29 @@ terms, and a schema a validator can hold it to.
 ```python
 block = msi_table.uns["msi_metadata"]
 
-print(block["schema_version"])                    # "0.1.0"
+print(block["schema_version"])                    # "0.6.0"
 print(block["ms_analysis"]["pixel_size_um"])      # {"x": 20.0, "y": 20.0}
 print(block["provenance"]["source_format"])       # "imzml"
+print(block.get("acquisition"))                   # see below; absent for imzML
 ```
+
+`block["acquisition"]` is the normalised view of the run itself, filled
+from `acquisition_params` by every reader that has the facts and absent
+(not empty) when a reader has none of them. One line per field, with its
+unit:
+
+| Field | Meaning and unit |
+|-------|------------------|
+| `acquisition_datetime` | Start of the acquisition, ISO 8601 `YYYY-MM-DDThh:mm:ss[.fff]`; carries a UTC offset only when the source recorded one (Bruker tsf/tdf and solariX do, PHI and Waters do not) |
+| `laser_power_percent` | Laser power as the percentage of the laser's range the vendor software shows; Bruker tsf/tdf and solariX |
+| `laser_frequency_hz` | Laser repetition rate in hertz; Bruker tsf/tdf and solariX |
+| `shots_per_pixel` | Laser shots summed into one pixel's spectrum; Bruker tsf/tdf, solariX and rapiflex |
+| `method_file` | File name of the acquisition method (`*.m` for Bruker, `*.EXP` for Waters, `*.par` for rapiflex), never a path |
+
+The raw vendor values stay in `acquisition_params` under their own
+spellings (`laser_frequency` on Bruker tsf/tdf, `laser_rep_rate` on
+solariX, `acquisition_date` on PHI and Waters, and so on), so nothing is
+lost by the normalisation.
 
 It is written by every converter path identically, validated by
 `thyra validate`, and exported to a METASPACE submission by

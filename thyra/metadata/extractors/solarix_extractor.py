@@ -117,6 +117,26 @@ class SolarixMetadataExtractor(MetadataExtractor):
             "regions": reader.get_region_info() or [],
         }
 
+    def _method_name(self) -> Optional[str]:
+        """Name of the ``*.m`` method directory inside the ``.d``, if exactly one.
+
+        The directory is the acquisition method (its ``apexAcquisition.method``
+        is the parameter file). Only the name is reported -- a path names
+        the acquisition PC -- and two candidates are reported as none
+        rather than picking one.
+        """
+        try:
+            methods = sorted(
+                path.name
+                for path in self._reader.data_path.glob("*.m")
+                if path.is_dir()
+            )
+        except OSError:
+            return None
+        if len(methods) != 1:
+            return None
+        return methods[0]
+
     def _extract_acquisition_params(self) -> Dict[str, Any]:
         reader = self._reader
         props = reader.properties
@@ -126,10 +146,20 @@ class SolarixMetadataExtractor(MetadataExtractor):
             "mz_acq_range": list(reader.mass_range),
             "acquisition_datetime": props.get("AcquisitionDateTime"),
             "operator_name": props.get("OperatorName"),
+            # LaserPower is a percentage of the laser's range (it equals
+            # the method's LaserAttn, whose LaserPowerRange is 100) and
+            # LaserRepRate is in Hz (it equals the method's LaserFrequency).
             "laser_power": _collapse(stats["laser_power"]),
             "laser_rep_rate": _collapse(stats["laser_rep_rate"]),
+            # NumSummations is the laser shot count per pixel, not the
+            # number of transients co-added: on the acquisition checked it
+            # equals the method's NumLaserShots (200) while the method's
+            # NS (scans summed) is 1.
             "num_summations": _collapse(stats["num_summations"]),
         }
+        method_name = self._method_name()
+        if method_name is not None:
+            params["method_name"] = method_name
         # Raw enum values per acquisition key; the full ScanMode /
         # AcquisitionMode / MsLevel enums are undocumented, so the numbers
         # are stored as found rather than labelled.

@@ -431,7 +431,35 @@ class WatersMetadataExtractor(MetadataExtractor):
         lm_func = self._ml.get_lockmass_function(self._handle)
         params["lockmass_function"] = lm_func if lm_func >= 0 else None
 
+        ms_method = self._ms_method_name()
+        if ms_method is not None:
+            params["ms_method"] = ms_method
+
         return params
+
+    def _ms_method_name(self) -> Optional[str]:
+        """File name of the MS method from ``_header.txt``, without its directory.
+
+        MassLynx records ``$$ MS Method`` as the full path of the ``.EXP``
+        file on the acquisition PC; the name is what identifies the method
+        and the path names a machine the store will not be opened on, so
+        only the name is kept. ``None`` when the header is absent or has
+        no such line. Both spellings of the file name are tried because
+        MassLynx writes it in capitals and a case-sensitive filesystem
+        keeps them apart.
+        """
+        from ...readers.waters.instrument import parse_header_txt
+
+        for file_name in ("_header.txt", "_HEADER.TXT"):
+            path = self._data_path / file_name
+            try:
+                text = path.read_text(encoding="latin-1", errors="replace")
+            except OSError:
+                continue
+            value = parse_header_txt(text).get("MS Method", "")
+            name = value.replace("\\", "/").rsplit("/", 1)[-1].strip()
+            return name or None
+        return None
 
     def _extract_instrument_info(self) -> Dict[str, Any]:
         """Extract instrument information.

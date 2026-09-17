@@ -9,10 +9,14 @@ acquisition) or from vendor metadata that directly encodes the fact
 """
 
 import logging
+import math
+import re
+from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 from ..types import ComprehensiveMetadata
 from .models import (
+    Acquisition,
     Fragmentation,
     IonMobility,
     IsolationWindow,
@@ -62,6 +66,220 @@ def _first_string(mapping: Dict[str, Any], keys: Tuple[str, ...]) -> Optional[st
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
+
+
+def _first_number(mapping: Dict[str, Any], keys: Tuple[str, ...]) -> Optional[float]:
+    """The first finite scalar among ``keys``, if any.
+
+    A ``[min, max]`` pair (how the Bruker extractors report a per-frame
+    value that varied across the acquisition) is not a scalar and is
+    skipped: the section states one value per acquisition or none. A
+    numeric string counts, since the FlexImaging info file is parsed as
+    text.
+    """
+    for key in keys:
+        value = mapping.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, str):
+            try:
+                value = float(value.strip())
+            except ValueError:
+                continue
+        if isinstance(value, (int, float)) and math.isfinite(value):
+            return float(value)
+    return None
+
+
+# --- the ``acquisition`` section -------------------------------------------
+#
+# Key spellings per field, in preference order.  Each is a name an
+# extractor already writes into ``acquisition_params``; the raw dict is
+# read here and never rewritten, so the vendor spelling stays available
+# beside the normalised one.  The vendor evidence behind each unit is in
+# the extractor that writes the key.
+_ACQUISITION_DATETIME_KEYS = (
+    "acquisition_datetime",  # Bruker tsf/tdf and solariX, ISO 8601 with offset
+    "acquisition_date",  # PHI (AcqFileDate) and Waters (MassLynx), no offset
+)
+_LASER_POWER_KEYS = ("laser_power",)  # Bruker tsf/tdf, solariX, rapiflex
+_LASER_FREQUENCY_KEYS = (
+    "laser_frequency",  # Bruker tsf/tdf: MaldiFrameInfo.LaserRepRate, Hz
+    "laser_rep_rate",  # solariX: Spectra.LaserRepRate, Hz
+)
+_SHOTS_PER_PIXEL_KEYS = (
+    "num_laser_shots",  # Bruker tsf/tdf: MaldiFrameInfo.NumLaserShots
+    "num_summations",  # solariX: Spectra.NumSummations, which is the shot count
+    "shots_per_spot",  # rapiflex: "Number of Shots" in the info file
+)
+_METHOD_FILE_KEYS = (
+    "method_name",  # Bruker tsf/tdf (GlobalMetadata.MethodName) and solariX (*.m)
+    "ms_method",  # Waters: "$$ MS Method" in _header.txt
+    "method",  # rapiflex: "Method" in the info file
+)
+
+# Formats whose ``laser_power`` is verified to be a percentage of the
+# laser's range: Bruker tsf/tdf (``MaldiFrameInfo.LaserPower``, the value
+# timsControl shows as "Laser Power %") and solariX (``Spectra.LaserPower``
+# equals the method's ``LaserAttn`` on a ``LaserPowerRange`` of 100).  The
+# rapiflex info file's "Laser Power" was not checked against an
+# acquisition, so it is not trusted as a percentage; imzML never carries
+# the key.
+_LASER_POWER_PERCENT_FORMATS = frozenset({"bruker", "tsf", "tdf", "solarix"})
+
+_MONTH_ABBREVIATIONS = {
+    name: number
+    for number, name in enumerate(
+        (
+            "jan",
+            "feb",
+            "mar",
+            "apr",
+            "may",
+            "jun",
+            "jul",
+            "aug",
+            "sep",
+            "oct",
+            "nov",
+            "dec",
+        ),
+        start=1,
+    )
+}
+# Waters MassLynx ``getAcquisitionDate``: '07-Nov-2019 14:09:44'.
+_WATERS_DATETIME = re.compile(
+    r"(?P<day>\d{1,2})-(?P<month>[A-Za-z]{3})-(?P<year>\d{4})"
+    r"\s+(?P<hour>\d{1,2}):(?P<minute>\d{2}):(?P<second>\d{2})"
+)
+# PHI SmartSoft-TOF ``AcqFileDate``: '06/23/2026 21:12:35', month first.
+_PHI_DATETIME = re.compile(
+    r"(?P<month>\d{1,2})/(?P<day>\d{1,2})/(?P<year>\d{4})"
+    r"\s+(?P<hour>\d{1,2}):(?P<minute>\d{2}):(?P<second>\d{2})"
+)
+
+
+def _parse_vendor_datetime(value: str) -> Optional[datetime]:
+    """Parse the timestamp formats the readers report, or ``None``.
+
+    Three formats, each tied to the vendor that writes it: ISO 8601 with
+    a UTC offset (Bruker tsf/tdf ``GlobalMetadata.AcquisitionDateTime``
+    and solariX ``Properties.AcquisitionDateTime``), MassLynx's
+    ``dd-Mon-yyyy hh:mm:ss`` (Waters) and SmartSoft-TOF's
+    ``mm/dd/yyyy hh:mm:ss`` (PHI).  They cannot be confused with each
+    other, so the order does not matter.  The month names are matched
+    against a fixed table rather than ``strptime``'s ``%b``, whose
+    reading depends on the process locale.  Anything else stays
+    unparsed: the raw string is still in ``acquisition_params``.
+    """
+    text = value.strip()
+    if "T" in text:
+        try:
+            return datetime.fromisoformat(text)
+        except ValueError:
+            return None
+    for pattern in (_WATERS_DATETIME, _PHI_DATETIME):
+        match = pattern.fullmatch(text)
+        if match is None:
+            continue
+        parts = match.groupdict()
+        month_text = parts["month"]
+        month = (
+            _MONTH_ABBREVIATIONS.get(month_text.lower())
+            if month_text.isalpha()
+            else int(month_text)
+        )
+        if month is None:
+            return None
+        try:
+            return datetime(
+                int(parts["year"]),
+                month,
+                int(parts["day"]),
+                int(parts["hour"]),
+                int(parts["minute"]),
+                int(parts["second"]),
+            )
+        except ValueError:
+            return None
+    return None
+
+
+def _format_iso_8601(moment: datetime) -> str:
+    """ISO 8601 text keeping the source's precision and offset, if any.
+
+    Whole seconds stay whole and milliseconds stay milliseconds, so a
+    Bruker ``2025-04-22T08:59:34.395+02:00`` is written back exactly.
+    """
+    if moment.microsecond == 0:
+        return moment.isoformat(timespec="seconds")
+    if moment.microsecond % 1000 == 0:
+        return moment.isoformat(timespec="milliseconds")
+    return moment.isoformat()
+
+
+def _file_name(value: str) -> Optional[str]:
+    """The last component of ``value`` on either path separator, or ``None``.
+
+    Vendor software records the method as it was opened, which on a
+    Bruker or Waters PC is an absolute path; the store keeps the name
+    and drops the machine it came from.
+    """
+    name = re.split(r"[\\/]", value)[-1].strip()
+    return name or None
+
+
+def _build_acquisition(
+    acquisition: Dict[str, Any], source_format: Optional[str]
+) -> Optional[Acquisition]:
+    """The ``acquisition`` section from what the extractor reported.
+
+    Every field follows the builder's rule -- best-effort and honest: a
+    vendor value is taken only where its meaning and unit are verified
+    (see the key tables above), an unparseable timestamp leaves the
+    field unset with the raw string untouched in ``acquisition_params``,
+    and a per-frame value that varied across the acquisition (reported
+    as a pair, not a scalar) is not summarised into one number.
+
+    Returns ``None`` when nothing was reported, so the section is absent
+    from the block rather than written empty.
+    """
+    fields: Dict[str, Any] = {}
+
+    raw_datetime = _first_string(acquisition, _ACQUISITION_DATETIME_KEYS)
+    if raw_datetime is not None:
+        moment = _parse_vendor_datetime(raw_datetime)
+        if moment is not None:
+            fields["acquisition_datetime"] = _format_iso_8601(moment)
+        else:
+            logger.debug(
+                "Acquisition timestamp %r is in no format the builder parses; "
+                "left unset",
+                raw_datetime,
+            )
+
+    if (source_format or "").lower() in _LASER_POWER_PERCENT_FORMATS:
+        power = _first_number(acquisition, _LASER_POWER_KEYS)
+        if power is not None and 0.0 <= power <= 100.0:
+            fields["laser_power_percent"] = power
+
+    frequency = _first_number(acquisition, _LASER_FREQUENCY_KEYS)
+    if frequency is not None and frequency > 0.0:
+        fields["laser_frequency_hz"] = frequency
+
+    shots = _first_number(acquisition, _SHOTS_PER_PIXEL_KEYS)
+    if shots is not None and shots >= 1.0 and shots == int(shots):
+        fields["shots_per_pixel"] = int(shots)
+
+    method = _first_string(acquisition, _METHOD_FILE_KEYS)
+    if method is not None:
+        name = _file_name(method)
+        if name is not None:
+            fields["method_file"] = name
+
+    if not fields:
+        return None
+    return Acquisition(**fields)
 
 
 def _polarity_from_cv_params(raw_metadata: Dict[str, Any]) -> Optional[str]:
@@ -393,7 +611,8 @@ def build_msi_metadata(
 
     Returns:
         The populated document.  Fields the source does not report are
-        left unset.
+        left unset, and the ``acquisition`` section is absent when the
+        reader reported none of its facts.
     """
     from thyra import __version__
 
@@ -424,6 +643,7 @@ def build_msi_metadata(
             fragmentation,
             msms_resolved_table,
         ),
+        acquisition=_build_acquisition(acquisition, source_format),
         processing=list(processing or []),
         provenance=Provenance(
             thyra_version=__version__,

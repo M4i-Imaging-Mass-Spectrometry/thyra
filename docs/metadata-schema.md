@@ -28,7 +28,7 @@ import spatialdata as sd
 sdata = sd.read_zarr("output.zarr")
 block = sdata.tables["msi_dataset_z0"].uns["msi_metadata"]
 
-print(block["schema_version"])                       # "0.5.0"
+print(block["schema_version"])                       # "0.6.0"
 print(block["ms_analysis"]["pixel_size_um"])         # {"x": 20.0, "y": 20.0}
 print(block["ms_analysis"]["ionisation_source"])     # "MALDI"
 print(block["ms_analysis"]["ionisation_source_term"])
@@ -40,10 +40,12 @@ print(block["ms_analysis"]["ionisation_source_term"])
 
 ## The document
 
-Four sections. `ms_analysis` and `provenance` are written by the converter
-for every store; `sample` and `preparation` describe things no raw file
-records (what the tissue was, how it was prepared) and are supplied by
-you -- see [Completing the metadata](#completing-the-metadata).
+Five sections and a processing list. `ms_analysis` and `provenance` are
+written by the converter for every store; `acquisition` is written when the
+reader reports at least one of its facts and is absent otherwise; `sample`
+and `preparation` describe things no raw file records (what the tissue was,
+how it was prepared) and are supplied by you -- see
+[Completing the metadata](#completing-the-metadata).
 
 | Section | Field | Type | Ontology |
 |---------|-------|------|----------|
@@ -65,6 +67,11 @@ you -- see [Completing the metadata](#completing-the-metadata).
 | | `pixel_size_um` | `{x, y}`, **required** | -- |
 | | `ion_mobility` | `{present, separation, separation_term, unit_term, range_lower, range_upper, num_scans, resolved_table, grid}` | PSI-MS (`MS:1002815` / `MS:1002476`, unit `MS:1002814`) |
 | | `fragmentation` | `{present, ms_level, constant_across_pixels, merges_precursors, dissociation_term, windows, resolved_table}` | PSI-MS (`MS:1000511`; windows `MS:1000827` / `828` / `829`, `MS:1000045`, `MS:1000133`) |
+| `acquisition` | `acquisition_datetime` | ISO 8601 `YYYY-MM-DDThh:mm:ss[.fff]`, with a UTC offset only when the source recorded one | -- |
+| | `laser_power_percent` | number, percent of the laser's range | -- |
+| | `laser_frequency_hz` | number, hertz | IMS (`IMS:1006000`) |
+| | `shots_per_pixel` | integer, laser shots summed into one pixel's spectrum | IMS (`IMS:1006001`) |
+| | `method_file` | text, the acquisition method's file name (never a path) | -- |
 | `processing` | list of `{name, software {name, version, uri}, parameters}` | ordered steps, oldest first | -- |
 | `provenance` | `thyra_version` | text, required | -- |
 | | `source_format` | `"imzml"`, `"bruker"`, ... | -- |
@@ -101,6 +108,8 @@ from the format itself.
 |--------|----------|-------------------|----------|------------------|
 | imzML | -- | -- | from the `<analyzer>` component cvParam | from the instrumentConfiguration (model term or `MS:1000031` value) |
 | Bruker `.d` | -- | MALDI, when the laser tables are present | TOF (timsTOF-family formats) | from the DB |
+| PHI ToF-SIMS | from the header | SIMS | TOF | platform name |
+| Waters `.raw` | -- | -- | -- | from `_HEADER.TXT` |
 
 Bruker `.d` also fills `ion_mobility`: `present: true` for a TDF acquisition
 (TIMS engaged), with the acquired 1/K0 range and the ramp length in scans,
@@ -120,8 +129,6 @@ The arrays that describe the axis itself and the mass-mobility heatmap live
 outside this block, in `uns["mobility_axis"]` and `uns["mobility_heatmap"]`
 (see [Output Format](output-format.md#ion-mobility)): this block is versioned
 and carries no arrays.
-| PHI ToF-SIMS | from the header | SIMS | TOF | platform name |
-| Waters `.raw` | -- | -- | -- | from `_HEADER.TXT` |
 
 Bruker `.d` also fills `fragmentation` from `Frames.MsMsType` and whichever
 precursor table the acquisition uses -- `PasefFrameMsMsInfo` for PASEF frames,
@@ -140,6 +147,26 @@ MS/MS functions it left out under `excluded_functions` in the Waters-specific
 block. The MS level MassLynx reports is not used on its own, because on a
 raster it split across functions the level is a chunk artefact (see
 [Supported Formats](supported-formats.md#which-functions-hold-the-image)).
+
+The `acquisition` section is filled the same way, from the vendor values
+the reader already keeps in `uns["acquisition_params"]`, and only where
+the value's meaning and unit were checked against an acquisition:
+
+| Source | `acquisition_datetime` | `laser_power_percent` | `laser_frequency_hz` | `shots_per_pixel` | `method_file` |
+|--------|------------------------|-----------------------|----------------------|-------------------|---------------|
+| Bruker tsf/tdf | `GlobalMetadata.AcquisitionDateTime`, with offset | `MaldiFrameInfo.LaserPower` | `MaldiFrameInfo.LaserRepRate` | `MaldiFrameInfo.NumLaserShots` | `GlobalMetadata.MethodName`, name only |
+| Bruker solariX | `Properties.AcquisitionDateTime`, with offset | `Spectra.LaserPower` | `Spectra.LaserRepRate` | `Spectra.NumSummations` (it equals the method's `NumLaserShots`) | the `*.m` directory's name |
+| Bruker rapiflex | -- (the info file's `Start Time` format is unverified) | -- (unit unverified) | -- | `Number of Shots` | `Method` |
+| PHI ToF-SIMS | `AcqFileDate`, no offset | -- (ion gun) | -- | -- | -- |
+| Waters `.raw` | MassLynx's acquisition date and time, no offset | -- | -- | -- | `$$ MS Method` in `_header.txt`, name only |
+| imzML | -- | -- | -- | -- | -- |
+
+A Bruker per-frame value that varied across the acquisition is reported in
+`acquisition_params` as a `[min, max]` pair and leaves the schema field
+unset: the section states one value per acquisition or none. A timestamp
+in a format the builder does not parse stays unset too, with the raw
+string untouched beside it. No time zone is ever assumed: PHI and Waters
+record none, so their timestamps carry none.
 `resolved_table` names the demultiplexed sibling table when one was written,
 mirroring `ion_mobility.resolved_table`, so both kinds of sibling are
 discoverable from this block alone.
@@ -198,6 +225,8 @@ artifact alone:
 | `ms_analysis.analyzer` | `MS:1000443` mass analyzer type |
 | `ms_analysis.instrument_model` | `MS:1000031` instrument model |
 | `ms_analysis.detector_resolving_power` | `MS:1000800` mass resolving power |
+| `acquisition.laser_frequency_hz` | `IMS:1006000` repetition rate |
+| `acquisition.shots_per_pixel` | `IMS:1006001` laser shots per spectrum |
 
 On the input side, every imzML file-description cvParam is preserved in
 `uns["raw_metadata"]["cvParams"]` **with its accession** (and unit
@@ -222,6 +251,12 @@ standard converge:
 - missing / empty pixel semantics
 - continuous-vs-processed source provenance after conversion
 - mass axis resampling provenance (method, axis law, target bins)
+- acquisition start timestamp (mzML has only the run's `startTimeStamp`
+  attribute; `MS:1000747` is the completion time)
+- laser power as a percentage of the instrument's range (`MS:1000846`
+  pulse energy is in joules)
+- acquisition method identity (`MS:1002128` names a method file format,
+  not the method)
 
 ### LinkML rendering
 
@@ -290,10 +325,11 @@ table of a store.
 Versions so far: 0.1.0 (initial), 0.2.0 (`ms_analysis.ion_mobility`
 added), 0.3.0 (`ion_mobility.resolved_table` and `ion_mobility.grid` added),
 0.4.0 (`ms_analysis.fragmentation` added), 0.5.0
-(`fragmentation.resolved_table` added).
+(`fragmentation.resolved_table` added), 0.6.0 (the `acquisition` section
+added).
 
 The JSON Schema rendering is committed at
-`thyra/metadata/schema/msi_metadata_schema_v0_5.json` and ships in the
+`thyra/metadata/schema/msi_metadata_schema_v0_6.json` and ships in the
 wheel, so non-Python consumers can validate documents without importing
 Thyra:
 
@@ -303,7 +339,7 @@ import json
 
 schema = json.loads(
     resources.files("thyra.metadata.schema")
-    .joinpath("msi_metadata_schema_v0_5.json")
+    .joinpath("msi_metadata_schema_v0_6.json")
     .read_text()
 )
 ```

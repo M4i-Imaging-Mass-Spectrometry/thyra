@@ -538,6 +538,30 @@ class TestSolarixMetadata:
         assert params["acquisition_key_0_acquisition_mode_raw"] == 33
         assert params["acquisition_key_0_ms_level_raw"] == 1
 
+    def test_the_method_directory_name_is_reported_when_there_is_one(self, solarix_d):
+        method = solarix_d / "PDE_micebrain_DHB_pos.m"
+        method.mkdir()
+        (method / "apexAcquisition.method").write_text("<method/>", encoding="utf-8")
+
+        with SolarixReader(solarix_d) as reader:
+            params = reader.get_comprehensive_metadata().acquisition_params
+
+        # The name only: the directory sits under the acquisition path.
+        assert params["method_name"] == "PDE_micebrain_DHB_pos.m"
+
+    def test_no_or_ambiguous_method_directory_means_no_key(self, solarix_d):
+        with SolarixReader(solarix_d) as reader:
+            assert "method_name" not in (
+                reader.get_comprehensive_metadata().acquisition_params
+            )
+
+        (solarix_d / "first.m").mkdir()
+        (solarix_d / "second.m").mkdir()
+        with SolarixReader(solarix_d) as reader:
+            assert "method_name" not in (
+                reader.get_comprehensive_metadata().acquisition_params
+            )
+
     def test_format_specific_block(self, solarix_d):
         with SolarixReader(solarix_d) as reader:
             fmt = reader.get_comprehensive_metadata().format_specific
