@@ -314,11 +314,7 @@ def scan_observed_mz_range(
     already stated (issue #371).
     """
     path = Path(path)
-    lowest: Optional[float] = None
-    highest: Optional[float] = None
-    # Whether every value seen so far is one value; only asked under
-    # ``shared_axis``, and only of the first chunk.
-    uniform = True
+    seen = _ObservedExtremes()
 
     with path.open("rb") as handle:
         carry = b""
@@ -328,44 +324,68 @@ def scan_observed_mz_range(
                 break
             buffer = carry + chunk
             for match in _LOWEST.finditer(buffer):
-                value = _as_float(match.group(1))
-                if value is None:
-                    continue
-                if lowest is None:
-                    lowest = value
-                elif value != lowest:
-                    uniform = False
-                    if value < lowest:
-                        lowest = value
+                seen.note_lowest(_as_float(match.group(1)))
             for match in _HIGHEST.finditer(buffer):
-                value = _as_float(match.group(1))
-                if value is None:
-                    continue
-                if highest is None:
-                    highest = value
-                elif value != highest:
-                    uniform = False
-                    if value > highest:
-                        highest = value
-            if shared_axis and uniform and lowest is not None and highest is not None:
+                seen.note_highest(_as_float(match.group(1)))
+            if shared_axis and seen.uniform and seen.complete:
                 logger.debug(
                     "%s declares a shared m/z axis and its first spectra agree on "
                     "(%s, %s); not scanning the rest of the document.",
                     path.name,
-                    lowest,
-                    highest,
+                    seen.lowest,
+                    seen.highest,
                 )
                 break
             carry = buffer[-_SCAN_OVERLAP_BYTES:]
 
-    if lowest is None or highest is None:
+    if seen.lowest is None or seen.highest is None:
         logger.info(
             "%s records no observed m/z range (MS:1000528/MS:1000527); "
             "a metadata-only read reports it as unknown.",
             path.name,
         )
         return None
-    return (lowest, highest)
+    return (seen.lowest, seen.highest)
+
+
+class _ObservedExtremes:
+    """The lowest and highest observed m/z seen so far, and whether they were all one value.
+
+    ``uniform`` is what :func:`scan_observed_mz_range` asks under a shared
+    axis: it stays True only while every lowest value equals the first
+    lowest and every highest the first highest, which is the specification's
+    guarantee for continuous mode checked against the file.
+    """
+
+    def __init__(self) -> None:
+        self.lowest: Optional[float] = None
+        self.highest: Optional[float] = None
+        self.uniform = True
+
+    @property
+    def complete(self) -> bool:
+        """Whether both a lowest and a highest have been seen."""
+        return self.lowest is not None and self.highest is not None
+
+    def note_lowest(self, value: Optional[float]) -> None:
+        """Fold one recorded lowest observed m/z in; ``None`` is skipped."""
+        if value is None:
+            return
+        if self.lowest is None:
+            self.lowest = value
+        elif value != self.lowest:
+            self.uniform = False
+            self.lowest = min(self.lowest, value)
+
+    def note_highest(self, value: Optional[float]) -> None:
+        """Fold one recorded highest observed m/z in; ``None`` is skipped."""
+        if value is None:
+            return
+        if self.highest is None:
+            self.highest = value
+        elif value != self.highest:
+            self.uniform = False
+            self.highest = max(self.highest, value)
 
 
 _ARRAY_BLOCK = re.compile(rb"<binaryDataArray\b.*?</binaryDataArray>", re.DOTALL)
