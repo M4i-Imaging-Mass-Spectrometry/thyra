@@ -979,7 +979,9 @@ class ImzMLReader(BaseMSIReader):
         between 0.4 ms and 64 s on a 2.0 GiB file (issue #360). A file
         that declares no raster geometry cannot be described from its
         head, and falls back to the full parse rather than to an invented
-        grid.
+        grid; see
+        :func:`~thyra.metadata.extractors.imzml_header_extractor.head_shortfall`
+        for the three files that do.
         """
         if self._metadata_only:
             extractor = self._header_metadata_extractor()
@@ -1010,7 +1012,7 @@ class ImzMLReader(BaseMSIReader):
         # back into this package, and this module is what imports it.
         from ...metadata.extractors.imzml_header_extractor import (
             ImzMLHeaderExtractor,
-            declared_raster,
+            head_shortfall,
         )
         from .header import declared_binary_extent, read_header
 
@@ -1042,11 +1044,12 @@ class ImzMLReader(BaseMSIReader):
             )
 
         header = read_header(imzml_path)
-        if declared_raster(header) is None:
+        shortfall = head_shortfall(header)
+        if shortfall is not None:
             logger.info(
-                "%s declares no raster geometry (IMS:1000042/IMS:1000043); "
-                "reading its metadata the full way instead.",
+                "%s: %s, so its metadata is read the full way instead.",
                 imzml_path.name,
+                shortfall,
             )
             return None
 

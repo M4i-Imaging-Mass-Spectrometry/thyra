@@ -27,6 +27,11 @@ What it reports differently, and why that is not a drift:
   ``is_high_density_profile``, which no detector calls).
 - ``coordinate_bounds`` is zeros and ``coordinate_offsets`` is ``None``.
   Both describe where the spectra sit, which is what was not read.
+- ``dimensions[2]`` is 1, because imzML has no header term for the number
+  of planes -- z is a property of the coordinates. So ``is_3d`` is False
+  here for a 3D acquisition that the coordinate path would report as 3D.
+  Nothing in the preview reads it (the card shows x and y), and nothing
+  on the conversion path reaches this class.
 """
 
 from __future__ import annotations
@@ -89,9 +94,9 @@ class ImzMLHeaderExtractor(ImzMLMetadataExtractor):
     def _declared_raster(self) -> Tuple[int, int]:
         """The raster the file declares, which the caller has checked for.
 
-        :func:`~thyra.readers.imzml.header.declares_raster` gates this
-        path, so reaching it without a declaration is a bug rather than a
-        bad file, and raises accordingly.
+        :func:`head_shortfall` gates this path, so reaching it without a
+        usable declaration is a bug rather than a bad file, and raises
+        accordingly.
         """
         raster = declared_raster(self.header)
         if raster is None:
@@ -129,39 +134,57 @@ class ImzMLHeaderExtractor(ImzMLMetadataExtractor):
         return int(self.header.n_spectra or 0)
 
 
-def declared_raster(parser: ImzMLHeaderParser) -> Optional[Tuple[int, int]]:
-    """``(n_x, n_y)`` from the document head, or ``None``.
+def head_shortfall(parser: ImzMLHeaderParser) -> Optional[str]:
+    """Why the head cannot describe this file, or ``None`` if it can.
 
-    ``None`` means the head cannot say, and the caller falls back to the
-    full parse rather than report a grid it did not read.  There are two
-    such cases and the second is not obvious:
+    The gate on the metadata-only path, and the single place the three
+    reasons live -- so the line logged when a file falls back to the full
+    parse says which one it was, rather than naming whichever was checked
+    first.
 
-    - The file declares no ``IMS:1000042``/``IMS:1000043``.  The spec puts
-      the raster in ``<scanSettings>`` and every writer met so far fills
-      it in, but nothing enforces it.
+    - **It declares no spectra.**  ``<spectrumList count="0">``, or no
+      count at all.  The coordinate path refuses such a file by name
+      ("No coordinates found"), and it should keep refusing it rather
+      than be described as an empty raster.
 
-    - The file is **0-based**, which makes the declaration ambiguous.
-      ``max count of pixels x`` is defined as a count, but pyimzml's own
-      writer fills it with the largest coordinate it saw -- the same
-      number for a 1-based file and one short for a 0-based one.  A
-      3x3 raster written from origin 0 declares ``2``.  Nothing in the
-      head distinguishes a writer that meant the count from one that
-      meant the index, so a file whose first spectrum sits at 0 on
-      either axis is handed to the coordinate path, which settles the
-      base exactly (issue #244).
+    - **It is numbered from 0**, which makes the raster declaration
+      ambiguous.  ``max count of pixels x`` is defined as a count, but
+      pyimzml's own writer fills it with the largest coordinate it saw --
+      the same number for a 1-based file, one short for a 0-based one, so
+      a 3x3 raster written from origin 0 declares ``2``.  Nothing in the
+      head says which was meant, so the coordinate path settles the base
+      exactly, as it has since issue #244.  A file that states no
+      position at all on its first spectrum is ambiguous the same way and
+      goes the same route, where it will fail honestly if it really has
+      no coordinates.
 
-    A file that states no position at all on its first spectrum is
-    ambiguous in the same way, and goes the same route -- where it will
-    fail honestly if it really has no coordinates.
+    - **It declares no raster.**  The spec puts ``IMS:1000042`` /
+      ``IMS:1000043`` in ``<scanSettings>`` and every writer met so far
+      fills them in, but nothing enforces it.
     """
+    if not parser.n_spectra:
+        return "its spectrum list declares no spectra"
+
     position = parser.first_position
     if position is None or position[0] < 1 or position[1] < 1:
-        logger.debug(
-            "First spectrum position %r leaves the declared raster ambiguous",
-            position,
+        return (
+            f"its first spectrum is at {position}, so a declared raster "
+            f"could be a count or a largest index"
         )
-        return None
 
+    if declared_raster(parser) is None:
+        return "it declares no raster geometry (IMS:1000042/IMS:1000043)"
+
+    return None
+
+
+def declared_raster(parser: ImzMLHeaderParser) -> Optional[Tuple[int, int]]:
+    """``(n_x, n_y)`` as the document head declares them, or ``None``.
+
+    Reads the declaration and nothing else.  Whether the declaration can
+    be *trusted* is :func:`head_shortfall`'s question, and it is asked
+    before this path is taken at all.
+    """
     n_x = parser.imzmldict.get("max count of pixels x")
     n_y = parser.imzmldict.get("max count of pixels y")
     try:

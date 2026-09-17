@@ -76,6 +76,26 @@ def write_zero_based_imzml(directory: Path, n_spectra: int = 6) -> Path:
     return path
 
 
+def empty_the_spectrum_list(path: Path) -> Path:
+    """Leave the head intact and take every spectrum out of the document.
+
+    ``ImzMLWriter`` cannot produce this directly -- it sizes the raster
+    with ``max()`` over the coordinates and raises on an empty one -- but
+    the shape is what matters: a file whose head is complete and whose
+    spectrum list declares nothing.
+    """
+    text = path.read_text(encoding="utf-8")
+    emptied, n = re.subn(
+        r"<spectrumList\b[^>]*>.*</spectrumList>",
+        '<spectrumList count="0" defaultDataProcessingRef="export">' "</spectrumList>",
+        text,
+        flags=re.DOTALL,
+    )
+    assert n == 1, "fixture had no spectrum list to empty"
+    path.write_text(emptied, encoding="utf-8")
+    return path
+
+
 def strip_observed_mz(path: Path) -> Path:
     """Remove every observed-m/z cvParam, as an IONTOF export has none.
 
@@ -220,6 +240,23 @@ class TestWhatTheHeadWillNotGuess:
 
         assert preview.grid_dims == (3, 2)
         assert len(parser_builds) == 1, "the ambiguous file skipped the parse"
+
+    def test_a_file_declaring_no_spectra_falls_back_too(self, temp_dir, parser_builds):
+        """An empty acquisition keeps being refused, not described.
+
+        The head could describe this file -- it declares a raster and a
+        pitch -- and the card would read "a raster this size, zero pixels
+        in it", which is a description of something nobody can convert.
+        The coordinate path already refuses it, so the head declines and
+        that refusal stands, whatever its wording (today's comes out of
+        numpy rather than out of a message Thyra wrote).
+        """
+        path = empty_the_spectrum_list(write_imzml(temp_dir, n_spectra=6))
+
+        preview = preview_msi(path)
+
+        assert preview.readable is False
+        assert len(parser_builds) == 1, "the empty file skipped the parse"
 
     def test_a_missing_ibd_is_still_refused(self, temp_dir):
         """A preview that called this readable would invite a refusal."""
