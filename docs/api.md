@@ -109,9 +109,11 @@ Two properties make it usable directly from UI code:
   header: a Bruker `.d` from `analysis.tdf`, an imzML from the block before
   `<run>` -- 0.4 ms whether that document is 29 MB or 2.0 GiB. One step is
   bounded by the file rather than by its header, and it is worth knowing
-  about: an imzML records its mass range per spectrum, so reading it costs a
-  pass over the XML (3.9 s on a 2.0 GiB document, 53 ms on a 29 MB one). That
-  pass never opens the `.ibd`.
+  about: a processed-mode imzML records its mass range per spectrum, so
+  reading it costs a pass over the XML (3.9 s on a 2.0 GiB document, 53 ms on
+  a 29 MB one). A continuous-mode one shares a single m/z array across every
+  spectrum, so its first spectrum states the range and the pass stops there.
+  Neither pass opens the `.ibd`.
 
 ```python
 from pathlib import Path

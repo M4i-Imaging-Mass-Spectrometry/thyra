@@ -202,6 +202,125 @@ class TestTheRangeScanIsChunked:
         )
 
 
+def write_continuous_imzml(directory: Path, n_spectra: int = 40) -> Path:
+    """The same raster as ``write_imzml``, in continuous mode.
+
+    Every spectrum shares the one m/z array, which is what ``IMS:1000030``
+    declares and what lets the range scan stop at the first spectrum.
+    """
+    import numpy as np
+    from pyimzml.ImzMLWriter import ImzMLWriter
+
+    path = directory / "continuous.imzML"
+    mzs = np.linspace(100.0, 500.0, 5)
+    intensities = np.arange(1.0, 6.0)
+
+    with ImzMLWriter(str(path), mode="continuous") as writer:
+        for i in range(n_spectra):
+            writer.addSpectrum(mzs, intensities, (i % 3 + 1, i // 3 + 1, 1))
+    return path
+
+
+_HIGHEST_OBSERVED = re.compile(r'(accession="MS:1000527"[^>]*?value=")([^"]*)(")')
+
+
+def raise_recorded_highest(path: Path, ordinal: int, value: float) -> Path:
+    """Rewrite one spectrum's recorded highest observed m/z.
+
+    ``ordinal`` counts occurrences in document order; ``-1`` is the last
+    spectrum.  The binary is untouched: what changes is what the document
+    CLAIMS, which is all the scan reads.
+    """
+    text = path.read_text(encoding="utf-8")
+    matches = list(_HIGHEST_OBSERVED.finditer(text))
+    assert matches, "fixture carried no highest-observed-m/z cvParams"
+    match = matches[ordinal]
+    text = f"{text[: match.start(2)]}{value}{text[match.end(2):]}"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+class TestAContinuousFileStopsAtItsFirstSpectrum:
+    """A shared m/z axis is stated once, so the scan need not read it 117,911 times.
+
+    Measured on a 270 MB continuous export over a network share: the full
+    pass cost 5.6 s cold and 0.58 s warm for a range the first spectrum
+    already stated (issue #371).  The early stop is exact by the
+    specification -- continuous mode means one m/z array for every
+    spectrum -- and it is checked against the file's own first chunk
+    rather than taken on trust.
+    """
+
+    def test_the_preview_range_is_the_one_a_full_read_finds(self, temp_dir):
+        path = write_continuous_imzml(temp_dir)
+
+        from_head = preview_msi(path).mz_range
+
+        reader = ImzMLReader(path)
+        try:
+            from_binary = reader.get_essential_metadata().mass_range
+        finally:
+            reader.close()
+
+        assert from_head == pytest.approx(from_binary)
+
+    def test_the_scan_stops_after_the_first_chunk(self, temp_dir, monkeypatch):
+        """Observable only by planting a claim past the first chunk.
+
+        The last spectrum is made to claim a higher m/z than the array it
+        shares with every other spectrum can hold.  A full scan sees it; the
+        shared-axis scan stops before it, and that is the documented trade:
+        the specification says the value cannot differ, so the rest of the
+        document is not read to check.  The plain scan is unchanged, which
+        is what keeps a processed file honest.
+        """
+        from thyra.readers.imzml import header as header_module
+
+        path = raise_recorded_highest(write_continuous_imzml(temp_dir), -1, 9999.0)
+        monkeypatch.setattr(header_module, "_SCAN_CHUNK_BYTES", 1024)
+        monkeypatch.setattr(header_module, "_SCAN_OVERLAP_BYTES", 256)
+
+        assert header_module.scan_observed_mz_range(path, shared_axis=True) == (
+            pytest.approx((100.0, 500.0))
+        )
+        assert header_module.scan_observed_mz_range(path) == pytest.approx(
+            (100.0, 9999.0)
+        )
+
+    def test_a_disagreement_in_the_first_chunk_scans_in_full(self, temp_dir):
+        """The specification is checked, not assumed.
+
+        A writer that declares continuous and still records differing
+        extrema on its first spectra is scanned to the end like any other
+        file, and the range is the extremes of everything it recorded.
+        """
+        from thyra.readers.imzml import header as header_module
+
+        path = raise_recorded_highest(write_continuous_imzml(temp_dir), 1, 9999.0)
+
+        assert header_module.scan_observed_mz_range(path, shared_axis=True) == (
+            pytest.approx((100.0, 9999.0))
+        )
+
+    def test_a_processed_file_is_still_scanned_in_full(self, temp_dir, monkeypatch):
+        """The mode gates the early stop, and it is read off the head.
+
+        The same planted claim on a processed file reaches the preview,
+        because each of its spectra has its own array and the last one
+        really can range higher than the first.
+        """
+        from thyra.readers.imzml import header as header_module
+
+        path = raise_recorded_highest(write_imzml(temp_dir, n_spectra=40), -1, 9999.0)
+        monkeypatch.setattr(header_module, "_SCAN_CHUNK_BYTES", 1024)
+        monkeypatch.setattr(header_module, "_SCAN_OVERLAP_BYTES", 256)
+
+        preview = preview_msi(path)
+
+        assert preview.readable, preview.error
+        assert preview.mz_range == pytest.approx((100.0, 9999.0))
+
+
 class TestWhatTheHeadWillNotGuess:
     def test_a_zero_based_file_falls_back_to_the_coordinates(
         self, temp_dir, parser_builds

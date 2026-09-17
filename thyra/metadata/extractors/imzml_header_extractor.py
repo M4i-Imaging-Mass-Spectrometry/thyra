@@ -72,7 +72,7 @@ class ImzMLHeaderExtractor(ImzMLMetadataExtractor):
     def _extract_essential_impl(self) -> EssentialMetadata:
         """Build essential metadata from the head of the document."""
         n_x, n_y = self._declared_raster()
-        mass_range = scan_observed_mz_range(self.imzml_path)
+        mass_range = self._recorded_mass_range()
         n_spectra = self.header.n_spectra
 
         return EssentialMetadata(
@@ -120,7 +120,7 @@ class ImzMLHeaderExtractor(ImzMLMetadataExtractor):
                 -- gets told, because the alternative is an invented
                 range reaching an axis (see the base implementation).
         """
-        mass_range = scan_observed_mz_range(self.imzml_path)
+        mass_range = self._recorded_mass_range()
         if mass_range is None:
             raise ValueError(
                 f"{self.imzml_path} records no observed m/z range "
@@ -128,6 +128,21 @@ class ImzMLHeaderExtractor(ImzMLMetadataExtractor):
                 "not decode spectra to find one."
             )
         return mass_range, 0
+
+    def _recorded_mass_range(self) -> Optional[Tuple[float, float]]:
+        """The observed-m/z extrema the document records, or ``None``.
+
+        The one call site for the scan on this path, so the mode reaches
+        it once: a continuous file (``IMS:1000030``, every spectrum one
+        m/z array) states its range on its first spectrum and the scan
+        stops there; a processed file is scanned in full.  The mode comes
+        off ``parser.metadata`` exactly as the full extractor reads it,
+        which is what keeps the two paths agreeing about which files are
+        which.
+        """
+        return scan_observed_mz_range(
+            self.imzml_path, shared_axis=self._is_continuous_mode()
+        )
 
     def _spectrum_count(self) -> int:
         """The count the file declares, not one taken over coordinates."""

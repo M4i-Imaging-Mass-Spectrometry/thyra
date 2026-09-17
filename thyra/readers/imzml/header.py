@@ -277,6 +277,8 @@ def _collect(
 
 def scan_observed_mz_range(
     path: Union[str, Path],
+    *,
+    shared_axis: bool = False,
 ) -> Optional[Tuple[float, float]]:
     """The mass range the file itself records, or ``None``.
 
@@ -298,10 +300,21 @@ def scan_observed_mz_range(
     terms that are wanted, not the document structure, and the cost is
     then the file's size rather than its element count -- 53 ms for
     29 MB, 3.9 s for 2.0 GiB.
+
+    ``shared_axis`` says the file declares continuous mode
+    (``IMS:1000030``): by the specification every spectrum then shares one
+    m/z array, and the recorded extrema are computed from that same array,
+    so the first spectrum's pair is the file's pair.  The scan then stops
+    after its first chunk -- provided every extremum recorded in that
+    chunk agrees, which is the specification's guarantee checked against
+    the file's own first spectra.  A continuous file whose recorded
+    extrema disagree there is scanned in full, exactly as a processed one.
+    Measured on a 270 MB continuous export over a network share: the full
+    pass cost 5.6 s cold and 0.58 s warm for a range the first spectrum
+    already stated (issue #371).
     """
     path = Path(path)
-    lowest: Optional[float] = None
-    highest: Optional[float] = None
+    seen = _ObservedExtremes()
 
     with path.open("rb") as handle:
         carry = b""
@@ -311,23 +324,68 @@ def scan_observed_mz_range(
                 break
             buffer = carry + chunk
             for match in _LOWEST.finditer(buffer):
-                value = _as_float(match.group(1))
-                if value is not None and (lowest is None or value < lowest):
-                    lowest = value
+                seen.note_lowest(_as_float(match.group(1)))
             for match in _HIGHEST.finditer(buffer):
-                value = _as_float(match.group(1))
-                if value is not None and (highest is None or value > highest):
-                    highest = value
+                seen.note_highest(_as_float(match.group(1)))
+            if shared_axis and seen.uniform and seen.complete:
+                logger.debug(
+                    "%s declares a shared m/z axis and its first spectra agree on "
+                    "(%s, %s); not scanning the rest of the document.",
+                    path.name,
+                    seen.lowest,
+                    seen.highest,
+                )
+                break
             carry = buffer[-_SCAN_OVERLAP_BYTES:]
 
-    if lowest is None or highest is None:
+    if seen.lowest is None or seen.highest is None:
         logger.info(
             "%s records no observed m/z range (MS:1000528/MS:1000527); "
             "a metadata-only read reports it as unknown.",
             path.name,
         )
         return None
-    return (lowest, highest)
+    return (seen.lowest, seen.highest)
+
+
+class _ObservedExtremes:
+    """The lowest and highest observed m/z seen so far, and whether they were all one value.
+
+    ``uniform`` is what :func:`scan_observed_mz_range` asks under a shared
+    axis: it stays True only while every lowest value equals the first
+    lowest and every highest the first highest, which is the specification's
+    guarantee for continuous mode checked against the file.
+    """
+
+    def __init__(self) -> None:
+        self.lowest: Optional[float] = None
+        self.highest: Optional[float] = None
+        self.uniform = True
+
+    @property
+    def complete(self) -> bool:
+        """Whether both a lowest and a highest have been seen."""
+        return self.lowest is not None and self.highest is not None
+
+    def note_lowest(self, value: Optional[float]) -> None:
+        """Fold one recorded lowest observed m/z in; ``None`` is skipped."""
+        if value is None:
+            return
+        if self.lowest is None:
+            self.lowest = value
+        elif value != self.lowest:
+            self.uniform = False
+            self.lowest = min(self.lowest, value)
+
+    def note_highest(self, value: Optional[float]) -> None:
+        """Fold one recorded highest observed m/z in; ``None`` is skipped."""
+        if value is None:
+            return
+        if self.highest is None:
+            self.highest = value
+        elif value != self.highest:
+            self.uniform = False
+            self.highest = max(self.highest, value)
 
 
 _ARRAY_BLOCK = re.compile(rb"<binaryDataArray\b.*?</binaryDataArray>", re.DOTALL)
