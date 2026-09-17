@@ -15,7 +15,7 @@ description: >-
   datasets converted to SpatialData.  Stored in
   table.uns["msi_metadata"]; base fields mirror the METASPACE
   submission form.
-version: 0.5.0
+version: 0.6.0
 prefixes:
   linkml: https://w3id.org/linkml/
   MS: http://purl.obolibrary.org/obo/MS_
@@ -201,6 +201,23 @@ classes:
       n_channels:
         range: integer
         required: true
+  Acquisition:
+    description: >-
+      When the acquisition was run and with what laser settings; every
+      field is unset when the source does not report it.
+    attributes:
+      # ISO 8601 date and time; a UTC offset only when the source has one.
+      acquisition_datetime: {}
+      laser_power_percent:
+        range: float
+      laser_frequency_hz:
+        range: float
+        slot_uri: IMS:1006000
+      shots_per_pixel:
+        range: integer
+        slot_uri: IMS:1006001
+      # A file name, never a path.
+      method_file: {}
   SoftwareRef:
     description: A software agent, the way mzQC records analysis software.
     attributes:
@@ -243,6 +260,8 @@ classes:
       ms_analysis:
         range: MSAnalysis
         required: true
+      acquisition:
+        range: Acquisition
       processing:
         range: ProcessingStep
         multivalued: true

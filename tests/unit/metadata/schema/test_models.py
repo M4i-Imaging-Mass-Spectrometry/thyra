@@ -91,6 +91,8 @@ class TestCvBindings:
             "MS:1000828",  # isolation window lower offset
             "MS:1000829",  # isolation window upper offset
             "MS:1000045",  # collision energy
+            "IMS:1006000",  # repetition rate
+            "IMS:1006001",  # laser shots per spectrum
         }
 
     def test_every_binding_resolves_in_the_local_tables(self):
@@ -125,6 +127,12 @@ class TestCvBindings:
         concepts = [c for c, _ in models.CANDIDATE_CV_CONCEPTS]
         assert any("resampling" in c for c in concepts)
         assert any("stage offset" in c for c in concepts)
+        # The acquisition section's fields without a CV term are listed
+        # with the ones it does not bind, so the gap is on record.
+        paths = [p for _, p in models.CANDIDATE_CV_CONCEPTS]
+        assert "acquisition.acquisition_datetime" in paths
+        assert "acquisition.laser_power_percent" in paths
+        assert "acquisition.method_file" in paths
 
 
 class TestProcessing:
@@ -172,3 +180,71 @@ class TestToUnsDict:
     def test_uns_dict_validates_back(self):
         data = _minimal().to_uns_dict()
         assert MSIMetadata.model_validate(data) is not None
+
+
+class TestAcquisition:
+    def _document(self, **acquisition) -> dict:
+        doc = _minimal().model_dump()
+        doc["acquisition"] = acquisition
+        return doc
+
+    def test_the_section_validates(self):
+        from thyra.metadata.schema import Acquisition
+
+        section = Acquisition(
+            acquisition_datetime="2025-04-22T08:59:34.395+02:00",
+            laser_power_percent=70.0,
+            laser_frequency_hz=1000.0,
+            shots_per_pixel=50,
+            method_file="imaging.m",
+        )
+        meta = MSIMetadata.model_validate(self._document(**section.model_dump()))
+        assert meta.acquisition == section
+
+    def test_an_absent_section_is_absent_in_the_uns_dict(self):
+        assert _minimal().acquisition is None
+        assert "acquisition" not in _minimal().to_uns_dict()
+
+    def test_extra_keys_are_forbidden(self):
+        with pytest.raises(ValidationError):
+            MSIMetadata.model_validate(self._document(laser_power=70.0))
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "07-Nov-2019 14:09:44",  # MassLynx, unparsed
+            "06/23/2026 21:12:35",  # SmartSoft-TOF, unparsed
+            "2019-11-07",  # a date is not a datetime
+            "2019-11-07T25:00:00",  # not a time
+            "not a timestamp",
+        ],
+    )
+    def test_an_unparseable_datetime_is_rejected(self, value):
+        with pytest.raises(ValidationError, match="acquisition_datetime"):
+            MSIMetadata.model_validate(self._document(acquisition_datetime=value))
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "2019-11-07T14:09:44",
+            "2019-11-07T14:09:44.123+02:00",
+            "2019-11-07T14:09:44Z",
+        ],
+    )
+    def test_iso_8601_with_or_without_an_offset_is_accepted(self, value):
+        meta = MSIMetadata.model_validate(self._document(acquisition_datetime=value))
+        assert meta.acquisition is not None
+        assert meta.acquisition.acquisition_datetime == value
+
+    def test_the_method_must_be_a_name_not_a_path(self):
+        for path in ("D:\\Methods\\imaging.m", "/data/imaging.m"):
+            with pytest.raises(ValidationError, match="not a path"):
+                MSIMetadata.model_validate(self._document(method_file=path))
+
+    def test_laser_power_is_bounded_to_a_percentage(self):
+        with pytest.raises(ValidationError):
+            MSIMetadata.model_validate(self._document(laser_power_percent=140.0))
+        with pytest.raises(ValidationError):
+            MSIMetadata.model_validate(self._document(laser_frequency_hz=0.0))
+        with pytest.raises(ValidationError):
+            MSIMetadata.model_validate(self._document(shots_per_pixel=0))

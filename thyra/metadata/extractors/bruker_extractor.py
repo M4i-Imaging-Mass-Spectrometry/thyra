@@ -413,29 +413,70 @@ class BrukerMetadataExtractor(MetadataExtractor):
         return params
 
     def _extract_laser_params(self, cursor, params: Dict[str, Any]) -> None:
-        """Extract laser parameters from database."""
+        """Extract laser parameters: per-frame settings, then beam geometry.
+
+        ``LaserPower``, ``NumLaserShots`` and ``LaserRepRate`` are columns
+        of ``MaldiFrameInfo``, one row per frame. ``LaserPower`` is the
+        percentage of the laser's range that timsControl shows as
+        "Laser Power" (70.0 on the acquisition checked), ``LaserRepRate``
+        is in Hz. The three are constant within a normal acquisition, so
+        each is reported as a scalar when every frame agrees and as a
+        ``[min, max]`` pair when they differ -- the way the solariX
+        extractor reports the same three -- and only the frames of the
+        selected region are aggregated when there is one. The beam scan
+        sizes and spot size live in ``MaldiFrameLaserInfo``.
+
+        An earlier version selected ``LaserPower`` and ``LaserFrequency``
+        from ``MaldiFrameLaserInfo``, which has never had those columns
+        (TDF/TSF schema 3.x), so no real acquisition ever filled any of
+        these keys before.
+        """
         try:
-            cursor.execute("""
-                SELECT DISTINCT LaserPower, LaserFrequency, BeamScanSizeX, \
-BeamScanSizeY, SpotSize
-                FROM MaldiFrameLaserInfo
-                LIMIT 1
-            """)
+            if self._region is not None:
+                cursor.execute(
+                    "SELECT MIN(LaserPower), MAX(LaserPower), "
+                    "MIN(NumLaserShots), MAX(NumLaserShots), "
+                    "MIN(LaserRepRate), MAX(LaserRepRate) "
+                    "FROM MaldiFrameInfo WHERE RegionNumber = ?",
+                    (self._region,),
+                )
+            else:
+                cursor.execute(
+                    "SELECT MIN(LaserPower), MAX(LaserPower), "
+                    "MIN(NumLaserShots), MAX(NumLaserShots), "
+                    "MIN(LaserRepRate), MAX(LaserRepRate) "
+                    "FROM MaldiFrameInfo"
+                )
             result = cursor.fetchone()
-
             if result:
-                self._process_laser_result(result, params)
-
+                self._process_frame_laser_result(result, params)
         except sqlite3.OperationalError:
-            logger.debug("Could not extract laser parameters")
+            logger.debug("Could not extract per-frame laser parameters")
 
-    def _process_laser_result(self, result, params: Dict[str, Any]) -> None:
-        """Process laser parameter query result."""
-        laser_power, laser_freq, beam_x, beam_y, spot_size = result
-        if laser_power is not None:
-            params["laser_power"] = laser_power
-        if laser_freq is not None:
-            params["laser_frequency"] = laser_freq
+        try:
+            result = self._query_laser_info(cursor)
+            if result:
+                self._process_beam_result(result, params)
+        except sqlite3.OperationalError:
+            logger.debug("Could not extract beam scan parameters")
+
+    @staticmethod
+    def _process_frame_laser_result(result, params: Dict[str, Any]) -> None:
+        """Store the per-frame laser aggregates, collapsed when constant."""
+        pairs = (
+            ("laser_power", result[0], result[1]),
+            ("num_laser_shots", result[2], result[3]),
+            ("laser_frequency", result[4], result[5]),
+        )
+        for key, low, high in pairs:
+            if low is None or high is None:
+                continue
+            params[key] = low if low == high else [low, high]
+
+    @staticmethod
+    def _process_beam_result(result, params: Dict[str, Any]) -> None:
+        """Store the beam scan sizes and spot size."""
+        beam_x, beam_y, spot_size = result
         if beam_x is not None:
             params["beam_scan_size_x"] = beam_x
             params["BeamScanSizeX"] = beam_x  # Add both formats for compatibility
@@ -446,7 +487,14 @@ BeamScanSizeY, SpotSize
             params["laser_spot_size"] = spot_size
 
     def _extract_timing_params(self, cursor, params: Dict[str, Any]) -> None:
-        """Extract timing parameters from database."""
+        """Extract the acquisition timestamp and method name from GlobalMetadata.
+
+        ``MethodName`` is recorded as timsControl opened it, which may be
+        an absolute path on the acquisition PC; only the file name (the
+        ``*.m`` directory's name) is kept, since a path names a machine
+        the store will not be opened on. The full value is still in
+        ``raw_metadata["global_metadata"]``.
+        """
         try:
             cursor.execute(
                 "SELECT Value FROM GlobalMetadata WHERE Key = " "'AcquisitionDateTime'"
@@ -454,6 +502,15 @@ BeamScanSizeY, SpotSize
             result = cursor.fetchone()
             if result:
                 params["acquisition_datetime"] = result[0]
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("SELECT Value FROM GlobalMetadata WHERE Key = 'MethodName'")
+            result = cursor.fetchone()
+            if result and isinstance(result[0], str):
+                name = result[0].replace("\\", "/").rsplit("/", 1)[-1].strip()
+                if name:
+                    params["method_name"] = name
         except sqlite3.OperationalError:
             pass
 

@@ -48,6 +48,17 @@ class TestSchemaVersion:
         assert _warnings(issues)
         assert not _errors(issues)
 
+    def test_older_minor_version_validates_without_a_word(self):
+        # A 0.5.0 store (no acquisition section) read by 0.6.0 code is the
+        # additive-minor case the versioning rule promises to accept.
+        doc = _valid_doc()
+        major, minor, patch = (int(p) for p in MSI_METADATA_SCHEMA_VERSION.split("."))
+        assert minor >= 1, "no older minor exists to test against"
+        doc["schema_version"] = f"{major}.{minor - 1}.{patch}"
+        meta, issues = validate_document(doc)
+        assert meta is not None
+        assert issues == []
+
     def test_garbage_version_is_an_error(self):
         doc = _valid_doc()
         doc["schema_version"] = "not-a-version"
