@@ -10,7 +10,7 @@ Status as of 2026-09-01:
 - Design comment posted: https://github.com/scverse/spatialdata/issues/1178#issuecomment-5494212751
   Awaiting a maintainer reply. Do not post a second one.
 - Related zarr bug filed as a side effect: see handout J.
-- Nothing written yet. Part 2 below is the prompt to start from.
+- Nothing written yet. Part 2 below is the brief to start from.
 
 Investigated against `upstream/main` @ ccf1ea0, anndata 0.12.16, zarr 3.2.1/3.3.0.
 
@@ -400,7 +400,7 @@ This implements melonora's 2026-07-03 maintainer decision ("write_kwargs for use
 
 ---
 
-# PART 2 -- THE HANDOFF PROMPT
+# PART 2 -- THE HANDOFF BRIEF
 
 `````
 Implement scverse/spatialdata issue #1178 ("No sharding configuration exposed for tables"):
@@ -408,8 +408,7 @@ https://github.com/scverse/spatialdata/issues/1178
 
 ## Repo and branch
 
-Work in the spatialdata clone at %USERPROFILE%/Desktop/spatialdata (Windows; PowerShell is
-primary, a Bash tool is also available). Remotes: origin = Tomatokeftes fork, upstream =
+Work in the spatialdata clone at %USERPROFILE%/Desktop/spatialdata (Windows; PowerShell). Remotes: origin = Tomatokeftes fork, upstream =
 scverse/spatialdata. There is a test venv at .venv-test (anndata 0.12.16, zarr 3.2.1).
 
 Branch FROM upstream/main @ ccf1ea0 (re-verified as the tip; if it has moved, re-check the line
@@ -687,7 +686,7 @@ Plain, short sentences. Do not add any tool as co-author or committer, and do no
   Do not post another one. It already states the API, why it is not symmetric with #1106, that the
   global is narrowed rather than removed, the offer of `raster_shard_size_bytes`, and the sequencing.
   Read it before you start; the PR description should be consistent with it. If maintainers reply
-  asking for changes, follow their reply over this prompt.
+  asking for changes, follow their reply over this brief.
 - 5 source files + 1 test file, ~130 lines total.
 - All seven CI matrix jobs green, including the macos/3.14 prerelease leg that installs anndata from
   git main. pre-commit green (prettier, mypy on src only, ruff + ruff-format); pre-commit.ci will

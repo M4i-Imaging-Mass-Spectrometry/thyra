@@ -148,7 +148,7 @@ broken by this today. You can still get there from plain zarr, as above.
 
 #4218 is refactoring `chunk_grids.py` but doesn't touch this loop.
 
-# PART 2 -- THE HANDOFF PROMPT
+# PART 2 -- THE HANDOFF BRIEF
 
 `````
 Fix zarr-developers/zarr-python issue #4304 and open a PR.

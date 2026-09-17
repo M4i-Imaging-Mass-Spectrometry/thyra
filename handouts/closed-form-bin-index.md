@@ -6,7 +6,7 @@
 12.8 hours of wall clock, every one of them bit-identical to the current
 tree. This note holds what the decision page summarises: the derivation
 that settled correctness, the harness, the environment, and every number,
-so the next session does not re-derive them.
+so nobody re-derives them.
 
 ## The question
 
@@ -343,7 +343,7 @@ passes (3,171 tests). Micro-benchmarked, the shipped `_nn_map_to_bins`
 with a linearisation is 4.2x the search at 1,273 sorted peaks on 600k
 bins, 4.9x at 4,722, 3.5x at 15,000 on 1.05M bins, and 1.8x at 400.
 
-### Things learned, for the next session
+### Things learned, for whoever comes next
 
 - The API's `resampling_config=None` disables resampling; the CLI's
   default is a dict with `method="auto"`, `axis_type="auto"` and every
