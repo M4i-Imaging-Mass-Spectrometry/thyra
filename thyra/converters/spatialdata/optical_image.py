@@ -62,12 +62,33 @@ up front and the pixels only after the store exists, so
 :meth:`OpticalImages.stream_pending_pixels` keeps that
 contract by dropping the declared element from the store and warning. A
 store never keeps an image whose pixels were not written.
+
+**The alignment image is cropped to the section it aligns.** A FlexImaging
+``.mis`` names one whole-slide scan and every ``.d`` cut from that slide
+names the same one, so a project of eleven sections used to hold eleven
+copies of a 28670 x 10606 photo, each placed so that *its own* Area lands on
+*its own* MSI -- which is where the other ten sections' pixels are wrong by
+centimetres. Measured on a real store: five copies of one photo, composed
+placements up to 54,873 um apart. When a conversion covers exactly one
+region -- a single-region acquisition, or one region of a multi-region file
+selected with ``region=`` -- :class:`OpticalImages` crops the alignment
+image to that region's Area box plus :data:`CROP_MARGIN_FRACTION`, streams
+and pyramids the crop alone, and composes a :class:`Translation` by the
+crop's origin in front of whatever transform the full image would have
+carried. Nothing on the MSI side moves: the raster-to-image affine, the
+pixel polygons and the ``coordinate_systems`` attr all keep describing the
+full image's pixel grid, and the crop's own transform is what places its
+pixels back where they were. The crop's origin and size, and the full
+image's, are recorded in the store's ``optical_images`` root attr so the
+whole slide can be found again without re-reading the ``.d``. A
+whole-file conversion of a multi-region acquisition is unchanged.
 """
 
 from __future__ import annotations
 
 import itertools
 import logging
+import math
 import os
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -98,15 +119,23 @@ from PIL import Image as PILImage
 from spatialdata.models import Image2DModel
 from spatialdata.transformations import Affine, Identity, Scale
 from spatialdata.transformations import Sequence as SequenceTransform
-from spatialdata.transformations import set_transformation
+from spatialdata.transformations import Translation, set_transformation
 
 from ...alignment import AreaAlignmentResult, TeachingPointAlignment
 from ._chunking import image_chunks
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from ...alignment.teaching_points import RegionMapping
     from ...core.base_reader import BaseMSIReader
 
 logger = logging.getLogger(__name__)
+
+#: How much of a region's Area box is added on each side when the alignment
+#: image is cropped to it, as a fraction of the box's own width and height.
+#: Enough that the tissue edge and the slide around it are both in the crop;
+#: on the real sections measured (a 1028 x 724 px Area on a 28670 x 10606
+#: scan) it keeps the crop under one percent of the slide.
+CROP_MARGIN_FRACTION = 0.10
 
 #: Decoded bytes one band of the source TIFF may occupy while level 0 is
 #: streamed in. Measured on a 36736 px wide RGB brightfield: a whole
@@ -337,26 +366,35 @@ class OpticalTiffSource:
         """Decoded bytes of one full-width row across all channels."""
         return int(self.shape[0]) * int(self.shape[2]) * int(self.dtype.itemsize)
 
-    def bands(self, rows: int) -> Iterator[Tuple[int, np.ndarray]]:
+    def bands(
+        self, rows: int, window: Optional[Window] = None
+    ) -> Iterator[Tuple[int, np.ndarray]]:
         """Yield ``(first_row, band)`` with ``band`` shaped ``(c, rows, x)``.
 
         Row ranges are decoded through tifffile's zarr adapter, so only the
         strips of a band are ever decoded. When ``rows`` covers the page the
         page is decoded once, whole, with tifffile's own parallel decoder.
+
+        ``window`` is ``(y_start, y_stop, x_start, x_stop)`` in this page's
+        pixels: only those rows are decoded, only those columns are kept,
+        and ``first_row`` stays in the page's own row numbering. With a
+        window the adapter is always used, so a single-strip page decodes
+        its one strip and keeps the window of it.
         """
         n_rows = self.shape[1]
         with tifffile.TiffFile(self.path) as tif:
             page = tif.pages[0]
-            if rows >= n_rows:
+            if window is None and rows >= n_rows:
                 yield 0, self._to_cyx(page.asarray())
                 return
+            y_start, y_stop, x_start, x_stop = window or (0, n_rows, 0, self.shape[2])
             source = zarr.open_array(store=page.aszarr(), mode="r")
-            for start in range(0, n_rows, rows):
-                stop = min(start + rows, n_rows)
+            for start in range(y_start, y_stop, rows):
+                stop = min(start + rows, y_stop)
                 if self.page_axes == "SYX":
-                    decoded = source[:, start:stop]
+                    decoded = source[:, start:stop, x_start:x_stop]
                 else:
-                    decoded = source[start:stop]
+                    decoded = source[start:stop, x_start:x_stop]
                 yield start, self._to_cyx(decoded)
 
     def _to_cyx(self, decoded: np.ndarray) -> np.ndarray:
@@ -459,18 +497,28 @@ class OpticalRasterSource:
         """Decoded bytes of one full-width row across all channels."""
         return int(self.shape[0]) * int(self.shape[2]) * int(self.dtype.itemsize)
 
-    def bands(self, rows: int) -> Iterator[Tuple[int, np.ndarray]]:
-        """Yield ``(0, page)``: these formats decode whole or not at all.
+    def bands(
+        self, rows: int, window: Optional[Window] = None
+    ) -> Iterator[Tuple[int, np.ndarray]]:
+        """Yield ``(first_row, page)``: these formats decode whole or not at all.
 
         ``rows`` is accepted for the shared surface and ignored;
         :func:`band_rows` returns the full height for a ``strip_rows`` this
         large anyway, so the caller asks for the whole page regardless.
+        With a ``window`` the page is still decoded whole -- there is no
+        other way -- and the window of it is what comes out, with
+        ``first_row`` at the window's top.
         """
         del rows
         with _unlimited_pixels(), PILImage.open(self.path) as page:
             frame = page if self.convert_to is None else page.convert(self.convert_to)
             decoded = np.asarray(frame)
-        yield 0, self._to_cyx(decoded)
+        cyx = self._to_cyx(decoded)
+        if window is None:
+            yield 0, cyx
+            return
+        y_start, y_stop, x_start, x_stop = window
+        yield y_start, cyx[:, y_start:y_stop, x_start:x_stop]
 
     def _to_cyx(self, decoded: np.ndarray) -> np.ndarray:
         """``(y, x)`` or ``(y, x, s)`` as Pillow returns it, to ``(c, y, x)``."""
@@ -490,10 +538,144 @@ class OpticalRasterSource:
         return moved
 
 
+#: ``(y_start, y_stop, x_start, x_stop)`` in a page's own pixels: the part of
+#: it a source is asked to decode.
+Window = Tuple[int, int, int, int]
+
 #: What :func:`probe_optical_source` returns. The two classes share the
 #: surface :class:`StreamedOpticalImage` uses, not a base class: they have
 #: nothing else in common, and a Protocol would only restate this line.
 OpticalSource = Union[OpticalTiffSource, OpticalRasterSource]
+
+
+@dataclass(frozen=True)
+class OpticalCrop:
+    """Where a cropped alignment image sits in the whole-slide scan it was cut from.
+
+    Everything is in the full image's pixels, integers, origin at its top
+    left: ``x0``/``y0`` are the crop's first column and row, ``width`` and
+    ``height`` its size, ``full_width``/``full_height`` the scan's. The
+    crop's own pixel ``(u, v)`` is the scan's pixel ``(x0 + u, y0 + v)``,
+    which is exactly the :class:`Translation` the cropped element carries.
+    """
+
+    x0: int
+    y0: int
+    width: int
+    height: int
+    full_width: int
+    full_height: int
+    region_id: int
+    region_name: str
+
+    @classmethod
+    def around(
+        cls,
+        box: Tuple[float, float, float, float],
+        full_width: int,
+        full_height: int,
+        *,
+        mapping: "RegionMapping",
+        margin: float = CROP_MARGIN_FRACTION,
+    ) -> Optional["OpticalCrop"]:
+        """The crop for a region whose pixels land in ``box``, or ``None``.
+
+        ``box`` is ``(x_min, x_max, y_min, y_max)`` in full-image pixels --
+        where the region's raster lands under the alignment affine. It is
+        padded by ``margin`` of its own width and height on every side,
+        rounded outward to whole pixels and clamped to the image. ``None``
+        when there is nothing to cut: the padded box covers the whole scan,
+        or does not meet it at all (an Area drawn off the image, which the
+        affine can produce from a ``.mis`` whose areas do not match the
+        data).
+        """
+        x_min, x_max, y_min, y_max = box
+        pad_x = (x_max - x_min) * margin
+        pad_y = (y_max - y_min) * margin
+        x0 = max(0, int(math.floor(x_min - pad_x)))
+        y0 = max(0, int(math.floor(y_min - pad_y)))
+        x1 = min(full_width, int(math.ceil(x_max + pad_x)))
+        y1 = min(full_height, int(math.ceil(y_max + pad_y)))
+        if x1 <= x0 or y1 <= y0:
+            return None
+        if x0 == 0 and y0 == 0 and x1 == full_width and y1 == full_height:
+            return None
+        return cls(
+            x0=x0,
+            y0=y0,
+            width=x1 - x0,
+            height=y1 - y0,
+            full_width=full_width,
+            full_height=full_height,
+            region_id=mapping.region_id,
+            region_name=mapping.name,
+        )
+
+    @property
+    def window(self) -> Window:
+        """The crop as the row and column range a source decodes."""
+        return (self.y0, self.y0 + self.height, self.x0, self.x0 + self.width)
+
+    def to_attr(self) -> Dict[str, Any]:
+        """The crop as the store's ``optical_images`` root attr records it."""
+        return {
+            "origin": [self.x0, self.y0],
+            "size": [self.width, self.height],
+            "full_size": [self.full_width, self.full_height],
+            "region_id": self.region_id,
+            "region_name": self.region_name,
+            "margin_fraction": CROP_MARGIN_FRACTION,
+        }
+
+
+@dataclass(frozen=True)
+class CroppedOpticalSource:
+    """A window of an optical source, with the surface of a whole one.
+
+    :class:`StreamedOpticalImage` never learns it holds a crop: ``shape`` is
+    the window's, ``bands`` yields the window's rows numbered from the
+    window's top, and the pyramid is built from the window's size. The
+    decode itself is the inner source's, asked for the window, so a TIFF
+    still decodes only the strips the window touches.
+    """
+
+    inner: OpticalSource
+    crop: OpticalCrop
+
+    @property
+    def path(self) -> Path:
+        """The file the inner source reads."""
+        return self.inner.path
+
+    @property
+    def shape(self) -> Shape:
+        """``(c, y, x)`` of the window."""
+        return (self.inner.shape[0], self.crop.height, self.crop.width)
+
+    @property
+    def dtype(self) -> np.dtype:
+        """The inner source's dtype."""
+        return self.inner.dtype
+
+    @property
+    def strip_rows(self) -> int:
+        """The inner source's strip height: the decode unit is unchanged."""
+        return self.inner.strip_rows
+
+    @property
+    def row_bytes(self) -> int:
+        """Decoded bytes of one window-wide row across all channels."""
+        return int(self.shape[0]) * int(self.crop.width) * int(self.dtype.itemsize)
+
+    def bands(self, rows: int) -> Iterator[Tuple[int, np.ndarray]]:
+        """Yield ``(first_row, band)`` in the window's own row numbering."""
+        for start, band in self.inner.bands(rows, window=self.crop.window):
+            yield start - self.crop.y0, band
+
+
+#: What :class:`StreamedOpticalImage` streams from: a whole source, or a
+#: window of one.
+AnyOpticalSource = Union[OpticalSource, CroppedOpticalSource]
 
 
 def probe_optical_source(path: Union[str, Path]) -> OpticalSource:
@@ -539,7 +721,7 @@ class StreamedOpticalImage:
     it, under ``optical_images``.
     """
 
-    source: OpticalSource
+    source: AnyOpticalSource
     name: str
     chunks: Tuple[int, ...]
     scale_factors: Sequence[int]
@@ -843,6 +1025,10 @@ class OpticalImages:
         # attrs are composed. See :meth:`root_attr`.
         self._sources: Dict[str, str] = {}
         self._alignment_element: Optional[str] = None
+        # The window of the alignment image this conversion embeds, when it
+        # covers exactly one region. See the module docstring and
+        # :meth:`_crop_for_alignment_image`.
+        self._crop: Optional[OpticalCrop] = None
         # Optical images declared to SpatialData as placeholders whose pixels
         # still have to be streamed into the store once it is written. See
         # :class:`StreamedOpticalImage` and :meth:`stream_pending_pixels`.
@@ -877,6 +1063,68 @@ class OpticalImages:
     def pending(self) -> Mapping[str, StreamedOpticalImage]:
         """The placeholders whose pixels have not been streamed yet."""
         return self._pending
+
+    @property
+    def crop(self) -> Optional[OpticalCrop]:
+        """The window of the alignment image the store holds, or ``None`` for all of it."""
+        return self._crop
+
+    def _converted_region_mapping(self) -> Optional["RegionMapping"]:
+        """The one region this conversion covers, or ``None`` if it covers several.
+
+        A single-region acquisition has one mapping. A multi-region file
+        converted with ``region=`` still maps every Area -- the reader's
+        positions are not filtered -- but the reader says which region it
+        selected, and that region's mapping is the one. A multi-region
+        file converted whole has several, and ``None`` here is what keeps
+        that conversion unchanged.
+        """
+        if self._alignment is None:
+            return None
+        mappings = self._alignment.region_mappings
+        selected = getattr(self.reader, "_selected_region", None)
+        if selected is not None:
+            for mapping in mappings:
+                if mapping.region_id == selected:
+                    return mapping
+            return None
+        if len(mappings) == 1:
+            return mappings[0]
+        return None
+
+    def _crop_for_alignment_image(
+        self, full_width: int, full_height: int
+    ) -> Optional[OpticalCrop]:
+        """Where to cut the alignment image, or ``None`` to keep it whole.
+
+        The box is where the converted region's raster actually lands under
+        :attr:`tic_to_image` -- the same affine the TIC and the polygons are
+        placed by -- not the Area's own corners. For a single region the two
+        coincide by construction (the affine stretches the raster bounds
+        onto the Area); for a selected region of a multi-region file the
+        affine is the global stretch and the Area corners are only where
+        the ``.mis`` drew them, so the affine's answer is the one that
+        agrees with the MSI. Half a raster step is added on each side so the
+        outermost pixels' full footprint is inside the box before the
+        margin is.
+        """
+        mapping = self._converted_region_mapping()
+        if mapping is None or self._alignment is None or self._tic_to_image is None:
+            return None
+        matrix = self._tic_to_image
+        scale_x, scale_y = float(matrix[0, 0]), float(matrix[1, 1])
+        # Raster bounds in the TIC grid's own indices, i.e. relative to the
+        # position the affine calls (0, 0).
+        rx0 = mapping.raster_min_x - self._alignment.first_raster_x
+        rx1 = mapping.raster_max_x - self._alignment.first_raster_x
+        ry0 = mapping.raster_min_y - self._alignment.first_raster_y
+        ry1 = mapping.raster_max_y - self._alignment.first_raster_y
+        x_lo = float(matrix[0, 2]) + rx0 * scale_x - abs(scale_x) / 2.0
+        x_hi = float(matrix[0, 2]) + rx1 * scale_x + abs(scale_x) / 2.0
+        y_lo = float(matrix[1, 2]) + ry0 * scale_y - abs(scale_y) / 2.0
+        y_hi = float(matrix[1, 2]) + ry1 * scale_y + abs(scale_y) / 2.0
+        box = (min(x_lo, x_hi), max(x_lo, x_hi), min(y_lo, y_hi), max(y_lo, y_hi))
+        return OpticalCrop.around(box, full_width, full_height, mapping=mapping)
 
     def compute_alignment(self) -> None:
         """Compute optical-MSI alignment from reader metadata.
@@ -1184,7 +1432,8 @@ class OpticalImages:
         # probe raises for a layout or sample format it cannot read; the
         # per-image guard in add_images turns that into the same
         # "skip with a warning" the whole-page decode used to give.
-        source = probe_optical_source(image_path)
+        probed = probe_optical_source(image_path)
+        source: AnyOpticalSource = probed
         n_channels, y_size, x_size = source.shape
 
         # Determine transform.  Two cases:
@@ -1202,7 +1451,11 @@ class OpticalImages:
         #    map both together.
         um_mode = not self._apply_alignment and self._tic_to_image is not None
         is_primary = self._is_primary_optical(image_path)
+        crop: Optional[OpticalCrop] = None
         if is_primary:
+            # The FULL dimensions, crop or not: the other images scale into
+            # the whole scan's pixel grid, which is the frame everything on
+            # the MSI side is stated in.
             self._primary_dims = (x_size, y_size)
             if um_mode:
                 transform = self._to_um_transform()
@@ -1212,6 +1465,27 @@ class OpticalImages:
             else:
                 transform = Identity()
                 logger.info(f"  Primary alignment image: {x_size}x{y_size}")
+            crop = self._crop_for_alignment_image(x_size, y_size)
+            if crop is not None:
+                # The crop's pixel (u, v) is the scan's (x0 + u, y0 + v):
+                # that translation goes FIRST, and then whatever carried the
+                # whole scan into the store's frame carries the crop. So
+                # the raster-to-image affine, the pixel polygons and the
+                # coordinate_systems attr keep describing the scan's grid.
+                shift = Translation([crop.x0, crop.y0], axes=("x", "y"))
+                transform = (
+                    shift
+                    if isinstance(transform, Identity)
+                    else SequenceTransform([shift, transform])
+                )
+                source = CroppedOpticalSource(probed, crop)
+                n_channels, y_size, x_size = source.shape
+                self._crop = crop
+                logger.info(
+                    f"  Cropped to region {crop.region_id} ('{crop.region_name}'): "
+                    f"{crop.width}x{crop.height} at ({crop.x0}, {crop.y0}) of "
+                    f"{crop.full_width}x{crop.full_height}"
+                )
         elif self._primary_dims is not None:
             # Non-primary: first scale to match primary, then if
             # we're in um-mode, chain through the same um affine.
@@ -1425,18 +1699,31 @@ class OpticalImages:
         elements, because per-element attributes do not survive the write:
         see :class:`StreamedOpticalImage`.
 
+        * **Whether it is a crop, and of what.** The alignment element of a
+          single-region conversion is a window of the whole-slide scan,
+          and its element carries the translation that puts the window
+          back. ``crop`` records the window's origin and size and the
+          scan's full size, in the scan's pixels, so the whole slide can
+          be located -- or a "show the whole slide" built -- without
+          re-reading the ``.d``. Absent on an element that is the whole
+          file.
+
         Returns:
             ``{"alignment_element": str | None, "elements": {name:
-            {"source_file": str}}}``, or ``None`` when the conversion put
-            no optical image in the store -- the section is omitted rather
-            than written empty, as every other optional section here is.
+            {"source_file": str, "crop"?: {...}}}}``, or ``None`` when the
+            conversion put no optical image in the store -- the section is
+            omitted rather than written empty, as every other optional
+            section here is.
         """
         if not self._sources:
             return None
+        elements: Dict[str, Dict[str, Any]] = {
+            name: {"source_file": source_file}
+            for name, source_file in self._sources.items()
+        }
+        if self._crop is not None and self._alignment_element in elements:
+            elements[self._alignment_element]["crop"] = self._crop.to_attr()
         return {
             "alignment_element": self._alignment_element,
-            "elements": {
-                name: {"source_file": source_file}
-                for name, source_file in self._sources.items()
-            },
+            "elements": elements,
         }
