@@ -15,7 +15,15 @@ Design constraints:
   exception it returns an :class:`MsiPreview` with
   ``readable=False`` and ``error`` set to the exception message,
   so the wizard can render an inline error in the per-sample card.
-- Target runtime: <500 ms for inputs up to ~50 GB.
+- Target runtime: <500 ms for inputs up to ~50 GB.  Met by reading each
+  format's header: a Bruker ``.d`` answers from ``analysis.tdf``, and an
+  imzML from the block before ``<run>`` -- 0.4 ms whether the document is
+  29 MB or 2.0 GiB.  One step is bounded by the file rather than by its
+  header, and is named here because it is the exception: an imzML's mass
+  range is recorded per spectrum, so reading it costs a pass over the
+  XML (53 ms for 29 MB, 3.9 s for 2.0 GiB).  That pass never opens the
+  ``.ibd``; before it existed the same answer cost 64 s of decoded
+  spectra (issue #360).
 """
 
 from __future__ import annotations
@@ -38,7 +46,14 @@ class MsiPreview:
 
     Attributes:
         mz_range: ``(min_mz, max_mz)`` of the source mass axis, in Da.
-            ``(0.0, 0.0)`` when ``readable=False``.
+            ``(0.0, 0.0)`` when ``readable=False``.  ``None`` when the
+            file states no range and finding one would mean decoding
+            spectra, which a preview will not do: an imzML written
+            without the observed-m/z cvParams (IONTOF SurfaceLab writes
+            none) records its extrema only in the ``.ibd``.  Deliberately
+            not filled in from the first spectrum -- measured 28 Da
+            narrow on a real file, which is a range a reader would
+            believe (issue #360).
         n_pixels: Number of spectra (pixels) the dataset actually holds --
             the positions that carry a measurement, not the extent of the
             raster, which is :attr:`grid_dims`.  ``0`` when
@@ -108,7 +123,7 @@ class MsiPreview:
             answers in frame-count order.
     """
 
-    mz_range: Tuple[float, float]
+    mz_range: Optional[Tuple[float, float]]
     n_pixels: Optional[int]
     grid_dims: Tuple[int, int]
     instrument_type: Optional[AxisType]
@@ -364,7 +379,11 @@ def preview_msi(path: Path) -> MsiPreview:
 
         dims = essential.dimensions
         return MsiPreview(
-            mz_range=(float(essential.mass_range[0]), float(essential.mass_range[1])),
+            mz_range=(
+                (float(essential.mass_range[0]), float(essential.mass_range[1]))
+                if getattr(essential, "mass_range_known", True)
+                else None
+            ),
             n_pixels=(
                 int(essential.n_spectra)
                 if getattr(essential, "n_spectra_counted", True)

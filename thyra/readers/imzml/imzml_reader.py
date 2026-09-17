@@ -302,6 +302,15 @@ class ImzMLReader(BaseMSIReader):
                 representation; it outranks the file's own ``MS:1000127`` /
                 ``MS:1000128``, and contradicting a declaration is logged as a
                 warning. Defaults to ``None`` (detect).
+
+                ``metadata_only`` answers metadata from the head of the
+                document instead of parsing the spectrum list and decoding
+                the ``.ibd`` -- 0.4 ms against 64 s on a 2.0 GiB file.
+                Passed by ``preview_msi``; see
+                :mod:`thyra.readers.imzml.header` for what the head can
+                and cannot say. A reader built this way still reads
+                spectra if asked, at the usual cost of building the
+                parser.
         """
         _refuse_retired_keywords(kwargs)
         _refuse_shifted_cache_coordinates(cache_coordinates)
@@ -317,6 +326,11 @@ class ImzMLReader(BaseMSIReader):
         self.max_mass_axis_length: Optional[int] = validate_max_mass_axis_length(
             kwargs.get("max_mass_axis_length", DEFAULT_MAX_MASS_AXIS_LENGTH)
         )
+        # Read from kwargs rather than declared as a parameter: this
+        # signature already carries a guard against a caller shifting
+        # arguments into ``cache_coordinates``, and a third positional
+        # slot is a third way to do it.
+        self._metadata_only: bool = bool(kwargs.get("metadata_only", False))
         # Validated here rather than at extraction time, so a bad value fails
         # while the caller is still looking at its own arguments.
         self.spectrum_type: Optional[str] = normalize_spectrum_type(
@@ -958,7 +972,22 @@ class ImzMLReader(BaseMSIReader):
         logger.info(f"Cached {n_coords:,} coordinates as numpy array")
 
     def _create_metadata_extractor(self) -> MetadataExtractor:
-        """Create ImzML metadata extractor."""
+        """Create ImzML metadata extractor.
+
+        With ``metadata_only``, the head of the document answers this
+        without the parser being built at all -- which is the difference
+        between 0.4 ms and 64 s on a 2.0 GiB file (issue #360). A file
+        that declares no raster geometry cannot be described from its
+        head, and falls back to the full parse rather than to an invented
+        grid; see
+        :func:`~thyra.metadata.extractors.imzml_header_extractor.head_shortfall`
+        for the three files that do.
+        """
+        if self._metadata_only:
+            extractor = self._header_metadata_extractor()
+            if extractor is not None:
+                return extractor
+
         self._ensure_parser_initialized()
 
         if not self.imzml_path:
@@ -966,6 +995,70 @@ class ImzMLReader(BaseMSIReader):
 
         return ImzMLMetadataExtractor(
             self.parser, self.imzml_path, spectrum_type=self.spectrum_type
+        )
+
+    def _header_metadata_extractor(self) -> Optional[MetadataExtractor]:
+        """The head-only extractor, or ``None`` if the head is not enough.
+
+        The ``.ibd`` is never opened, but it is checked twice: that it
+        exists, and that it is long enough to hold the last array the
+        document declares. Both are what a wizard card is for -- an
+        acquisition nobody can convert should say so before someone
+        tries, which is what ``preview_msi`` did when the full parse ran
+        the validator on the way past. The second check is one-sided; see
+        :func:`~thyra.readers.imzml.header.declared_binary_extent`.
+        """
+        # Imported here, not at module scope: the header extractor reaches
+        # back into this package, and this module is what imports it.
+        from ...metadata.extractors.imzml_header_extractor import (
+            ImzMLHeaderExtractor,
+            head_shortfall,
+        )
+        from .header import declared_binary_extent, read_header
+
+        if self.filepath is None:
+            raise ValueError("No file path provided for parser initialization")
+
+        imzml_path = Path(self.filepath)
+        ibd_path = imzml_path.with_suffix(".ibd")
+        if not ibd_path.exists():
+            raise ConversionRefused(
+                f"Corresponding .ibd file not found for {imzml_path}"
+            )
+
+        ibd_size = ibd_path.stat().st_size
+        extent = declared_binary_extent(imzml_path)
+        if extent is not None and extent.end_byte > ibd_size:
+            spectrum = (
+                f"spectrum {extent.spectrum_index}"
+                if extent.spectrum_index is not None
+                else "the last spectrum"
+            )
+            raise ConversionRefused(
+                f"imzML {spectrum} declares an array ending at byte "
+                f"{extent.end_byte:,}, but {ibd_path.name} is "
+                f"{ibd_size:,} bytes. The .ibd is truncated or its offsets "
+                f"are wrong -- pyimzml would return empty arrays for those "
+                f"spectra without raising, and they would simply be missing "
+                f"from the output."
+            )
+
+        header = read_header(imzml_path)
+        shortfall = head_shortfall(header)
+        if shortfall is not None:
+            logger.info(
+                "%s: %s, so its metadata is read the full way instead.",
+                imzml_path.name,
+                shortfall,
+            )
+            return None
+
+        # Recorded so the rest of the reader agrees with what was read,
+        # without the parser having been built.
+        self.imzml_path = imzml_path
+        self.ibd_path = ibd_path
+        return ImzMLHeaderExtractor(
+            header, imzml_path, spectrum_type=self.spectrum_type
         )
 
     @property

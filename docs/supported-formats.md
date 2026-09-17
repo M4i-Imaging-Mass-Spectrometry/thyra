@@ -104,6 +104,22 @@ slide -- keeps the base of 1 and does not move. z is separate and rebases on
 the smallest plane present, because z has no origin to preserve. Whatever was
 subtracted is recorded in `coordinate_systems.global.coordinate_offsets_px`.
 
+**Previewing reads the head, not the document.** An imzML states its raster,
+its pitch, its instrument and its spectrum count in the block before `<run>`,
+and `preview_msi` answers from there -- 0.4 ms whether the document is 29 MB or
+2.0 GiB. It used to parse the whole spectrum list for the offsets and then
+decode every m/z array out of the `.ibd` for the mass range: 64 s on a 2.0 GiB
+export, for numbers the head already holds. The mass range is the one thing it
+does not hold, and it is read from the per-spectrum `MS:1000528` / `MS:1000527`
+terms in the XML -- the same extrema, to the six decimals the file records,
+without opening the binary. A writer that omits those terms, as IONTOF
+SurfaceLab does, leaves the range genuinely unknown and a preview reports it as
+`None` rather than guessing from one spectrum. Two files still take the old
+route, because their head cannot settle the raster: one that declares no
+`IMS:1000042` / `IMS:1000043`, and one numbered from 0, where that declaration
+is one short of the acquisition. A conversion is unaffected -- it reads every
+coordinate as before.
+
 **Ion mobility.** imzML defines two binary arrays, but TIMSCONVERT and
 TIMSImaging add a third for mobility, declared through a param group bound to
 `MS:1003006` (mean inverse reduced ion mobility array, unit `MS:1002814`).

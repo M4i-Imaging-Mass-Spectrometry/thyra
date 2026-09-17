@@ -10,10 +10,13 @@ acquisition without decoding it.
 
 The split is a price, not a promise about cost: "essential" is cheap for a
 format whose header states the counts and expensive for one that does not.
-imzML scans every spectrum in processed mode to find the true mass range,
+imzML scanned every spectrum in processed mode to find the true mass range,
 and PHI has to aggregate the whole ion-event stream to learn which pixels
 fired at all -- which is why both offer a way to skip the counting and say
-so in the result rather than guessing (``n_spectra_counted``, issue #240).
+so in the result rather than guessing (``n_spectra_counted``, issue #240;
+``mass_range_known``, issue #360).  On imzML that way is a whole second
+extractor, :class:`ImzMLHeaderExtractor`, because the expensive half is
+the spectrum list itself and not one query within it.
 
 Both results are cached on the instance, so the expensive phase runs once
 per reader. :meth:`MetadataExtractor.clear_cache` exists for the case

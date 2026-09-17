@@ -529,22 +529,53 @@ class TestConverterCreationDoesNotSwallowRefusals:
 
 
 class TestPreviewReportsARefusedFile:
-    """``preview_msi`` drives the Ousia Import Wizard's per-sample card."""
+    """``preview_msi`` drives the Ousia Import Wizard's per-sample card.
+
+    The refusal survives the metadata-only path of issue #360, but not the
+    message that used to come with it. A preview no longer parses the
+    document, so it no longer holds every spectrum's offsets: it reads the
+    last array the file declares out of the tail of the XML and compares
+    that one end byte against the ``.ibd``. So a truncated binary is still
+    refused, and still before anyone converts it, but the spectrum named is
+    the last one rather than the first one affected -- and the byte named is
+    what the file claims, not where it was cut.
+
+    The check is one-sided on purpose and the second test below is what
+    says so: it can miss a bad file whose offsets are not in document
+    order, and it can never refuse a good one.
+    """
 
     def test_refused_file_is_unreadable_with_the_validator_message(self, temp_dir):
         path = write_imzml(temp_dir, n_spectra=6)
         cut = spectrum_end_byte(path, 2)
+        intact_end = path.with_suffix(".ibd").stat().st_size
         with open(path.with_suffix(".ibd"), "r+b") as handle:
             handle.truncate(cut)
 
         preview = preview_msi(path)
         assert preview.readable is False
         assert preview.error is not None
-        assert "spectrum 3" in preview.error
+        # The last spectrum, whose array is the one read out of the tail.
+        assert "spectrum 6" in preview.error
+        assert f"{intact_end:,}" in preview.error
         assert f"{cut:,}" in preview.error
         # The card still renders; it just renders the error.
         assert preview.n_pixels == 0
         assert preview.grid_dims == (0, 0)
+
+    def test_a_file_whose_binary_is_whole_is_not_refused(self, temp_dir):
+        """Guard the guard: the tail check fires on a shortfall, not on a tail.
+
+        Without this, a check that refused every file would pass the test
+        above for the wrong reason -- and it would refuse every acquisition
+        in the wizard.
+        """
+        path = write_imzml(temp_dir, n_spectra=6)
+
+        preview = preview_msi(path)
+
+        assert preview.readable is True, preview.error
+        assert preview.error is None
 
     def test_clean_file_is_still_readable(self, temp_dir):
         path = write_imzml(temp_dir, n_spectra=6)

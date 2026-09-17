@@ -630,12 +630,21 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             ),
             "ibd_file": str(self.imzml_path.with_suffix(".ibd")),
             "uuid": self._extract_uuid(),
-            "spectrum_count": len(self.parser.coordinates),
+            "spectrum_count": self._spectrum_count(),
             "scan_settings": {},
             "ion_mobility": self._extract_ion_mobility(),
         }
 
         return format_specific
+
+    def _spectrum_count(self) -> int:
+        """How many spectra the file holds, counted from the coordinates.
+
+        Separate from its one call site so the metadata-only extractor can
+        take the same number off ``<spectrumList count>`` without the
+        coordinate list being built at all (issue #360).
+        """
+        return len(self.parser.coordinates)
 
     def _extract_ion_mobility(self) -> Dict[str, Any]:
         """Whether the file declares a third, ion mobility, binary array.

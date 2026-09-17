@@ -105,7 +105,13 @@ Two properties make it usable directly from UI code:
   `readable=False` and `error` set to the message. Check `readable` before
   reading the numeric fields; they hold zeroes when it is `False`.
 - **It is fast.** The design budget is under 500 ms for inputs up to about
-  50 GB, because it never touches the spectra.
+  50 GB, because it never touches the spectra. Each format answers from its
+  header: a Bruker `.d` from `analysis.tdf`, an imzML from the block before
+  `<run>` -- 0.4 ms whether that document is 29 MB or 2.0 GiB. One step is
+  bounded by the file rather than by its header, and it is worth knowing
+  about: an imzML records its mass range per spectrum, so reading it costs a
+  pass over the XML (3.9 s on a 2.0 GiB document, 53 ms on a 29 MB one). That
+  pass never opens the `.ibd`.
 
 ```python
 from pathlib import Path
@@ -131,6 +137,14 @@ p = preview_msi(Path("no/such/file.imzML"))
 print(p.readable, p.error)
 # False Path does not exist: no\such\file.imzML
 ```
+
+Two fields can come back as `None` rather than a number, and both mean "the
+file does not say, and a preview will not decode spectra to find out":
+`n_pixels` for a PHI acquisition, whose occupied pixels are a property of the
+ion-event stream; and `mz_range` for an imzML written without the observed-m/z
+cvParams `MS:1000528` / `MS:1000527`, which IONTOF SurfaceLab omits. Neither is
+filled in with a plausible substitute -- taking an imzML's range from its first
+spectrum was measured 28 Da narrow on a real file.
 
 `instrument_type` is the `AxisType` the resampling decision tree would pick for
 this input, so a caller can show the default before the user commits to it.
