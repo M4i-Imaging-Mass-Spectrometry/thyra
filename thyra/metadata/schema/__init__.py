@@ -31,7 +31,7 @@ rigorous here". Every one of the fourteen is documented in
 consumer reads to know what it may rely on.
 """
 
-from .builder import build_msi_metadata
+from .builder import build_msi_metadata, forget_resolved_table
 from .metaspace import to_metaspace
 from .models import (
     MSI_METADATA_SCHEMA_VERSION,
@@ -83,6 +83,7 @@ __all__ = [
     "build_msi_metadata",
     "check_store_var_conventions",
     "deep_merge",
+    "forget_resolved_table",
     "read_msi_metadata_blocks",
     "to_metaspace",
     "validate_document",

@@ -45,6 +45,7 @@ from ...metadata.schema import (
     ProcessingStep,
     SoftwareRef,
     build_msi_metadata,
+    forget_resolved_table,
 )
 from ...metadata.types import ComprehensiveMetadata, EssentialMetadata
 from ...resampling import ResamplingDecisionTree, ResamplingMethod
@@ -2051,10 +2052,9 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         it was. The summed table's ``uns`` is built before the siblings
         are, and it carries their keys, so a failure swallowed here leaves
         a store whose summed table points at an element nobody wrote. A
-        failure therefore propagates now (issue #280). The builders can
-        still decline by returning ``None`` -- a decision, not a failure --
-        and that path leaves the same dangling key; it is a separate
-        defect from this one and is tracked as issue #343.
+        failure therefore propagates now (issue #280). A builder may still
+        decline by returning ``None`` -- a decision, not a failure -- and
+        the name is taken back out when it does (issue #343).
         """
         if self._common_mass_axis is None:
             return
@@ -2066,11 +2066,15 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         sibling_uns = self.build_uns_metadata()
         sibling_uns.pop("mobility_heatmap", None)
         summed = state.tables.get(table_key)
+        declined: List[str] = []
         if self._mobility_table_key is not None:
             table = self._build_mobility_sibling(
                 obs, table_key, region_key, dict(sibling_uns), z_value
             )
-            if table is not None:
+            if table is None:
+                declined.append("ion_mobility")
+                self._mobility_table_key = None
+            else:
                 if self._mobility_grid is not None:
                     self._record_mobility_marginal(table, summed, table_key)
                 state.tables[self._mobility_table_key] = table
@@ -2078,9 +2082,59 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             table = self._build_msms_sibling(
                 obs, table_key, region_key, dict(sibling_uns), z_value
             )
-            if table is not None:
+            if table is None:
+                declined.append("fragmentation")
+                self._msms_table_key = None
+            else:
                 self._record_demultiplexed_current(table, summed, table_key)
                 state.tables[self._msms_table_key] = table
+        if declined:
+            self._unname_declined_siblings(state, table_key, declined)
+
+    #: The ``uns`` block outside the versioned schema that names each
+    #: sibling, keyed by the ``ms_analysis`` section that names it inside.
+    _SIBLING_UNS_BLOCK = {
+        "ion_mobility": "mobility_axis",
+        "fragmentation": "msms_schedule",
+    }
+
+    def _unname_declined_siblings(
+        self, state: ConversionState, table_key: str, declined: List[str]
+    ) -> None:
+        """Take a declined sibling's key back out of every table that names it.
+
+        The alternative was to decide before naming -- hoist whatever makes
+        a builder decline up into :meth:`_plan_mobility_table` and
+        :meth:`_plan_msms_table`, so a table that will not be built is never
+        named. That is the cleaner shape and it is not the one taken: the
+        two builders decline at eight separate points across
+        ``mobility_table`` and ``msms_table``, several of them knowable
+        only once the pass has run (a feature listing that comes back
+        empty, a var count over the ceiling), and a ninth added later
+        would re-open the defect silently. Reacting to ``None`` in one
+        place closes all of them, including the ones nobody has written
+        yet.
+
+        Every table written for this slice is cleaned, not just the summed
+        one: ``sibling_uns`` in :meth:`_attach_sibling_tables` is taken
+        from :meth:`build_uns_metadata` *before* either builder runs, so a
+        surviving sibling carries the same stale pointer. A mobility table
+        that declines while the MS/MS table is written would otherwise
+        leave the MS/MS table naming it too.
+        """
+        for key in (table_key, self._mobility_table_key, self._msms_table_key):
+            if key is None:
+                continue
+            uns = getattr(state.tables.get(key), "uns", None)
+            if uns is None:
+                continue
+            for section in declined:
+                block = uns.get(self._SIBLING_UNS_BLOCK[section])
+                if isinstance(block, dict):
+                    block.pop("resolved_table", None)
+                meta = uns.get(MSI_METADATA_UNS_KEY)
+                if isinstance(meta, dict):
+                    forget_resolved_table(meta, section)
 
     def _build_mobility_sibling(
         self,

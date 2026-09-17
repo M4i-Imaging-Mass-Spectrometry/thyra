@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from thyra.metadata.schema import build_msi_metadata
+from thyra.metadata.schema import build_msi_metadata, forget_resolved_table
 from thyra.metadata.schema.models import (
     MSI_METADATA_SCHEMA_VERSION,
     IonMobility,
@@ -174,3 +174,86 @@ class TestBuilder:
         model, issues = validate_document(as_uns)
         assert model is not None
         assert not [issue for issue in issues if issue.severity == "error"]
+
+
+class TestForgetResolvedTable:
+    """Unnaming a sibling the converter named but did not write (issue #343).
+
+    The converter names a sibling table in this block *before* the builder
+    runs, so that the two agree; a builder that declines leaves the name
+    pointing at an element nobody wrote. The path into the serialised
+    block lives beside the builder that wrote it, and so does its test.
+    """
+
+    def _serialised(self, **kwargs):
+        return build_msi_metadata(
+            _comprehensive({"ion_mobility": TDF_REPORT}),
+            pixel_size_um=(20.0, 20.0),
+            source_format="bruker",
+            **kwargs,
+        ).to_uns_dict()
+
+    def test_the_name_and_the_grid_both_go(self):
+        # The grid describes the binning of the table being unnamed, so
+        # keeping it would say a table was binned onto a grid nobody wrote.
+        uns = self._serialised(
+            mobility_resolved_table="tims_z0_mobility",
+            mobility_grid={
+                "law": "linear",
+                "lower": 1.0,
+                "upper": 1.29,
+                "n_channels": 256,
+            },
+        )
+        assert uns["ms_analysis"]["ion_mobility"]["resolved_table"]
+        assert uns["ms_analysis"]["ion_mobility"]["grid"]
+
+        forget_resolved_table(uns, "ion_mobility")
+
+        mobility = uns["ms_analysis"]["ion_mobility"]
+        assert "resolved_table" not in mobility
+        assert "grid" not in mobility
+
+    def test_the_acquisition_is_left_alone(self):
+        """``present`` and the axis describe the source, not the sibling."""
+        uns = self._serialised(mobility_resolved_table="tims_z0_mobility")
+
+        forget_resolved_table(uns, "ion_mobility")
+
+        mobility = uns["ms_analysis"]["ion_mobility"]
+        assert mobility["present"] is True
+        assert mobility["num_scans"] == 240
+
+    def test_what_is_left_still_validates(self):
+        """A block edited after serialisation is still a schema document."""
+        uns = self._serialised(
+            mobility_resolved_table="tims_z0_mobility",
+            mobility_grid={
+                "law": "linear",
+                "lower": 1.0,
+                "upper": 1.29,
+                "n_channels": 256,
+            },
+        )
+
+        forget_resolved_table(uns, "ion_mobility")
+
+        model, issues = validate_document(uns)
+        assert model is not None
+        assert model.ms_analysis.ion_mobility.resolved_table is None
+        assert [i for i in issues if i.severity == "error"] == []
+
+    def test_a_block_that_names_nothing_is_untouched(self):
+        uns = self._serialised()
+        before = dict(uns["ms_analysis"]["ion_mobility"])
+
+        forget_resolved_table(uns, "ion_mobility")
+
+        assert uns["ms_analysis"]["ion_mobility"] == before
+
+    def test_a_document_without_the_section_is_not_invented(self):
+        uns = {"ms_analysis": {}}
+
+        forget_resolved_table(uns, "fragmentation")
+
+        assert uns == {"ms_analysis": {}}
