@@ -143,7 +143,29 @@ dependencies = [
     #     compressed chunks per shard against 142 on 3.1.6, plus the shard index that
     #     implies. A 3.1.5 resolve buys that silently, and the shard-level assertion
     #     cannot see it; _chunking.MIN_TABLE_CHUNK_BYTES is what catches it.
-    "zarr>=3.1.6, <3.2",              # tested 3.1.6
+    #
+    # Ceiling moved <3.2 -> <3.5 on 2026-09-17, deliberately and measured. 3.2, 3.3
+    # and 3.4 were all outside the old bound; 3.4.0 is what a resolve now takes.
+    # 3217 unit tests pass on it (full tests/unit on a clean pip resolve), and
+    # `uv lock --upgrade-package zarr` moves exactly two lines -- zarr 3.1.6 -> 3.4.0
+    # and msgspec added, which 3.4.0 made a required dependency. Nothing else in the
+    # spatialdata / ome-zarr / dask cluster moves, so despite sitting in that cluster
+    # this one was not the stack-wide bump it was expected to be.
+    #
+    # Two things it buys, both previously carried as known live hazards:
+    #   - zarr-python#4305 ships, so the rank-0 auto-shard infinite loop is fixed AT
+    #     the zarr layer. Safety for it used to rest on two anndata behaviours that
+    #     were never a contract.
+    #   - zarr-python#4358 ships, so zarr retries the Windows metadata rename itself
+    #     and utils/zarr_atomic_write.py stops patching (its guard detects the
+    #     upstream helper). Retiring that module outright is issue #341, which this
+    #     ceiling was the remaining blocker for.
+    #
+    # Watch when raising further: tifffile must stay at or above its own floor below.
+    # 3.4.0 renamed `RegularChunkGrid` to `RegularChunkGridMetadata`, and a tifffile
+    # below that floor fails the optical path with a misleading
+    # "zarr 3.4.0 < 3 is not supported" that names the wrong package entirely.
+    "zarr>=3.1.6, <3.5",              # tested 3.4.0
     "imagecodecs>=2024.1.1",  # For reading compressed TIFF optical images
     # Floor is 0.13.2, not 0.13.0. anndata 0.13.0 imports
     # `typing_extensions.sentinel` (needs typing-extensions >= 4.16) but declares
