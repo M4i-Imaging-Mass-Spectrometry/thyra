@@ -11,7 +11,10 @@ dictionaries.
 **A field here is a promise that survives to disk**, which is what makes
 the absences deliberate. ``n_spectra_counted`` exists because 0 spectra
 and "not counted" are different facts and a store that conflates them
-misreports a PHI preview (issue #240). ``pixel_size`` is the in-plane
+misreports a PHI preview (issue #240); ``mass_range_known`` is the same
+distinction for a range, and exists because an imzML that records no
+observed-m/z cvParams leaves one genuinely unread (issue #360).
+``pixel_size`` is the in-plane
 raster pitch and says nothing about z, which is why ``z_spacing_um`` is
 separate and usually ``None``. ``coordinate_offsets`` records what
 rebasing the file's coordinates subtracted, so a store can say where its
@@ -53,6 +56,15 @@ class EssentialMetadata:
             that display a count must say so rather than print the zero.
         total_peaks: Total number of peaks across all spectra (used for
             sparse matrix pre-allocation).
+        mass_range_known: Whether ``mass_range`` was read at all. False
+            only on the metadata-only path of a file that records no
+            range of its own: an imzML written without the observed-m/z
+            cvParams (``MS:1000528``/``MS:1000527``) states its extrema
+            nowhere but in the binary, and a preview does not decode
+            spectra to find them (issue #360). When False, ``mass_range``
+            is ``(0.0, 0.0)`` meaning "not read", which is not a range
+            any acquisition has -- callers must say "unknown" rather
+            than print it.
         source_path: Absolute path to the source data.
         coordinate_offsets: Raw coordinate offsets ``(x, y, z)`` used to
             normalise coordinates to 0-based indexing.
@@ -81,6 +93,7 @@ class EssentialMetadata:
     spectrum_type: Optional[str] = None
     z_spacing_um: Optional[float] = None
     n_spectra_counted: bool = True
+    mass_range_known: bool = True
 
     @property
     def has_pixel_size(self) -> bool:
