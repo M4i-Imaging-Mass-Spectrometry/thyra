@@ -34,7 +34,7 @@ from thyra.preview import preview_msi
 from thyra.readers.imzml import imzml_reader as imzml_reader_module
 from thyra.readers.imzml.imzml_reader import ImzMLReader
 
-from .test_imzml_parser_state_validation import write_imzml
+from .test_imzml_parser_state_validation import empty_the_spectrum_list, write_imzml
 
 _OBSERVED_MZ_CVPARAM = re.compile(
     r'\s*<cvParam[^>]*accession="MS:100052[78]"[^>]*/>\s*'
@@ -73,26 +73,6 @@ def write_zero_based_imzml(directory: Path, n_spectra: int = 6) -> Path:
     with ImzMLWriter(str(path), mode="processed") as writer:
         for i in range(n_spectra):
             writer.addSpectrum(mzs, intensities, (i % 3, i // 3, 1))
-    return path
-
-
-def empty_the_spectrum_list(path: Path) -> Path:
-    """Leave the head intact and take every spectrum out of the document.
-
-    ``ImzMLWriter`` cannot produce this directly -- it sizes the raster
-    with ``max()`` over the coordinates and raises on an empty one -- but
-    the shape is what matters: a file whose head is complete and whose
-    spectrum list declares nothing.
-    """
-    text = path.read_text(encoding="utf-8")
-    emptied, n = re.subn(
-        r"<spectrumList\b[^>]*>.*</spectrumList>",
-        '<spectrumList count="0" defaultDataProcessingRef="export">' "</spectrumList>",
-        text,
-        flags=re.DOTALL,
-    )
-    assert n == 1, "fixture had no spectrum list to empty"
-    path.write_text(emptied, encoding="utf-8")
     return path
 
 
@@ -246,17 +226,22 @@ class TestWhatTheHeadWillNotGuess:
 
         The head could describe this file -- it declares a raster and a
         pitch -- and the card would read "a raster this size, zero pixels
-        in it", which is a description of something nobody can convert.
-        The coordinate path already refuses it, so the head declines and
-        that refusal stands, whatever its wording (today's comes out of
-        numpy rather than out of a message Thyra wrote).
+        in it", which is a description of something nobody can convert. So
+        the head declines and the coordinate path's refusal stands.
+
+        The refusal is now the reader's own, raised off the document before
+        the parser is built, which is why the fallback this file takes costs
+        no parse at all. What says the head declined is the message: had it
+        not, the card would read as a perfectly readable 3 x 2 raster with
+        nothing in it.
         """
-        path = empty_the_spectrum_list(write_imzml(temp_dir, n_spectra=6))
+        path = empty_the_spectrum_list(write_imzml(temp_dir, n_spectra=6), declared=0)
 
         preview = preview_msi(path)
 
         assert preview.readable is False
-        assert len(parser_builds) == 1, "the empty file skipped the parse"
+        assert "declares no spectra" in (preview.error or "")
+        assert parser_builds == [], "the fallback no longer needs a parse"
 
     def test_a_missing_ibd_is_still_refused(self, temp_dir):
         """A preview that called this readable would invite a refusal."""

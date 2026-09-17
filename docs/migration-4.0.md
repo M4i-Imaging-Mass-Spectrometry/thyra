@@ -4,15 +4,17 @@ This page covers upgrading from **3.23.3 to 4.0.0**. For a pin older than
 3.23.3, read [If you are coming from further back](#if-you-are-coming-from-further-back-than-3233)
 at the bottom first: it is the part most likely to catch you out.
 
-4.0.0 is a major release because five changes break a published API. **None of
+4.0.0 is a major release because seven changes break a published API. **None of
 them changes the tables a conversion writes.** Convert the same file with
 3.23.3 and with 4.0.0 and the matrices, the `var` and the `obs` come out the
-same; two keys leave the metadata, and one failure mode that used to be a log
-line is now a failure. Everything else in the release is a fix, a docs change
-or a performance change.
+same; two keys leave the metadata, one failure mode that used to be a log line
+is now a failure, and one that used to be a numpy error now names the file.
+Everything else in the release is a fix, a docs change or a performance change.
 
-If you only call `thyra convert` from the command line, nothing here applies:
-no flag was removed or renamed in this release.
+If you only call `thyra convert` from the command line, almost nothing here
+applies: no flag was removed or renamed in this release. Item 7 is the one you
+may notice, and only on a file that never converted — what it prints is now a
+sentence rather than a traceback.
 
 ## What changed, at a glance
 
@@ -23,6 +25,8 @@ no flag was removed or renamed in this release.
 | 3 | `batch_size` is gone | pass `batch_size` to any reader |
 | 4 | `EssentialMetadata` loses two fields, and two keys leave the store | implement the reader ABC, or read `estimated_memory_gb` from a store |
 | 5 | `convert()`'s stages take a typed state | subclass `BaseMSIConverter` or call its stage methods |
+| 6 | A preview's mass range can be unknown | read `MsiPreview.mz_range`, or build an `EssentialMetadata` yourself |
+| 7 | An imzML that declares no spectra is refused by name | catch `IndexError` around an imzML read |
 
 Only item 4 changes what is written to disk.
 
@@ -165,6 +169,58 @@ access change. Two notes:
   for everyone.
 - `mode` (`"3d_volume"` / `"2d_slices"`) is dropped. It restated
   `self.handle_3d`, which every stage already has — read that instead.
+
+## 6. A preview's mass range can be unknown
+
+**Affects:** anyone reading `MsiPreview.mz_range`, and anyone building an
+`EssentialMetadata` by hand.
+
+`preview_msi` no longer parses an imzML's spectrum list or decodes its `.ibd`;
+it answers from the head of the document instead (issue #360, with the
+measurements in `docs/supported-formats.md`). The one thing a head cannot
+always state is the mass range: an imzML written without the observed-m/z
+cvParams (`MS:1000528` / `MS:1000527`) records its extrema nowhere but in the
+binary, and IONTOF SurfaceLab writes none.
+
+So `MsiPreview.mz_range` is `Optional[Tuple[float, float]]`, and `None` means
+"not read" rather than "empty". It is deliberately not filled in from the first
+spectrum: that was measured 28 Da narrow on a real file — a range narrow enough
+to be believed and wrong enough to mislead.
+
+`EssentialMetadata` gains `mass_range_known`, which is the distinction
+`n_spectra_counted` already draws for a count (issue #240). When it is False,
+`mass_range` is `(0.0, 0.0)` meaning "not read", which is not a range any
+acquisition has.
+
+**This one does not change what is stored**, despite adding a field to
+`EssentialMetadata`. `uns["essential_metadata"]` is written from an explicit
+five-key dict rather than from the dataclass, so a new field does not reach a
+store.
+
+**What to do:** handle `None` where you format `mz_range`, as you already have
+to for `n_pixels`. A custom extractor needs no change — `mass_range_known`
+defaults to True, which is what every path that reads a range for real should
+report.
+
+## 7. An imzML that declares no spectra is refused by name
+
+**Affects:** anyone catching `IndexError` around an imzML read.
+
+An imzML whose `<spectrumList>` holds no `<spectrum>` elements used to fail
+with `IndexError: too many indices for array: array is 1-dimensional, but 2
+were indexed`, logged as "Failed to initialize ImzML parser". That came out of
+pyimzml's constructor, which ends by taking the z extent off the coordinates it
+collected, and an empty coordinate list makes that a 1-D array. It named
+neither the file nor the reason, and a preview reported it as the whole account
+of the file.
+
+Such a file is now refused before the parser is built, with a `ConversionRefused`
+naming the file, the term and what is missing.
+
+**What to do:** nothing, unless you were catching `IndexError` specifically.
+`ConversionRefused` subclasses `ValueError`, so `except ConversionRefused`,
+`except ValueError` and `except Exception` all keep working and gain the
+message. `IndexError` was never an outcome Thyra documented or intended.
 
 ---
 

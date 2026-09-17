@@ -3,13 +3,14 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Generator, List, NamedTuple, Optional, Tuple, Union, cast
 
-# The stdlib XML parser, used to re-read one element of a document pyimzml has
-# already parsed with the same stdlib parser -- see
-# _first_spectrum_array_lengths. Thyra does depend on defusedxml, hard, and the
-# Bruker `.mis` parser imports it unconditionally; it is deliberately not used
-# here, because it would not change what has already been read. pyimzml parses
-# the whole document with xml.etree first, this re-read only revisits one
-# element of what it accepted, and defusedxml cannot retract that.
+# The stdlib XML parser, used to read part of a document pyimzml parses in full
+# with the same stdlib parser -- see _spectrum_list_head, which runs just before
+# that parse, and _first_spectrum_array_lengths, which runs just after it. Thyra
+# does depend on defusedxml, hard, and the Bruker `.mis` parser imports it
+# unconditionally; it is deliberately not used here, because it would not change
+# what is exposed: these two only read documents the reader is already committed
+# to handing to pyimzml's own undefended xml.etree parse, and neither reads
+# further into one than that parse does.
 from xml.etree import ElementTree  # nosec B405
 
 import numpy as np
@@ -180,6 +181,65 @@ def _first_spectrum_array_lengths(
             )
         return arrays
     return {}
+
+
+class _SpectrumListHead(NamedTuple):
+    """What a document's ``<spectrumList>`` says before its first child."""
+
+    declared: Optional[int]
+    """The ``count`` attribute, or None if there is no list or no count."""
+
+    has_spectra: bool
+    """Whether a ``<spectrum>`` element follows the opening tag."""
+
+
+def _spectrum_list_head(imzml_path: Path) -> Optional[_SpectrumListHead]:
+    """Read the ``<spectrumList>`` opening tag and whether a spectrum follows.
+
+    The ``count`` attribute is read but not believed: it is what the document
+    claims, while ``has_spectra`` is what it holds, and a file can get those
+    two wrong independently. Only the second decides anything.
+
+    Stops at the first ``<spectrum>``, so a well-formed file costs its header
+    and nothing else -- 0.26 ms on xenium's 1.97 GiB, against 64 s for the
+    parse it guards. A file with no spectra is scanned to ``</spectrumList>``,
+    which for such a file is the end of a small document.
+
+    Args:
+        imzml_path: Path to the imzML file.
+
+    Returns:
+        What the spectrum list declares and whether it holds anything, or None
+        if the document could not be read this way -- in which case say
+        nothing and let pyimzml report the file in its own words.
+    """
+    declared: Optional[int] = None
+    try:
+        with open(imzml_path, "rb") as handle:
+            # Both events: the count is on the opening tag, and the closing tag
+            # is what says a list with no children has ended rather than not
+            # started yet.
+            events = ElementTree.iterparse(  # nosec B314
+                handle, events=("start", "end")
+            )
+            for event, elem in events:
+                if elem.tag == _MZML_NS + "spectrum" and event == "start":
+                    return _SpectrumListHead(declared, True)
+                if elem.tag == _MZML_NS + "spectrumList":
+                    if event == "start":
+                        try:
+                            declared = int(elem.attrib["count"])
+                        except (KeyError, ValueError):
+                            declared = None
+                    else:
+                        return _SpectrumListHead(declared, False)
+    except (ElementTree.ParseError, OSError) as e:
+        # A file this cannot read is pyimzml's to condemn, not this function's.
+        logger.debug(f"Could not read the <spectrumList> of {imzml_path}: {e}")
+        return None
+    # No <spectrumList> at all. Still no spectra, and still worth naming: the
+    # alternative is the same IndexError from the same empty coordinate list.
+    return _SpectrumListHead(declared, False)
 
 
 def _read_spectrum_mzs(parser: Any, idx: int) -> Optional[NDArray[Any]]:
@@ -418,8 +478,9 @@ class ImzMLReader(BaseMSIReader):
         Raises:
             ConversionRefused: If ``batch_size`` is passed, if
                 ``cache_coordinates`` is given a value its declared type
-                does not allow, or if the corresponding .ibd file is not found or
-                metadata parsing fails
+                does not allow, if the corresponding .ibd file is not found,
+                if the document declares no spectra, or if metadata parsing
+                fails
             Exception: If parser initialization fails
         """
         if isinstance(imzml_path, str):
@@ -432,6 +493,8 @@ class ImzMLReader(BaseMSIReader):
             raise ConversionRefused(
                 f"Corresponding .ibd file not found for {imzml_path}"
             )
+
+        self._refuse_a_document_with_no_spectra(imzml_path)
 
         # Open the .ibd file for reading
         self.ibd_file = open(self.ibd_path, mode="rb")
@@ -526,6 +589,48 @@ class ImzMLReader(BaseMSIReader):
         except Exception:
             self.close()
             raise
+
+    def _refuse_a_document_with_no_spectra(self, imzml_path: Path) -> None:
+        """Refuse a file whose ``<spectrumList>`` holds nothing, by name.
+
+        The one check here that cannot wait for :meth:`_validate_parser_state`,
+        because the parser it validates is never built. ``ImzMLParser.__init__``
+        finishes by taking the z extent off the coordinates it collected --
+        ``np.asarray(self.coordinates)[:, 2].max()`` -- and an empty list
+        becomes a 1-D array, so the constructor dies with ``IndexError: too
+        many indices for array``. That names neither the file nor the reason,
+        and it is what a preview used to report as its whole explanation.
+
+        ``ImzMLMetadataExtractor._extract_essential_impl`` already refuses the
+        same file with "No coordinates found in ImzML file"; this is the same
+        fact, said earlier and said with the file in it.
+
+        Args:
+            imzml_path: Path to the imzML file about to be parsed.
+
+        Raises:
+            ConversionRefused: If the document holds no ``<spectrum>``.
+        """
+        head = _spectrum_list_head(imzml_path)
+        if head is None or head.has_spectra:
+            return
+
+        # Only when the two disagree. A list that declares 0 and holds 0 is
+        # consistent, and saying so twice reads like two separate faults.
+        claimed = (
+            f", though its count attribute says {head.declared:,}"
+            if head.declared
+            else ""
+        )
+        raise ConversionRefused(
+            f"imzML {imzml_path.name} declares no spectra: its <spectrumList> "
+            f"holds no <spectrum> elements{claimed}. The file describes no "
+            f"pixels, so there is nothing to convert -- an acquisition cut "
+            f"short, or an export that wrote its header and stopped. pyimzml "
+            f"would take the z extent off the coordinates it collected and "
+            f"index that empty list, failing with a numpy IndexError that "
+            f"names neither the file nor the reason."
+        )
 
     def _validate_parser_state(self) -> None:
         """Check pyimzml's parser state against the .ibd before anything reads.

@@ -18,7 +18,7 @@ import re
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, List
+from typing import Iterator, List, Optional
 
 import numpy as np
 import pytest
@@ -174,6 +174,61 @@ def spectrum_end_byte(imzml_path: Path, spectrum: int) -> int:
         )
     finally:
         parser.m.close()
+
+
+def set_spectrum_list_count(imzml_path: Path, value: int) -> Path:
+    """Rewrite the ``<spectrumList>`` count attribute and nothing else.
+
+    Args:
+        imzml_path: The file to edit in place.
+        value: The count to declare.
+
+    Returns:
+        The same path, for chaining onto ``write_imzml``.
+    """
+    text = imzml_path.read_text(encoding="utf-8")
+    edited, n = re.subn(
+        r'(<spectrumList\b[^>]*?count=")[^"]*(")',
+        rf"\g<1>{value}\g<2>",
+        text,
+    )
+    assert n == 1, f"expected one spectrumList count, rewrote {n}"
+    imzml_path.write_text(edited, encoding="utf-8")
+    return imzml_path
+
+
+def empty_the_spectrum_list(imzml_path: Path, declared: Optional[int] = None) -> Path:
+    """Drop every ``<spectrum>``, leaving the head and the opening tag intact.
+
+    ``ImzMLWriter`` cannot write this directly -- it sizes the raster with
+    ``max()`` over the coordinates and raises on an empty one -- so the two
+    halves are made separately here.
+
+    The two counts a real file can carry are genuinely different faults, and
+    ``declared`` is which one to build: left alone, the attribute keeps saying
+    what the writer wrote, which is a truncated export -- a header sized for an
+    acquisition that then produced nothing. ``0`` is a file that is honestly
+    empty and says so.
+
+    Args:
+        imzml_path: The file to edit in place.
+        declared: The count to restate, or None to keep the written one.
+
+    Returns:
+        The same path, for chaining onto ``write_imzml``.
+    """
+    text = imzml_path.read_text(encoding="utf-8")
+    edited, n = re.subn(
+        r"(<spectrumList\b[^>]*>).*?</spectrumList>",
+        r"\g<1></spectrumList>",
+        text,
+        flags=re.DOTALL,
+    )
+    assert n == 1, f"expected one <spectrumList>, rewrote {n}"
+    imzml_path.write_text(edited, encoding="utf-8")
+    if declared is not None:
+        return set_spectrum_list_count(imzml_path, declared)
+    return imzml_path
 
 
 class TestCleanFilesAreAccepted:
@@ -662,6 +717,148 @@ class TestIbdUuid:
         assert n == 1
         path.write_text(edited, encoding="utf-8")
         assert self._read_warnings(path) == []
+
+
+class TestADocumentThatDeclaresNoSpectra:
+    """A ``<spectrumList>`` holding nothing, refused before the parser exists.
+
+    Every other refusal in this file comes out of ``_validate_parser_state``,
+    which runs against a parser that was built. This one cannot: pyimzml's
+    constructor ends by taking the z extent off the coordinates it collected,
+    ``np.asarray(self.coordinates)[:, 2].max()``, and an empty list makes that
+    a 1-D array -- so the constructor dies with ``IndexError: too many indices
+    for array`` and leaves nothing to validate. A preview reported exactly that
+    sentence as its whole account of the file.
+
+    ``ImzMLMetadataExtractor._extract_essential_impl`` refuses the same file
+    with "No coordinates found in ImzML file", so the fact was already known
+    one stage later; it was only ever unreachable.
+    """
+
+    def test_an_empty_spectrum_list_is_refused_by_name(self, temp_dir):
+        path = write_imzml(temp_dir, n_spectra=6)
+        empty_the_spectrum_list(path, declared=0)
+
+        reader = ImzMLReader(path)
+        with pytest.raises(ConversionRefused) as excinfo:
+            reader.get_essential_metadata()
+
+        message = str(excinfo.value)
+        assert "sample.imzML" in message
+        assert "declares no spectra" in message
+        assert "<spectrumList>" in message
+        assert "too many indices" not in message
+
+    def test_a_count_the_list_does_not_back_up_is_named(self, temp_dir):
+        """count="6" over nothing is a different fault from count="0"."""
+        path = write_imzml(temp_dir, n_spectra=6)
+        empty_the_spectrum_list(path)
+
+        reader = ImzMLReader(path)
+        with pytest.raises(ConversionRefused) as excinfo:
+            reader.get_essential_metadata()
+
+        assert "count attribute says 6" in str(excinfo.value)
+
+    def test_a_count_of_zero_over_nothing_is_not_reported_twice(self, temp_dir):
+        """The count agrees with the list, so there is one fault to report."""
+        path = write_imzml(temp_dir, n_spectra=6)
+        empty_the_spectrum_list(path, declared=0)
+
+        reader = ImzMLReader(path)
+        with pytest.raises(ConversionRefused) as excinfo:
+            reader.get_essential_metadata()
+
+        assert "count attribute" not in str(excinfo.value)
+
+    def test_a_document_with_no_spectrum_list_at_all_is_refused_too(self, temp_dir):
+        path = write_imzml(temp_dir, n_spectra=6)
+        text = path.read_text(encoding="utf-8")
+        edited, n = re.subn(
+            r"<spectrumList\b.*?</spectrumList>", "", text, flags=re.DOTALL
+        )
+        assert n == 1
+        path.write_text(edited, encoding="utf-8")
+
+        reader = ImzMLReader(path)
+        with pytest.raises(ConversionRefused) as excinfo:
+            reader.get_essential_metadata()
+
+        assert "declares no spectra" in str(excinfo.value)
+
+    def test_the_parser_is_never_built(self, temp_dir, monkeypatch):
+        """A guard on the document, not a rewording of what pyimzml raised.
+
+        Pinned because the cheaper fix was to catch the ``IndexError`` and
+        rename it, which would go quiet the day pyimzml handles an empty
+        coordinate list itself.
+        """
+        path = write_imzml(temp_dir, n_spectra=6)
+        empty_the_spectrum_list(path)
+
+        constructions: List[str] = []
+
+        def _forbidden_parser(*args, **kwargs):
+            constructions.append(kwargs.get("filename", ""))
+            raise AssertionError("the parser must not be built for this file")
+
+        monkeypatch.setattr(imzml_reader_module, "ImzMLParser", _forbidden_parser)
+
+        with pytest.raises(ConversionRefused):
+            ImzMLReader(path)._ensure_parser_initialized()
+
+        assert constructions == []
+
+    def test_the_preview_card_says_what_is_wrong_with_the_file(self, temp_dir):
+        """Where this message is actually read: the Ousia Import Wizard."""
+        path = write_imzml(temp_dir, n_spectra=6)
+        empty_the_spectrum_list(path)
+
+        preview = preview_msi(path)
+
+        assert preview.readable is False
+        assert preview.error is not None
+        assert "declares no spectra" in preview.error
+        assert "too many indices" not in preview.error
+        assert preview.n_pixels == 0
+
+    def test_a_file_that_holds_spectra_is_not_refused(self, temp_dir):
+        """Guard the guard: a check that refused everything would pass above."""
+        path = write_imzml(temp_dir, n_spectra=6)
+
+        reader = ImzMLReader(path)
+        try:
+            assert reader.n_spectra == 6
+        finally:
+            reader.close()
+
+    def test_a_count_of_zero_over_a_list_that_holds_spectra_is_not_refused(
+        self, temp_dir
+    ):
+        """The count is read for the message, never for the verdict."""
+        path = write_imzml(temp_dir, n_spectra=6)
+        set_spectrum_list_count(path, 0)
+
+        reader = ImzMLReader(path)
+        try:
+            assert reader.n_spectra == 6
+        finally:
+            reader.close()
+
+    def test_a_document_that_will_not_parse_is_left_to_pyimzml(self, temp_dir):
+        """This check must never be the one that condemns a broken document.
+
+        It reads the file before pyimzml does, so a file neither can parse
+        would otherwise be reported as declaring no spectra -- which is a
+        guess, and the wrong one.
+        """
+        path = write_imzml(temp_dir, n_spectra=6)
+        path.write_text("<mzML><spectrumList count=", encoding="utf-8")
+
+        with pytest.raises(Exception) as excinfo:
+            ImzMLReader(path)._ensure_parser_initialized()
+
+        assert "declares no spectra" not in str(excinfo.value)
 
 
 @pytest.mark.skipif(
