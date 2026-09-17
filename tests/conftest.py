@@ -24,40 +24,6 @@ UNIT_DIR = TEST_DIR / "unit"
 INTEGRATION_DIR = TEST_DIR / "integration"
 
 
-def pytest_configure(config):
-    """Give the suite the same Windows rename retry a conversion gets.
-
-    Zarr renames each metadata document and each rewritten chunk over its
-    destination (``zarr/storage/_local.py::_atomic_write``), and on Windows
-    that rename has no atomic form: ``MoveFileEx`` must delete the
-    destination first, and for well under a millisecond after a name was
-    last used NTFS still holds it, so the delete comes back
-    ``[WinError 5] Access is denied``. Measured on this project's Windows 11
-    machine with pure stdlib and nothing else imported: a replace onto an
-    EXISTING file fails 720 times in 20,000 (3.6%); onto an absent one,
-    never (0 in 3,000); and onto a FRESH name, never either, which is what
-    rules the on-access scanner out. See ``thyra.utils.zarr_atomic_write``
-    for the full measurement.
-
-    ``thyra.utils.zarr_atomic_write`` already fixes this for anything a
-    converter writes, and :class:`StreamedOpticalImage` now installs it
-    too. What is left uncovered is the suite's own raw
-    ``SpatialData(...).write(...)`` calls -- the reference stores a test
-    builds to compare Thyra's output against. Those are plain spatialdata,
-    so no Thyra entry point runs first, and they flake:
-    ``tests/unit/converters/test_optical_image_streaming.py`` failed 4 runs
-    out of 5 before this hook and 0 out of 8 after it.
-
-    This installs the retry, it does not skip anything: every assertion
-    still runs on Windows. CI never needed it -- 0 ``test (windows-latest)``
-    failures in 60 runs, the Actions Windows images ship with real-time
-    monitoring off -- this is for local Windows development.
-    """
-    from thyra.utils.zarr_atomic_write import install_windows_atomic_write_retry
-
-    install_windows_atomic_write_retry()
-
-
 def pytest_collection_modifyitems(config, items):
     """Stamp each test's lane marker from the directory it lives in.
 

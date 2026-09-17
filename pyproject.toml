@@ -122,7 +122,20 @@ dependencies = [
     # bit ome_zarr 0.12.x with newer dask, and spatialdata 0.8 requires >= 0.16.
     "ome-zarr>=0.16.0, <0.19",        # tested 0.18.0
     "tqdm>=4.50.0",
-    # Floor is 3.1.6, and it is load-bearing. anndata >= 0.13 writes every zarr v3
+    # Floor is 3.4.0, raised from 3.1.6 by issue #341 and load-bearing for TWO
+    # independent reasons. The newer one first:
+    #
+    # 3.4.0 is the first release carrying zarr-python#4358, the retry around the
+    # Windows metadata rename. Thyra used to carry its own copy of that retry and
+    # #341 deleted it, so from that commit on zarr's own is the ONLY one. The old
+    # `>=3.1.6` floor would have let a resolver pick 3.1.6, 3.2.x or 3.3.x -- all
+    # of which have neither retry -- and hand a Windows user the `[WinError 5]
+    # Access is denied` conversion abort with nothing left to catch it. That is a
+    # regression the deletion alone would have shipped, which is why the floor moved
+    # in the same commit. Do not lower it without restoring the shim.
+    #
+    # The original reason, now subsumed but kept because it says what the floor is
+    # protecting: 3.1.6 was itself a floor, and it is load-bearing. anndata >= 0.13 writes every zarr v3
     # array with `shards="auto"`, and `_auto_partition` sized the auto INNER chunk
     # with `max_bytes=1024` where the line right above it says "aim for a 1MiB
     # chunk". zarr-python#3603 changed that 1024 to 1048576; it merged six days
@@ -156,16 +169,17 @@ dependencies = [
     #   - zarr-python#4305 ships, so the rank-0 auto-shard infinite loop is fixed AT
     #     the zarr layer. Safety for it used to rest on two anndata behaviours that
     #     were never a contract.
-    #   - zarr-python#4358 ships, so zarr retries the Windows metadata rename itself
-    #     and utils/zarr_atomic_write.py stops patching (its guard detects the
-    #     upstream helper). Retiring that module outright is issue #341, which this
-    #     ceiling was the remaining blocker for.
+    #   - zarr-python#4358 ships, so zarr retries the Windows metadata rename itself.
+    #     Thyra used to carry its own copy of that retry in utils/zarr_atomic_write.py;
+    #     this ceiling was the last blocker on deleting it, and issue #341 did.
+    #     Dropping below 3.4 therefore reintroduces the WinError 5 conversion abort
+    #     on Windows developer and end-user machines, with nothing left to patch it.
     #
     # Watch when raising further: tifffile must stay at or above its own floor below.
     # 3.4.0 renamed `RegularChunkGrid` to `RegularChunkGridMetadata`, and a tifffile
     # below that floor fails the optical path with a misleading
     # "zarr 3.4.0 < 3 is not supported" that names the wrong package entirely.
-    "zarr>=3.1.6, <3.5",              # tested 3.4.0
+    "zarr>=3.4.0, <3.5",              # tested 3.4.0
     "imagecodecs>=2024.1.1",  # For reading compressed TIFF optical images
     # Floor is 0.13.2, not 0.13.0. anndata 0.13.0 imports
     # `typing_extensions.sentinel` (needs typing-extensions >= 4.16) but declares
@@ -429,9 +443,9 @@ python_version = "3.12"
 # and only the analysis was host-dependent.
 #
 # The cost, stated plainly: the non-Windows side of those guards is no longer
-# type-checked. That is three early-return statements
-# (`utils/windows_paths.py` twice, `utils/zarr_atomic_write.py` once), each one
-# line. Pinning the substantial platform -- the MAX_PATH handling and the SDK
+# type-checked. That is two early-return statements, both in
+# `utils/windows_paths.py`, each one line. (It was three until issue #341
+# deleted `utils/zarr_atomic_write.py`.) Pinning the substantial platform -- the MAX_PATH handling and the SDK
 # loader are Windows-specific and are where the types matter -- buys
 # determinism at that price. Revisit if non-Windows-specific code ever grows
 # past a guard clause.
