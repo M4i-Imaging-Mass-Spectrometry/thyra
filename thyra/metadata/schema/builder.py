@@ -435,3 +435,47 @@ def build_msi_metadata(
             ),
         ),
     )
+
+
+# The sibling tables named in ``ms_analysis``, and the fields of each
+# section that describe the sibling rather than the acquisition.
+#
+# ``ion_mobility.grid`` is here with ``resolved_table`` because it
+# describes the binning *of that table*: it is present only when the
+# table was binned onto a common mobility grid rather than read off a
+# shared feature axis (see :func:`_build_ion_mobility`). Keeping it after
+# the table is unnamed would say a table was binned onto a grid that
+# nobody wrote.
+_SIBLING_TABLE_FIELDS: Dict[str, Tuple[str, ...]] = {
+    "ion_mobility": ("resolved_table", "grid"),
+    "fragmentation": ("resolved_table",),
+}
+
+
+def forget_resolved_table(meta_uns: Dict[str, Any], section: str) -> None:
+    """Unname the sibling table ``ms_analysis.<section>`` points at.
+
+    The converter names a sibling table in the summed table's metadata
+    *before* the sibling is built, so that the two agree; a builder that
+    then declines by returning ``None`` -- a decision, not a failure --
+    would otherwise leave the block pointing at an element nobody wrote
+    (issue #343).
+
+    Takes the serialised block, not the model: by the time a builder can
+    decline, :meth:`MSIMetadata.to_uns_dict` has already run and the
+    ``uns`` entry is a plain dict.  The path into it lives here, beside
+    the builder that wrote it, rather than in the converter.
+
+    The section itself is left in place.  ``ion_mobility.present`` and
+    the fragmentation windows describe the *acquisition*, which is no
+    less true for the sibling not being written, and the converter only
+    ever names a sibling for a source that has the dimension.
+    """
+    analysis = meta_uns.get("ms_analysis")
+    if not isinstance(analysis, dict):
+        return
+    block = analysis.get(section)
+    if not isinstance(block, dict):
+        return
+    for field in _SIBLING_TABLE_FIELDS[section]:
+        block.pop(field, None)
