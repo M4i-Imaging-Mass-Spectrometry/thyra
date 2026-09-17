@@ -677,7 +677,7 @@ T8 extend test_table_group_keeps_anndata_encoding_metadata (:691)
 ## Style
 
 No emojis anywhere, including commit messages, the PR body and the issue comment. No em dashes.
-Plain, short sentences. Do not add Claude or any AI tool as co-author or committer, and do not add
+Plain, short sentences. Do not add any tool as co-author or committer, and do not add
 "Assisted-by" or "Generated with" trailers. Commit as the repo's configured git user only.
 
 ## Definition of done

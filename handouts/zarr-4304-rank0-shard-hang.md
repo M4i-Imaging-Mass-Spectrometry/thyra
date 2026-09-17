@@ -277,7 +277,7 @@ def test_create_0d_array_auto_shards_with_target_shard_size():
 ## Style
 
 No emojis anywhere, including commit messages and the PR body. No em dashes. Plain, short sentences.
-Do not add Claude or any AI tool as co-author or committer, and do not add "Assisted-by" or
+Do not add any tool as co-author or committer, and do not add "Assisted-by" or
 "Generated with" trailers. Commit as the repo's configured git user only.
 
 ## Definition of done
