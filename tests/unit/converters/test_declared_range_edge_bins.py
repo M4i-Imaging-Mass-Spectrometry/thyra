@@ -17,11 +17,12 @@ where ``--no-resample`` stored all 14.
 The fix must not become the clamp it replaced
 ---------------------------------------------
 
-``_nearest_neighbor_resample`` used to clip every out-of-range index into
-the axis and accumulate, so narrowing the range piled the whole discarded
-part of the spectrum onto two bins: on real ``pea.imzML`` resampled to
-400-800 m/z, bin 0 held 654,158 counts where a real peak there is around
-80. The total was conserved exactly, so no TIC check could see it.
+The converter's ``_nearest_neighbor_resample``, the body
+``NearestNeighborStrategy`` now carries, used to clip every out-of-range
+index into the axis and accumulate, so narrowing the range piled the whole
+discarded part of the spectrum onto two bins: on real ``pea.imzML``
+resampled to 400-800 m/z, bin 0 held 654,158 counts where a real peak
+there is around 80. The total was conserved exactly, so no TIC check could see it.
 
 The new rule is bounded to the **declared** range -- at most half a bin
 beyond the first and last centre -- which is why
@@ -32,21 +33,18 @@ edge-bin tests rather than instead of them.
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import anndata
 import numpy as np
 import pytest
 
-from thyra.converters.spatialdata.base_spatialdata_converter import (
-    BaseSpatialDataConverter,
-)
 from thyra.converters.spatialdata.streaming_converter import (
     StreamingSpatialDataConverter,
 )
 from thyra.readers.imzml import ImzMLReader
 from thyra.resampling.binning import kept_mz_range
 from thyra.resampling.common_axis import CommonAxisBuilder
+from thyra.resampling.strategies import NearestNeighborStrategy, TICPreservingStrategy
 from thyra.resampling.types import AxisType
 
 MIN_MZ = 100.0
@@ -68,37 +66,23 @@ def _physics_axis() -> np.ndarray:
     )
 
 
-def _stub(axis, axis_range):
-    """The converter's resampling surface, without building a converter.
-
-    The same ``SimpleNamespace`` pattern the other resampling tests use,
-    with the reporting helper bound on so the count and the one-shot
-    warning are the real ones.
-    """
-    stub = SimpleNamespace(
-        _common_mass_axis=np.asarray(axis, float),
-        _axis_range=axis_range,
-        _gap_tolerance_da=None,
-        _out_of_range_peaks=0,
-        _out_of_range_warned=False,
-    )
-    stub._count_out_of_range = (
-        lambda n_dropped, n_total: BaseSpatialDataConverter._count_out_of_range(
-            stub, n_dropped, n_total
-        )
-    )
-    return stub
+def _nn(axis, axis_range, cache_enabled=False):
+    """The nearest-neighbour operator, cache off unless a test wants it."""
+    strategy = NearestNeighborStrategy(np.asarray(axis, float), axis_range)
+    if not cache_enabled:
+        strategy._shared_cache = False
+    return strategy
 
 
-def _nearest_neighbor(stub, mzs, intensities):
-    return BaseSpatialDataConverter._nearest_neighbor_resample(
-        stub, np.asarray(mzs, float), np.asarray(intensities, float)
-    )
+def _nearest_neighbor(strategy, mzs, intensities):
+    return strategy.resample(np.asarray(mzs, float), np.asarray(intensities, float))
 
 
-def _tic_preserving(stub, mzs, intensities):
-    return BaseSpatialDataConverter._tic_preserving_resample(
-        stub, np.asarray(mzs, float), np.asarray(intensities, float)
+def _tic_preserving(axis, axis_range, mzs, intensities):
+    """The dense form of the TIC-preserving result, over the whole axis."""
+    strategy = TICPreservingStrategy(np.asarray(axis, float), axis_range)
+    return strategy.to_dense(
+        *strategy.resample(np.asarray(mzs, float), np.asarray(intensities, float))
     )
 
 
@@ -124,30 +108,31 @@ class TestAPeakOnTheBoundSurvives:
 
     def test_nearest_neighbor_puts_the_bounds_in_the_edge_bins(self):
         axis = _physics_axis()
-        stub = _stub(axis, (MIN_MZ, MAX_MZ))
+        strategy = _nn(axis, (MIN_MZ, MAX_MZ))
 
-        indices, values = _nearest_neighbor(stub, [MIN_MZ, MAX_MZ], [7.0, 11.0])
+        indices, values = _nearest_neighbor(strategy, [MIN_MZ, MAX_MZ], [7.0, 11.0])
 
         assert sorted(indices.tolist()) == [0, len(axis) - 1]
         assert values.sum() == pytest.approx(18.0)
-        assert stub._out_of_range_peaks == 0
-        assert not stub._out_of_range_warned
+        assert strategy.out_of_range_peaks == 0
+        assert not strategy._out_of_range_warned
 
     def test_nearest_neighbor_dropped_them_before(self):
         """The same call with no declared range is the old behaviour."""
         axis = _physics_axis()
-        stub = _stub(axis, None)
+        strategy = _nn(axis, None)
 
-        indices, _ = _nearest_neighbor(stub, [MIN_MZ, MAX_MZ], [7.0, 11.0])
+        indices, _ = _nearest_neighbor(strategy, [MIN_MZ, MAX_MZ], [7.0, 11.0])
 
         assert indices.size == 0
-        assert stub._out_of_range_peaks == 2
+        assert strategy.out_of_range_peaks == 2
 
     def test_tic_preserving_keeps_the_bound_peaks_too(self):
         axis = _physics_axis()
-        stub = _stub(axis, (MIN_MZ, MAX_MZ))
 
-        resampled = _tic_preserving(stub, [MIN_MZ, 500.0, MAX_MZ], [7.0, 5.0, 11.0])
+        resampled = _tic_preserving(
+            axis, (MIN_MZ, MAX_MZ), [MIN_MZ, 500.0, MAX_MZ], [7.0, 5.0, 11.0]
+        )
 
         assert resampled.sum() == pytest.approx(23.0)
         assert resampled[0] > 0.0
@@ -159,10 +144,8 @@ class TestAPeakOnTheBoundSurvives:
         mzs = [MIN_MZ, 250.0, 700.0, MAX_MZ]
         intensities = [7.0, 3.0, 5.0, 11.0]
 
-        _, nn_values = _nearest_neighbor(
-            _stub(axis, (MIN_MZ, MAX_MZ)), mzs, intensities
-        )
-        tic_values = _tic_preserving(_stub(axis, (MIN_MZ, MAX_MZ)), mzs, intensities)
+        _, nn_values = _nearest_neighbor(_nn(axis, (MIN_MZ, MAX_MZ)), mzs, intensities)
+        tic_values = _tic_preserving(axis, (MIN_MZ, MAX_MZ), mzs, intensities)
 
         assert nn_values.sum() == pytest.approx(sum(intensities))
         assert tic_values.sum() == pytest.approx(sum(intensities))
@@ -177,22 +160,12 @@ class TestAPeakOnTheBoundSurvives:
         mzs = np.array([MIN_MZ, 300.0, MAX_MZ])
         intensities = np.array([7.0, 3.0, 11.0])
 
-        cached = _stub(axis, (MIN_MZ, MAX_MZ))
-        cached._nn_shared_cache = None
-        cached._nn_cache_misses = 0
-        cached._build_nn_shared_cache = (
-            lambda a, m: BaseSpatialDataConverter._build_nn_shared_cache(cached, a, m)
-        )
-        cached._nn_resample_via_cache = (
-            lambda a, m, i: BaseSpatialDataConverter._nn_resample_via_cache(
-                cached, a, m, i
-            )
-        )
+        cached = _nn(axis, (MIN_MZ, MAX_MZ), cache_enabled=True)
 
         # First call builds the cache, second one hits it.
         first = _nearest_neighbor(cached, mzs, intensities)
         second = _nearest_neighbor(cached, mzs, intensities)
-        generic = _nearest_neighbor(_stub(axis, (MIN_MZ, MAX_MZ)), mzs, intensities)
+        generic = _nearest_neighbor(_nn(axis, (MIN_MZ, MAX_MZ)), mzs, intensities)
 
         for got in (first, second):
             assert got[0].tolist() == generic[0].tolist()
@@ -204,22 +177,24 @@ class TestBinZeroIsStillNotADumpingGround:
 
     def test_a_peak_below_the_declared_minimum_is_dropped(self):
         axis = _physics_axis()
-        stub = _stub(axis, (MIN_MZ, MAX_MZ))
+        strategy = _nn(axis, (MIN_MZ, MAX_MZ))
 
         indices, values = _nearest_neighbor(
-            stub, [50.0, 500.0, 5_000.0], [654_158.0, 80.0, 654_158.0]
+            strategy, [50.0, 500.0, 5_000.0], [654_158.0, 80.0, 654_158.0]
         )
 
         assert values.sum() == pytest.approx(80.0)
         assert 0 not in indices.tolist()
-        assert stub._out_of_range_peaks == 2
+        assert strategy.out_of_range_peaks == 2
 
     def test_the_slack_stops_at_the_declared_bound(self):
         """Half a bin outside the *centre*, not half a bin outside the range."""
         axis = _physics_axis()
-        stub = _stub(axis, (MIN_MZ, MAX_MZ))
+        strategy = _nn(axis, (MIN_MZ, MAX_MZ))
 
-        indices, _ = _nearest_neighbor(stub, [MIN_MZ - 1e-6, MAX_MZ + 1e-6], [3.0, 4.0])
+        indices, _ = _nearest_neighbor(
+            strategy, [MIN_MZ - 1e-6, MAX_MZ + 1e-6], [3.0, 4.0]
+        )
 
         assert indices.size == 0
 
@@ -239,10 +214,10 @@ class TestBinZeroIsStillNotADumpingGround:
         axis = _physics_axis()
 
         indices, values = _nearest_neighbor(
-            _stub(axis, (MIN_MZ, MAX_MZ)), [10.0, 20.0], [654_158.0, 9.0]
+            _nn(axis, (MIN_MZ, MAX_MZ)), [10.0, 20.0], [654_158.0, 9.0]
         )
         resampled = _tic_preserving(
-            _stub(axis, (MIN_MZ, MAX_MZ)), [10.0, 20.0], [654_158.0, 9.0]
+            axis, (MIN_MZ, MAX_MZ), [10.0, 20.0], [654_158.0, 9.0]
         )
 
         assert indices.size == 0
@@ -261,9 +236,11 @@ class TestAUniformAxisIsUnchanged:
 
     def test_a_peak_just_outside_is_still_out(self):
         axis = np.linspace(100.0, 110.0, 11)
-        stub = _stub(axis, (100.0, 110.0))
+        strategy = _nn(axis, (100.0, 110.0))
 
-        indices, _ = _nearest_neighbor(stub, [100.0 - 1e-9, 110.0 + 1e-9], [3.0, 4.0])
+        indices, _ = _nearest_neighbor(
+            strategy, [100.0 - 1e-9, 110.0 + 1e-9], [3.0, 4.0]
+        )
 
         assert indices.size == 0
 

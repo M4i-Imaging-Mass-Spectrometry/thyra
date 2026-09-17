@@ -1,6 +1,6 @@
 """The sparse form of ``tic_preserving`` is the dense form, bin for bin.
 
-``_tic_preserving_resample`` used to interpolate onto every bin of the axis
+``tic_preserving`` used to interpolate onto every bin of the axis
 and hand a dense array downstream, where it was scanned for non-zeros. On a
 zero-suppressed profile source -- a Waters MRT pixel stores ~15,000 samples
 in clusters around its peaks and the default axis has 1.05M bins -- that
@@ -12,15 +12,11 @@ same handling of gaps, cropping, unsorted input and degenerate spectra.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import numpy as np
 import pytest
 
-from thyra.converters.spatialdata.base_spatialdata_converter import (
-    BaseSpatialDataConverter,
-)
 from thyra.resampling.interpolation import tic_preserving_sparse, tic_support_bins
+from thyra.resampling.strategies import TICPreservingStrategy
 
 
 def _sqrt_axis(lo, hi, width_at_1000):
@@ -65,13 +61,12 @@ AXIS = _sqrt_axis(300.0, 1000.0, 1.3e-3)
 
 
 def _dense(axis, mzs, its, tol=None):
-    stub = SimpleNamespace(_common_mass_axis=axis, _gap_tolerance_da=tol)
-    return BaseSpatialDataConverter._tic_preserving_resample(stub, mzs, its)
+    strategy = TICPreservingStrategy(axis, None, tol)
+    return strategy.to_dense(*strategy.resample(mzs, its))
 
 
 def _sparse(axis, mzs, its, tol=None):
-    stub = SimpleNamespace(_common_mass_axis=axis, _gap_tolerance_da=tol)
-    return BaseSpatialDataConverter._tic_preserving_resample_sparse(stub, mzs, its)
+    return TICPreservingStrategy(axis, None, tol).resample(mzs, its)
 
 
 def _scatter(axis, idx, vals):
@@ -178,7 +173,7 @@ class TestAgreesWithTheDenseForm:
         assert idx.size == 0
         assert _dense(AXIS, np.array([400.0, 401.0]), np.zeros(2)).sum() == 0.0
 
-    def test_module_function_is_what_both_methods_call(self):
+    def test_module_function_is_what_the_strategy_calls(self):
         mzs, its = _zero_suppressed_profile(7)
         idx, vals = tic_preserving_sparse(AXIS, mzs, its, None)
         idx2, vals2 = _sparse(AXIS, mzs, its)

@@ -20,20 +20,15 @@ What is pinned here:
 * the build-time guard: an axis that is not strictly ascending, or that
   deviates from its linearisation by a quarter bin or more, falls back to
   the search; and
-* the converter's resample path, cached and generic, returns the same
+* the strategy's resample path, cached and generic, returns the same
   bins and sums with the linearisation as without it.
 """
 
 from __future__ import annotations
 
-from types import MethodType, SimpleNamespace
-
 import numpy as np
 import pytest
 
-from thyra.converters.spatialdata.base_spatialdata_converter import (
-    BaseSpatialDataConverter,
-)
 from thyra.resampling.binning import (
     NN_LINEARISATION_MARGIN,
     nn_map_to_bins,
@@ -48,6 +43,7 @@ from thyra.resampling.mass_axis import (
     TOFAxisGenerator,
 )
 from thyra.resampling.mass_axis.tof_generator import PHI_NANOTOF_LAW, TIMSTOF_TOF_LAW
+from thyra.resampling.strategies import NearestNeighborStrategy
 from thyra.resampling.types import AxisLinearisation, AxisType
 
 GENERATORS = [
@@ -172,52 +168,44 @@ class TestBuildTimeGuard:
         assert usable_linearisation(mass_axis.linearisation, axis, 1.0) is None
 
 
-def _stub(mass_axis, linearisation, cache_enabled):
-    """A converter stand-in with just enough state for the resample path."""
-    stub = SimpleNamespace(
-        _common_mass_axis=np.asarray(mass_axis.mz_values, float),
-        _axis_range=(mass_axis.min_mz, mass_axis.max_mz),
-        _nn_linearisation=linearisation,
-        _nn_shared_cache=None if cache_enabled else False,
-        _nn_cache_misses=0,
-        _out_of_range_peaks=0,
-        _out_of_range_warned=True,
+def _strategy(mass_axis, linearisation, cache_enabled):
+    """The nearest-neighbour operator over a generated axis."""
+    strategy = NearestNeighborStrategy(
+        np.asarray(mass_axis.mz_values, float),
+        (mass_axis.min_mz, mass_axis.max_mz),
+        linearisation,
     )
-    for name in (
-        "_nearest_neighbor_resample",
-        "_nn_resample_via_cache",
-        "_build_nn_shared_cache",
-        "_count_out_of_range",
-    ):
-        setattr(stub, name, MethodType(getattr(BaseSpatialDataConverter, name), stub))
-    return stub
+    strategy._out_of_range_warned = True
+    if not cache_enabled:
+        strategy._shared_cache = False
+    return strategy
 
 
-class TestConverterPathsAgree:
+class TestTheStrategysPathsAgree:
     @pytest.mark.parametrize("cache_enabled", [False, True], ids=["generic", "cached"])
     def test_resample_returns_the_same_bins_and_sums(self, cache_enabled):
         rng = np.random.default_rng(7)
         mass_axis = ReflectorTOFAxisGenerator().generate_axis(100.0, 2000.0, 100_000)
-        searching = _stub(mass_axis, None, cache_enabled)
-        computing = _stub(mass_axis, mass_axis.linearisation, cache_enabled)
+        searching = _strategy(mass_axis, None, cache_enabled)
+        computing = _strategy(mass_axis, mass_axis.linearisation, cache_enabled)
         mzs = np.sort(rng.uniform(90.0, 2010.0, 3_000))  # some out of range
         for _ in range(3):
             ints = rng.lognormal(np.log(50), 1.0, mzs.size)
             ints[rng.random(mzs.size) < 0.3] = 0.0
-            a_bins, a_sums = searching._nearest_neighbor_resample(mzs, ints)
-            b_bins, b_sums = computing._nearest_neighbor_resample(mzs, ints)
+            a_bins, a_sums = searching.resample(mzs, ints)
+            b_bins, b_sums = computing.resample(mzs, ints)
             np.testing.assert_array_equal(b_bins, a_bins)
             np.testing.assert_array_equal(b_sums, a_sums)
-        assert computing._out_of_range_peaks == searching._out_of_range_peaks
+        assert computing.out_of_range_peaks == searching.out_of_range_peaks
 
-    def test_a_stub_without_the_attribute_still_searches(self):
-        # The unbound-call harnesses predate the attribute; they must keep
-        # working, on the search.
+    def test_no_linearisation_still_searches(self):
+        # The default: a strategy handed no linearisation places every
+        # peak by binary search, and says so.
         mass_axis = LinearAxisGenerator().generate_axis(100.0, 1000.0, 1_000)
-        stub = _stub(mass_axis, None, False)
-        del stub._nn_linearisation
+        strategy = _strategy(mass_axis, None, False)
+        assert strategy.linearisation is None
         mzs = np.array([100.0, 500.25, 999.9])
-        bins, sums = stub._nearest_neighbor_resample(mzs, np.ones(3))
+        bins, _ = strategy.resample(mzs, np.ones(3))
         np.testing.assert_array_equal(bins, nn_map_to_bins(mass_axis.mz_values, mzs))
 
 
@@ -311,7 +299,7 @@ def test_the_sibling_tables_are_what_the_search_builds(tmp_path, fused):
                 mobility_grid=True,
             )
             assert converter.convert()
-            used = converter._nn_linearisation is not None
+            used = converter._axis_linearisation is not None
             return spatialdata.read_zarr(prepare_zarr_read_path(out)), used
         finally:
             bsc.usable_linearisation = original
@@ -341,3 +329,37 @@ def test_the_sibling_tables_are_what_the_search_builds(tmp_path, fused):
                 b.var[column].to_numpy(),
                 err_msg=f"{key}: var[{column}] differs",
             )
+
+
+def test_an_interpolated_conversion_still_reports_the_axis_coordinate(tmp_path):
+    """The linearisation belongs to the axis, not to the method that bins.
+
+    ``tic_preserving`` does not use it to resample -- it interpolates --
+    but the sibling tables written beside it still place peaks onto the
+    same axis, and they take the linearisation as an argument. Deriving
+    it from the strategy instead of holding it beside the axis made this
+    ``None`` under the interpolating method, which costs the sinks the
+    closed form (D21) for nothing. Pinned so it stays an axis property.
+    """
+    pytest.importorskip("spatialdata")
+
+    from tests.unit.converters.test_fused_passes import RESAMPLED, FusedStubReader
+    from thyra.converters.spatialdata.streaming_converter import (
+        StreamingSpatialDataConverter,
+    )
+    from thyra.resampling.strategies import TICPreservingStrategy
+    from thyra.utils.windows_paths import prepare_zarr_output_path
+
+    out = prepare_zarr_output_path(tmp_path / "interpolated.zarr", "stub")
+    converter = StreamingSpatialDataConverter(
+        FusedStubReader(),
+        out,
+        dataset_id="stub",
+        pixel_size_um=10.0,
+        resampling_config={**RESAMPLED, "method": "tic_preserving"},
+        mobility_grid=True,
+    )
+    assert converter.convert()
+
+    assert isinstance(converter._resampler, TICPreservingStrategy)
+    assert converter._axis_linearisation is not None

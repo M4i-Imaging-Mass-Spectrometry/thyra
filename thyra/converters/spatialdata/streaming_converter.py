@@ -28,8 +28,6 @@ from tqdm import tqdm
 
 from ...core.conversion_state import ConversionState
 from ...errors import ConversionRefused
-from ...resampling import ResamplingMethod
-from ...resampling.binning import kept_mz_range
 from .base_spatialdata_converter import BaseSpatialDataConverter
 from .csc_assembly import CscAssembly, index_dtype
 
@@ -299,15 +297,6 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 "measured. Pass use_csc=True or leave it out."
             )
 
-        # Resolved once here rather than per spectrum: _process_spectrum is
-        # the hottest call in both passes, and re-importing ResamplingMethod
-        # plus re-checking the attribute there measured ~35 us per call.
-        self._nn_route: bool = (
-            self._resampling_config is not None
-            and getattr(self, "_resampling_method", None)
-            == ResamplingMethod.NEAREST_NEIGHBOR
-        )
-
     def _suppress_reader_progress(self) -> None:
         """Suppress progress output from reader during the passes."""
         setattr(self.reader, "_quiet_mode", True)
@@ -397,16 +386,17 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 mz_indices, values = mz_indices[keep], values[keep]
             return mz_indices, values
 
-        # Optimized nearest-neighbor path; the route is resolved once in
-        # __init__ because this runs once per spectrum per pass.
-        if self._nn_route:
-            return self._nearest_neighbor_resample(mzs, intensities)
-
-        # TIC-preserving, evaluated only where the interpolant can be
-        # non-zero and returned already zero-filtered. On a zero-suppressed
-        # profile source the dense form of this call -- interpolate onto
-        # every bin, then mask -- was 35x the cost of reading the file.
-        return self._tic_preserving_resample_sparse(mzs, intensities)
+        # One operator, chosen when the axis was built, called here once
+        # per spectrum per pass. Both methods return the bins they fill
+        # and nothing else: on a zero-suppressed profile source the dense
+        # form of the TIC-preserving call -- interpolate onto every bin,
+        # then mask -- was 35x the cost of reading the file.
+        # A plain ValueError, not a ConversionRefused: nobody can act on
+        # an internal invariant, and its traceback is the useful part
+        # (thyra/errors.py names this one).
+        if self._resampler is None:
+            raise ValueError("Common mass axis is not initialized")
+        return self._resampler.resample(mzs, intensities)
 
     def _plan_tables(self) -> List[_TableUnit]:
         """The tables this conversion writes: one per plane, or one volume.
@@ -674,8 +664,8 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 "(non-finite, or negative)"
             )
         usable = peaks_in - self._unusable_intensities
-        if self._out_of_range_peaks >= usable and self._common_mass_axis is not None:
-            lo_mz, hi_mz = kept_mz_range(self._common_mass_axis, self._axis_range)
+        if self._resampler is not None and self._resampler.out_of_range_peaks >= usable:
+            lo_mz, hi_mz = self._resampler.kept_range
             return (
                 "every peak fell outside the target mass range "
                 f"[{lo_mz:.4f}, {hi_mz:.4f}] m/z -- widen the "

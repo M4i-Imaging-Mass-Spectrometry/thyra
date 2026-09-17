@@ -25,12 +25,23 @@ from .mobility_grid import (
     build_mobility_grid,
     linear_channel,
 )
+from .strategies import (
+    NearestNeighborStrategy,
+    ResamplingStrategy,
+    TICPreservingStrategy,
+    build_strategy,
+)
 from .types import AxisType, MassAxis, ResamplingConfig, ResamplingMethod
 
 __all__ = [
     # Decision tree and strategies
     "ResamplingDecisionTree",
     "CommonAxisBuilder",
+    # Per-spectrum operators (Strategy pattern)
+    "ResamplingStrategy",
+    "NearestNeighborStrategy",
+    "TICPreservingStrategy",
+    "build_strategy",
     # Types
     "ResamplingMethod",
     "AxisType",
