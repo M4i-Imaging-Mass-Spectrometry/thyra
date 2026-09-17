@@ -64,7 +64,7 @@ jobs:
   # Six lint, type and security tools are configured across .flake8,
   # .pre-commit-config.yaml and pyproject.toml, and until this job existed not
   # one of them ran anywhere but a local hook a contributor may never install.
-  # A fork PR, a `git commit --no-verify`, or any session that edits files
+  # A fork PR, a `git commit --no-verify`, or any editor that writes files
   # without hooks merged unlinted, untyped and unscanned with every check
   # green. The repo-local no-lab-share-paths and no-user-home-paths guards --
   # the ones that exist to keep colleague names and share layouts out of a
