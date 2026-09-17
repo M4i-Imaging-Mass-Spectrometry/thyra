@@ -1734,6 +1734,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 self.reader,
                 self._common_mass_axis,
                 n_spectra=self._get_total_spectra_count(),
+                linearisation=self._nn_linearisation,
             )
         except Exception as e:
             logger.error("Could not build the mass-mobility heatmap: %s", str(e))
@@ -1907,6 +1908,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                     if discovery is not None
                     else "Mobility heatmap"
                 ),
+                linearisation=self._nn_linearisation,
             )
         except Exception as e:
             logger.error("Could not scan the mobility spectra: %s", str(e))
@@ -1997,12 +1999,21 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 logger.warning("No mobility-resolved table: %s", str(e))
         msms = None
         if self._msms_table_key is not None:
-            msms = new_msms_accumulator(self.reader, self._common_mass_axis, n_grid)
+            msms = new_msms_accumulator(
+                self.reader,
+                self._common_mass_axis,
+                n_grid,
+                self._nn_linearisation,
+            )
         if heatmap is None and discovery is None and msms is None:
             return None
         self._sibling_scans_done = True
         return SiblingPasses(
-            self._common_mass_axis, heatmap=heatmap, discovery=discovery, msms=msms
+            self._common_mass_axis,
+            heatmap=heatmap,
+            discovery=discovery,
+            msms=msms,
+            linearisation=self._nn_linearisation,
         )
 
     def _take_fused_results(self, passes: Any) -> None:
@@ -2183,6 +2194,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             grid=self._mobility_grid,
             discovery=discovery,
             scratch=scratch,
+            linearisation=self._nn_linearisation,
         )
 
     def _build_msms_sibling(
@@ -2216,6 +2228,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             z_value=z_value,
             scratch=scratch,
             accumulator=accumulator,
+            linearisation=self._nn_linearisation,
         )
 
     @staticmethod
@@ -2975,6 +2988,13 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                     "This is slow for large datasets!"
                 )
             self._common_mass_axis = self.reader.get_common_mass_axis()
+            # A raw union axis was laid by no generator, so there is no
+            # coordinate it is uniform in and every placement onto it is a
+            # search. Cleared beside the axis rather than left at its
+            # initial value: the two must never disagree about which axis
+            # a linearisation describes, and that is easier to keep true
+            # if every assignment to one is an assignment to both.
+            self._nn_linearisation = None
             if len(self._common_mass_axis) == 0:
                 raise ConversionRefused(
                     "Common mass axis is empty. Cannot proceed with conversion."

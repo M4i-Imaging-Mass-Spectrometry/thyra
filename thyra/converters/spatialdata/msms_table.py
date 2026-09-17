@@ -48,6 +48,7 @@ from scipy import sparse
 
 from ...core.base_reader import BaseMSIReader
 from ...core.msms import FragmentationSchedule, windows_overlap
+from ...resampling.types import AxisLinearisation
 from .csc_assembly import (
     CscAssembly,
     release_when_collected,
@@ -218,13 +219,19 @@ def _var_labels(
 
 
 def _bin_indices(
-    axis: NDArray[np.float64], mzs: NDArray[np.float64]
+    axis: NDArray[np.float64],
+    mzs: NDArray[np.float64],
+    linearisation: Optional[AxisLinearisation] = None,
 ) -> Tuple[NDArray[np.int64], NDArray[np.bool_]]:
     """Nearest mass-axis column of each fragment m/z, and which were kept.
 
     The same rule the summed table's resampling follows: "in range" is the
     strict axis span, and a peak outside it is dropped rather than folded
     onto an edge bin.
+
+    ``linearisation`` is ``axis``'s own, when it has one, so the column is
+    computed rather than searched for (design decision D21, issue #348).
+    The column is the same either way.
     """
     from .base_spatialdata_converter import _nn_map_to_bins
 
@@ -232,7 +239,7 @@ def _bin_indices(
     kept = mzs if in_range.all() else mzs[in_range]
     if kept.size == 0:
         return np.array([], dtype=np.int64), in_range
-    return _nn_map_to_bins(axis, kept).astype(np.int64), in_range
+    return _nn_map_to_bins(axis, kept, linearisation).astype(np.int64), in_range
 
 
 class _Demultiplexer:
@@ -245,10 +252,14 @@ class _Demultiplexer:
     """
 
     def __init__(
-        self, axis: NDArray[np.float64], window_rank: NDArray[np.int64]
+        self,
+        axis: NDArray[np.float64],
+        window_rank: NDArray[np.int64],
+        linearisation: Optional[AxisLinearisation] = None,
     ) -> None:
         self.axis = axis
         self.window_rank = window_rank
+        self.linearisation = linearisation
         self.n_dropped = 0
 
     def entries(
@@ -257,7 +268,7 @@ class _Demultiplexer:
         mzs: NDArray[np.float64],
         intensities: NDArray[np.float64],
     ) -> Tuple[NDArray[np.int64], NDArray[np.float64]]:
-        columns, in_range = _bin_indices(self.axis, mzs)
+        columns, in_range = _bin_indices(self.axis, mzs, self.linearisation)
         if columns.size == 0:
             self.n_dropped += int(mzs.size)
             return columns, np.zeros(0, dtype=np.float64)
@@ -315,11 +326,15 @@ class MsmsAccumulator:
     """
 
     def __init__(
-        self, axis: NDArray[np.float64], window_rank: NDArray[np.int64], n_rows: int
+        self,
+        axis: NDArray[np.float64],
+        window_rank: NDArray[np.int64],
+        n_rows: int,
+        linearisation: Optional[AxisLinearisation] = None,
     ) -> None:
         """Allocate the count over ``windows x axis``; refuses a span too wide."""
         n_windows = int(window_rank.size)
-        self.demux = _Demultiplexer(axis, window_rank)
+        self.demux = _Demultiplexer(axis, window_rank, linearisation)
         self.assembly = CscAssembly(n_windows * int(axis.size), n_rows)
         self.n_skipped = 0
         self.n_rows_seen = 0
@@ -397,11 +412,12 @@ def _demultiplex(
     window_rank: NDArray[np.int64],
     n_obs: int,
     scratch: Path,
+    linearisation: Optional[AxisLinearisation] = None,
 ) -> Optional[Tuple[sparse.csc_matrix, NDArray[np.int64], CscAssembly]]:
     """Two passes over the precursor spectra; ``(matrix, keys, assembly)`` or ``None``."""
     from tqdm import tqdm
 
-    accumulator = MsmsAccumulator(axis, window_rank, n_obs)
+    accumulator = MsmsAccumulator(axis, window_rank, n_obs, linearisation)
     with tqdm(desc="MS/MS table: counting", unit="spectrum") as pbar:
         for coords, window_index, mzs, intensities in reader.iter_precursor_spectra():
             pbar.update(1)
@@ -417,7 +433,10 @@ def _demultiplex(
 
 
 def new_msms_accumulator(
-    reader: BaseMSIReader, common_mass_axis: NDArray[np.float64], n_rows: int
+    reader: BaseMSIReader,
+    common_mass_axis: NDArray[np.float64],
+    n_rows: int,
+    linearisation: Optional[AxisLinearisation] = None,
 ) -> Optional[MsmsAccumulator]:
     """An accumulator for ``reader``'s schedule, or ``None`` when it must not be split.
 
@@ -432,7 +451,7 @@ def new_msms_accumulator(
     if axis.size == 0:
         return None
     _mz, _mobility, window_rank = _precursor_axis(schedule, _window_mobility(reader))
-    return MsmsAccumulator(axis, window_rank, n_rows)
+    return MsmsAccumulator(axis, window_rank, n_rows, linearisation)
 
 
 def build_msms_table(
@@ -446,6 +465,7 @@ def build_msms_table(
     pixel_key: Optional[Callable[[Coords], Optional[str]]] = None,
     scratch: Optional[Path] = None,
     accumulator: Optional[MsmsAccumulator] = None,
+    linearisation: Optional[AxisLinearisation] = None,
 ) -> Optional[Any]:
     """Build the demultiplexed MS/MS table for one MSI table, or ``None``.
 
@@ -467,6 +487,10 @@ def build_msms_table(
         accumulator: The two passes already run by the converter's fused
             passes (:func:`new_msms_accumulator`, fed frame by frame);
             ``None`` runs them here over ``iter_precursor_spectra``.
+        linearisation: ``common_mass_axis``'s own, when it has one, so
+            each fragment's column is computed rather than searched for
+            (issue #348). Ignored when ``accumulator`` is given: that one
+            was built with its own.
 
     Returns:
         A ``TableModel``-parsed AnnData, or ``None`` when the acquisition
@@ -506,6 +530,7 @@ def build_msms_table(
                 window_rank,
                 n_obs,
                 workdir,
+                linearisation,
             )
         finally:
             if built is None and owns_scratch:

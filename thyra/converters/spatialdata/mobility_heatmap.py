@@ -49,6 +49,7 @@ from ...resampling.mobility_grid import (
     build_mobility_grid,
     linear_channel,
 )
+from ...resampling.types import AxisLinearisation
 from .base_spatialdata_converter import _nn_map_to_bins
 
 logger = logging.getLogger(__name__)
@@ -140,6 +141,7 @@ def map_points_to_axis(
     mzs: NDArray[np.float64],
     mobility: NDArray[np.float64],
     intensities: NDArray[np.float64],
+    linearisation: Optional[AxisLinearisation] = None,
 ) -> Tuple[NDArray[np.int64], NDArray[np.float64], NDArray[np.float64], int]:
     """One pixel's points onto the common mass axis, the summed table's way.
 
@@ -152,6 +154,17 @@ def map_points_to_axis(
     (ties to the right). This is the one place the mapping is written: the
     heatmap, the grid's discovery pass and the grid's scatter pass all go
     through it, so they cannot disagree.
+
+    Args:
+        axis: The common mass axis, ascending.
+        mzs: This pixel's m/z values.
+        mobility: Their mobility values.
+        intensities: Their intensities.
+        linearisation: The axis's own, when it has one, so the bin index
+            is computed rather than searched for (design decision D21).
+            ``None`` searches, which is the answer for a raw union axis.
+            It changes the cost of this call and nothing else: the two
+            routes return the same index for every value.
 
     Returns:
         ``(bins, mobility, intensities, n_dropped)`` -- the axis index of
@@ -182,7 +195,12 @@ def map_points_to_axis(
         intensities = intensities[in_range]
         if mzs.size == 0:
             return np.zeros(0, dtype=np.int64), mobility, intensities, n_dropped
-    return _nn_map_to_bins(axis, mzs).astype(np.int64), mobility, intensities, n_dropped
+    return (
+        _nn_map_to_bins(axis, mzs, linearisation).astype(np.int64),
+        mobility,
+        intensities,
+        n_dropped,
+    )
 
 
 def map_indexed_points_to_axis(
@@ -191,6 +209,7 @@ def map_indexed_points_to_axis(
     inverse: NDArray[np.int64],
     mobility: NDArray[np.float64],
     intensities: NDArray[np.float64],
+    linearisation: Optional[AxisLinearisation] = None,
 ) -> Tuple[NDArray[np.int64], NDArray[np.float64], NDArray[np.float64], int]:
     """:func:`map_points_to_axis` for points whose m/z is ``unique_mz[inverse]``.
 
@@ -206,6 +225,14 @@ def map_indexed_points_to_axis(
     A source whose points do not share m/z values keeps
     :func:`map_points_to_axis`; this is the same mapping, not a second
     one, and the two are pinned against each other in the tests.
+
+    Args:
+        axis: The common mass axis, ascending.
+        unique_mz: The frame's distinct m/z values, ascending.
+        inverse: Each point's index into ``unique_mz``.
+        mobility: Each point's mobility value.
+        intensities: Each point's intensity.
+        linearisation: As :func:`map_points_to_axis`.
 
     Returns:
         What :func:`map_points_to_axis` returns for ``unique_mz[inverse]``.
@@ -226,10 +253,21 @@ def map_indexed_points_to_axis(
         intensities = intensities[usable]
         if inverse.size == 0:
             return np.zeros(0, dtype=np.int64), mobility, intensities, 0
-    bins = _nn_map_to_bins(axis, unique_mz).astype(np.int64)
+    # The mask first, then the mapping of what it kept. The out-of-range
+    # entries' bins were always discarded -- ``inverse`` is filtered by
+    # ``kept`` before it indexes ``bins`` -- but mapping them was still a
+    # closed form evaluated outside the axis, where a law is free to
+    # return a NaN or an infinity (``sqrt`` of a negative, a reciprocal
+    # of zero) and the cast to an index is then undefined. Masking first
+    # is the same answer for every entry anyone reads, and maps fewer.
     in_range = (unique_mz >= axis[0]) & (unique_mz <= axis[-1])
     if in_range.all():
+        bins = _nn_map_to_bins(axis, unique_mz, linearisation).astype(np.int64)
         return bins[inverse], mobility, intensities, 0
+    bins = np.zeros(unique_mz.size, dtype=np.int64)
+    bins[in_range] = _nn_map_to_bins(axis, unique_mz[in_range], linearisation).astype(
+        np.int64
+    )
     kept = in_range[inverse]
     n_dropped = int(inverse.size - kept.sum())
     inverse = inverse[kept]
@@ -432,6 +470,7 @@ def scan_mobility(
     *sinks: Any,
     n_spectra: Optional[int] = None,
     description: str = "Mobility scan",
+    linearisation: Optional[AxisLinearisation] = None,
 ) -> None:
     """One raw pass over :meth:`BaseMSIReader.iter_mobility_spectra`.
 
@@ -441,13 +480,16 @@ def scan_mobility(
     summed spectrum is the vendor centroid (one extra library call per
     frame, about a millisecond); the mapping costs more than the read,
     which is why the sinks share a pass rather than each taking one.
+
+    ``linearisation`` is the axis's own, passed straight to the mapping;
+    see :func:`map_points_to_axis`.
     """
     from tqdm import tqdm
 
     axis = np.asarray(mass_axis, dtype=np.float64)
     with tqdm(total=n_spectra, desc=description, unit="spectrum") as pbar:
         for coords, mzs, mobility, intensities in reader.iter_mobility_spectra():
-            mapped = map_points_to_axis(axis, mzs, mobility, intensities)
+            mapped = map_points_to_axis(axis, mzs, mobility, intensities, linearisation)
             for sink in sinks:
                 sink.add_mapped(coords, *mapped)
             pbar.update(1)
@@ -457,6 +499,7 @@ def build_mobility_heatmap(
     reader: BaseMSIReader,
     mass_axis: NDArray[np.float64],
     n_spectra: Optional[int] = None,
+    linearisation: Optional[AxisLinearisation] = None,
 ) -> Optional[Dict[str, Any]]:
     """Accumulate the heatmap over every pixel of ``reader``.
 
@@ -474,5 +517,6 @@ def build_mobility_heatmap(
         heatmap,
         n_spectra=n_spectra,
         description="Mobility heatmap",
+        linearisation=linearisation,
     )
     return finish_mobility_heatmap(heatmap)

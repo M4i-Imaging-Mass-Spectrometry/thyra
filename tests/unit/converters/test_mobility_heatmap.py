@@ -257,15 +257,21 @@ class TestIndexedMapping:
         self._same(flat, indexed)
         np.testing.assert_array_equal(flat[0], [1, 1])
 
-    def test_the_unique_values_are_mapped_once(self, monkeypatch):
+    @staticmethod
+    def _counting_map(monkeypatch):
+        """Record the size of every array handed to the bin mapping."""
         calls = []
         original = mh._nn_map_to_bins
 
-        def counted(axis, mzs):
+        def counted(axis, mzs, linearisation=None):
             calls.append(np.asarray(mzs).size)
-            return original(axis, mzs)
+            return original(axis, mzs, linearisation)
 
         monkeypatch.setattr(mh, "_nn_map_to_bins", counted)
+        return calls
+
+    def test_the_unique_values_are_mapped_once(self, monkeypatch):
+        calls = self._counting_map(monkeypatch)
         mzs = np.array([100.0, 121.0] * 50)
         map_indexed_points_to_axis(
             self.AXIS,
@@ -274,6 +280,27 @@ class TestIndexedMapping:
             np.ones(mzs.size),
         )
         assert calls == [2]
+
+    def test_only_the_in_range_uniques_are_mapped(self, monkeypatch):
+        """The mask runs before the mapping, not after it (issue #348).
+
+        Their bins were always discarded, so this is not a change of
+        answer. It matters because a linearisation is a closed form and
+        the law is free to return a NaN or an infinity outside the axis,
+        where the cast to an index is then undefined.
+        """
+        calls = self._counting_map(monkeypatch)
+        mzs = np.array([1.0, 100.0, 121.0, 10_000.0])
+        bins, _mobility, _intensities, n_dropped = map_indexed_points_to_axis(
+            self.AXIS,
+            *np.unique(mzs, return_inverse=True),
+            np.ones(mzs.size),
+            np.ones(mzs.size),
+        )
+        # Four distinct values, two of them off the axis at either end.
+        assert calls == [2]
+        assert n_dropped == 2
+        np.testing.assert_array_equal(bins, mh._nn_map_to_bins(self.AXIS, mzs[1:3]))
 
     def test_an_accumulator_fed_either_way_agrees(self):
         mzs = np.array([100.0, 121.0, 100.0, 140.0, 130.0, 121.0])

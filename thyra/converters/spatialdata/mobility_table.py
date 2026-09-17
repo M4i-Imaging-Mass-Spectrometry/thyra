@@ -54,6 +54,7 @@ from scipy import sparse
 from ...core.base_reader import BaseMSIReader
 from ...errors import ConversionRefused
 from ...resampling.mobility_grid import MobilityGrid
+from ...resampling.types import AxisLinearisation
 from .csc_assembly import (
     CscAssembly,
     available_memory_gb,
@@ -148,7 +149,9 @@ def _var_labels(
 
 
 def nearest_axis_index(
-    axis: NDArray[np.float64], values: NDArray[np.float64]
+    axis: NDArray[np.float64],
+    values: NDArray[np.float64],
+    linearisation: Optional[AxisLinearisation] = None,
 ) -> NDArray[np.int64]:
     """The column of the MSI table each of ``values`` maps to.
 
@@ -157,6 +160,11 @@ def nearest_axis_index(
     value outside the axis span has no such column (the summed table
     dropped it); it takes the nearest edge, which is the only honest
     integer there is.
+
+    ``linearisation`` is ``axis``'s own, when it has one, so the column is
+    computed rather than searched for (issue #348). The clip above it is
+    what makes that safe here: the closed form is only ever evaluated
+    inside the axis span, never on a value beyond it.
     """
     from .base_spatialdata_converter import _nn_map_to_bins
 
@@ -164,7 +172,7 @@ def nearest_axis_index(
     if axis.size == 0:
         return np.zeros(values.size, dtype=np.int64)
     clipped = np.clip(values, axis[0], axis[-1])
-    return _nn_map_to_bins(axis, clipped).astype(np.int64)
+    return _nn_map_to_bins(axis, clipped, linearisation).astype(np.int64)
 
 
 def row_lookup(
@@ -353,6 +361,7 @@ def _build_from_shared_axis(
     common_mass_axis: NDArray[np.float64],
     n_obs: int,
     scratch: Path,
+    linearisation: Optional[AxisLinearisation] = None,
 ) -> Optional[Tuple[sparse.csc_matrix, pd.DataFrame, CscAssembly]]:
     """Scatter the source's own feature pairs; ``(matrix, var, assembly)`` or ``None``."""
     listed = reader.get_shared_mobility_features()
@@ -392,7 +401,9 @@ def _build_from_shared_axis(
         keys, values = _shared_axis_row(features, coords, mzs, mobility, intensities)
         assembly.scatter(row, keys, values)
     matrix = assembly.matrix()
-    var, n_mobility_values = _feature_var(features.unique_pairs, common_mass_axis)
+    var, n_mobility_values = _feature_var(
+        features.unique_pairs, common_mass_axis, linearisation
+    )
     logger.info(
         "Mobility-resolved table: %d pixels x %d (m/z, mobility) features, "
         "%d non-zeros, %d distinct mobility values",
@@ -405,13 +416,15 @@ def _build_from_shared_axis(
 
 
 def _feature_var(
-    unique_pairs: NDArray[np.float64], common_mass_axis: NDArray[np.float64]
+    unique_pairs: NDArray[np.float64],
+    common_mass_axis: NDArray[np.float64],
+    linearisation: Optional[AxisLinearisation] = None,
 ) -> Tuple[pd.DataFrame, int]:
     """The ``var`` of a shared-axis table and its count of distinct mobilities."""
     var_mz = unique_pairs[:, 0]
     var_mobility = unique_pairs[:, 1]
     mz_index = nearest_axis_index(
-        np.asarray(common_mass_axis, dtype=np.float64), var_mz
+        np.asarray(common_mass_axis, dtype=np.float64), var_mz, linearisation
     )
     unique_mobility, mobility_index = np.unique(var_mobility, return_inverse=True)
     mobility_index = np.asarray(mobility_index).ravel().astype(np.int64)
@@ -780,6 +793,7 @@ def _build_from_grid(
     n_obs: int,
     discovery: Optional[GridDiscovery],
     scratch: Path,
+    linearisation: Optional[AxisLinearisation] = None,
 ) -> Optional[Tuple[sparse.csc_matrix, pd.DataFrame, CscAssembly]]:
     """Bin every pixel's point cloud onto the grid; ``(matrix, var, assembly)`` or ``None``.
 
@@ -792,7 +806,13 @@ def _build_from_grid(
     axis = np.asarray(common_mass_axis, dtype=np.float64)
     if discovery is None:
         discovery = GridDiscovery(axis, grid, row_for, n_obs)
-        scan_mobility(reader, axis, discovery, description="Mobility grid: counting")
+        scan_mobility(
+            reader,
+            axis,
+            discovery,
+            description="Mobility grid: counting",
+            linearisation=linearisation,
+        )
         discovery.finish()
     elif discovery.n_features is None:
         discovery.finish()
@@ -807,6 +827,7 @@ def _build_from_grid(
             axis,
             GridScatter(discovery),
             description="Mobility grid: scattering",
+            linearisation=linearisation,
         )
     matrix = assembly.matrix()
     var = _grid_feature_var(assembly.unique_keys, axis, grid)
@@ -840,6 +861,7 @@ def build_mobility_table(
     grid: Optional[MobilityGrid] = None,
     discovery: Optional[GridDiscovery] = None,
     scratch: Optional[Path] = None,
+    linearisation: Optional[AxisLinearisation] = None,
 ) -> Optional[Any]:
     """Build the mobility-resolved table for one MSI table, or ``None``.
 
@@ -872,6 +894,10 @@ def build_mobility_table(
             so the directory must outlive the write; a caller who passes
             one owns its removal. ``None`` makes a temporary one that is
             removed when the returned table is garbage collected.
+        linearisation: ``common_mass_axis``'s own, when it has one, so
+            every m/z is placed by the closed form rather than by binary
+            search (issue #348). ``None`` searches. Ignored on the parts
+            of the grid route ``discovery`` already ran.
 
     Returns:
         A ``TableModel``-parsed AnnData, or ``None`` when no table can be
@@ -888,7 +914,9 @@ def build_mobility_table(
     built = None
     try:
         if reader.has_shared_mobility_axis:
-            built = _build_from_shared_axis(reader, row_for, axis, n_obs, workdir)
+            built = _build_from_shared_axis(
+                reader, row_for, axis, n_obs, workdir, linearisation
+            )
         else:
             refusal = grid_refusal(reader, axis, grid)
             if refusal is not None or grid is None:
@@ -899,7 +927,7 @@ def build_mobility_table(
                 )
                 return None
             built = _build_from_grid(
-                reader, row_for, axis, grid, n_obs, discovery, workdir
+                reader, row_for, axis, grid, n_obs, discovery, workdir, linearisation
             )
             grid_uns = grid.to_uns()
     finally:
