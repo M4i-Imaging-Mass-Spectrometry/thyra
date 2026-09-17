@@ -36,6 +36,7 @@ import spatialdata
 from spatialdata.transformations import get_transformation
 
 from tests.fixtures.mock_msi_generator import MockMSIConfig, MockMSIReader
+from thyra.converters.spatialdata.optical_image import OpticalImages
 from thyra.converters.spatialdata.streaming_converter import (
     StreamingSpatialDataConverter,
 )
@@ -45,29 +46,45 @@ PITCH = 25.0
 KEY = "m_z0"
 OPTICAL = "slide_overview.tif"
 
-#: A stand-in for what ``_build_tic_to_image_affine`` computes from real
-#: FlexImaging landmarks: raster indices to optical-photo pixels.
+#: A stand-in for what ``OpticalImages.build_tic_to_image_affine`` computes
+#: from real FlexImaging landmarks: raster indices to optical-photo pixels.
 TIC_TO_IMAGE = np.array(
     [[4.0, 0.0, 10.0], [0.0, 4.0, 20.0], [0.0, 0.0, 1.0]], dtype=np.float64
 )
 
 
-class _AlignedConverter(StreamingSpatialDataConverter):
-    """A converter that has alignment data, without needing a ``.mis``.
+class _AlignedOptical(OpticalImages):
+    """Optical images that have alignment data, without needing a ``.mis``.
 
     Only the affine construction is stubbed. The predicate under test,
     the attr builder and the TIC image's transform are all the real
     ones, which is the whole point -- the defect was in how those three
     read the state, not in how the state is computed.
+
+    Stubbed here rather than on a converter subclass because the
+    converter does not own this state: it reads it back off its
+    ``optical``, so an override there would never be called.
     """
 
-    def _build_tic_to_image_affine(self) -> None:
-        self._tic_to_image_matrix = TIC_TO_IMAGE.copy()
-        self._primary_optical_filename = OPTICAL
+    def build_tic_to_image_affine(self) -> None:
+        self._tic_to_image = TIC_TO_IMAGE.copy()
+        self.primary_filename = OPTICAL
+
+
+def _install(converter, cls, *, apply_alignment: bool) -> None:
+    """Give ``converter`` an ``OpticalImages`` of class ``cls``."""
+    converter.optical = cls(
+        converter.reader,
+        converter.output_path,
+        converter.dataset_id,
+        include=False,
+        apply_alignment=apply_alignment,
+        pixel_size_xy=converter._resolved_pixel_size_xy,
+    )
 
 
 def _convert(output: Path, *, apply_optical_alignment: bool) -> Path:
-    converter = _AlignedConverter(
+    converter = StreamingSpatialDataConverter(
         reader=MockMSIReader(
             MockMSIConfig(
                 n_x=N_X,
@@ -85,6 +102,7 @@ def _convert(output: Path, *, apply_optical_alignment: bool) -> Path:
         include_optical=False,
         apply_optical_alignment=apply_optical_alignment,
     )
+    _install(converter, _AlignedOptical, apply_alignment=apply_optical_alignment)
     assert converter.convert() is True
     return output
 
@@ -187,10 +205,10 @@ class TestAlignmentDataThatYieldsNoMatrix:
     ``TeachingPointAlignment.compute_area_alignment`` skips every area
     with no matching region, so a real ``.mis`` whose areas match no
     region in the data produces an ``AreaAlignmentResult`` with an empty
-    mapping list. ``_build_tic_to_image_affine`` then returns early and
+    mapping list. ``build_tic_to_image_affine`` then returns early and
     no matrix exists.
 
-    The pixel polygons used to gate on ``_alignment_result`` alone, so in
+    The pixel polygons used to gate on ``optical.alignment`` alone, so in
     that state they took the alignment branch while the attr and the TIC
     image took the micrometer one. ``transform_point`` iterates
     ``region_mappings`` and returns ``None`` for every position, so the
@@ -201,17 +219,17 @@ class TestAlignmentDataThatYieldsNoMatrix:
     def _convert(self, output: Path) -> Path:
         from thyra.alignment.teaching_points import AreaAlignmentResult
 
-        class _NoMappings(StreamingSpatialDataConverter):
-            def _compute_optical_alignment(self) -> None:
-                self._alignment_result = AreaAlignmentResult(
+        class _NoMappings(OpticalImages):
+            def compute_alignment(self) -> None:
+                self._alignment = AreaAlignmentResult(
                     region_mappings=[], first_raster_x=0, first_raster_y=0
                 )
 
-            def _build_tic_to_image_affine(self) -> None:
+            def build_tic_to_image_affine(self) -> None:
                 # What the real one does with no region mappings.
                 return
 
-        converter = _NoMappings(
+        converter = StreamingSpatialDataConverter(
             reader=MockMSIReader(
                 MockMSIConfig(
                     n_x=N_X,
@@ -228,6 +246,7 @@ class TestAlignmentDataThatYieldsNoMatrix:
             pixel_size_um=PITCH,
             include_optical=False,
         )
+        _install(converter, _NoMappings, apply_alignment=True)
         assert converter.convert() is True
         return output
 

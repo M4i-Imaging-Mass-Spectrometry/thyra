@@ -908,7 +908,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             self._finalize_table(state, unit)
 
         # Add optical images if available
-        self._add_optical_images(state)
+        self.optical.add_images(state.images)
 
     def _finalize_table(self, state: ConversionState, unit: _TableUnit) -> None:
         """One table over its memmaps, parsed, with its shapes and TIC image."""
@@ -1064,7 +1064,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # canonical alignment step.
         if self._msi_is_in_optical_pixel_space():
             transform = Affine(
-                self._tic_to_image_matrix,
+                self.optical.tic_to_image,
                 input_axes=("x", "y"),
                 output_axes=("x", "y"),
             )
