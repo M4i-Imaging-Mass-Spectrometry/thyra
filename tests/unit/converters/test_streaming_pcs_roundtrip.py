@@ -125,10 +125,10 @@ def test_image_write_failure_is_not_silent(tmp_path, monkeypatch):
     def _boom(_data_structures):
         raise RuntimeError("simulated optical/image write failure")
 
-    # _add_optical_images is the shared image-loading seam invoked while
-    # writing the TIC + optical elements; forcing it to raise simulates any
-    # downstream image/optical write failure.
-    monkeypatch.setattr(converter, "_add_optical_images", _boom)
+    # OpticalImages.add_images is the shared image-loading seam invoked
+    # while writing the TIC + optical elements; forcing it to raise simulates
+    # any downstream image/optical write failure.
+    monkeypatch.setattr(converter.optical, "add_images", _boom)
 
     assert converter.convert() is False, (
         "convert() must fail loudly when image writing fails, not report a "

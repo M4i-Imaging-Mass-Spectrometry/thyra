@@ -594,7 +594,7 @@ def test_converters_stream_the_pixels_after_the_write(rgb_tiff: Path, tmp_path: 
     converter, success = _convert(_mock_reader(rgb_tiff), output_path)
     assert success is True
     # Nothing is left waiting: every declared image was streamed.
-    assert converter._pending_optical_images == {}
+    assert converter.optical.pending == {}
 
     whole = _cyx(rgb_tiff)
     _, levels, _ = _read_element(output_path, "ds_optical_highres")
@@ -627,7 +627,7 @@ def test_unreadable_pixels_drop_the_image_not_the_conversion(
     with thyra_logs("thyra.converters", logging.WARNING) as records:
         converter, success = _convert(_mock_reader(truncated_tiff), output_path)
     assert success is True
-    assert converter._pending_optical_images == {}
+    assert converter.optical.pending == {}
     assert any(
         "Failed to load optical image truncated_0000.tiff" in record.message
         for record in records
@@ -652,7 +652,7 @@ def test_same_name_keeps_the_last_file(tmp_path: Path, thyra_logs):
     with thyra_logs("thyra.converters", logging.WARNING) as records:
         converter, success = _convert(_mock_reader(first, second), output_path)
     assert success is True
-    assert converter._pending_optical_images == {}
+    assert converter.optical.pending == {}
     assert any("is replaced by b_0000.tif" in r.message for r in records)
     _, levels, _ = _read_element(output_path, "ds_optical_highres")
     np.testing.assert_array_equal(levels["s0"][1], np.moveaxis(last, -1, 0))
@@ -670,9 +670,10 @@ def _root_attrs(store: Path) -> dict:
 def _convert_designating(primary_stem: str, reader, output_path: Path, **fields):
     """Convert with the .mis alignment image already resolved.
 
-    On a real Bruker acquisition ``_primary_optical_filename`` is set while
-    the .mis is read; the mock reader has no .mis, so it is planted here.
-    Extra ``fields`` are set on the converter the same way.
+    On a real Bruker acquisition ``OpticalImages.primary_filename`` is set
+    while the .mis is read; the mock reader has no .mis, so it is planted
+    here. Extra ``fields`` are set on the same object -- that object owns
+    this state, so planting it on the converter would only be ignored.
     """
     from thyra.converters.spatialdata.streaming_converter import (
         StreamingSpatialDataConverter,
@@ -681,9 +682,9 @@ def _convert_designating(primary_stem: str, reader, output_path: Path, **fields)
     converter = StreamingSpatialDataConverter(
         reader, output_path, dataset_id="ds", pixel_size_um=10.0, use_csc=True
     )
-    converter._primary_optical_filename = primary_stem
+    converter.optical.primary_filename = primary_stem
     for name, value in fields.items():
-        setattr(converter, name, value)
+        setattr(converter.optical, name, value)
     return converter, converter.convert()
 
 
@@ -749,7 +750,7 @@ def test_the_store_names_the_alignment_element_not_the_filename(
         "slideb_0000",
         _mock_reader(primary, other),
         output_path,
-        _tic_to_image_matrix=np.eye(3, dtype=np.float64),
+        _tic_to_image=np.eye(3, dtype=np.float64),
     )
     assert success is True
 
@@ -774,7 +775,7 @@ def test_a_dropped_optical_image_leaves_no_trace_in_the_attrs(
             "truncated_0000",
             _mock_reader(truncated_tiff),
             output_path,
-            _tic_to_image_matrix=np.eye(3, dtype=np.float64),
+            _tic_to_image=np.eye(3, dtype=np.float64),
         )
     assert success is True
     # The premise: it was declared and then dropped, not never added.

@@ -229,7 +229,7 @@ def test_conversion_carries_a_jpeg_into_the_store(tmp_path: Path):
     converter, success = _convert_with_optical(jpeg, output_path)
 
     assert success is True
-    assert converter._pending_optical_images == {}
+    assert converter.optical.pending == {}
     sdata = SpatialData.read(str(output_path))
     stored = sdata.images["ds_optical_highres"]
     assert stored.shape == (3, 37, 53)
@@ -257,7 +257,7 @@ def test_an_undecodable_jpeg_drops_the_image_not_the_conversion(
         converter, success = _convert_with_optical(jpeg, output_path)
 
     assert success is True
-    assert converter._pending_optical_images == {}
+    assert converter.optical.pending == {}
     assert any(
         "Failed to load optical image scan_0000.jpg" in record.getMessage()
         for record in records

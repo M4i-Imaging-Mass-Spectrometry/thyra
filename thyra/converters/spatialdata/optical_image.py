@@ -59,7 +59,7 @@ dtype. :func:`block_mean` is unit-tested against xarray for exactly that.
 **Failure policy.** An optical image that cannot be decoded used to be
 skipped with a warning before anything was written; now the header is read
 up front and the pixels only after the store exists, so
-:meth:`BaseSpatialDataConverter._stream_pending_optical_pixels` keeps that
+:meth:`OpticalImages.stream_pending_pixels` keeps that
 contract by dropping the declared element from the store and warning. A
 store never keeps an image whose pixels were not written.
 """
@@ -73,18 +73,39 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import dask.array as da
 import numpy as np
 import tifffile
 import xarray as xr
 import zarr
+from numpy.typing import NDArray
 from PIL import Image as PILImage
 from spatialdata.models import Image2DModel
+from spatialdata.transformations import Affine, Identity, Scale
+from spatialdata.transformations import Sequence as SequenceTransform
 from spatialdata.transformations import set_transformation
 
+from ...alignment import AreaAlignmentResult, TeachingPointAlignment
 from ...utils.zarr_atomic_write import install_windows_atomic_write_retry
+from ._chunking import image_chunks
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from ...core.base_reader import BaseMSIReader
 
 logger = logging.getLogger(__name__)
 
@@ -515,7 +536,7 @@ class StreamedOpticalImage:
     ``attrs`` mapping and the converter used to fill it with the image's
     source filename; nothing of it was ever in a store. Provenance that has
     to survive belongs in the store's root attrs, which is where
-    :meth:`BaseSpatialDataConverter._create_optical_images_attr` now puts
+    :meth:`OpticalImages.root_attr` now puts
     it, under ``optical_images``.
     """
 
@@ -708,3 +729,723 @@ class StreamedOpticalImage:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             # list() so a failing unit raises here, not silently.
             list(pool.map(reduce_region, regions))
+
+
+def _calc_optical_scale_factors(
+    smallest_dim: int,
+    min_coarsest_size: int = 1000,
+    factor: int = 2,
+) -> list:
+    """Pick pyramid scale factors for an optical image of given size.
+
+    Decides how many cumulative-doubling downsample levels to generate
+    based on the smallest spatial dimension; stops once the next
+    halving would drop the short side below ``min_coarsest_size``.
+
+    Mirrors :func:`spatialdata_io.readers._utils._utils.calc_scale_factors`
+    so wizard-converted microscopy and Thyra-bundled FlexImaging
+    brightfield share the same pyramid shape Xenium's own morphology
+    image gets out of spatialdata-io.
+
+    Returns a list of (cumulative) downsample factors to feed to
+    ``Image2DModel.parse(scale_factors=...)``.  Empty list means
+    "no pyramid needed" (image is already at or below the coarsest
+    target size).
+
+    Args:
+        smallest_dim: ``min(width, height)`` of the source image.
+        min_coarsest_size: stop adding levels once the next halving
+            would drop the short side below this value.  Default
+            ~1000 px matches spatialdata-io's convention and gives a
+            coarsest level that comfortably fits a single viewport
+            paint in a few hundred KB.
+        factor: downsample factor per step.  Default 2 (mip-map style).
+    """
+    if smallest_dim <= 0:
+        return []
+    factors: list = []
+    cur = smallest_dim / factor
+    while cur >= min_coarsest_size:
+        factors.append(factor)
+        cur /= factor
+    return factors
+
+
+class OpticalImages:
+    """The optical images of one conversion: alignment, declaration, streaming.
+
+    One conversion owns one of these. It holds every piece of state the
+    optical images need -- the FlexImaging alignment, the TIC-to-image
+    affine, which file became which element, which of those elements is
+    the alignment image, and the placeholders still waiting for their
+    pixels -- and it is the only thing that writes any of them.
+
+    The three steps, in the order a conversion takes them:
+
+    1. :meth:`compute_alignment` and :meth:`build_tic_to_image_affine`,
+       while the reader's metadata is being read. Both run regardless of
+       ``apply_alignment``: the opt-out path needs the affine's *inverse*
+       to carry the optical photo into micrometers.
+    2. :meth:`add_images`, while the elements are assembled -- each image
+       is declared as a placeholder with its final shape, chunks and
+       transformations, and nothing is decoded.
+    3. :meth:`stream_pending_pixels`, once the store exists, which fills
+       each placeholder from its file in bands.
+
+    What the converter reads back is the four read-only properties
+    (:attr:`alignment`, :attr:`tic_to_image`, :attr:`sources`,
+    :attr:`alignment_element`) plus :attr:`apply_alignment`; it never
+    writes any of them.
+    """
+
+    def __init__(
+        self,
+        reader: "BaseMSIReader",
+        output_path: Path,
+        dataset_id: str,
+        *,
+        include: bool,
+        apply_alignment: bool,
+        pixel_size_xy: Callable[[], Tuple[float, float]],
+    ) -> None:
+        """Build the optical images of one conversion.
+
+        Args:
+            reader: The MSI reader. Only ``get_optical_image_paths``,
+                ``get_primary_optical_image_path``, ``mis_metadata``,
+                ``_positions`` and ``_header`` are read, and the last four
+                through ``getattr``/``hasattr`` -- a reader here is whatever
+                satisfies the interface, not necessarily a
+                :class:`~thyra.core.base_reader.BaseMSIReader` subclass.
+            output_path: The store being written. Read only after it exists,
+                by :meth:`stream_pending_pixels` and :meth:`forget_image`.
+            dataset_id: Names the per-dataset coordinate system each image is
+                placed in, and prefixes every element name.
+            include: Whether to put optical images in the store at all.
+            apply_alignment: Whether the MSI raster itself is placed in
+                optical-photo pixels. See :meth:`_load_single_image` for what
+                the two modes do to an image's transform.
+            pixel_size_xy: The conversion's in-plane pitch as ``(x_um, y_um)``,
+                called when an image is loaded rather than read here: the
+                converter settles its pitch from the reader's metadata after
+                this object is built.
+        """
+        self.reader = reader
+        self.output_path = output_path
+        self.dataset_id = dataset_id
+        self._include = bool(include)
+        self._apply_alignment = bool(apply_alignment)
+        self._pixel_size_xy = pixel_size_xy
+        # Optical-MSI alignment (computed from FlexImaging Area definitions)
+        self._alignment: Optional[AreaAlignmentResult] = None
+        # Affine matrix mapping TIC raster indices to optical image pixels
+        self._tic_to_image: Optional[NDArray[np.float64]] = None
+        # Primary optical image filename from .mis <ImageFile> and its
+        # dimensions. The filename is public because a test that has no
+        # .mis to read plants it; the dimensions are only ever derived
+        # here, from the primary image's own header.
+        self.primary_filename: Optional[str] = None
+        self._primary_dims: Optional[Tuple[int, int]] = None  # (width, height)
+        # What the store will say about its optical images: which element
+        # each file became, and which of those elements is the alignment
+        # image. Filled as the images are declared, read when the root
+        # attrs are composed. See :meth:`root_attr`.
+        self._sources: Dict[str, str] = {}
+        self._alignment_element: Optional[str] = None
+        # Optical images declared to SpatialData as placeholders whose pixels
+        # still have to be streamed into the store once it is written. See
+        # :class:`StreamedOpticalImage` and :meth:`stream_pending_pixels`.
+        self._pending: Dict[str, StreamedOpticalImage] = {}
+
+    @property
+    def alignment(self) -> Optional[AreaAlignmentResult]:
+        """The FlexImaging area alignment, or ``None`` if there is none."""
+        return self._alignment
+
+    @property
+    def tic_to_image(self) -> Optional[NDArray[np.float64]]:
+        """The 3x3 affine from TIC raster indices to optical-photo pixels."""
+        return self._tic_to_image
+
+    @property
+    def sources(self) -> Mapping[str, str]:
+        """Element name to the name of the file it was read from."""
+        return self._sources
+
+    @property
+    def alignment_element(self) -> Optional[str]:
+        """The element the alignment is stated against, if it is in the store."""
+        return self._alignment_element
+
+    @property
+    def apply_alignment(self) -> bool:
+        """Whether the MSI raster is placed in optical-photo pixels."""
+        return self._apply_alignment
+
+    @property
+    def pending(self) -> Mapping[str, StreamedOpticalImage]:
+        """The placeholders whose pixels have not been streamed yet."""
+        return self._pending
+
+    def compute_alignment(self) -> None:
+        """Compute optical-MSI alignment from reader metadata.
+
+        For FlexImaging data with Area definitions, this computes the
+        transformation that maps MSI raster coordinates to optical image
+        pixel coordinates.
+        """
+        # Check if reader has FlexImaging-specific metadata
+        if not hasattr(self.reader, "mis_metadata"):
+            logger.debug("Reader does not have mis_metadata, skipping alignment")
+            return
+
+        mis_metadata = getattr(self.reader, "mis_metadata", {})
+        areas = mis_metadata.get("areas", [])
+
+        if not areas:
+            logger.debug("No Area definitions found, skipping alignment")
+            return
+
+        # Get required data for alignment
+        positions = getattr(self.reader, "_positions", [])
+        header = getattr(self.reader, "_header", {})
+
+        if not positions:
+            logger.warning("No position data available for alignment")
+            return
+
+        first_raster_x = header.get("first_raster_x", 0)
+        first_raster_y = header.get("first_raster_y", 0)
+
+        # Store the primary optical image filename from <ImageFile>
+        image_file = mis_metadata.get("ImageFile", "")
+        if image_file:
+            self.primary_filename = Path(image_file).stem.lower()
+            logger.info(f"Primary alignment image from .mis: {image_file}")
+
+        # Compute area-based alignment
+        try:
+            aligner = TeachingPointAlignment()
+            self._alignment = aligner.compute_area_alignment(
+                areas=areas,
+                poslog_positions=positions,
+                first_raster_x=first_raster_x,
+                first_raster_y=first_raster_y,
+            )
+            logger.info(
+                f"Computed optical alignment with "
+                f"{len(self._alignment.region_mappings)} region mappings"
+            )
+        except (KeyError, TypeError, ValueError) as e:
+            # Thyra arithmetic over Thyra's own parse of the .mis and the
+            # poslog (issue #280). What it can legitimately meet is a
+            # record those files did not fill: an Area without ``p1``, a
+            # position without ``region``, a corner that is not a pair.
+            # Not AttributeError -- nothing here reads an attribute, so one
+            # would be a defect in the aligner and must keep its traceback.
+            logger.warning(f"Failed to compute optical alignment: {e}")
+            self._alignment = None
+
+    def build_tic_to_image_affine(self) -> None:
+        """Build affine matrix mapping TIC raster-index coords to image pixels.
+
+        When optical alignment is available, this creates a 3x3 affine matrix
+        that transforms TIC image coordinates (integer raster indices) into
+        optical image pixel coordinates, so the TIC overlays correctly on the
+        optical image in SpatialData.
+
+        For single-region data, uses that region's mapping directly.
+        For multi-region data, computes a global affine from the overall
+        raster bounds and overall image bounds across all regions.
+
+        The matrix encodes: image_pixel = scale * raster_index + offset
+        where offset places the first pixel center at image_min + half_pixel.
+        """
+        if self._alignment is None:
+            return
+        if not self._alignment.region_mappings:
+            return
+
+        mappings = self._alignment.region_mappings
+
+        if len(mappings) == 1:
+            # Single region: use its mapping directly
+            rm = mappings[0]
+            n_raster_x = rm.raster_max_x - rm.raster_min_x + 1
+            image_width = rm.image_max_x - rm.image_min_x
+            scale_x = image_width / max(1, n_raster_x)
+            n_raster_y = rm.raster_max_y - rm.raster_min_y + 1
+            image_height = rm.image_max_y - rm.image_min_y
+            scale_y = image_height / max(1, n_raster_y)
+            half_x = scale_x / 2.0
+            half_y = scale_y / 2.0
+            tx = rm.image_min_x + half_x
+            ty = rm.image_min_y + half_y
+        else:
+            # Multi-region: compute global affine from overall bounds.
+            # The TIC grid covers the full normalized raster space
+            # (0..n_x-1, 0..n_y-1). We map this to the bounding box
+            # of all region image areas.
+            first_rx = self._alignment.first_raster_x
+            first_ry = self._alignment.first_raster_y
+
+            # Global raster bounds (original coords)
+            global_raster_min_x = min(rm.raster_min_x for rm in mappings)
+            global_raster_max_x = max(rm.raster_max_x for rm in mappings)
+            global_raster_min_y = min(rm.raster_min_y for rm in mappings)
+            global_raster_max_y = max(rm.raster_max_y for rm in mappings)
+
+            # Global image bounds
+            global_img_min_x = min(rm.image_min_x for rm in mappings)
+            global_img_max_x = max(rm.image_max_x for rm in mappings)
+            global_img_min_y = min(rm.image_min_y for rm in mappings)
+            global_img_max_y = max(rm.image_max_y for rm in mappings)
+
+            n_raster_x = global_raster_max_x - global_raster_min_x + 1
+            n_raster_y = global_raster_max_y - global_raster_min_y + 1
+            image_width = global_img_max_x - global_img_min_x
+            image_height = global_img_max_y - global_img_min_y
+
+            scale_x = image_width / max(1, n_raster_x)
+            scale_y = image_height / max(1, n_raster_y)
+            half_x = scale_x / 2.0
+            half_y = scale_y / 2.0
+
+            # The TIC grid index (0,0) corresponds to original raster
+            # position (first_rx, first_ry). We need to account for
+            # any gap between first_rx and global_raster_min_x.
+            offset_raster_x = first_rx - global_raster_min_x
+            offset_raster_y = first_ry - global_raster_min_y
+
+            tx = global_img_min_x + half_x + offset_raster_x * scale_x
+            ty = global_img_min_y + half_y + offset_raster_y * scale_y
+
+        # 3x3 affine: [[sx, 0, tx], [0, sy, ty], [0, 0, 1]]
+        self._tic_to_image = np.array(
+            [
+                [scale_x, 0, tx],
+                [0, scale_y, ty],
+                [0, 0, 1],
+            ],
+            dtype=np.float64,
+        )
+        logger.info(
+            f"Built TIC-to-image affine: "
+            f"scale=({scale_x:.2f}, {scale_y:.2f}), "
+            f"offset=({tx:.1f}, {ty:.1f})"
+        )
+
+    def add_images(self, images: MutableMapping[str, Any]) -> None:
+        """Load and add optical images from the reader to data structures.
+
+        Finds the optical images associated with the MSI data and adds them
+        as image layers in the SpatialData output. The primary alignment image
+        (from .mis <ImageFile>) is loaded first so its dimensions are known
+        when computing Scale transforms for the other images.
+
+        Args:
+            images: The store's images, to add each placeholder to
+        """
+        if not self._include:
+            return
+
+        optical_paths = self.reader.get_optical_image_paths()
+        if not optical_paths:
+            logger.debug("No optical images found")
+            return
+
+        self._adopt_reader_primary_optical()
+        logger.info(f"Found {len(optical_paths)} optical image(s)")
+
+        # Load primary image first so we know its dimensions for scaling others
+        primary_paths = [p for p in optical_paths if self._is_primary_optical(p)]
+        other_paths = [p for p in optical_paths if not self._is_primary_optical(p)]
+
+        for image_path in primary_paths + other_paths:
+            try:
+                self._load_single_image(image_path, images)
+            except Exception as e:
+                logger.warning(f"Failed to load optical image {image_path.name}: {e}")
+
+    def _adopt_reader_primary_optical(self) -> None:
+        """Take the .mis alignment image from the reader if nothing else set it.
+
+        :meth:`compute_alignment` normally records it while it is
+        reading the .mis, but it returns early whenever there is nothing to
+        align -- no Area definitions, no positions -- and then the primary
+        image is never named even though the .mis names it. The Bruker
+        readers resolve it during folder discovery regardless, so ask them.
+
+        Asked for with ``getattr`` even though ``BaseMSIReader`` defines it,
+        because a reader here is whatever satisfies the interface and not
+        necessarily a subclass: this project's own
+        ``tests/unit/converters/test_streaming_converter.py`` passes in a
+        plain class that implements the methods and inherits nothing. This
+        method is optional and arrived after those readers were written, so
+        not having it has to mean "no designated image", not a crash in the
+        middle of a conversion.
+        """
+        if self.primary_filename:
+            return
+        resolve = getattr(self.reader, "get_primary_optical_image_path", None)
+        primary = resolve() if callable(resolve) else None
+        if primary is not None:
+            self.primary_filename = Path(primary).stem.lower()
+            logger.info(f"Primary alignment image from .mis: {primary.name}")
+
+    def _is_primary_optical(self, image_path: Path) -> bool:
+        """Check if an image file is the primary alignment image from .mis.
+
+        Matched on the stem, not the whole filename: what the .mis names and
+        what is on disk agree on the name but not always on the spelling of
+        the extension, and a folder does not hold the same stem twice.
+        """
+        if not self.primary_filename:
+            return False
+        return image_path.stem.lower() == self.primary_filename
+
+    def _scale_transform(self, x_size: int, y_size: int) -> Any:
+        """Compute a Scale transform for a non-primary optical image.
+
+        Maps the image's pixel coordinates to the primary alignment image's
+        coordinate space using the dimension ratio.
+
+        Args:
+            x_size: Width of the non-primary image
+            y_size: Height of the non-primary image
+
+        Returns:
+            Scale transform, or Identity if no primary dimensions available
+        """
+        if self._primary_dims is None:
+            return Identity()
+
+        primary_w, primary_h = self._primary_dims
+        scale_x = primary_w / x_size
+        scale_y = primary_h / y_size
+
+        logger.info(f"  Scale to primary: ({scale_x:.4f}, {scale_y:.4f})")
+        return Scale([scale_x, scale_y], axes=("x", "y"))
+
+    def _to_um_transform(self) -> Any:
+        """Build an Affine mapping primary-optical pixels to MSI um.
+
+        Composes the inverse of the tic-to-image affine (so optical
+        pixel -> MSI raster index) with the MSI pixel size (so raster
+        index -> um).  Used only when ``apply_optical_alignment=False``
+        and FlexImaging metadata is available -- it places the optical
+        image into the same micrometer "global" frame as the MSI so a
+        downstream registration step (e.g. Ousia's EscDat wizard) can
+        map both elements together with a single composed affine.
+
+        The math: ``tic_to_image_matrix`` is a 3x3 affine encoding
+        ``image_pixel = scale * raster_index + offset``.  Inverting
+        and composing with scale-by-pixel-size yields::
+
+            um = pixel_size_um * inv(tic_to_image) @ optical_pixel
+
+        Returns an :class:`Affine` over ``(x, y)`` input + output axes.
+        Caller should not invoke when ``tic_to_image`` is None.
+        """
+        if self._tic_to_image is None:
+            raise RuntimeError(
+                "_to_um_transform called without "
+                "a tic_to_image matrix; check call-site guard."
+            )
+        inv = np.linalg.inv(self._tic_to_image)
+        # Scale matrix: [[ps_x, 0, 0], [0, ps_y, 0], [0, 0, 1]]
+        ps_x, ps_y = self._pixel_size_xy()
+        scale_mat = np.array(
+            [[ps_x, 0.0, 0.0], [0.0, ps_y, 0.0], [0.0, 0.0, 1.0]],
+            dtype=np.float64,
+        )
+        matrix = scale_mat @ inv
+        return Affine(
+            matrix,
+            input_axes=("x", "y"),
+            output_axes=("x", "y"),
+        )
+
+    def _load_single_image(
+        self, image_path: Path, images: MutableMapping[str, Any]
+    ) -> None:
+        """Load a single optical image and add it to data structures.
+
+        The primary image (identified by .mis <ImageFile>) gets an Identity
+        transform. Other images get a Scale transform mapping their pixel
+        coordinates to the primary image's coordinate space.
+
+        Args:
+            image_path: Path to the optical image (TIFF, JPEG, PNG or BMP)
+            images: The store's images, to add the placeholder to
+        """
+        # Generate a clean name for the image layer
+        image_name = self._element_name(image_path)
+
+        logger.info(f"Loading optical image: {image_path.name} as '{image_name}'")
+
+        # Only the page header is read here. The pixels never enter this
+        # process whole: the element is declared to SpatialData as a lazy
+        # placeholder with the final shape, dtype, chunking and pyramid,
+        # and stream_pending_pixels() fills it in bands once the store
+        # exists. See this module's own docstring for why (the whole-page
+        # route cost ~5x the decoded image in transient memory).
+        # probe raises for a layout or sample format it cannot read; the
+        # per-image guard in add_images turns that into the same
+        # "skip with a warning" the whole-page decode used to give.
+        source = probe_optical_source(image_path)
+        n_channels, y_size, x_size = source.shape
+
+        # Determine transform.  Two cases:
+        #
+        # 1. apply_optical_alignment=True (default): "global" is
+        #    optical-image pixel space.  Primary image is Identity;
+        #    non-primary images Scale to match primary dims.
+        #
+        # 2. apply_optical_alignment=False (e.g. Ousia wizard):
+        #    "global" is MSI micrometer space.  Map the primary
+        #    image's pixel coordinates into MSI um using the inverse
+        #    of the tic-to-image affine, then scale by pixel_size_um.
+        #    This way the optical image lands alongside the MSI in
+        #    the same um frame and downstream registration steps
+        #    map both together.
+        um_mode = not self._apply_alignment and self._tic_to_image is not None
+        is_primary = self._is_primary_optical(image_path)
+        if is_primary:
+            self._primary_dims = (x_size, y_size)
+            if um_mode:
+                transform = self._to_um_transform()
+                logger.info(
+                    f"  Primary image -> um via inverse alignment: {x_size}x{y_size}"
+                )
+            else:
+                transform = Identity()
+                logger.info(f"  Primary alignment image: {x_size}x{y_size}")
+        elif self._primary_dims is not None:
+            # Non-primary: first scale to match primary, then if
+            # we're in um-mode, chain through the same um affine.
+            base = self._scale_transform(x_size, y_size)
+            if um_mode:
+                transform = SequenceTransform([base, self._to_um_transform()])
+            else:
+                transform = base
+        else:
+            transform = Identity()
+
+        # Multi-scale pyramid + chunked layout.
+        #
+        # Without scale_factors a single-scale image is written and any
+        # downstream viewer has to read full-resolution tiles at every
+        # zoom level.  For a typical FlexImaging brightfield (10k x 10k+
+        # pixels) that is the difference between an instant first paint
+        # and a multi-second stall every time the user pans or zooms.
+        #
+        # We mirror what spatialdata-io's xenium reader does for its
+        # morphology images: scale_factors=[2, 2, 2, 2] gives the viewer
+        # five pyramid levels.  Here we adapt the level count to the
+        # image's smallest spatial dimension so tiny images don't waste
+        # levels and huge ones get enough to keep the coarsest level
+        # fast (< ~1000 px short side).
+        #
+        # chunks=(1, 4096, 4096) stores each channel as 4k x 4k blocks
+        # so a viewer's 512 x 512 tile read decompresses at most one
+        # chunk per request.
+        smallest = min(y_size, x_size)
+        scale_factors = _calc_optical_scale_factors(smallest)
+        streamed = StreamedOpticalImage(
+            source=source,
+            name=image_name,
+            chunks=image_chunks(2),  # (1, 4096, 4096); sharding seam, see _chunking
+            scale_factors=scale_factors,
+            transformations={
+                self.dataset_id: transform,
+                "global": transform,
+            },
+        )
+        # Keyed by element name, as the images dict is: a second file that
+        # maps to the same name replaces the first, the way the dict
+        # assignment always did, only now with a warning.
+        earlier = self._pending.get(image_name)
+        if earlier is not None:
+            logger.warning(
+                f"Optical image '{image_name}' from {earlier.source.path.name} "
+                f"is replaced by {image_path.name}, which maps to the same name"
+            )
+        images[image_name] = streamed.placeholder()
+        self._pending[image_name] = streamed
+        # Which file this element came from, and whether it is the one the
+        # alignment is stated against. Neither is recoverable from the
+        # store otherwise: the element name drops the extension and
+        # rewrites the stem (_0000 -> highres, and a stem over 30
+        # characters is truncated), and the alignment image is only
+        # distinguishable by its transform, and only when the alignment
+        # was applied. Recorded here, written by the root attrs.
+        self._sources[image_name] = image_path.name
+        if is_primary:
+            self._alignment_element = image_name
+
+        pyramid_desc = (
+            f", {len(scale_factors)} pyramid level{'s' if len(scale_factors) != 1 else ''}"
+            if scale_factors
+            else " (no pyramid; image small enough)"
+        )
+        logger.info(
+            f"Added optical image '{image_name}': {x_size}x{y_size} "
+            f"({n_channels} channel{'s' if n_channels > 1 else ''}){pyramid_desc}"
+            "; pixels stream in once the store is written"
+        )
+
+    def stream_pending_pixels(self) -> int:
+        """Fill every optical image declared so far with its pixels.
+
+        Call once the SpatialData write that carried the placeholders has
+        returned and before metadata is consolidated. Each image streams
+        from its TIFF in bands and builds its pyramid level by level on
+        disk, so memory stays bounded by one band, not by the image.
+
+        A TIFF whose pixels cannot be read is dropped from the store with a
+        warning and the conversion goes on without it -- the tolerance the
+        whole-page decode had, when the same failure happened before
+        anything was written. Only a failure to drop the element propagates,
+        because an image with metadata and no pixels is a corrupt store.
+
+        Returns:
+            The number of images whose pixels are now in the store.
+        """
+        pending, self._pending = self._pending, {}
+        streamed = 0
+        for image in pending.values():
+            logger.info(f"Streaming optical image pixels: '{image.name}'")
+            try:
+                image.stream_pixels(self.output_path)
+            except Exception as e:  # mirrors the per-image guard in add_images
+                logger.warning(
+                    f"Failed to load optical image {image.source.path.name}: {e}; "
+                    f"dropping '{image.name}' from the store"
+                )
+                image.discard(self.output_path)
+                self.forget_image(image.name)
+                continue
+            streamed += 1
+        return streamed
+
+    def forget_image(self, name: str) -> None:
+        """Take a dropped optical image back out of the store's root attrs.
+
+        The root attrs were composed and written by the ``SpatialData``
+        write that carried the placeholders, so an image
+        :meth:`stream_pending_pixels` then drops is still named in
+        them. Metadata naming an element that is not in the store is worse
+        than none -- a consumer that trusts it gets a KeyError where it
+        would otherwise have fallen back -- so the store is corrected
+        before ``zarr.consolidate_metadata`` runs, which copies whatever is
+        here into the consolidated document.
+
+        Args:
+            name: Element name of the image whose pixels could not be read.
+        """
+        self._sources.pop(name, None)
+        was_alignment = self._alignment_element == name
+        if was_alignment:
+            self._alignment_element = None
+        try:
+            root = zarr.open_group(
+                str(self.output_path), mode="r+", use_consolidated=False
+            )
+            optical = root.attrs.get("optical_images")
+            if isinstance(optical, dict):
+                remaining = self.root_attr()
+                if remaining is None:
+                    del root.attrs["optical_images"]
+                else:
+                    root.attrs["optical_images"] = remaining
+            if was_alignment:
+                self._clear_reference_element(root)
+        except Exception as e:  # pragma: no cover - a store we just wrote
+            logger.warning(
+                f"Could not unrecord the dropped optical image '{name}' from "
+                f"the store's attrs: {e}"
+            )
+
+    @staticmethod
+    def _clear_reference_element(root: Any) -> None:
+        """Null ``coordinate_systems.global.reference_element`` in ``root``.
+
+        Reassigns the whole attr: a zarr attribute is a value, so mutating
+        the dict a read returns changes nothing on disk.
+        """
+        systems = root.attrs.get("coordinate_systems")
+        if not isinstance(systems, dict) or not isinstance(systems.get("global"), dict):
+            return
+        root.attrs["coordinate_systems"] = {
+            **systems,
+            "global": {**systems["global"], "reference_element": None},
+        }
+
+    def _element_name(self, image_path: Path) -> str:
+        """Generate a clean name for an optical image layer.
+
+        The suffix is dropped, so the same acquisition exported as a .tif or
+        a .jpg lands under the same element name.
+
+        Args:
+            image_path: Path to the optical image
+
+        Returns:
+            Clean name for the image layer (e.g., 'optical_0000', 'optical_deriv')
+        """
+        stem = image_path.stem.lower()
+
+        # Extract meaningful suffix from filename
+        if "_0000" in stem:
+            suffix = "highres"
+        elif "_0001" in stem:
+            suffix = "derived"
+        elif "deriv" in stem:
+            suffix = "overview"
+        else:
+            # Use stem with special chars replaced
+            suffix = stem.replace(" ", "_").replace("-", "_")
+            # Truncate if too long
+            if len(suffix) > 30:
+                suffix = suffix[:30]
+
+        return f"{self.dataset_id}_optical_{suffix}"
+
+    def root_attr(self) -> Optional[Dict[str, Any]]:
+        """What each optical element in this store came from, and which aligns.
+
+        Two facts the store could not state before:
+
+        * **Which file.** The element name is derived, not the filename:
+          :meth:`_element_name` drops the extension, maps
+          ``_0000``/``_0001``/``deriv`` onto ``highres``/``derived``/
+          ``overview`` and truncates anything else at 30 characters, so
+          ``sample_0000.tif`` and ``sample_0000.jpg`` both land under
+          ``<dataset_id>_optical_highres`` and neither name survives.
+        * **Which one the alignment is stated against.** The .mis names it
+          in ``<ImageFile>``; the store only ever implied it, through the
+          transform (the alignment image gets ``Identity``, the others a
+          ``Scale`` into its pixel grid) and only when
+          ``apply_optical_alignment=True``. A consumer that wanted the
+          alignment image had to guess -- Ousia guesses alphabetically.
+
+        Written into the store's own root attrs rather than onto the
+        elements, because per-element attributes do not survive the write:
+        see :class:`StreamedOpticalImage`.
+
+        Returns:
+            ``{"alignment_element": str | None, "elements": {name:
+            {"source_file": str}}}``, or ``None`` when the conversion put
+            no optical image in the store -- the section is omitted rather
+            than written empty, as every other optional section here is.
+        """
+        if not self._sources:
+            return None
+        return {
+            "alignment_element": self._alignment_element,
+            "elements": {
+                name: {"source_file": source_file}
+                for name, source_file in self._sources.items()
+            },
+        }
