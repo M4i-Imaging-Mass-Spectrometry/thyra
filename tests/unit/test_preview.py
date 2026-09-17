@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from thyra import MsiPreview, preview_msi
+from thyra.preview import _region_summary
 from thyra.resampling.types import AxisType, ResamplingMethod
 
 
@@ -205,3 +206,103 @@ class TestPreviewMsiAPI:
         # Path() round-trip should be idempotent.
         result = preview_msi(Path(imzml_path))
         assert result.readable is True
+
+
+class TestRegionSummary:
+    """``MsiPreview.regions``: the multi-region split the wizard needs.
+
+    A Bruker ``.d`` can hold several tissue sections.  Converted whole it
+    becomes ONE sample whose grid is the bounding box of all of them and
+    is mostly empty, silently -- so a caller that means to offer one
+    sample per section has to be able to see the sections first.
+
+    The three normalizations below are the whole reason ``_region_summary``
+    exists rather than the field being ``reader.get_region_info()``.
+    """
+
+    def test_a_single_region_input_reports_None(self, create_minimal_imzml):
+        """The common case, and the one every existing caller is in."""
+        imzml_path, *_ = create_minimal_imzml
+
+        result = preview_msi(imzml_path)
+
+        assert result.regions is None
+
+    def test_one_entry_is_folded_to_None(self):
+        """Readers disagree about this, and callers should not have to.
+
+        ``BrukerReader`` answers ``None`` below two regions; the solariX
+        reader answers a one-entry list.  Left alone, "is this one
+        section?" gets a different answer per vendor for the same slide.
+        """
+
+        class _OneRegion:
+            def get_region_info(self):
+                return [{"region_number": 0, "n_spectra": 713}]
+
+        assert _region_summary(_OneRegion()) is None
+
+    def test_regions_come_back_in_region_number_order(self):
+        """``BrukerReader`` sorts by frame count, which shuffles sections.
+
+        A five-region acquisition answers 2, 0, 3, 4, 1.  Rendered in
+        that order, section three is offered first and the numbering the
+        user reads in FlexImaging matches nothing on screen.
+        """
+
+        class _FrameCountOrder:
+            def get_region_info(self):
+                return [
+                    {"region_number": 2, "n_spectra": 34633},
+                    {"region_number": 0, "n_spectra": 29234},
+                    {"region_number": 3, "n_spectra": 1900},
+                    {"region_number": 4, "n_spectra": 45},
+                    {"region_number": 1, "n_spectra": 44},
+                ]
+
+        summary = _region_summary(_FrameCountOrder())
+
+        assert summary is not None
+        assert [r["region_number"] for r in summary] == [0, 1, 2, 3, 4]
+
+    def test_a_reader_that_raises_leaves_the_field_None(self):
+        """Never trade a working preview for a field almost nothing has.
+
+        ``regions`` means "one region, or no such concept" and must not
+        also mean "could not tell" -- the caller's branch is the same
+        either way, and failing the preview would blank a card that has
+        six other usable fields on it.
+        """
+
+        class _Broken:
+            def get_region_info(self):
+                raise RuntimeError("database is locked")
+
+        assert _region_summary(_Broken()) is None
+
+    def test_bounds_and_name_survive_the_normalization(self):
+        """Sorting must not drop the two keys that identify a region."""
+
+        class _Full:
+            def get_region_info(self):
+                return [
+                    {
+                        "region_number": 1,
+                        "n_spectra": 12470,
+                        "bounds": (0, 248, 85, 392),
+                        "name": "02",
+                    },
+                    {
+                        "region_number": 0,
+                        "n_spectra": 12495,
+                        "bounds": (479, 255, 565, 399),
+                        "name": "01",
+                    },
+                ]
+
+        summary = _region_summary(_Full())
+
+        assert summary is not None
+        assert summary[0]["name"] == "01"
+        assert summary[0]["bounds"] == (479, 255, 565, 399)
+        assert summary[1]["name"] == "02"

@@ -1177,24 +1177,79 @@ class BrukerReader(BrukerBaseMSIReader):
             logger.warning(f"Could not build region map: {e}")
             return None
 
+    def _region_bounds(self) -> Dict[int, Tuple[int, int, int, int]]:
+        """Per-region raster bounding boxes as ``(x_min, y_min, x_max, y_max)``.
+
+        Normalized by the same coordinate offsets :meth:`get_region_map`
+        applies, so a box is in the frame of
+        :attr:`EssentialMetadata.dimensions` -- the grid a caller already
+        has. Reporting raw ``XIndexPos`` instead would hand back numbers
+        that cannot be drawn against that grid without the offsets, which
+        are not public.
+
+        One SQL aggregate over ``MaldiFrameInfo``, which is indexed and
+        already open: this stays cheap enough for the metadata-only
+        preview path, where it is the whole point. No spectra are read.
+
+        Returns:
+            Region number to box. Empty when the table cannot be queried.
+        """
+        offsets = self._get_coordinate_offsets()
+        x_off, y_off = (offsets[0], offsets[1]) if offsets else (0, 0)
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "SELECT RegionNumber, MIN(XIndexPos), MIN(YIndexPos), "
+                "MAX(XIndexPos), MAX(YIndexPos) "
+                "FROM MaldiFrameInfo GROUP BY RegionNumber"
+            )
+            rows = cursor.fetchall()
+        except sqlite3.OperationalError as e:
+            logger.warning(f"Could not read region bounds: {e}")
+            return {}
+        return {
+            int(region): (
+                int(x_min) - x_off,
+                int(y_min) - y_off,
+                int(x_max) - x_off,
+                int(y_max) - y_off,
+            )
+            for region, x_min, y_min, x_max, y_max in rows
+        }
+
     def get_region_info(self) -> Optional[list]:
         """Get summary information about acquisition regions.
 
+        ``bounds`` is what lets a caller tell one region from another.
+        The names FlexImaging writes are frequently just "01", "02",
+        "03" and the spectrum counts of two serial sections are nearly
+        equal, so neither identifies which piece of tissue a region is.
+        Where it sits on the slide does.
+
         Returns:
             List of region summary dicts with region_number, n_spectra,
-            and name (from .mis Area definitions when available),
-            or None if region information is not available.
+            bounds (``(x_min, y_min, x_max, y_max)``, 0-based, in the
+            frame of :attr:`EssentialMetadata.dimensions`), and name
+            (from .mis Area definitions when available), or None if
+            region information is not available.
+
+            Order follows ``_detect_regions``: frame count descending,
+            NOT region number. Sort before displaying.
         """
         if not self._region_info or len(self._region_info) <= 1:
             return None
 
         areas = self._mis_metadata.get("areas", [])
+        bounds = self._region_bounds()
         result = []
         for region_num, n_frames in self._region_info:
             info: Dict[str, Any] = {
                 "region_number": region_num,
                 "n_spectra": n_frames,
             }
+            box = bounds.get(region_num)
+            if box is not None:
+                info["bounds"] = box
             if region_num < len(areas) and areas[region_num].get("name"):
                 info["name"] = areas[region_num]["name"]
             result.append(info)

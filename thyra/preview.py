@@ -7,8 +7,10 @@ guess, EscDat folder probe) without running any conversion.
 Design constraints:
 
 - No spectra are read; no zarr is written.  The function only invokes
-  ``BaseMSIReader.get_essential_metadata`` and
-  ``get_comprehensive_metadata``.
+  ``BaseMSIReader.get_essential_metadata``,
+  ``get_comprehensive_metadata`` and ``get_region_info`` -- the last of
+  which is, on every reader that implements it, an aggregate over a
+  table the reader already has open.
 - The function never raises for "we couldn't read it".  On any
   exception it returns an :class:`MsiPreview` with
   ``readable=False`` and ``error`` set to the exception message,
@@ -21,7 +23,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .core.registry import detect_format, get_reader_class
 from .resampling.decision_tree import ResamplingDecisionTree
@@ -84,6 +86,26 @@ class MsiPreview:
             and so ``tic_preserving`` -- reached exactly that bug on
             PHI ToF-SIMS, which the catch-all default reports as
             ``constant`` while asking for ``nearest_neighbor``.
+        regions: One entry per acquisition region for a MULTI-region
+            input -- a Bruker ``.d`` holding several tissue sections --
+            and ``None`` for everything else, which is the common case.
+            Each is ``{"region_number": int, "n_spectra": int}`` plus,
+            where the format reports them, ``"bounds"``
+            (``(x_min, y_min, x_max, y_max)``, 0-based, in the frame of
+            :attr:`grid_dims`) and ``"name"`` (the ``.mis`` Area label).
+
+            Read this before trusting :attr:`grid_dims` or
+            :attr:`n_pixels` of a multi-region input: both describe the
+            whole acquisition, so the grid is the bounding box of every
+            region together and is mostly empty.  A three-section slide
+            previews as 1170 x 400 for 26,087 spectra.
+
+            ``None`` means "one region, or the format has no such
+            concept", never "could not tell": a reader that raises is
+            logged and leaves this ``None``, exactly as an unavailable
+            :attr:`instrument_type` does.  Sorted by ``region_number``
+            -- readers are not required to be, and the timsTOF one
+            answers in frame-count order.
     """
 
     mz_range: Tuple[float, float]
@@ -95,6 +117,37 @@ class MsiPreview:
     readable: bool
     error: Optional[str] = None
     resampling_method: Optional[ResamplingMethod] = None
+    regions: Optional[List[Dict[str, Any]]] = None
+
+
+def _region_summary(reader: Any) -> Optional[List[Dict[str, Any]]]:
+    """``reader.get_region_info()``, normalized for the preview contract.
+
+    Three things happen here that callers should not each have to do:
+
+    * **A single region is not a region list.** Readers disagree about
+      this -- the timsTOF one answers ``None`` below two regions while
+      the solariX one answers a one-entry list -- so a caller testing
+      ``regions is not None`` gets a different answer per vendor for the
+      same "is this one section?" question.  One entry is folded to
+      ``None`` here, and the question becomes vendor-independent.
+    * **Order.** ``BrukerReader`` sorts by frame count, so a five-region
+      acquisition answers 2, 0, 3, 4, 1.  Rendered in that order the
+      sections come out shuffled.  Sorted by ``region_number``.
+    * **Failure is not an answer.** A reader that raises leaves this
+      ``None`` rather than failing the whole preview, which would trade
+      a working card for a field almost no input has.
+
+    No spectra are read; see :meth:`BaseMSIReader.get_region_info`.
+    """
+    try:
+        found = reader.get_region_info()
+    except Exception as exc:  # noqa: BLE001 - never fail a preview over this
+        logger.debug("Region enumeration unavailable for preview: %s", exc)
+        return None
+    if not found or len(found) <= 1:
+        return None
+    return sorted(found, key=lambda region: region.get("region_number", 0))
 
 
 def _probe_escdat(path: Path) -> bool:
@@ -324,6 +377,7 @@ def preview_msi(path: Path) -> MsiPreview:
             readable=True,
             error=None,
             resampling_method=_guess_resampling_method(essential, comprehensive),
+            regions=_region_summary(reader),
         )
     finally:
         _close_quietly(reader)
