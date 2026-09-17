@@ -1,13 +1,13 @@
-"""Total ion current preservation, shared by both resampling paths.
+"""Total ion current preservation: the rule every resampling path shares.
 
-Thyra interpolates spectra onto a common mass axis in two places: the
-converters' hot per-pixel loop
-(``BaseSpatialDataConverter._tic_preserving_resample``) and the public
-``TICPreservingStrategy``. Both are supposed to honour the same contract --
-``ResamplingMethod.TIC_PRESERVING`` promises that "the total ion count is
-preserved after rebinning" -- and they drifted apart, with the converter
-losing its rescaling step entirely. Keeping the rule in one module is what
-stops that happening again.
+Thyra interpolates spectra onto a common mass axis in one place,
+``tic_preserving_sparse`` in ``thyra/resampling/interpolation.py``, which
+the converter's ``BaseSpatialDataConverter._tic_preserving_resample`` calls;
+it used to be two (the converter's inline copy and a public
+``TICPreservingStrategy``), they drifted, the converter lost its rescaling
+step, and keeping the rule in this module is what stopped that happening
+again and is what the strategy classes being rebuilt on the same function
+(issue #277) will share.
 
 Why rescaling is needed at all
 ------------------------------
@@ -133,10 +133,10 @@ def rescale_to_preserved_tic(
             *centres*, so it stops half a bin short of the range it was
             asked for at either end, and measuring the preserved share
             against the end points alone would forfeit a peak sitting
-            exactly on a declared bound (issue #239). ``None`` -- what
-            ``TICPreservingStrategy`` passes, since it is handed a bare
-            axis and has no declared range -- uses the axis's own span, the
-            behaviour this function has always had.
+            exactly on a declared bound (issue #239). ``None`` -- what a
+            caller with no declared range passes, handed a bare axis --
+            uses the axis's own span, the behaviour this function has
+            always had.
 
     Returns:
         ``resampled``, scaled so that its sum is the preserved TIC.

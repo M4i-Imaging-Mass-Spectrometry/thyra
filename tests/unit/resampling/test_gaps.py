@@ -16,8 +16,7 @@ import numpy as np
 import pytest
 
 from thyra.resampling.gaps import zero_across_gaps
-from thyra.resampling.strategies.base import Spectrum
-from thyra.resampling.strategies.tic_preserving import TICPreservingStrategy
+from thyra.resampling.interpolation import tic_preserving_sparse
 
 
 class TestZeroAcrossGaps:
@@ -102,30 +101,27 @@ class TestZeroAcrossGaps:
 class TestTICPreservingWithGapTolerance:
     """The strategy end to end, and what masking does to the total."""
 
-    def _spectrum(self, mzs, intensities):
-        return Spectrum(
-            mz=np.asarray(mzs, dtype=np.float64),
-            intensity=np.asarray(intensities, dtype=np.float64),
-            coordinates=(1, 1, 1),
-            metadata={},
+    def _resample(self, axis, mzs, intensities, gap_tolerance_da=None):
+        indices, values = tic_preserving_sparse(
+            axis,
+            np.asarray(mzs, dtype=np.float64),
+            np.asarray(intensities, dtype=np.float64),
+            gap_tolerance_da,
+            None,
         )
+        out = np.zeros(axis.size)
+        out[indices] = values
+        return out
 
     def test_default_is_off(self):
         """Unset, the strategy behaves exactly as before."""
         axis = np.linspace(0.0, 100.0, 1001)
-        spectrum = self._spectrum([0.0, 100.0], [1.0, 1.0])
-        assert TICPreservingStrategy().gap_tolerance_da is None
-        without = TICPreservingStrategy().resample(spectrum, axis).intensity
+        without = self._resample(axis, [0.0, 100.0], [1.0, 1.0])
         assert np.count_nonzero(without) == axis.size
 
     def test_tolerance_confines_intensity_to_the_measured_regions(self):
         axis = np.linspace(0.0, 100.0, 1001)
-        spectrum = self._spectrum([0.0, 100.0], [1.0, 1.0])
-        with_tol = (
-            TICPreservingStrategy(gap_tolerance_da=1.0)
-            .resample(spectrum, axis)
-            .intensity
-        )
+        with_tol = self._resample(axis, [0.0, 100.0], [1.0, 1.0], gap_tolerance_da=1.0)
         # Only bins within 1 Da of 0.0 or 100.0 survive: 0.0-1.0 and
         # 99.0-100.0 at 0.1 Da spacing.
         assert np.count_nonzero(with_tol) == 22
@@ -134,29 +130,22 @@ class TestTICPreservingWithGapTolerance:
     def test_tic_is_still_preserved(self):
         """Masking happens before the rescale, so the total is not lost."""
         axis = np.linspace(0.0, 100.0, 1001)
-        spectrum = self._spectrum([0.0, 100.0], [3.0, 5.0])
-        out = TICPreservingStrategy(gap_tolerance_da=1.0).resample(spectrum, axis)
-        assert out.intensity.sum() == pytest.approx(8.0)
+        out = self._resample(axis, [0.0, 100.0], [3.0, 5.0], gap_tolerance_da=1.0)
+        assert out.sum() == pytest.approx(8.0)
 
     def test_uniform_source_is_unaffected(self):
         """A dense uniform source: same answer with and without the tolerance."""
         mzs = np.arange(100.0, 200.0, 0.01)
         rng = np.random.default_rng(0)
         intensities = rng.random(mzs.size)
-        spectrum = self._spectrum(mzs, intensities)
         axis = np.linspace(100.0, 199.99, 20_000)
 
-        without = TICPreservingStrategy().resample(spectrum, axis).intensity
-        with_tol = (
-            TICPreservingStrategy(gap_tolerance_da=0.005)
-            .resample(spectrum, axis)
-            .intensity
-        )
+        without = self._resample(axis, mzs, intensities)
+        with_tol = self._resample(axis, mzs, intensities, gap_tolerance_da=0.005)
         np.testing.assert_allclose(with_tol, without)
 
     def test_a_tolerance_that_masks_everything_leaves_zeros(self):
         """No surviving bin means nothing to rescale into -- not a crash."""
         axis = np.array([50.0, 51.0])
-        spectrum = self._spectrum([0.0, 100.0], [1.0, 1.0])
-        out = TICPreservingStrategy(gap_tolerance_da=1.0).resample(spectrum, axis)
-        assert np.array_equal(out.intensity, np.zeros(2))
+        out = self._resample(axis, [0.0, 100.0], [1.0, 1.0], gap_tolerance_da=1.0)
+        assert np.array_equal(out, np.zeros(2))

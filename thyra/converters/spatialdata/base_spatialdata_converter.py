@@ -48,7 +48,14 @@ from ...metadata.schema import (
 )
 from ...metadata.types import ComprehensiveMetadata, EssentialMetadata
 from ...resampling import ResamplingDecisionTree, ResamplingMethod
-from ...resampling.gaps import zero_across_gaps
+from ...resampling.binning import (
+    SharedAxisNNCache,
+    kept_mz_range,
+    nn_accumulate,
+    nn_map_to_bins,
+    usable_linearisation,
+)
+from ...resampling.interpolation import tic_preserving_sparse
 from ...resampling.mass_axis.tof_generator import (
     DEFAULT_BINS_PER_FWHM,
     TOFAxisGenerator,
@@ -59,7 +66,6 @@ from ...resampling.mobility_grid import (
     build_mobility_grid,
     report_channel_width,
 )
-from ...resampling.tic import preserved_tic, rescale_to_preserved_tic
 from ...resampling.types import AxisLinearisation, AxisType, ResamplingConfig
 from ...utils.zarr_atomic_write import install_windows_atomic_write_retry
 from ._chunking import table_write_config
@@ -362,259 +368,6 @@ def _current_ratio_block(
     }
 
 
-def _kept_mz_range(
-    axis: NDArray[np.float64],
-    axis_range: Optional[Tuple[float, float]],
-) -> Tuple[float, float]:
-    """The m/z range a peak has to be inside to survive resampling.
-
-    Every physics generator lays ``target_bins + 1`` bin *edges* across the
-    requested ``[min_mz, max_mz]`` and returns the midpoints, so the first
-    and last axis point sit half a bin *inside* the range that was asked
-    for -- ``[50.0001, 999.9975]`` for a source declaring 50-1000. Testing
-    membership against the axis points therefore discarded peaks the caller
-    had asked to keep, and did it worst on the sources that declare their
-    range *as* their first and last sample: PHI TOF-SIMS takes
-    ``mass_range`` from the first and last detector channel, so both were
-    dropped in every pixel (issue #239).
-
-    The rule is the **declared** range, which is the outer bin edges, which
-    is at most half a bin beyond the first and last centre. That bound is
-    what keeps this from becoming the clamp
-    :meth:`BaseSpatialDataConverter._nearest_neighbor_resample` documents:
-    a peak further out than the range is still dropped, so narrowing the
-    range with ``--resample-min-mz`` cannot pile the discarded part of the
-    spectrum onto bin 0.
-
-    A uniform axis is ``np.linspace(min_mz, max_mz, n)``, whose end points
-    *are* the declared bounds, so nothing changes there -- nor for
-    ``--no-resample``, where no axis was built and ``axis_range`` is None.
-
-    A module-level function rather than a method for the reason
-    :func:`_nn_map_to_bins` is: the unbound-call test harnesses drive the
-    resampling surface on a ``SimpleNamespace`` that has no methods.
-
-    Args:
-        axis: The target mass axis, ascending.
-        axis_range: The declared ``(min_mz, max_mz)``, or None when no
-            resampled axis was built.
-
-    Returns:
-        ``(min_mz, max_mz)``, always covering ``axis`` itself.
-    """
-    if axis_range is None:
-        return float(axis[0]), float(axis[-1])
-    # Never narrower than the axis: a generator that returned points
-    # outside the range it was handed must not cost anyone a peak that has
-    # a bin waiting for it.
-    return (
-        min(float(axis_range[0]), float(axis[0])),
-        max(float(axis_range[1]), float(axis[-1])),
-    )
-
-
-#: How far, in bins, a resampled axis may deviate from its own linearisation
-#: before the converter stops computing bin indices and searches for them
-#: instead. The +-1 repair in :func:`_nn_map_to_bins` is exact below 0.5
-#: (see :class:`~thyra.resampling.types.AxisLinearisation`); a quarter of a
-#: bin leaves float rounding in the position nowhere to matter. Real axes sit
-#: below 0.005: the deviation is second order in one bin's relative width.
-NN_LINEARISATION_MARGIN = 0.25
-
-
-def _usable_linearisation(
-    linearisation: Optional[AxisLinearisation],
-    axis: NDArray[np.float64],
-    min_gap: float,
-) -> Optional[AxisLinearisation]:
-    """The linearisation the nearest-neighbour mapping may compute indices from, or None.
-
-    Checked once, when the axis is built. The closed form is exact only on
-    a strictly ascending axis (a duplicated value must still map to its
-    first occurrence, which is what ``np.searchsorted`` does and the
-    repair does not) whose every centre lies within
-    :data:`NN_LINEARISATION_MARGIN` bins of ``u0 + i * du``. Any axis a
-    generator lays satisfies both by construction; the check is what turns
-    that argument into something the conversion has verified rather than
-    trusted, and it is what keeps ``--no-resample`` -- a raw union axis
-    with no law at all -- on the search.
-    """
-    if linearisation is None:
-        return None
-    if not (min_gap > 0):
-        logger.info(
-            "Nearest-neighbour bin index: axis is not strictly ascending, "
-            "keeping the binary search"
-        )
-        return None
-    deviation = linearisation.deviation(axis)
-    if not (deviation < NN_LINEARISATION_MARGIN):
-        logger.warning(
-            "Nearest-neighbour bin index: axis deviates from its linearisation "
-            "by %.3f bins (limit %.2f), keeping the binary search",
-            deviation,
-            NN_LINEARISATION_MARGIN,
-        )
-        return None
-    logger.info(
-        "Nearest-neighbour bin index: closed form, worst deviation %.2e bins",
-        deviation,
-    )
-    return linearisation
-
-
-def _nn_map_to_bins(
-    axis: NDArray[np.float64],
-    mzs: NDArray[np.float64],
-    linearisation: Optional[AxisLinearisation] = None,
-) -> NDArray[np.int_]:
-    """Map in-range m/z values to their nearest bin on ``axis``.
-
-    Ties (a peak exactly between two bins) resolve to the right bin,
-    matching the strict ``<`` comparison this code has always used.
-
-    With a ``linearisation`` -- the coordinate the generator laid the axis
-    uniformly in, checked by :func:`_usable_linearisation` -- the index is
-    computed: round the value's position in that coordinate, then take
-    the nearest of that bin and its two neighbours, comparing in m/z with
-    the same tie rule. The rounded position is within one bin of the
-    answer whenever the axis deviates from its linearisation by under
-    half a bin, which every generated axis does (design decision D21), so
-    the two routes return the same index for every value. They differ
-    only in cost, which is the point: ``np.searchsorted`` on an axis of
-    10^5 to 10^6 bins is a cache-missing binary search per peak, where
-    this is three linear reads.
-
-    Without one, the bin is found by binary search. That route stays for
-    any axis without a law: the raw union axis under ``--no-resample``,
-    an axis a caller passes bare, and the sibling tables' sinks.
-
-    A module-level function rather than a method so the unbound-call test
-    harnesses (a ``SimpleNamespace`` posing as the converter) keep working.
-
-    Args:
-        axis: The target mass axis, ascending.
-        mzs: m/z values, all within the range :func:`_kept_mz_range`
-            reports -- so within half a bin of ``axis``, not necessarily
-            within ``[axis[0], axis[-1]]``.
-        linearisation: The axis's own, or None to search.
-
-    Returns:
-        The nearest-bin index of each m/z value, same length as ``mzs``.
-    """
-    if linearisation is not None:
-        return _nn_computed_bins(axis, mzs, linearisation)
-
-    # Find insertion points using vectorized binary search
-    indices = np.searchsorted(axis, mzs)
-
-    # Clip to valid range. Everything reaching here is inside the declared
-    # range, so this pins searchsorted's one-past-the-end result and sends
-    # a peak in the half-bin skirt of either end into the edge bin it
-    # belongs to; it can no longer pull in a peak from outside the range.
-    indices_clipped = np.clip(indices, 0, len(axis) - 1)
-
-    # For non-boundary points, check if left is closer
-    # Only check where we're not at the left edge
-    check_left = indices > 0
-    if np.any(check_left):
-        # Get distances only for points that need checking
-        mz_values = axis[indices_clipped[check_left]]
-        mz_values_left = axis[indices_clipped[check_left] - 1]
-        mz_query = mzs[check_left]
-
-        # Use left if it's closer
-        use_left = np.abs(mz_values_left - mz_query) < np.abs(mz_values - mz_query)
-        indices_clipped[check_left] = np.where(
-            use_left, indices_clipped[check_left] - 1, indices_clipped[check_left]
-        )
-    return indices_clipped
-
-
-def _nn_computed_bins(
-    axis: NDArray[np.float64],
-    mzs: NDArray[np.float64],
-    linearisation: AxisLinearisation,
-) -> NDArray[np.int_]:
-    """The closed-form route of :func:`_nn_map_to_bins`.
-
-    Why the rounded position is never more than one bin off. A value's
-    true nearest bin ``j`` has the value between the centres ``j - 1``
-    and ``j + 1``; ``forward`` is monotone, so its position lies between
-    those two centres' positions, each within ``d < 1/2`` of its own
-    index; so the position lies in ``(j - 3/2, j + 3/2)`` and rounds to
-    ``j - 1``, ``j`` or ``j + 1``. The comparison among those three is
-    then the reference's own comparison, so ties resolve as it resolves
-    them: to the right.
-
-    A value in the half-bin skirt beyond either end rounds to ``-1`` or
-    ``n``; the clip sends it to the edge bin, whose neighbour is then
-    compared like any other -- the same answer the search's clip gives.
-    """
-    n = axis.size
-    k = np.rint(linearisation.positions(mzs)).astype(np.intp)
-    np.clip(k, 0, n - 1, out=k)
-    left = np.maximum(k - 1, 0)
-    right = np.minimum(k + 1, n - 1)
-    d_left = np.abs(axis[left] - mzs)
-    d_k = np.abs(axis[k] - mzs)
-    d_right = np.abs(axis[right] - mzs)
-    # Start from the right neighbour and move left only on a strict
-    # improvement, so an exact tie keeps the right-hand bin.
-    best = right
-    best_d = d_right
-    closer = d_k < best_d
-    best = np.where(closer, k, best)
-    best_d = np.where(closer, d_k, best_d)
-    closer = d_left < best_d
-    return np.where(closer, left, best)
-
-
-def _nn_accumulate(
-    idx: NDArray[np.int_], intensities: NDArray[np.float64]
-) -> Tuple[NDArray[np.int_], NDArray[np.float64]]:
-    """Sum intensities per bin and return the non-zero bins, ascending.
-
-    Two equivalent routes. When ``idx`` is non-decreasing -- true whenever
-    the spectrum's m/z values are ascending, which every format seen so
-    far produces -- equal bins form contiguous runs, so the per-bin sums
-    are ``np.add.reduceat`` over the run starts. That is O(n_peaks),
-    where the ``np.bincount`` fallback is O(n_bins): for a centroid
-    spectrum of hundreds of peaks against an axis of 10^5 bins the
-    difference is roughly 7x per spectrum. Both sum left-to-right over
-    the same float64 values, so the results are bit-identical; the
-    fallback keeps unsorted input correct.
-
-    The kept-bin test is ``!= 0`` rather than ``> 0`` because a bin whose
-    accumulated value is negative is still a measurement: dropping it
-    silently raises the stored TIC above the input's. Baseline-subtracted
-    data can carry negative intensities, though every export seen so far
-    filters them out upstream.
-    """
-    # bincount always promotes its weights to float64; match it so both
-    # accumulation routes return the same dtype and the same rounding.
-    vals = intensities.astype(np.float64, copy=False)
-
-    if idx.size and bool(np.all(idx[1:] >= idx[:-1])):
-        starts = np.concatenate(([0], np.flatnonzero(np.diff(idx)) + 1))
-        if starts.size == idx.size:
-            # Every peak already sits in its own bin (the common case
-            # for both centroid and profile data): nothing to sum.
-            bins = idx
-            sums = vals
-        else:
-            bins = idx[starts]
-            sums = np.add.reduceat(vals, starts)
-        keep = sums != 0
-        return bins[keep].astype(np.int_, copy=False), sums[keep]
-
-    accumulated = np.bincount(idx, weights=vals)
-    nonzero_mask = accumulated != 0
-    nonzero_indices = np.where(nonzero_mask)[0].astype(np.int_)
-    nonzero_values = accumulated[nonzero_mask]
-    return nonzero_indices, nonzero_values.astype(np.float64)
-
-
 def _regate_tic_preserving(converter, tree, axis_type) -> None:
     """Re-ask the TIC-preserving gate about the axis that will be built.
 
@@ -733,190 +486,6 @@ def _tof_plan(converter: Any) -> Tuple[float, float, float]:
         if k is None:
             k = DEFAULT_BINS_PER_FWHM
     return float(a), float(b), float(k)
-
-
-def _tic_support_bins(
-    axis: NDArray[np.float64],
-    mzs: NDArray[np.float64],
-    intensities: NDArray[np.float64],
-) -> NDArray[np.int_]:
-    """Axis indices at which the linear interpolant of a spectrum can be non-zero.
-
-    ``np.interp`` draws straight lines between consecutive source points, so
-    the interpolant is non-zero only on segments with a non-zero endpoint.
-    Consecutive non-zero samples form runs; each run's support is the open
-    interval from the sample before it to the sample after it (those two are
-    where the trace touches zero), closed at the spectrum's own ends where
-    there is no such neighbour. Runs are separated by at least one zero
-    sample, so their supports never overlap and the indices come out sorted.
-
-    A zero-suppressed profile -- Waters MassLynx stores samples in clusters
-    around each peak with an explicit zero at either edge -- has supports
-    covering a small fraction of a fine axis, which is what makes the sparse
-    evaluation cheap. A spectrum with no zeros in it is one run, and its
-    support is every axis point the dense evaluation would have populated.
-
-    Args:
-        axis: Target mass axis, ascending.
-        mzs: Source m/z values, ascending.
-        intensities: Source intensities, parallel to ``mzs``.
-
-    Returns:
-        Sorted, unique axis indices. Empty when nothing is non-zero.
-    """
-    nonzero = intensities != 0
-    if not nonzero.any():
-        return np.array([], dtype=np.int_)
-
-    last = mzs.size - 1
-    edges = np.diff(np.concatenate(([False], nonzero, [False])).astype(np.int8))
-    starts = np.flatnonzero(edges == 1)
-    ends = np.flatnonzero(edges == -1) - 1
-
-    # Open at a neighbouring zero sample (the interpolant is exactly zero
-    # there), closed at the spectrum's own first or last sample.
-    lo = np.where(
-        starts == 0,
-        np.searchsorted(axis, mzs[0], side="left"),
-        np.searchsorted(axis, mzs[np.maximum(starts - 1, 0)], side="right"),
-    )
-    hi = np.where(
-        ends == last,
-        np.searchsorted(axis, mzs[last], side="right"),
-        np.searchsorted(axis, mzs[np.minimum(ends + 1, last)], side="left"),
-    )
-
-    lengths = hi - lo
-    keep = lengths > 0
-    if not keep.any():
-        return np.array([], dtype=np.int_)
-    lo = lo[keep]
-    lengths = lengths[keep]
-    offsets = np.cumsum(lengths) - lengths
-    total = int(lengths.sum())
-    return np.repeat(lo - offsets, lengths) + np.arange(total, dtype=np.int_)
-
-
-def _tic_preserving_sparse(
-    axis: NDArray[np.float64],
-    mzs: NDArray[np.float64],
-    intensities: NDArray[np.float64],
-    gap_tolerance_da: Optional[float],
-    axis_range: Optional[Tuple[float, float]] = None,
-) -> Tuple[NDArray[np.int_], NDArray[np.float64]]:
-    """TIC-preserving resampling, evaluated only where it can be non-zero.
-
-    This is the operator ``BaseSpatialDataConverter._tic_preserving_resample``
-    documents -- interpolate onto the axis, zero unsupported bins, rescale to
-    the preserved TIC -- restricted to the axis points
-    :func:`_tic_support_bins` reports. Every other axis point interpolates
-    to exactly zero, so scattering the result into a zero array reproduces
-    the dense evaluation bin for bin; the sole difference is the order in
-    which the rescale sums its terms.
-
-    Measured on a Waters SELECT SERIES MRT run (13,398 pixels, ~15,000
-    stored samples per strong pixel, 1.05M-bin axis): the dense form cost
-    570 s against 16 s for nearest-neighbour binning, almost all of it in
-    interpolating onto and then scanning a million bins per pixel of which
-    ~13,000 were ever non-zero.
-
-    Args:
-        axis: Target mass axis, ascending.
-        mzs: Source m/z values, any order.
-        intensities: Source intensities, parallel to ``mzs``.
-        gap_tolerance_da: See :func:`thyra.resampling.gaps.zero_across_gaps`.
-        axis_range: The declared ``(min_mz, max_mz)`` the axis was built
-            across, which is the share of the spectrum the result is
-            entitled to carry. ``None`` falls back to the axis's own span.
-            See :func:`_kept_mz_range`: the two resampling methods have to
-            agree on what the axis covers, so this is the same range
-            ``_nearest_neighbor_resample`` keeps peaks inside.
-
-    Returns:
-        ``(bin_indices, intensities)`` holding only the non-zero bins,
-        indices ascending.
-    """
-    empty = (np.array([], dtype=np.int_), np.array([], dtype=np.float64))
-    if mzs.size == 0:
-        return empty
-
-    kept_range = _kept_mz_range(axis, axis_range)
-
-    if np.all(mzs[:-1] <= mzs[1:]):
-        mzs_sorted = mzs
-        intensities_sorted = intensities
-    else:
-        order = np.argsort(mzs)
-        mzs_sorted = mzs[order]
-        intensities_sorted = intensities[order]
-
-    if mzs_sorted.size == 1:
-        # np.interp cannot interpolate a lone point onto a grid that does
-        # not contain it -- it would return all zeros and lose the peak.
-        # Place it in its nearest bin, as the nearest_neighbor path and
-        # TICPreservingStrategy both do.
-        target_tic = preserved_tic(
-            mzs_sorted, intensities_sorted, kept_range[0], kept_range[1]
-        )
-        if target_tic <= 0.0:
-            return empty
-        nearest = int(np.argmin(np.abs(axis - mzs_sorted[0])))
-        return (
-            np.array([nearest], dtype=np.int_),
-            np.array([target_tic], dtype=np.float64),
-        )
-
-    indices = _tic_support_bins(axis, mzs_sorted, intensities_sorted)
-    if indices.size == 0:
-        return empty
-
-    targets = axis[indices]
-    values = np.interp(targets, mzs_sorted, intensities_sorted, left=0.0, right=0.0)
-
-    # Discard bins no source point vouches for, before the rescale so the
-    # intensity returns to the bins that were measured rather than being
-    # deleted. No-op when no tolerance was configured.
-    zero_across_gaps(values, targets, mzs_sorted, gap_tolerance_da)
-
-    # Rescale to the required TIC -- the step that makes the method live up
-    # to its name. Reads only the kept range and the sum of ``values``, so
-    # the subset evaluation rescales exactly as the dense one would.
-    rescale_to_preserved_tic(values, axis, mzs_sorted, intensities_sorted, kept_range)
-
-    keep = values != 0
-    return indices[keep], values[keep]
-
-
-class _SharedAxisNNCache:
-    """Precomputed nearest-neighbor mapping for one recurring m/z array.
-
-    Built the first time :meth:`_nearest_neighbor_resample` sees a spectrum,
-    and reused for every later spectrum that carries the same m/z array.
-    ``key`` is a private copy so a caller-side mutation of the original
-    array cannot fool the equality check; ``key_ref`` keeps the original
-    object for the O(1) identity test that readers yielding one shared
-    array (Rapiflex, Waters, PHI) hit every time.
-    """
-
-    __slots__ = (
-        "key",
-        "key_ref",
-        "n_total",
-        "n_dropped",
-        "lo",
-        "hi",
-        "starts",
-        "bins",
-    )
-
-    key: NDArray[np.float64]
-    key_ref: NDArray[np.float64]
-    n_total: int
-    n_dropped: int
-    lo: int
-    hi: int
-    starts: Optional[NDArray[np.int_]]
-    bins: NDArray[np.int_]
 
 
 class BaseSpatialDataConverter(BaseMSIConverter, ABC):
@@ -1075,7 +644,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # the span of the axis points themselves. Filled by
         # _build_resampled_mass_axis(); ``None`` means "no resampled axis
         # was built", and the span is then the axis's own. See
-        # :func:`_kept_mz_range`.
+        # :func:`thyra.resampling.binning.kept_mz_range`.
         self._axis_range: Optional[Tuple[float, float]] = None
         # Intensities dropped for being non-finite or negative, and
         # whether that has been said yet. See _count_unusable_intensities().
@@ -1185,7 +754,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         self._nn_shared_cache: Any = None
         self._nn_cache_misses: int = 0
         # The resampled axis's own linearisation, once _build_resampled_mass_axis()
-        # has built the axis and _usable_linearisation() has checked it;
+        # has built the axis and usable_linearisation() has checked it;
         # None means the nearest-neighbour mapping searches (D21).
         self._nn_linearisation: Optional[AxisLinearisation] = None
 
@@ -2794,7 +2363,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # The range the bins were laid across, kept because a physics axis
         # reports bin *centres* and so stops half a bin short of it at
         # either end. It, not the axis's own span, is what decides whether
-        # a peak is in range -- see _kept_mz_range() (issue #239).
+        # a peak is in range -- see kept_mz_range() (issue #239).
         self._axis_range = (float(min_mz), float(max_mz))
 
         # Bin sizes for the log line, in chunks. ``np.diff`` over the whole
@@ -2804,7 +2373,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         # A positive narrowest gap is "strictly ascending", which the
         # closed-form bin index needs and this log line already computed.
-        self._nn_linearisation = _usable_linearisation(
+        self._nn_linearisation = usable_linearisation(
             mass_axis.linearisation, self._common_mass_axis, min_bin_size
         )
 
@@ -3147,7 +2716,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         if self._out_of_range_warned or self._common_mass_axis is None:
             return
         self._out_of_range_warned = True
-        lo_mz, hi_mz = _kept_mz_range(
+        lo_mz, hi_mz = kept_mz_range(
             self._common_mass_axis, getattr(self, "_axis_range", None)
         )
         logger.warning(
@@ -3182,7 +2751,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         "In range" is the **declared** ``[min_mz, max_mz]``, which is the
         outer bin edges and so at most half a bin beyond the first and last
-        centre -- see :func:`_kept_mz_range` for why the axis points
+        centre -- see :func:`thyra.resampling.binning.kept_mz_range` for why the axis points
         themselves are the wrong test and why the rule stops there. A peak
         further out is dropped, not clamped. ``_tic_preserving_resample``
         follows the same range, so the two methods agree on what the axis
@@ -3220,7 +2789,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             if result is not None:
                 return result
 
-        lo_mz, hi_mz = _kept_mz_range(axis, getattr(self, "_axis_range", None))
+        lo_mz, hi_mz = kept_mz_range(axis, getattr(self, "_axis_range", None))
         in_range = (mzs >= lo_mz) & (mzs <= hi_mz)
         if not in_range.all():
             self._count_out_of_range(int(mzs.size - in_range.sum()), int(mzs.size))
@@ -3229,19 +2798,19 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             if mzs.size == 0:
                 return np.array([], dtype=np.int_), np.array([], dtype=np.float64)
 
-        return _nn_accumulate(
-            _nn_map_to_bins(axis, mzs, getattr(self, "_nn_linearisation", None)),
+        return nn_accumulate(
+            nn_map_to_bins(axis, mzs, getattr(self, "_nn_linearisation", None)),
             intensities,
         )
 
     def _build_nn_shared_cache(
         self, axis: NDArray[np.float64], mzs: NDArray[np.float64]
-    ) -> Optional[_SharedAxisNNCache]:
+    ) -> Optional[SharedAxisNNCache]:
         """Precompute the nearest-neighbor mapping for one m/z array.
 
         Returns None when the array cannot be cached -- empty, or not
         ascending, which the contiguous in-range slice below relies on.
-        The mapping itself comes from the same :meth:`_nn_map_to_bins`
+        The mapping itself comes from the same :func:`thyra.resampling.binning.nn_map_to_bins`
         the generic path uses, so a cache hit and a fresh computation
         agree bin for bin.
         """
@@ -3250,12 +2819,12 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         # Ascending m/z makes the in-range subset one contiguous slice,
         # with the same inclusive endpoints as the generic path's mask --
-        # the declared range, not the axis's own span (_kept_mz_range).
-        lo_mz, hi_mz = _kept_mz_range(axis, getattr(self, "_axis_range", None))
+        # the declared range, not the axis's own span (kept_mz_range).
+        lo_mz, hi_mz = kept_mz_range(axis, getattr(self, "_axis_range", None))
         lo = int(np.searchsorted(mzs, lo_mz, side="left"))
         hi = int(np.searchsorted(mzs, hi_mz, side="right"))
 
-        cache = _SharedAxisNNCache()
+        cache = SharedAxisNNCache()
         cache.key = mzs.copy()
         cache.key_ref = mzs
         cache.n_total = int(mzs.size)
@@ -3267,9 +2836,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             cache.bins = np.array([], dtype=np.int_)
             return cache
 
-        idx = _nn_map_to_bins(
-            axis, mzs[lo:hi], getattr(self, "_nn_linearisation", None)
-        )
+        idx = nn_map_to_bins(axis, mzs[lo:hi], getattr(self, "_nn_linearisation", None))
         # Ascending m/z onto an ascending axis gives non-decreasing bins,
         # so equal bins form contiguous runs.
         starts = np.concatenate(([0], np.flatnonzero(np.diff(idx)) + 1))
@@ -3350,7 +2917,8 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         The TIC preserved is the share of the spectrum lying inside the
         target axis range -- see ``thyra.resampling.tic``, which holds the
-        rule and the reasoning, and which ``TICPreservingStrategy`` uses too.
+        rule and the reasoning, shared with
+        ``thyra.resampling.interpolation.tic_preserving_sparse`` below.
         When the axis spans the spectrum, which is the default, that share
         is the whole input TIC.
 
@@ -3370,7 +2938,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             raise RuntimeError("Common mass axis is not initialized")
 
         axis = self._common_mass_axis
-        indices, values = _tic_preserving_sparse(
+        indices, values = tic_preserving_sparse(
             axis,
             mzs,
             intensities,
@@ -3393,11 +2961,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         a Waters MRT pixel stores ~15,000 samples in clusters around its
         peaks, on a 1.05M-bin axis -- this is what turns a 570 s conversion
         into one that is bounded by reading the file. See
-        :func:`_tic_preserving_sparse`.
+        :func:`thyra.resampling.interpolation.tic_preserving_sparse`.
         """
         if self._common_mass_axis is None:
             raise RuntimeError("Common mass axis is not initialized")
-        return _tic_preserving_sparse(
+        return tic_preserving_sparse(
             self._common_mass_axis,
             mzs,
             intensities,

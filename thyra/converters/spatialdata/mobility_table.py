@@ -53,6 +53,7 @@ from scipy import sparse
 
 from ...core.base_reader import BaseMSIReader
 from ...errors import ConversionRefused
+from ...resampling.binning import nn_map_to_bins
 from ...resampling.mobility_grid import MobilityGrid
 from ...resampling.types import AxisLinearisation
 from .csc_assembly import (
@@ -166,13 +167,11 @@ def nearest_axis_index(
     what makes that safe here: the closed form is only ever evaluated
     inside the axis span, never on a value beyond it.
     """
-    from .base_spatialdata_converter import _nn_map_to_bins
-
     values = np.asarray(values, dtype=np.float64)
     if axis.size == 0:
         return np.zeros(values.size, dtype=np.int64)
     clipped = np.clip(values, axis[0], axis[-1])
-    return _nn_map_to_bins(axis, clipped, linearisation).astype(np.int64)
+    return nn_map_to_bins(axis, clipped, linearisation).astype(np.int64)
 
 
 def row_lookup(

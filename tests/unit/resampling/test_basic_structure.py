@@ -14,7 +14,6 @@ from thyra.resampling import (
     ResamplingMethod,
 )
 from thyra.resampling.mass_axis.base_generator import BaseAxisGenerator
-from thyra.resampling.strategies.base import ResamplingStrategy, Spectrum
 
 
 class TestBasicImports:
@@ -116,57 +115,7 @@ class TestBasicFunctionality:
 class TestAbstractClasses:
     """Test abstract base classes."""
 
-    def test_resampling_strategy_abstract(self):
-        """Test ResamplingStrategy cannot be instantiated."""
-        with pytest.raises(TypeError):
-            ResamplingStrategy()
-
     def test_base_axis_generator_abstract(self):
         """Test BaseAxisGenerator cannot be instantiated."""
         with pytest.raises(TypeError):
             BaseAxisGenerator()
-
-
-class TestSpectrumDataclass:
-    """Test Spectrum dataclass functionality."""
-
-    def test_spectrum_creation(self):
-        """Test Spectrum can be created."""
-        mz = np.array([100, 200, 300])
-        intensity = np.array([1000, 2000, 1500])
-        coords = (5, 10, 0)
-
-        spectrum = Spectrum(mz=mz, intensity=intensity, coordinates=coords)
-
-        assert np.array_equal(spectrum.mz, mz)
-        assert np.array_equal(spectrum.intensity, intensity)
-        assert spectrum.coordinates == coords
-        assert spectrum.metadata is None
-
-    def test_spectrum_centroid_detection(self):
-        """Test centroid detection heuristic."""
-        # Small spectrum should be detected as centroid
-        small_spectrum = Spectrum(
-            mz=np.array([100, 200]),
-            intensity=np.array([1000, 2000]),
-            coordinates=(0, 0, 0),
-        )
-        assert small_spectrum.is_centroid is True
-
-        # Large spectrum with many zeros should be centroid
-        mz_large = np.linspace(100, 1000, 200)
-        intensity_large = np.zeros(200)
-        intensity_large[::20] = 1000  # Only every 20th point has intensity
-
-        centroid_spectrum = Spectrum(
-            mz=mz_large, intensity=intensity_large, coordinates=(0, 0, 0)
-        )
-        assert centroid_spectrum.is_centroid is True
-
-        # Large spectrum with no zeros should be profile
-        intensity_profile = np.ones(200) * 100  # All points have intensity
-
-        profile_spectrum = Spectrum(
-            mz=mz_large, intensity=intensity_profile, coordinates=(0, 0, 0)
-        )
-        assert profile_spectrum.is_centroid is False

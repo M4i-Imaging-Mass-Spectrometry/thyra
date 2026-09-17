@@ -48,6 +48,7 @@ from scipy import sparse
 
 from ...core.base_reader import BaseMSIReader
 from ...core.msms import FragmentationSchedule, windows_overlap
+from ...resampling.binning import nn_map_to_bins
 from ...resampling.types import AxisLinearisation
 from .csc_assembly import (
     CscAssembly,
@@ -233,13 +234,11 @@ def _bin_indices(
     computed rather than searched for (design decision D21, issue #348).
     The column is the same either way.
     """
-    from .base_spatialdata_converter import _nn_map_to_bins
-
     in_range = (mzs >= axis[0]) & (mzs <= axis[-1])
     kept = mzs if in_range.all() else mzs[in_range]
     if kept.size == 0:
         return np.array([], dtype=np.int64), in_range
-    return _nn_map_to_bins(axis, kept, linearisation).astype(np.int64), in_range
+    return nn_map_to_bins(axis, kept, linearisation).astype(np.int64), in_range
 
 
 class _Demultiplexer:

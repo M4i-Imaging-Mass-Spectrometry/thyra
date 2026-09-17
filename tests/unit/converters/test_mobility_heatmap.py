@@ -261,13 +261,13 @@ class TestIndexedMapping:
     def _counting_map(monkeypatch):
         """Record the size of every array handed to the bin mapping."""
         calls = []
-        original = mh._nn_map_to_bins
+        original = mh.nn_map_to_bins
 
         def counted(axis, mzs, linearisation=None):
             calls.append(np.asarray(mzs).size)
             return original(axis, mzs, linearisation)
 
-        monkeypatch.setattr(mh, "_nn_map_to_bins", counted)
+        monkeypatch.setattr(mh, "nn_map_to_bins", counted)
         return calls
 
     def test_the_unique_values_are_mapped_once(self, monkeypatch):
@@ -300,7 +300,7 @@ class TestIndexedMapping:
         # Four distinct values, two of them off the axis at either end.
         assert calls == [2]
         assert n_dropped == 2
-        np.testing.assert_array_equal(bins, mh._nn_map_to_bins(self.AXIS, mzs[1:3]))
+        np.testing.assert_array_equal(bins, mh.nn_map_to_bins(self.AXIS, mzs[1:3]))
 
     def test_an_accumulator_fed_either_way_agrees(self):
         mzs = np.array([100.0, 121.0, 100.0, 140.0, 130.0, 121.0])
