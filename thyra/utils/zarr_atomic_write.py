@@ -68,9 +68,10 @@ Deferring to a fixed Zarr
 -------------------------
 
 Zarr has since taken this retry upstream, in zarr-developers/zarr-python#4358
-(merged 2026-09-15; no release carries it yet, the newest being v3.3.0). On a
-Zarr that has it, ``install_windows_atomic_write_retry`` patches nothing and
-Zarr's own retry runs.
+(merged 2026-09-15, shipped in **v3.4.0** the same day). On a Zarr that has
+it, ``install_windows_atomic_write_retry`` patches nothing and Zarr's own
+retry runs. This project does not pin such a Zarr yet -- the ceiling is still
+``<3.2`` -- so on the pinned Zarr the patch below is what runs.
 
 That check is not politeness, it is necessary. This module does not *wrap*
 ``_atomic_write``, it **substitutes** a copy of it -- it has to, because the
@@ -84,10 +85,15 @@ destination, and nothing would fail to say so.
 
 Deferring costs only the exhaustion message logged below. The delays and the
 retried error codes are the same on both sides -- upstream's came from the
-measurements above.
+measurements above. Re-checked against the released v3.4.0 rather than the
+merge commit, because #4358 was merged as-is with polishing promised in a
+follow-up: same codes (5, 32) and the same 1/5/20/50/200 ms spacing over six
+attempts. Upstream sleeps *after* a failure and makes its last attempt outside
+the loop; this module sleeps *before* each attempt with a leading zero. Same
+schedule, written the other way round.
 
 Removing this module outright is thyra#341, which needs the ``zarr`` ceiling
-in pyproject.toml raised past the release that carries #4358 first.
+in pyproject.toml raised past v3.4.0 first.
 """
 
 import contextlib
