@@ -204,29 +204,3 @@ class TestDegenerateInput:
     def test_single_peak_outside_axis_is_dropped(self):
         out = _resample(_axis(1_000), np.array([50.0]), np.array([999.0]))
         assert not out.any()
-
-
-class TestAgreementWithStrategyImplementation:
-    """The converter must agree with the repo's other TIC-preserving code.
-
-    ``thyra/resampling/strategies/tic_preserving.py`` already rescaled. The
-    converter's inline copy did not, and the divergence is what the fix
-    closes.
-    """
-
-    @pytest.mark.parametrize("bins", [1_000, 10_000])
-    def test_same_tic_as_strategy(self, bins):
-        from thyra.resampling.strategies.base import Spectrum
-        from thyra.resampling.strategies.tic_preserving import TICPreservingStrategy
-
-        mzs, intensities = _profile_spectrum()
-        axis = _axis(bins)
-
-        converter_out = _resample(axis, mzs, intensities)
-        strategy_out = TICPreservingStrategy().resample(
-            Spectrum(mz=mzs, intensity=intensities, coordinates=(0, 0, 0)), axis
-        )
-
-        assert converter_out.sum() == pytest.approx(
-            float(np.sum(strategy_out.intensity)), rel=1e-9
-        )

@@ -19,9 +19,8 @@ import pytest
 
 from thyra.converters.spatialdata.base_spatialdata_converter import (
     BaseSpatialDataConverter,
-    _tic_preserving_sparse,
-    _tic_support_bins,
 )
+from thyra.resampling.interpolation import tic_preserving_sparse, tic_support_bins
 
 
 def _sqrt_axis(lo, hi, width_at_1000):
@@ -86,7 +85,7 @@ class TestSupportBins:
         axis = np.arange(0.0, 10.5, 0.5)
         mzs = np.array([1.0, 2.0, 3.0, 4.0, 6.0, 7.0, 8.0, 9.0])
         its = np.array([5.0, 3.0, 0.0, 0.0, 0.0, 2.0, 0.0, 4.0])
-        idx = _tic_support_bins(axis, mzs, its)
+        idx = tic_support_bins(axis, mzs, its)
         # First run [1, 2] starts at the spectrum's own first sample, so
         # axis == 1.0 is included; it ends before the zero at 3.0.
         # Run [7] sits between zeros at 6.0 and 8.0, open at both.
@@ -101,18 +100,18 @@ class TestSupportBins:
     def test_no_zeros_means_the_whole_span(self):
         axis = np.linspace(0.0, 10.0, 41)
         mzs = np.array([2.0, 3.0, 5.0])
-        idx = _tic_support_bins(axis, mzs, np.array([1.0, 1.0, 1.0]))
+        idx = tic_support_bins(axis, mzs, np.array([1.0, 1.0, 1.0]))
         np.testing.assert_array_equal(
             idx, np.flatnonzero((axis >= 2.0) & (axis <= 5.0))
         )
 
     def test_all_zero_is_empty(self):
-        idx = _tic_support_bins(np.linspace(0, 1, 5), np.array([0.2, 0.4]), np.zeros(2))
+        idx = tic_support_bins(np.linspace(0, 1, 5), np.array([0.2, 0.4]), np.zeros(2))
         assert idx.size == 0
 
     def test_indices_are_sorted_and_unique(self):
         mzs, its = _zero_suppressed_profile()
-        idx = _tic_support_bins(AXIS, mzs, its)
+        idx = tic_support_bins(AXIS, mzs, its)
         assert np.all(np.diff(idx) > 0)
 
 
@@ -181,7 +180,7 @@ class TestAgreesWithTheDenseForm:
 
     def test_module_function_is_what_both_methods_call(self):
         mzs, its = _zero_suppressed_profile(7)
-        idx, vals = _tic_preserving_sparse(AXIS, mzs, its, None)
+        idx, vals = tic_preserving_sparse(AXIS, mzs, its, None)
         idx2, vals2 = _sparse(AXIS, mzs, its)
         np.testing.assert_array_equal(idx, idx2)
         np.testing.assert_array_equal(vals, vals2)

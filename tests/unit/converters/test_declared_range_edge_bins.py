@@ -40,12 +40,12 @@ import pytest
 
 from thyra.converters.spatialdata.base_spatialdata_converter import (
     BaseSpatialDataConverter,
-    _kept_mz_range,
 )
 from thyra.converters.spatialdata.streaming_converter import (
     StreamingSpatialDataConverter,
 )
 from thyra.readers.imzml import ImzMLReader
+from thyra.resampling.binning import kept_mz_range
 from thyra.resampling.common_axis import CommonAxisBuilder
 from thyra.resampling.types import AxisType
 
@@ -256,8 +256,8 @@ class TestAUniformAxisIsUnchanged:
     def test_the_kept_range_is_the_axis_span(self):
         axis = np.linspace(100.0, 110.0, 11)
 
-        assert _kept_mz_range(axis, (100.0, 110.0)) == (100.0, 110.0)
-        assert _kept_mz_range(axis, None) == (100.0, 110.0)
+        assert kept_mz_range(axis, (100.0, 110.0)) == (100.0, 110.0)
+        assert kept_mz_range(axis, None) == (100.0, 110.0)
 
     def test_a_peak_just_outside_is_still_out(self):
         axis = np.linspace(100.0, 110.0, 11)
@@ -273,7 +273,7 @@ class TestTheKeptRangeNeverNarrowsTheAxis:
         """A generator that overshot must not cost a peak with a bin waiting."""
         axis = np.linspace(100.0, 110.0, 11)
 
-        assert _kept_mz_range(axis, (101.0, 109.0)) == (100.0, 110.0)
+        assert kept_mz_range(axis, (101.0, 109.0)) == (100.0, 110.0)
 
 
 class TestEndToEndOnAPhysicsAxis:

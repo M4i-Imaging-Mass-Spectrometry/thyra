@@ -44,13 +44,13 @@ from numpy.typing import NDArray
 
 from ...core.base_reader import BaseMSIReader
 from ...errors import ConversionRefused
+from ...resampling.binning import nn_map_to_bins
 from ...resampling.mobility_grid import (
     MOBILITY_CHANNELS,
     build_mobility_grid,
     linear_channel,
 )
 from ...resampling.types import AxisLinearisation
-from .base_spatialdata_converter import _nn_map_to_bins
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +196,7 @@ def map_points_to_axis(
         if mzs.size == 0:
             return np.zeros(0, dtype=np.int64), mobility, intensities, n_dropped
     return (
-        _nn_map_to_bins(axis, mzs, linearisation).astype(np.int64),
+        nn_map_to_bins(axis, mzs, linearisation).astype(np.int64),
         mobility,
         intensities,
         n_dropped,
@@ -262,10 +262,10 @@ def map_indexed_points_to_axis(
     # is the same answer for every entry anyone reads, and maps fewer.
     in_range = (unique_mz >= axis[0]) & (unique_mz <= axis[-1])
     if in_range.all():
-        bins = _nn_map_to_bins(axis, unique_mz, linearisation).astype(np.int64)
+        bins = nn_map_to_bins(axis, unique_mz, linearisation).astype(np.int64)
         return bins[inverse], mobility, intensities, 0
     bins = np.zeros(unique_mz.size, dtype=np.int64)
-    bins[in_range] = _nn_map_to_bins(axis, unique_mz[in_range], linearisation).astype(
+    bins[in_range] = nn_map_to_bins(axis, unique_mz[in_range], linearisation).astype(
         np.int64
     )
     kept = in_range[inverse]

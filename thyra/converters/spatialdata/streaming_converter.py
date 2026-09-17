@@ -29,7 +29,8 @@ from tqdm import tqdm
 from ...core.conversion_state import ConversionState
 from ...errors import ConversionRefused
 from ...resampling import ResamplingMethod
-from .base_spatialdata_converter import BaseSpatialDataConverter, _kept_mz_range
+from ...resampling.binning import kept_mz_range
+from .base_spatialdata_converter import BaseSpatialDataConverter
 from .csc_assembly import CscAssembly, index_dtype
 
 logger = logging.getLogger(__name__)
@@ -674,7 +675,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             )
         usable = peaks_in - self._unusable_intensities
         if self._out_of_range_peaks >= usable and self._common_mass_axis is not None:
-            lo_mz, hi_mz = _kept_mz_range(self._common_mass_axis, self._axis_range)
+            lo_mz, hi_mz = kept_mz_range(self._common_mass_axis, self._axis_range)
             return (
                 "every peak fell outside the target mass range "
                 f"[{lo_mz:.4f}, {hi_mz:.4f}] m/z -- widen the "

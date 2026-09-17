@@ -1,7 +1,7 @@
 # tests/unit/converters/test_nn_closed_form_bins.py
 """The computed bin index must be invisible: same bins as the search, always.
 
-``_nn_map_to_bins`` finds each peak's nearest bin by ``np.searchsorted``
+``nn_map_to_bins`` finds each peak's nearest bin by ``np.searchsorted``
 unless it is handed the axis's ``AxisLinearisation``, in which case it
 rounds the peak's position in the generator's own coordinate and repairs
 by one bin either side (design decision D21). The two routes must agree
@@ -32,10 +32,12 @@ import numpy as np
 import pytest
 
 from thyra.converters.spatialdata.base_spatialdata_converter import (
-    NN_LINEARISATION_MARGIN,
     BaseSpatialDataConverter,
-    _nn_map_to_bins,
-    _usable_linearisation,
+)
+from thyra.resampling.binning import (
+    NN_LINEARISATION_MARGIN,
+    nn_map_to_bins,
+    usable_linearisation,
 )
 from thyra.resampling.mass_axis import (
     FTICRAxisGenerator,
@@ -90,8 +92,8 @@ class TestComputedBinsMatchTheSearch:
         mass_axis = generator.generate_axis(min_mz, max_mz, target_bins)
         axis = mass_axis.mz_values.astype(np.float64)
         probes = _probes(axis, min_mz, max_mz, rng)
-        searched = _nn_map_to_bins(axis, probes)
-        computed = _nn_map_to_bins(axis, probes, mass_axis.linearisation)
+        searched = nn_map_to_bins(axis, probes)
+        computed = nn_map_to_bins(axis, probes, mass_axis.linearisation)
         np.testing.assert_array_equal(computed, searched)
 
     def test_unsorted_probes_too(self, generator, min_mz, max_mz, target_bins):
@@ -101,8 +103,8 @@ class TestComputedBinsMatchTheSearch:
         probes = _probes(axis, min_mz, max_mz, rng, n_random=5_000)
         rng.shuffle(probes)
         np.testing.assert_array_equal(
-            _nn_map_to_bins(axis, probes, mass_axis.linearisation),
-            _nn_map_to_bins(axis, probes),
+            nn_map_to_bins(axis, probes, mass_axis.linearisation),
+            nn_map_to_bins(axis, probes),
         )
 
 
@@ -111,9 +113,9 @@ class TestTieRule:
         mass_axis = LinearAxisGenerator().generate_axis(0.0, 4.0, 5)
         axis = mass_axis.mz_values
         probes = np.array([0.5, 1.5, 2.5, 3.5])
-        np.testing.assert_array_equal(_nn_map_to_bins(axis, probes), [1, 2, 3, 4])
+        np.testing.assert_array_equal(nn_map_to_bins(axis, probes), [1, 2, 3, 4])
         np.testing.assert_array_equal(
-            _nn_map_to_bins(axis, probes, mass_axis.linearisation), [1, 2, 3, 4]
+            nn_map_to_bins(axis, probes, mass_axis.linearisation), [1, 2, 3, 4]
         )
 
     def test_far_outside_values_take_the_edge_bins(self):
@@ -123,8 +125,8 @@ class TestTieRule:
         axis = mass_axis.mz_values
         probes = np.array([1.0, 50.0, 2000.0, 1e6])
         np.testing.assert_array_equal(
-            _nn_map_to_bins(axis, probes, mass_axis.linearisation),
-            _nn_map_to_bins(axis, probes),
+            nn_map_to_bins(axis, probes, mass_axis.linearisation),
+            nn_map_to_bins(axis, probes),
         )
 
 
@@ -133,7 +135,7 @@ class TestBuildTimeGuard:
         mass_axis = OrbitrapAxisGenerator().generate_axis(100.0, 2000.0, 50_000)
         axis = mass_axis.mz_values
         assert (
-            _usable_linearisation(
+            usable_linearisation(
                 mass_axis.linearisation, axis, float(np.diff(axis).min())
             )
             is mass_axis.linearisation
@@ -141,14 +143,14 @@ class TestBuildTimeGuard:
 
     def test_no_linearisation_means_no_closed_form(self):
         axis = np.linspace(100.0, 1000.0, 100)
-        assert _usable_linearisation(None, axis, 1.0) is None
+        assert usable_linearisation(None, axis, 1.0) is None
 
     def test_a_duplicated_axis_value_keeps_the_search(self):
         # searchsorted maps a duplicated value to its first occurrence;
         # the repair would not, so a non-ascending axis must not compute.
         axis = np.array([100.0, 200.0, 200.0, 300.0])
         lin = AxisLinearisation(lambda m: np.asarray(m, float), 100.0, 100.0)
-        assert _usable_linearisation(lin, axis, 0.0) is None
+        assert usable_linearisation(lin, axis, 0.0) is None
 
     def test_a_deviation_at_the_margin_keeps_the_search(self):
         axis = np.linspace(100.0, 1000.0, 100)
@@ -158,7 +160,7 @@ class TestBuildTimeGuard:
             lambda m: np.asarray(m, float), 100.0 - NN_LINEARISATION_MARGIN * step, step
         )
         assert lin.deviation(axis) == pytest.approx(NN_LINEARISATION_MARGIN)
-        assert _usable_linearisation(lin, axis, step) is None
+        assert usable_linearisation(lin, axis, step) is None
 
     def test_an_absurd_axis_is_refused_by_the_margin_not_by_luck(self):
         # Two bins over six decades: the deviation is within 2e-6 of the
@@ -167,7 +169,7 @@ class TestBuildTimeGuard:
         mass_axis = FTICRAxisGenerator().generate_axis(1.0, 1e6, 2)
         axis = mass_axis.mz_values
         assert mass_axis.linearisation.deviation(axis) > NN_LINEARISATION_MARGIN
-        assert _usable_linearisation(mass_axis.linearisation, axis, 1.0) is None
+        assert usable_linearisation(mass_axis.linearisation, axis, 1.0) is None
 
 
 def _stub(mass_axis, linearisation, cache_enabled):
@@ -216,7 +218,7 @@ class TestConverterPathsAgree:
         del stub._nn_linearisation
         mzs = np.array([100.0, 500.25, 999.9])
         bins, sums = stub._nearest_neighbor_resample(mzs, np.ones(3))
-        np.testing.assert_array_equal(bins, _nn_map_to_bins(mass_axis.mz_values, mzs))
+        np.testing.assert_array_equal(bins, nn_map_to_bins(mass_axis.mz_values, mzs))
 
 
 class TestTheUniformAxisIsLinearised:
@@ -250,7 +252,7 @@ class TestTheUniformAxisIsLinearised:
             np.arange(43, dtype=np.float64),
             atol=1e-9,
         )
-        usable = _usable_linearisation(
+        usable = usable_linearisation(
             axis.linearisation, axis.mz_values, float(np.diff(axis.mz_values).min())
         )
         assert usable is not None
@@ -295,9 +297,9 @@ def test_the_sibling_tables_are_what_the_search_builds(tmp_path, fused):
     reader_cls = FusedStubReader if fused else UnfusedStubReader
 
     def convert(tag, force_search):
-        original = bsc._usable_linearisation
+        original = bsc.usable_linearisation
         if force_search:
-            bsc._usable_linearisation = lambda *a, **k: None
+            bsc.usable_linearisation = lambda *a, **k: None
         try:
             out = prepare_zarr_output_path(tmp_path / f"{tag}.zarr", "stub")
             converter = StreamingSpatialDataConverter(
@@ -312,7 +314,7 @@ def test_the_sibling_tables_are_what_the_search_builds(tmp_path, fused):
             used = converter._nn_linearisation is not None
             return spatialdata.read_zarr(prepare_zarr_read_path(out)), used
         finally:
-            bsc._usable_linearisation = original
+            bsc.usable_linearisation = original
 
     closed, used_closed = convert("closed", force_search=False)
     searched, used_searched = convert("searched", force_search=True)
