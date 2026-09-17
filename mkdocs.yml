@@ -89,6 +89,7 @@ nav:
   - PHI ToF-SIMS Notes: phi-tofsims-notes.md
   - solariX Notes: solarix-notes.md
   - Design Decisions: design-decisions.md
+  - Migrating to 4.0: migration-4.0.md
   - API Reference: api.md
   - Contributing: contributing.md
   - Code of Conduct: code-of-conduct.md
