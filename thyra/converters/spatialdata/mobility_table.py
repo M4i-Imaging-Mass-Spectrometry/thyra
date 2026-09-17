@@ -979,7 +979,7 @@ def assemble_sibling_table(
     from anndata import AnnData
     from spatialdata.models import TableModel
 
-    from .base_spatialdata_converter import _jsonify_string_lists
+    from ...metadata.uns_assembler import _jsonify_string_lists
 
     n_obs = int(len(obs))
     table_obs = obs.copy()

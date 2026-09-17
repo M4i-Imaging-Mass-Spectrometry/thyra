@@ -2,7 +2,7 @@
 """Read-side defense for ``uns`` blocks written by earlier Thyra versions.
 
 Stores written before the JSON rule in
-``BaseSpatialDataConverter._collect_optional_sections`` carry string
+``UnsAssembler._collect_optional_sections`` carry string
 lists in ``uns`` (notably ``raw_metadata["cvParams"]``) that materialize
 as numpy ``StringDType`` arrays when read back through AnnData/zarr.
 ``copy.deepcopy`` of such an array segfaults the process on numpy

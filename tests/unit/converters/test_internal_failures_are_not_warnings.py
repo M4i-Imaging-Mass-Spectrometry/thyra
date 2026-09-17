@@ -126,11 +126,13 @@ class TestTheProvenanceBlock:
     ):
         """The tolerance the broad catch provided is the tolerance kept."""
         converter = _converter(tmp_path)
-        converter._collect_optional_sections = lambda *a, **k: (_ for _ in ()).throw(
-            KeyError("format_specific")
-        )
+        # Patched on the assembler, which is what composes the block now;
+        # an attribute on the converter would be silently ignored.
+        converter.uns._collect_optional_sections = lambda *a, **k: (
+            _ for _ in ()
+        ).throw(KeyError("format_specific"))
 
-        with thyra_logs("thyra.converters", logging.WARNING) as records:
+        with thyra_logs("thyra", logging.WARNING) as records:
             uns = converter.build_uns_metadata()
 
         # The section that raised is gone; the blocks composed after the
@@ -145,7 +147,7 @@ class TestTheProvenanceBlock:
     def test_an_invariant_break_is_not_downgraded_to_a_warning(self, tmp_path):
         """A RuntimeError is a defect, and a defect's traceback is the point."""
         converter = _converter(tmp_path)
-        converter._collect_region_info = lambda *a, **k: (_ for _ in ()).throw(
+        converter.uns._collect_region_info = lambda *a, **k: (_ for _ in ()).throw(
             RuntimeError("the region table is not built yet")
         )
 
@@ -166,7 +168,7 @@ class TestTheProvenanceBlock:
             ),
         )
 
-        with thyra_logs("thyra.converters", logging.WARNING) as records:
+        with thyra_logs("thyra", logging.WARNING) as records:
             uns = converter.build_uns_metadata()
 
         assert uns == {}

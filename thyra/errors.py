@@ -35,4 +35,28 @@ class ConversionRefused(ValueError):
     """
 
 
-__all__ = ["ConversionRefused"]
+#: What a provenance block is allowed to fail with (issue #280).
+#:
+#: The blocks that carry it are assembled from whatever shape a reader's
+#: extractor produced -- a missing attribute, a key the vendor did not
+#: write, a value of the wrong type -- so these four are the expected
+#: outcome of an unfamiliar source and cost the store one section.
+#: Everything else is Thyra breaking its own invariant, and a store missing
+#: a section it was asked to write is a worse outcome than a traceback, so
+#: the rest propagates.
+#:
+#: :class:`ConversionRefused` subclasses ``ValueError`` and is therefore
+#: *inside* this tuple. That is deliberate: none of the sites that use it
+#: calls anything that refuses. A site that does must re-raise the refusal
+#: ahead of the catch, because a refusal is addressed to the person who ran
+#: the conversion and a log line is not delivery.
+#:
+#: It lives here, beside that refusal, because both the converter and
+#: :mod:`thyra.metadata.uns_assembler` catch it, and neither module is a
+#: home for it: the converter imports the assembler, so the assembler
+#: cannot import the tuple back without a cycle, and the converter's error
+#: policy does not belong inside :mod:`thyra.metadata`.
+MALFORMED_METADATA = (AttributeError, KeyError, TypeError, ValueError)
+
+
+__all__ = ["ConversionRefused", "MALFORMED_METADATA"]

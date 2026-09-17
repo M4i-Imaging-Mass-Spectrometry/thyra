@@ -15,7 +15,6 @@ hand. pytest's ``caplog`` retains records, and so does Ousia's per-session
 log capture, which is the consumer that met it (issue #249).
 """
 
-import json
 import logging
 import warnings
 from abc import ABC, abstractmethod
@@ -37,16 +36,10 @@ from spatialdata.transformations import Identity
 from ...core.base_converter import BaseMSIConverter, PixelSizeSource
 from ...core.base_reader import BaseMSIReader
 from ...core.conversion_state import ConversionState
-from ...errors import ConversionRefused
-from ...metadata.schema import (
-    MSI_METADATA_UNS_KEY,
-    MSI_VAR_RESERVED_COLUMNS,
-    ProcessingStep,
-    SoftwareRef,
-    build_msi_metadata,
-    forget_resolved_table,
-)
+from ...errors import MALFORMED_METADATA, ConversionRefused
+from ...metadata.schema import MSI_VAR_RESERVED_COLUMNS
 from ...metadata.types import ComprehensiveMetadata, EssentialMetadata
+from ...metadata.uns_assembler import UnsAssembler, UnsContext
 from ...resampling import ResamplingDecisionTree, ResamplingMethod
 from ...resampling.binning import (
     SharedAxisNNCache,
@@ -117,49 +110,6 @@ def _suppress_upstream_warnings():
             category=UserWarning,
         )
         yield
-
-
-def _numeric_only(value: Any) -> bool:
-    """True when a list round-trips through AnnData/zarr as a numeric array."""
-    if isinstance(value, list):
-        return all(_numeric_only(item) for item in value)
-    if isinstance(value, np.ndarray):
-        return value.dtype.kind in "iufb"
-    return isinstance(value, (bool, int, float, np.integer, np.floating, np.bool_))
-
-
-def _json_fallback(obj: Any) -> Any:
-    """Last-resort encoder for values ``json.dumps`` does not know."""
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    if isinstance(obj, np.generic):
-        return obj.item()
-    return str(obj)
-
-
-def _jsonify_string_lists(obj: Any) -> Any:
-    """Replace any list that is not purely numeric with its JSON encoding.
-
-    AnnData/zarr cannot round-trip such lists: a list of dicts is
-    stringified entry by entry into Python ``repr`` strings, and any list
-    of strings comes back as a numpy string array -- whose ``deepcopy``
-    segfaults outright on numpy 2.1-2.2 (numpy#28609). Since every table
-    copy deepcopies ``uns`` (``AnnData.copy``, spatial queries, joins),
-    one such array in ``uns`` kills the reader's process with no
-    traceback. JSON side-steps both: it stores a single scalar string,
-    and hands consumers the actual structure back through
-    ``json.loads`` instead of ``repr`` output.
-
-    Purely numeric lists (nested included) are kept: they become plain
-    numeric arrays, which are safe and more useful as arrays.
-    """
-    if isinstance(obj, dict):
-        return {key: _jsonify_string_lists(value) for key, value in obj.items()}
-    if isinstance(obj, list):
-        if _numeric_only(obj):
-            return obj
-        return json.dumps(obj, default=_json_fallback)
-    return obj
 
 
 def _resolve_config_enum(raw: Any, by_name: Dict[str, Any], key: str) -> Any:
@@ -303,37 +253,11 @@ def _normalize_resampling_config(
     )
 
 
-#: How far the heatmap's total may sit from the stored mean spectrum's and
-#: still be called equal. Looser than :data:`_MARGINAL_TOLERANCE` because
-#: the two are not the same sum reordered: the heatmap coarsens the mass
-#: axis by an integer factor and clips mobility into the edge channels, so
-#: float32 storage of the counts sets the floor. Measured at 4e-8 under
-#: scan_sum and 0.15 under the vendor centroid, so the gap either side of
-#: this is four orders of magnitude wide.
-_HEATMAP_TOLERANCE = 1e-4
-
 #: How far a marginal may sit from the column it mirrors, relative to the
 #: largest value in the summed table, and still be called exact. Summing
 #: the same float64 values in a different order is the only difference
 #: under ``--tdf-spectrum scan_sum``.
 _MARGINAL_TOLERANCE = 1e-9
-
-#: What a provenance block is allowed to fail with (issue #280).
-#:
-#: The blocks below are assembled from whatever shape a reader's extractor
-#: produced -- a missing attribute, a key the vendor did not write, a value
-#: of the wrong type -- so these four are the expected outcome of an
-#: unfamiliar source and cost the store one section. Everything else is
-#: Thyra breaking its own invariant, and a store missing a section it was
-#: asked to write is a worse outcome than a traceback, so the rest
-#: propagates.
-#:
-#: :class:`~thyra.errors.ConversionRefused` subclasses ``ValueError`` and is
-#: therefore *inside* this tuple. That is deliberate: none of the sites that
-#: use it calls anything that refuses. A site that does must re-raise the
-#: refusal ahead of the catch, because a refusal is addressed to the person
-#: who ran the conversion and a log line is not delivery.
-_MALFORMED_METADATA = (AttributeError, KeyError, TypeError, ValueError)
 
 
 def _current_ratio_block(
@@ -667,8 +591,8 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             if resampling_config is not None
             else None
         )
-        # Filled by _build_resampled_mass_axis(); consumed by
-        # _processing_provenance().
+        # Filled by _build_resampled_mass_axis(); consumed by the uns
+        # assembler's processing provenance, through _uns_context().
         self._resolved_resampling_plan: Optional[Dict[str, Any]] = None
 
         # The mobility-resolved sibling table (see mobility_table.py): whether
@@ -714,8 +638,6 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # key it gets, so the MSI table's uns can name it.
         self._write_msms_table = bool(msms_table)
         self._msms_table_key: Optional[str] = None
-        self._fragmentation_schedule: Any = None
-        self._fragmentation_read = False
 
         # Metadata caches (populated lazily during conversion). These have
         # to exist before _setup_resampling below: its strategy selection
@@ -763,6 +685,19 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             include=include_optical,
             apply_alignment=apply_optical_alignment,
             pixel_size_xy=self._resolved_pixel_size_xy,
+        )
+
+        # The table's ``uns`` block and everything that composes it. Handed
+        # the same pitch accessor for the same reason, and the three other
+        # things it needs that are settled here; everything it reads that a
+        # conversion decides later travels per call in an
+        # :class:`~thyra.metadata.uns_assembler.UnsContext` (see
+        # :meth:`_uns_context`).
+        self.uns = UnsAssembler(
+            self.reader,
+            pixel_size_xy=self._resolved_pixel_size_xy,
+            pixel_size_detection_info=self._pixel_size_detection_info,
+            resampling_config=self._resampling_config,
         )
 
     def _setup_resampling(self) -> None:
@@ -964,7 +899,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 "total_peaks": getattr(essential, "total_peaks", None),
                 "n_spectra": getattr(essential, "n_spectra", None),
             }
-        except _MALFORMED_METADATA as e:
+        except MALFORMED_METADATA as e:
             logger.debug(f"Could not extract essential metadata: {e}")
 
     def _extract_comprehensive_metadata(self, metadata: Dict[str, Any]) -> None:
@@ -989,7 +924,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         try:
             self._extract_bruker_metadata(metadata, comp_meta)
             self._extract_instrument_info(metadata, comp_meta)
-        except _MALFORMED_METADATA as e:
+        except MALFORMED_METADATA as e:
             logger.debug(f"Could not extract comprehensive metadata: {e}")
 
     def _extract_bruker_metadata(self, metadata: Dict[str, Any], comp_meta) -> None:
@@ -1052,171 +987,43 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             self._release_table_scratch()
 
     def build_uns_metadata(self) -> Dict[str, Any]:
-        """The provenance block every write path must persist, identically.
+        """The provenance block every table of this conversion carries.
 
-        Single source of truth for what lands in the table's ``uns``:
-
-        - ``essential_metadata`` -- dimensions, mass range, source path,
-          spectrum type and the Thyra version that wrote the store.
-        - ``format_specific`` -- vendor metadata (FlexImaging areas,
-          teaching points, imzML file mode, ...).
-        - ``acquisition_params`` / ``instrument_info`` -- when the reader
-          has them.
-        - ``raw_metadata`` -- the source metadata as read.
-        - ``regions`` -- the acquisition region summary, as JSON.
-
-        This exists because the converters once had two write paths and
-        they drifted. The in-memory converters handed the table to
-        ``anndata``'s writer, which serialises whatever is in
-        ``adata.uns``; the streaming path hand-wrote the Zarr layout and
-        composed its own, much smaller block -- with ``spectrum_type``
-        hardcoded to ``"processed"``, which is not even a value the
-        extractors produce. Routing was on a size threshold at the time,
-        so a dataset large enough to reach the streaming path came out
-        claiming a spectrum representation it did not have, and without
-        any of the other sections, while a slightly smaller one from the
-        same instrument came out complete. There is one write path now,
-        through ``anndata``'s writer, and every table -- the summed one
-        and its siblings -- renders this mapping, so a section added here
-        reaches every store.
-
-        Sections the reader has nothing for are omitted rather than
-        written empty, so consumers can tell "not available from this
-        format" from "available and empty".
+        The converter's orchestration point: it packs what it currently
+        knows into an :class:`~thyra.metadata.uns_assembler.UnsContext`
+        and hands it to :meth:`~thyra.metadata.uns_assembler.UnsAssembler.build`,
+        which composes the mapping. See that method for what lands in it
+        and why there is exactly one place it is composed.
 
         Returns:
             Mapping of ``uns`` key to the value to store. Empty if the
             reader cannot produce comprehensive metadata at all.
         """
-        try:
-            comp_meta = self.reader.get_comprehensive_metadata()
-        except Exception as e:
-            # Non-fatal: a store without provenance still holds the
-            # spectra. But it is not a debug-level event -- the whole
-            # point of the block is that a consumer can say where the
-            # data came from, so losing it has to be visible in the log.
-            logger.warning("Could not read metadata for uns provenance: %s", str(e))
-            return {}
+        return self.uns.build(self._uns_context())
 
-        uns: Dict[str, Any] = {}
-        try:
-            self._collect_essential_metadata(uns, comp_meta)
-            self._collect_optional_sections(uns, comp_meta)
-            self._collect_region_info(uns)
-        except (*_MALFORMED_METADATA, RecursionError) as e:
-            # Three Thyra methods reading an object a Thyra extractor built,
-            # so the breadth the reader call above has is not earned here
-            # (issue #280). ``RecursionError`` is in the set because
-            # _serialize_for_zarr walks ``vars()`` and a vendor object that
-            # points back at its parent has no bottom.
-            logger.warning("Could not build the full uns provenance block: %s", str(e))
+    def _uns_context(self) -> UnsContext:
+        """What the assembler needs that this conversion decided after setup.
 
-        self._collect_msi_metadata_block(uns, comp_meta)
-        self._collect_mobility_axis(uns)
-        self._collect_mobility_heatmap(uns)
-        self._collect_msms_schedule(uns)
+        Packed fresh per call, never cached: the sibling keys are decided
+        per slice and taken back when a builder declines, the resolved
+        plan and the mobility grid are filled while the conversion runs,
+        and ``pixel_size_source`` is reassigned when a pitch is detected
+        from the reader's metadata.
 
-        return uns
-
-    def _fragmentation(self) -> Any:
-        """The reader's fragmentation schedule, read once and cached.
-
-        ``None`` when the reader cannot say. Asked for through the base
-        reader contract, so a format that learns to report it later needs
-        no change here.
+        ``_region_info`` is read through ``getattr`` because a converter
+        that never ran :meth:`_initialize_conversion` -- which is how
+        several tests ask for the block -- does not have it yet, and the
+        block is written from whatever regions are known, or omitted.
         """
-        if not self._fragmentation_read:
-            self._fragmentation_read = True
-            if self.reader.has_fragmentation:
-                try:
-                    self._fragmentation_schedule = self.reader.get_fragmentation()
-                except Exception as e:  # pragma: no cover - reader-defined
-                    logger.warning("Could not describe the fragmentation: %s", str(e))
-                    self._fragmentation_schedule = None
-            self._warn_if_precursors_merge()
-        return self._fragmentation_schedule
-
-    def _fragmentation_report(self) -> Any:
-        """The schedule in the shape the schema builder reads, or ``None``."""
-        schedule = self._fragmentation()
-        return None if schedule is None else schedule.to_extractor_report()
-
-    def _warn_if_precursors_merge(self) -> None:
-        """Say out loud when a stored spectrum sums several precursors.
-
-        The stored spectrum of such a pixel holds fragments of every
-        precursor the frame isolated, with nothing marking which came
-        from which. That is not visible in the output -- it looks like an
-        ordinary spectrum -- so it is said once, at WARNING, rather than
-        left for a reader of the peaks to work out.
-        """
-        schedule = self._fragmentation_schedule
-        if schedule is None or not schedule.merges_precursors:
-            return
-        targets = ", ".join(f"{w.target:g}" for w in schedule.windows[:6])
-        if len(schedule.windows) > 6:
-            targets += ", ..."
-        logger.warning(
-            "This acquisition isolates %d precursors per pixel (%s). Thyra "
-            "sums them into one spectrum per pixel, so the stored spectrum "
-            "holds fragments of all of them and cannot be attributed to a "
-            "single precursor. The schedule is recorded in "
-            "uns['msms_schedule'].",
-            len(schedule.windows),
-            targets,
+        return UnsContext(
+            mobility_table_key=self._mobility_table_key,
+            msms_table_key=self._msms_table_key,
+            mobility_grid=self._mobility_grid,
+            resolved_resampling_plan=self._resolved_resampling_plan,
+            region_info=getattr(self, "_region_info", None),
+            pixel_size_source=self.pixel_size_source,
+            mobility_heatmap=self._ensure_mobility_heatmap,
         )
-
-    def _collect_msms_schedule(self, uns: Dict[str, Any]) -> None:
-        """Add ``msms_schedule`` when the source fragmented anything.
-
-        Written on the summed MSI table so a consumer can tell fragment
-        m/z from intact m/z, and see which precursors a chimeric spectrum
-        merges. Kept out of the versioned ``msi_metadata`` block for the
-        same reason ``mobility_axis`` is: that block is versioned, this
-        one carries arrays.
-        """
-        schedule = self._fragmentation()
-        if schedule is None or not schedule.is_msms:
-            return
-        block = schedule.to_uns()
-        if self._msms_table_key is not None:
-            block["resolved_table"] = self._msms_table_key
-        uns["msms_schedule"] = _jsonify_string_lists(self._serialize_for_zarr(block))
-
-    def _collect_mobility_axis(self, uns: Dict[str, Any]) -> None:
-        """Add ``mobility_axis`` when the source has a mobility dimension.
-
-        Written on the summed MSI table so a consumer can tell "summed over
-        mobility" from "never had any", and so it can find the
-        mobility-resolved sibling (``resolved_table``) when one was written.
-        Kept out of the ``msi_metadata`` schema block: that block is
-        versioned, this one carries arrays.
-        """
-        try:
-            if not self.reader.has_ion_mobility:
-                return
-            axis = self.reader.get_mobility_axis()
-        except Exception as e:  # pragma: no cover - reader-defined
-            logger.warning("Could not describe the mobility axis: %s", str(e))
-            return
-        if axis is None:
-            return
-        block = axis.to_uns()
-        if self._mobility_table_key is not None:
-            block["resolved_table"] = self._mobility_table_key
-        uns["mobility_axis"] = _jsonify_string_lists(self._serialize_for_zarr(block))
-
-    def _collect_mobility_heatmap(self, uns: Dict[str, Any]) -> None:
-        """Add ``mobility_heatmap`` when the source has a mobility dimension.
-
-        The mean (m/z, mobility) frame of the whole dataset, the surface
-        a consumer looks at to decide whether mobility separates anything
-        before asking for a mobility-resolved table. Arrays, not lists,
-        and plain-name keys; nothing in it is per pixel.
-        """
-        block = self._ensure_mobility_heatmap()
-        if block is not None:
-            uns["mobility_heatmap"] = block
 
     def _ensure_mobility_heatmap(self) -> Optional[Dict[str, Any]]:
         """Build the heatmap the first time it is asked for; cache the result.
@@ -1615,52 +1422,14 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 self._record_demultiplexed_current(table, summed, table_key)
                 state.tables[self._msms_table_key] = table
         if declined:
-            self._unname_declined_siblings(state, table_key, declined)
-
-    #: The ``uns`` block outside the versioned schema that names each
-    #: sibling, keyed by the ``ms_analysis`` section that names it inside.
-    _SIBLING_UNS_BLOCK = {
-        "ion_mobility": "mobility_axis",
-        "fragmentation": "msms_schedule",
-    }
-
-    def _unname_declined_siblings(
-        self, state: ConversionState, table_key: str, declined: List[str]
-    ) -> None:
-        """Take a declined sibling's key back out of every table that names it.
-
-        The alternative was to decide before naming -- hoist whatever makes
-        a builder decline up into :meth:`_plan_mobility_table` and
-        :meth:`_plan_msms_table`, so a table that will not be built is never
-        named. That is the cleaner shape and it is not the one taken: the
-        two builders decline at eight separate points across
-        ``mobility_table`` and ``msms_table``, several of them knowable
-        only once the pass has run (a feature listing that comes back
-        empty, a var count over the ceiling), and a ninth added later
-        would re-open the defect silently. Reacting to ``None`` in one
-        place closes all of them, including the ones nobody has written
-        yet.
-
-        Every table written for this slice is cleaned, not just the summed
-        one: ``sibling_uns`` in :meth:`_attach_sibling_tables` is taken
-        from :meth:`build_uns_metadata` *before* either builder runs, so a
-        surviving sibling carries the same stale pointer. A mobility table
-        that declines while the MS/MS table is written would otherwise
-        leave the MS/MS table naming it too.
-        """
-        for key in (table_key, self._mobility_table_key, self._msms_table_key):
-            if key is None:
-                continue
-            uns = getattr(state.tables.get(key), "uns", None)
-            if uns is None:
-                continue
-            for section in declined:
-                block = uns.get(self._SIBLING_UNS_BLOCK[section])
-                if isinstance(block, dict):
-                    block.pop("resolved_table", None)
-                meta = uns.get(MSI_METADATA_UNS_KEY)
-                if isinstance(meta, dict):
-                    forget_resolved_table(meta, section)
+            # Every table written for this slice, not just the summed one:
+            # each sibling's uns was taken from build_uns_metadata() before
+            # either builder ran, so each carries the same stale pointer.
+            self.uns.unname_declined_siblings(
+                state.tables,
+                (table_key, self._mobility_table_key, self._msms_table_key),
+                declined,
+            )
 
     def _build_mobility_sibling(
         self,
@@ -1771,7 +1540,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         """
         try:
             block = _current_ratio_block(table, summed_key, summed)
-        except _MALFORMED_METADATA as e:  # pragma: no cover - defensive
+        except MALFORMED_METADATA as e:  # pragma: no cover - defensive
             # Two row sums over two memmaps (issue #280): a released memmap
             # or a matrix that is not the shape it should be raises one of
             # these. A comparison is the whole job here, so anything wider
@@ -1812,7 +1581,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # specific reason first and fall back to the generic one, or an
         # acquisition whose precursors are merely uninteresting gets told
         # its reader is incapable.
-        refusal = demultiplex_refusal(self._fragmentation())
+        refusal = demultiplex_refusal(self.uns.fragmentation())
         if refusal is not None:
             logger.info("No demultiplexed MS/MS table: %s", refusal)
             return None
@@ -1844,7 +1613,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         """
         try:
             block = _current_ratio_block(table, summed_key, summed)
-        except _MALFORMED_METADATA as e:  # pragma: no cover - defensive
+        except MALFORMED_METADATA as e:  # pragma: no cover - defensive
             # Same two row sums, same reasoning as _record_mobility_marginal.
             logger.debug("Could not compare the demultiplexed current: %s", str(e))
             return
@@ -1885,220 +1654,9 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         """
         return (float(self.pixel_size_um), float(self.pixel_size_y_um))
 
-    def _collect_msi_metadata_block(self, uns: Dict[str, Any], comp_meta: Any) -> None:
-        """Add the versioned ``msi_metadata`` schema block.
-
-        Built in its own try so a schema failure cannot take the other
-        provenance sections down with it.  See docs/metadata-schema.md
-        for the storage contract and ``thyra validate`` for the
-        consumer side.
-        """
-        try:
-            info = self._pixel_size_detection_info or {}
-            meta = build_msi_metadata(
-                comp_meta,
-                pixel_size_um=self._resolved_pixel_size_xy(),
-                pixel_size_source=self.pixel_size_source.value,
-                source_format=info.get("source_format"),
-                processing=self._processing_provenance(),
-                mobility_resolved_table=self._mobility_table_key,
-                mobility_grid=(
-                    None
-                    if self._mobility_grid is None
-                    else self._mobility_grid.to_schema_report()
-                ),
-                fragmentation=self._fragmentation_report(),
-                msms_resolved_table=self._msms_table_key,
-            )
-            uns[MSI_METADATA_UNS_KEY] = meta.to_uns_dict()
-        except _MALFORMED_METADATA as e:
-            # The schema builder is Thyra's, and so is everything handed to
-            # it, so its breadth was not earned (issue #280). What remains
-            # is the vendor-shaped part: a comp_meta section the builder
-            # reads positionally or by key and this source spells
-            # differently.
-            logger.warning("Could not build the msi_metadata block: %s", str(e))
-
-    def _processing_provenance(self) -> List[Any]:
-        """The processing steps this conversion performed, oldest first.
-
-        Modeled on mzQC provenance.  The list describes what was done to
-        the data, so nothing about how the store was written -- the sparse
-        layout, the number of passes -- belongs here.
-        """
-        from thyra import __version__
-
-        thyra_ref = SoftwareRef(name="thyra", version=__version__)
-        conversion_parameters: Dict[str, Any] = {}
-        # A TDF frame's mobility ramp is collapsed into one spectrum, and
-        # the two correct ways to do that differ in TIC by up to a fifth
-        # (vendor centroid vs. lossless scan sum), so the store must say
-        # which one it holds.
-        tdf_spectrum = getattr(self.reader, "tdf_spectrum", None)
-        if (
-            tdf_spectrum is not None
-            and getattr(self.reader, "file_type", None) == "tdf"
-        ):
-            conversion_parameters["tdf_spectrum"] = str(tdf_spectrum)
-        steps = [
-            ProcessingStep(
-                name="conversion",
-                software=thyra_ref,
-                parameters=conversion_parameters,
-            )
-        ]
-
-        config = self._resampling_config
-        if config is not None:
-            parameters: Dict[str, Any] = {}
-            for field_name, value in vars(config).items():
-                if value is None:
-                    continue
-                parameters[field_name] = getattr(value, "value", value)
-            # The resolved plan wins over the requested config: with
-            # "auto" settings the config says nothing about the method
-            # and axis the decision tree actually picked, and the step
-            # must declare what was done, not what was asked for.
-            for field_name, value in (self._resolved_resampling_plan or {}).items():
-                if value is None:
-                    continue
-                parameters[field_name] = getattr(value, "value", value)
-            steps.append(
-                ProcessingStep(
-                    name="mass axis resampling",
-                    software=thyra_ref,
-                    parameters=parameters,
-                )
-            )
-        return steps
-
-    def _collect_essential_metadata(self, uns: Dict[str, Any], comp_meta: Any) -> None:
-        """Add ``essential_metadata`` (tuples become lists for Zarr)."""
-        essential = getattr(comp_meta, "essential", None)
-        if essential is None:
-            return
-
-        dims = essential.dimensions
-        mrange = essential.mass_range
-        from thyra import __version__
-
-        uns["essential_metadata"] = {
-            "source_path": str(essential.source_path),
-            "dimensions": list(dims) if dims else None,
-            "mass_range": list(mrange) if mrange else None,
-            "spectrum_type": getattr(essential, "spectrum_type", None),
-            "thyra_version": __version__,
-        }
-
-    def _collect_optional_sections(self, uns: Dict[str, Any], comp_meta: Any) -> None:
-        """Add the vendor sections the reader actually populated.
-
-        Lists that are not purely numeric (imzML ``cvParams``, or any
-        string list a vendor extractor reports) are stored as JSON
-        strings -- see :func:`_jsonify_string_lists` for why letting
-        them reach the writer as lists corrupts them and crashes
-        readers on numpy 2.1-2.2.
-        """
-        for key in ("format_specific", "acquisition_params", "instrument_info"):
-            value = getattr(comp_meta, key, None)
-            if value:
-                uns[key] = _jsonify_string_lists(self._serialize_for_zarr(value))
-
-        raw_metadata = getattr(comp_meta, "raw_metadata", None)
-        if raw_metadata:
-            uns["raw_metadata"] = _jsonify_string_lists(
-                self._serialize_for_zarr(raw_metadata)
-            )
-
-    def _collect_region_info(self, uns: Dict[str, Any]) -> None:
-        """Add the acquisition region summary as JSON.
-
-        Stored as a JSON string because AnnData/zarr cannot round-trip
-        a list of dicts (they get stringified individually). JSON
-        preserves the structure and can be parsed with json.loads().
-
-        Always written for a consistent schema. Single-region datasets
-        get a single-entry list with region_number=1.
-        """
-        region_info = getattr(self, "_region_info", None)
-        if region_info:
-            uns["regions"] = json.dumps(self._serialize_for_zarr(region_info))
-
     def _add_metadata_to_uns(self, adata) -> None:
         """Apply :meth:`build_uns_metadata` to an AnnData about to be written."""
-        uns = self.build_uns_metadata()
-        adata.uns.update(uns)
-        self._record_heatmap_current(adata)
-        logger.debug("Added MSI metadata to AnnData .uns: %s", sorted(uns))
-
-    @staticmethod
-    def _record_heatmap_current(adata) -> None:
-        """Say how much of the stored mean spectrum the heatmap holds.
-
-        The heatmap's marginal over mobility is the stored mean spectrum
-        coarsened to its own m/z bins -- exactly, under the default
-        ``--tdf-spectrum scan_sum``, and not at all under the vendor
-        centroid, which is a peak-picked spectrum over the same scans
-        while the heatmap is built from the raw points. Measured at 15%
-        off on every vendor_centroid store.
-
-        docs/output-format.md says the identity holds only under
-        scan_sum, but nothing in the store said which case a given store
-        was, so a consumer plotting the heatmap next to the mean spectrum
-        had no way to tell the 15% from a bug (issue #253). The grid's
-        ``uns["mobility_marginal"]`` has recorded its ratio since it
-        existed; this is the same number for the heatmap.
-
-        Both quantities are per-pixel means over the same pixels, so
-        their totals compare directly: the ratio is one scalar and needs
-        nothing materialised.
-        """
-        block = adata.uns.get("mobility_heatmap")
-        spectrum = adata.uns.get("average_spectrum")
-        if not isinstance(block, dict) or spectrum is None:
-            return
-        try:
-            stored = float(np.asarray(spectrum, dtype=np.float64).sum())
-            held = float(np.asarray(block["counts"], dtype=np.float64).sum())
-        except _MALFORMED_METADATA as e:  # pragma: no cover - defensive
-            # A block without ``counts``, or counts that will not become a
-            # float array (issue #280). Two numpy sums cannot fail any
-            # other way that is not a defect.
-            # str(e), not e: this is the finalize path, where a retained
-            # record pins the memmaps the table is built on (issue #249).
-            logger.debug("Could not compare the mobility heatmap: %s", str(e))
-            return
-        if stored <= 0:
-            return
-        ratio = held / stored
-        block["current_ratio"] = ratio
-        if abs(ratio - 1.0) > _HEATMAP_TOLERANCE:
-            logger.warning(
-                "The mass-mobility heatmap holds %.4fx the stored mean "
-                "spectrum's ion current. Its marginal over mobility is that "
-                "spectrum only under --tdf-spectrum scan_sum; the vendor "
-                "centroid keeps only the current inside the peaks it picks, "
-                "while the heatmap reads raw points. "
-                'uns["mobility_heatmap"]["current_ratio"] records it.',
-                ratio,
-            )
-
-    def _serialize_for_zarr(self, obj):
-        """Recursively convert tuples to lists for Zarr serialization.
-
-        Dict keys are coerced to strings: Zarr group members must be named,
-        and a non-string key otherwise fails at write time, after the whole
-        conversion has already been done.
-        """
-        if isinstance(obj, dict):
-            return {str(k): self._serialize_for_zarr(v) for k, v in obj.items()}
-        elif isinstance(obj, (list, tuple)):
-            return [self._serialize_for_zarr(item) for item in obj]
-        elif hasattr(obj, "__dict__"):
-            # Convert dataclass/object to dict
-            return self._serialize_for_zarr(vars(obj))
-        else:
-            return obj
+        self.uns.apply(adata, self._uns_context())
 
     def _calculate_bins_from_width(
         self, min_mz: float, max_mz: float, axis_type
@@ -2295,7 +1853,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # Kept for provenance: the processing step must declare what was
         # actually done, and with "auto" settings the requested config
         # says nothing about the method, axis and bin width the decision
-        # tree resolved to.  See _processing_provenance().
+        # tree resolved to.  See the uns assembler's processing provenance.
         self._resolved_resampling_plan = {
             "method": getattr(self, "_resampling_method", None),
             "axis_type": axis_type,
