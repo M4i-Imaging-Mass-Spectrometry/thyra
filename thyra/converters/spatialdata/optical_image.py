@@ -101,7 +101,6 @@ from spatialdata.transformations import Sequence as SequenceTransform
 from spatialdata.transformations import set_transformation
 
 from ...alignment import AreaAlignmentResult, TeachingPointAlignment
-from ...utils.zarr_atomic_write import install_windows_atomic_write_retry
 from ._chunking import image_chunks
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -550,14 +549,6 @@ class StreamedOpticalImage:
         if len(self.chunks) != 3:
             raise ValueError(f"chunks must be (c, y, x), got {self.chunks}")
         self.scale_factors = [int(f) for f in self.scale_factors]
-        # This class is the one write path that does not go through
-        # BaseSpatialDataConverter, which installs the same retry in its
-        # __init__: a caller who builds a StreamedOpticalImage directly
-        # gets here without it, and then :meth:`stream_pixels` rewrites
-        # level-0 chunks (any band that does not complete a chunk) straight
-        # onto Zarr's un-retried Windows rename. Idempotent, and a no-op off
-        # Windows -- see thyra.utils.zarr_atomic_write.
-        install_windows_atomic_write_retry()
 
     @property
     def level_shapes(self) -> List[Shape]:

@@ -61,7 +61,6 @@ from ...resampling.mobility_grid import (
 )
 from ...resampling.tic import preserved_tic, rescale_to_preserved_tic
 from ...resampling.types import AxisLinearisation, AxisType, ResamplingConfig
-from ...utils.zarr_atomic_write import install_windows_atomic_write_retry
 from ._chunking import table_write_config
 from .optical_image import OpticalImages
 
@@ -1031,12 +1030,6 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 "is the layout an ion image reads down. Drop the argument; for "
                 "row-wise access call X.tocsr() on the matrix you read back."
             )
-
-        # Every Zarr write below this point goes through Zarr's atomic
-        # rename, which on Windows intermittently loses a race against
-        # whatever else has the destination open. Idempotent and a no-op
-        # off Windows.
-        install_windows_atomic_write_retry()
 
         # Validate inputs
         if pixel_size_um <= 0:

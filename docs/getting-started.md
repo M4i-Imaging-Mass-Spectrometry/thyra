@@ -199,13 +199,26 @@ intensity matrix is never held in RAM. There is no mode to switch on; the
 ### "WinError 5: Access is denied"
 
 Windows has no atomic file replace, so Zarr's metadata writes have to delete the
-destination before renaming the new copy over it. If any handle is open on that
-file at that instant the rename fails outright instead of waiting.
+destination before renaming the new copy over it. For well under a millisecond
+after a name was last used, NTFS still holds that name -- *file system
+tunnelling* -- and the delete comes back `Access is denied` instead of waiting.
 
-Thyra retries these renames a few times, which clears the transient contention
-Zarr's own concurrent writes create. A failure that survives the retries means
-something is holding the store open for longer than that -- typically a Python
-session, napari, or a Jupyter notebook that loaded it.
+It is worth saying what this is **not**, because both usual explanations are
+wrong here. It is not your antivirus: it reproduces with real-time monitoring
+off. And it is not another program holding a handle: replacing a *fresh* name
+never fails, and replacing the same name repeatedly fails about 4% of the time
+with nothing else running. Only a key written twice is ever exposed, which is
+why first writes are always fine.
+
+Zarr retries these renames a few times, which clears it. A failure that survives
+the retries is the case where something really is holding the store open for
+longer than that -- typically a Python session, napari, or a Jupyter notebook
+that loaded it.
+
+!!! note "Requires Zarr 3.4.0 or newer"
+    The retry is Zarr's, from zarr-python#4358. Thyra carried its own copy for
+    releases before that landed; it is gone now, and Thyra's `zarr>=3.4.0` floor
+    is what guarantees the one that replaced it is present.
 
 **Fix:** Close any program that has the zarr open, or write to a different output
 path.
