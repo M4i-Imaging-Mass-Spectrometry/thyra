@@ -277,6 +277,8 @@ def _collect(
 
 def scan_observed_mz_range(
     path: Union[str, Path],
+    *,
+    shared_axis: bool = False,
 ) -> Optional[Tuple[float, float]]:
     """The mass range the file itself records, or ``None``.
 
@@ -298,10 +300,25 @@ def scan_observed_mz_range(
     terms that are wanted, not the document structure, and the cost is
     then the file's size rather than its element count -- 53 ms for
     29 MB, 3.9 s for 2.0 GiB.
+
+    ``shared_axis`` says the file declares continuous mode
+    (``IMS:1000030``): by the specification every spectrum then shares one
+    m/z array, and the recorded extrema are computed from that same array,
+    so the first spectrum's pair is the file's pair.  The scan then stops
+    after its first chunk -- provided every extremum recorded in that
+    chunk agrees, which is the specification's guarantee checked against
+    the file's own first spectra.  A continuous file whose recorded
+    extrema disagree there is scanned in full, exactly as a processed one.
+    Measured on a 270 MB continuous export over a network share: the full
+    pass cost 5.6 s cold and 0.58 s warm for a range the first spectrum
+    already stated (issue #371).
     """
     path = Path(path)
     lowest: Optional[float] = None
     highest: Optional[float] = None
+    # Whether every value seen so far is one value; only asked under
+    # ``shared_axis``, and only of the first chunk.
+    uniform = True
 
     with path.open("rb") as handle:
         carry = b""
@@ -312,12 +329,33 @@ def scan_observed_mz_range(
             buffer = carry + chunk
             for match in _LOWEST.finditer(buffer):
                 value = _as_float(match.group(1))
-                if value is not None and (lowest is None or value < lowest):
+                if value is None:
+                    continue
+                if lowest is None:
                     lowest = value
+                elif value != lowest:
+                    uniform = False
+                    if value < lowest:
+                        lowest = value
             for match in _HIGHEST.finditer(buffer):
                 value = _as_float(match.group(1))
-                if value is not None and (highest is None or value > highest):
+                if value is None:
+                    continue
+                if highest is None:
                     highest = value
+                elif value != highest:
+                    uniform = False
+                    if value > highest:
+                        highest = value
+            if shared_axis and uniform and lowest is not None and highest is not None:
+                logger.debug(
+                    "%s declares a shared m/z axis and its first spectra agree on "
+                    "(%s, %s); not scanning the rest of the document.",
+                    path.name,
+                    lowest,
+                    highest,
+                )
+                break
             carry = buffer[-_SCAN_OVERLAP_BYTES:]
 
     if lowest is None or highest is None:

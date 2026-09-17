@@ -112,7 +112,10 @@ decode every m/z array out of the `.ibd` for the mass range: 64 s on a 2.0 GiB
 export, for numbers the head already holds. The mass range is the one thing it
 does not hold, and it is read from the per-spectrum `MS:1000528` / `MS:1000527`
 terms in the XML -- the same extrema, to the six decimals the file records,
-without opening the binary. A writer that omits those terms, as IONTOF
+without opening the binary. On a continuous-mode file every spectrum shares one
+m/z array, so the first spectrum states the range and the read stops there
+(checked against the file's own first spectra, not taken on trust); a
+processed-mode file is read to the end. A writer that omits those terms, as IONTOF
 SurfaceLab does, leaves the range genuinely unknown and a preview reports it as
 `None` rather than guessing from one spectrum. Two files still take the old
 route, because their head cannot settle the raster: one that declares no
