@@ -29,6 +29,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from ...core.frames import FrameScans
+from ...resampling.types import AxisLinearisation
 from .mobility_heatmap import (
     MobilityHeatmap,
     finish_mobility_heatmap,
@@ -56,6 +57,10 @@ class SiblingPasses:
             table is planned.
         msms: The MS/MS table's accumulator, or ``None`` when no split is
             planned.
+        linearisation: ``axis``'s own, when it has one, so every frame's
+            bin index is computed rather than searched for. The sinks
+            were the last callers still searching after design decision
+            D21 (issue #348); the index is the same either way.
     """
 
     def __init__(
@@ -64,9 +69,11 @@ class SiblingPasses:
         heatmap: Optional[MobilityHeatmap] = None,
         discovery: Optional[GridDiscovery] = None,
         msms: Optional[MsmsAccumulator] = None,
+        linearisation: Optional[AxisLinearisation] = None,
     ) -> None:
         """Hold the sinks; nothing is read until the converter's passes feed them."""
         self.axis = np.asarray(axis, dtype=np.float64)
+        self.linearisation = linearisation
         self.heatmap = heatmap
         self.heatmap_wanted = heatmap is not None
         self.discovery = discovery
@@ -111,13 +118,19 @@ class SiblingPasses:
         indexed = getattr(frame, "mobility_points_indexed", None)
         if indexed is not None:
             points = indexed()
-            return (
-                None
-                if points is None
-                else map_indexed_points_to_axis(self.axis, *points)
+            if points is None:
+                return None
+            unique_mz, inverse, mobility, intensities = points
+            return map_indexed_points_to_axis(
+                self.axis, unique_mz, inverse, mobility, intensities, self.linearisation
             )
         flat = frame.mobility_points()
-        return None if flat is None else map_points_to_axis(self.axis, *flat)
+        if flat is None:
+            return None
+        mzs, mobility, intensities = flat
+        return map_points_to_axis(
+            self.axis, mzs, mobility, intensities, self.linearisation
+        )
 
     # -- pass 1 ----------------------------------------------------------
 

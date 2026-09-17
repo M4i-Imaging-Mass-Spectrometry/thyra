@@ -46,7 +46,7 @@ from thyra.resampling.mass_axis import (
     TOFAxisGenerator,
 )
 from thyra.resampling.mass_axis.tof_generator import PHI_NANOTOF_LAW, TIMSTOF_TOF_LAW
-from thyra.resampling.types import AxisLinearisation
+from thyra.resampling.types import AxisLinearisation, AxisType
 
 GENERATORS = [
     pytest.param(LinearAxisGenerator(), id="constant"),
@@ -217,3 +217,125 @@ class TestConverterPathsAgree:
         mzs = np.array([100.0, 500.25, 999.9])
         bins, sums = stub._nearest_neighbor_resample(mzs, np.ones(3))
         np.testing.assert_array_equal(bins, _nn_map_to_bins(mass_axis.mz_values, mzs))
+
+
+class TestTheUniformAxisIsLinearised:
+    """A constant axis carries its coordinate like every other (issue #348).
+
+    ``CommonAxisBuilder.build_uniform_axis`` laid the bins itself instead
+    of asking ``LinearAxisGenerator`` for them, and so reported no
+    linearisation. The axis was right; it simply never said what it was
+    uniform in, and every placement onto it -- the summed table's
+    included -- fell back to the search.
+    """
+
+    def test_the_values_are_what_they_always_were(self):
+        from thyra.resampling.common_axis import CommonAxisBuilder
+
+        axis = CommonAxisBuilder().build_uniform_axis(90.0, 510.0, 43)
+
+        np.testing.assert_array_equal(axis.mz_values, np.linspace(90.0, 510.0, 43))
+        assert axis.axis_type is AxisType.CONSTANT
+        assert axis.num_bins == 43
+
+    def test_and_now_it_reports_its_coordinate(self):
+        from thyra.resampling.common_axis import CommonAxisBuilder
+
+        axis = CommonAxisBuilder().build_uniform_axis(90.0, 510.0, 43)
+
+        assert axis.linearisation is not None
+        # The identity: a constant axis is uniform in m/z itself.
+        np.testing.assert_allclose(
+            axis.linearisation.positions(axis.mz_values),
+            np.arange(43, dtype=np.float64),
+            atol=1e-9,
+        )
+        usable = _usable_linearisation(
+            axis.linearisation, axis.mz_values, float(np.diff(axis.mz_values).min())
+        )
+        assert usable is not None
+
+    def test_a_single_bin_axis_has_no_step_to_report(self):
+        from thyra.resampling.common_axis import CommonAxisBuilder
+
+        axis = CommonAxisBuilder().build_uniform_axis(90.0, 510.0, 1)
+
+        assert axis.linearisation is None
+
+
+@pytest.mark.parametrize("fused", [True, False])
+def test_the_sibling_tables_are_what_the_search_builds(tmp_path, fused):
+    """Every stored table, bit for bit, with the closed form and without it.
+
+    The sinks of the sibling tables were the last callers still searching
+    after D21 (issue #348). They map onto the summed table's own axis, so
+    they take the same linearisation -- and the tables they build have to
+    come out unchanged, which is the constraint the issue set. Checked on
+    the store rather than on the mapping: the fused reader hands its
+    points indexed and the unfused one flat, so between them this covers
+    both ``map_indexed_points_to_axis`` and ``map_points_to_axis``, plus
+    the grid's two passes and the MS/MS split.
+    """
+    spatialdata = pytest.importorskip("spatialdata")
+
+    from tests.unit.converters.test_fused_passes import (
+        RESAMPLED,
+        FusedStubReader,
+        UnfusedStubReader,
+    )
+    from thyra.converters.spatialdata import base_spatialdata_converter as bsc
+    from thyra.converters.spatialdata.streaming_converter import (
+        StreamingSpatialDataConverter,
+    )
+    from thyra.utils.windows_paths import (
+        prepare_zarr_output_path,
+        prepare_zarr_read_path,
+    )
+
+    reader_cls = FusedStubReader if fused else UnfusedStubReader
+
+    def convert(tag, force_search):
+        original = bsc._usable_linearisation
+        if force_search:
+            bsc._usable_linearisation = lambda *a, **k: None
+        try:
+            out = prepare_zarr_output_path(tmp_path / f"{tag}.zarr", "stub")
+            converter = StreamingSpatialDataConverter(
+                reader_cls(),
+                out,
+                dataset_id="stub",
+                pixel_size_um=10.0,
+                resampling_config=RESAMPLED,
+                mobility_grid=True,
+            )
+            assert converter.convert()
+            used = converter._nn_linearisation is not None
+            return spatialdata.read_zarr(prepare_zarr_read_path(out)), used
+        finally:
+            bsc._usable_linearisation = original
+
+    closed, used_closed = convert("closed", force_search=False)
+    searched, used_searched = convert("searched", force_search=True)
+
+    # Without this the test would pass by comparing two identical search
+    # runs, which is what it did before build_uniform_axis reported one.
+    assert used_closed is True
+    assert used_searched is False
+
+    assert set(closed.tables) == set(searched.tables)
+    assert set(closed.tables) == {"stub_z0", "stub_z0_mobility", "stub_z0_msms"}
+    for key in closed.tables:
+        a, b = closed.tables[key], searched.tables[key]
+        assert a.shape == b.shape, key
+        xa, xb = (
+            t.X.toarray() if hasattr(t.X, "toarray") else np.asarray(t.X)
+            for t in (a, b)
+        )
+        np.testing.assert_array_equal(xa, xb, err_msg=f"{key}: X differs")
+        assert list(a.var.index) == list(b.var.index), key
+        for column in a.var.columns:
+            np.testing.assert_array_equal(
+                a.var[column].to_numpy(),
+                b.var[column].to_numpy(),
+                err_msg=f"{key}: var[{column}] differs",
+            )

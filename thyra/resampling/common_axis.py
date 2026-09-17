@@ -2,8 +2,6 @@
 
 from typing import Dict, Optional, Tuple
 
-import numpy as np
-
 from ..errors import ConversionRefused
 from .mass_axis import (
     BaseAxisGenerator,
@@ -25,8 +23,15 @@ class CommonAxisBuilder:
     ) -> MassAxis:
         """Create uniform (equidistant) mass axis.
 
-        This is a placeholder implementation that will be expanded
-        in Phase 4.
+        Delegates to :class:`~thyra.resampling.mass_axis.LinearAxisGenerator`,
+        the generator for this axis type, rather than laying the bins a
+        second time. Both are ``np.linspace(min_mz, max_mz, num_bins)``
+        and always were, so the axis is unchanged -- but only the
+        generator reports the coordinate it laid them in, and without
+        that every placement onto a constant axis fell back to binary
+        search, including the summed table's (issue #348). It is the one
+        axis type whose linearisation is the identity, so it was also the
+        cheapest one to be missing.
 
         Args:
             min_mz: Minimum m/z value
@@ -36,15 +41,7 @@ class CommonAxisBuilder:
         Returns:
             Generated mass axis
         """
-        mz_values = np.linspace(min_mz, max_mz, num_bins)
-
-        return MassAxis(
-            mz_values=mz_values,
-            min_mz=min_mz,
-            max_mz=max_mz,
-            num_bins=num_bins,
-            axis_type=AxisType.CONSTANT,
-        )
+        return LinearAxisGenerator().generate_axis(min_mz, max_mz, num_bins)
 
     def build_physics_axis(
         self,
