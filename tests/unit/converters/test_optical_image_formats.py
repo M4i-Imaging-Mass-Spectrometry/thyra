@@ -372,9 +372,22 @@ def test_rapiflex_acquisition_with_a_jpeg_optical_image(tmp_path: Path):
 
     sdata = SpatialData.read(str(output_path))
     assert "rapiflex_optical_highres" in sdata.images
+    # The .mis draws one Area, so the alignment image in the store is that
+    # Area's window of the JPEG (plus the margin, clamped to the 37 x 53
+    # page), not the whole page; the store says where the window sits. The
+    # bytes are still the JPEG's own, which is what this test is for.
+    root = json.loads((output_path / "zarr.json").read_text(encoding="utf-8"))
+    crop = root["attributes"]["optical_images"]["elements"]["rapiflex_optical_highres"][
+        "crop"
+    ]
+    assert crop["full_size"] == [53, 37]
+    x0, y0 = crop["origin"]
+    width, height = crop["size"]
+    assert (x0, y0, width, height) == (7, 7, 36, 30)
+    whole = np.moveaxis(np.asarray(PILImage.open(expected)), -1, 0)
     np.testing.assert_array_equal(
         sdata.images["rapiflex_optical_highres"].values,
-        np.moveaxis(np.asarray(PILImage.open(expected)), -1, 0),
+        whole[:, y0 : y0 + height, x0 : x0 + width],
     )
     # The image the .mis named is the alignment image; the other two are
     # carried along beside it, scaled into its pixel space.
