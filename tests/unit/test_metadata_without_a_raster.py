@@ -282,3 +282,30 @@ class TestTheConversionIsRefused:
     def test_a_metadata_only_reader_is_not_refused(self, no_raster):
         with BrukerReader(no_raster, metadata_only=True) as reader:
             assert reader.file_type == "tsf"
+
+
+class TestAnUnreadableDatabaseIsSomeoneElsesError:
+    """The check runs before the database is opened properly, and stays quiet.
+
+    It reads the table list through a connection of its own, so it is the
+    first thing to touch the file -- ahead of ``_initialize_database``,
+    whose message for a locked file names the file and the application
+    likely holding it. A refusal from here would put a worse message in
+    front of a better one, so a database it cannot read is not refused.
+    """
+
+    def test_an_unreadable_database_falls_through(self, tmp_path, monkeypatch):
+        import sqlite3 as sqlite
+
+        from thyra.readers.bruker.timstof import timstof_reader
+
+        directory = _write_tsf(tmp_path / "locked.d")
+
+        def refuse_to_open(*args, **kwargs):
+            raise sqlite.OperationalError("database is locked")
+
+        monkeypatch.setattr(timstof_reader, "open_read_only", refuse_to_open)
+        with pytest.raises(Exception) as failure:
+            BrukerReader(directory)
+        # Whatever it is, it is not this check's refusal.
+        assert "MaldiFrameInfo" not in str(failure.value)

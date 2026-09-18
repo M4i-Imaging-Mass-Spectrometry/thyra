@@ -943,15 +943,26 @@ class BrukerReader(BrukerBaseMSIReader):
         at that point: opening a vendor DLL and a file whose conversion
         is already refused is work for an answer nobody gets.
 
+        A database that cannot be opened or queried at all is not
+        refused here. That is not this method's answer to give, and
+        ``_initialize_database`` a few lines later says it far better --
+        it names the locked file and the application likely holding it.
+        Saying anything here would only put a worse message in front of
+        a better one.
+
         Raises:
             ConversionRefused: When the database has no ``MaldiFrameInfo``
                 table.
         """
-        with closing(open_read_only(self.db_path)) as conn:
-            found = conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND "
-                "name = 'MaldiFrameInfo'"
-            ).fetchone()
+        try:
+            with closing(open_read_only(self.db_path)) as conn:
+                found = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND "
+                    "name = 'MaldiFrameInfo'"
+                ).fetchone()
+        except sqlite3.Error as e:
+            logger.debug("Could not check for the imaging tables yet: %s", e)
+            return
         if found is not None:
             return
         raise ConversionRefused(
