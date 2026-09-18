@@ -2,7 +2,8 @@
 
 See :mod:`thyra.metadata.schema.models` for the schema itself,
 ``docs/metadata-schema.md`` for the storage contract, and
-``thyra validate`` / ``thyra export-metaspace`` for the CLI.
+``thyra metadata`` / ``thyra validate`` / ``thyra export-metaspace``
+for the CLI.
 
 **What this schema covers, and what it deliberately does not** (issue
 #278). ``uns`` holds fourteen keys and only one of them, ``msi_metadata``,
@@ -31,7 +32,7 @@ rigorous here". Every one of the fourteen is documented in
 consumer reads to know what it may rely on.
 """
 
-from .builder import build_msi_metadata, forget_resolved_table
+from .builder import build_metadata_document, build_msi_metadata, forget_resolved_table
 from .metaspace import to_metaspace
 from .models import (
     MSI_METADATA_SCHEMA_VERSION,
@@ -56,7 +57,7 @@ from .models import (
     SamplePreparation,
     SoftwareRef,
 )
-from .store_io import deep_merge, read_msi_metadata_blocks
+from .store_io import decode_isolation_windows, deep_merge, read_msi_metadata_blocks
 from .validate import ValidationIssue, check_store_var_conventions, validate_document
 
 __all__ = [
@@ -82,8 +83,10 @@ __all__ = [
     "SamplePreparation",
     "SoftwareRef",
     "ValidationIssue",
+    "build_metadata_document",
     "build_msi_metadata",
     "check_store_var_conventions",
+    "decode_isolation_windows",
     "deep_merge",
     "forget_resolved_table",
     "read_msi_metadata_blocks",

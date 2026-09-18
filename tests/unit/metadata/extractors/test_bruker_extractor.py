@@ -44,7 +44,10 @@ class TestBrukerMetadataExtractor:
 
             query = last_call[0][0] if last_call[0] else ""
 
-            if "MIN(LaserPower)" in query:
+            if "sqlite_master" in query:
+                # Both imaging tables exist on this mock.
+                return (1,)
+            elif "MIN(LaserPower)" in query:
                 # (LaserPower, NumLaserShots, LaserRepRate) min/max pairs
                 return (100.0, 100.0, 10, 10, 2000.0, 2000.0)
             elif "'MethodName'" in query:
@@ -396,6 +399,10 @@ class TestBrukerMetadataExtractor:
             last_call = mock_cursor.execute.call_args
             if last_call and len(last_call) > 0:
                 query = last_call[0][0] if last_call[0] else ""
+                if "sqlite_master" in query:
+                    # The imaging tables exist on this mock; see
+                    # test_no_imaging_tables_* for the ones that do not.
+                    return (1,)
                 if "BeamScanSizeX, BeamScanSizeY, SpotSize" in query:
                     return (25.0, 25.0, 1.0)
                 elif "MIN(XIndexPos)" in query and "COUNT(*)" in query:
@@ -484,6 +491,10 @@ class TestBrukerMetadataExtractor:
             last_call = mock_cursor.execute.call_args
             if last_call and len(last_call) > 0:
                 query = last_call[0][0] if last_call[0] else ""
+                if "sqlite_master" in query:
+                    # The imaging tables exist on this mock; see
+                    # test_no_imaging_tables_* for the ones that do not.
+                    return (1,)
                 if "BeamScanSizeX, BeamScanSizeY, SpotSize" in query:
                     return (25.0, 25.0, 1.0)
                 elif "MIN(XIndexPos)" in query and "COUNT(*)" in query:
@@ -528,6 +539,10 @@ class TestBrukerMetadataExtractor:
             last_call = mock_cursor.execute.call_args
             if last_call and len(last_call) > 0:
                 query = last_call[0][0] if last_call[0] else ""
+                if "sqlite_master" in query:
+                    # The imaging tables exist on this mock; see
+                    # test_no_imaging_tables_* for the ones that do not.
+                    return (1,)
                 if "BeamScanSizeX, BeamScanSizeY, SpotSize" in query:
                     return (20.0, 30.0, 1.0)
                 elif "MIN(XIndexPos)" in query and "COUNT(*)" in query:
@@ -602,6 +617,10 @@ class TestBrukerMetadataExtractor:
             last_call = mock_cursor.execute.call_args
             if last_call and len(last_call) > 0:
                 query = last_call[0][0] if last_call[0] else ""
+                if "sqlite_master" in query:
+                    # The imaging tables exist on this mock; see
+                    # test_no_imaging_tables_* for the ones that do not.
+                    return (1,)
                 if "BeamScanSizeX, BeamScanSizeY, SpotSize" in query:
                     return (1.0, 1.0, 1.0)
                 elif "MIN(XIndexPos)" in query and "COUNT(*)" in query:

@@ -93,9 +93,14 @@ Every converted store carries a versioned, ontology-mapped metadata block
 (`uns["msi_metadata"]`), auto-populated from the source file:
 
 ```bash
+thyra metadata raw_data.d                                # the block, without converting
 thyra validate output.zarr                               # schema + ontology checks
 thyra export-metaspace output.zarr --merge sample.json   # METASPACE submission JSON
 ```
+
+`thyra metadata` builds the same block straight from a vendor file: no
+spectra are decoded and nothing is written, so it answers "what is in
+this folder?" before a conversion is worth starting.
 
 See [Metadata Schema](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/metadata-schema/).
 

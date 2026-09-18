@@ -1048,9 +1048,10 @@ def main(
     INPUT: Path to input MSI file or directory
     OUTPUT: Path for output file
 
-    Subcommands (each has its own --help): 'thyra validate PATH'
-    validates MSI metadata against the schema; 'thyra export-metaspace
-    PATH' writes the METASPACE submission JSON.
+    Subcommands (each has its own --help): 'thyra metadata INPUT'
+    writes a raw source's metadata document without converting it;
+    'thyra validate PATH' validates MSI metadata against the schema;
+    'thyra export-metaspace PATH' writes the METASPACE submission JSON.
     """
     # Validate all parameters
     _validate_basic_params(pixel_size, dataset_id)
@@ -1178,9 +1179,9 @@ def cli() -> None:
     """Console-script entry point: dispatch subcommands, else convert.
 
     ``thyra INPUT OUTPUT`` converts exactly as it always has; the
-    metadata subcommands (``thyra validate``, ``thyra
-    export-metaspace``) are picked off by their first argument before
-    click sees it.  Dispatch is hand-rolled rather than a
+    metadata subcommands (``thyra metadata``, ``thyra validate``,
+    ``thyra export-metaspace``) are picked off by their first argument
+    before click sees it.  Dispatch is hand-rolled rather than a
     ``click.Group`` because a group cannot carry the two positional
     arguments the conversion interface is documented with.
     """
