@@ -146,6 +146,14 @@ for Windows and Linux. This is the richest source Thyra handles: it carries
 optical microscopy images, FlexImaging `.mis` teaching points for MSI-to-optical
 registration, and per-pixel region annotations for multi-region slides.
 
+Not every `.d` is an image. The tables that give a frame a raster position,
+`MaldiFrameInfo` and `MaldiFrameLaserInfo`, are absent from a run that imaged
+nothing -- an electrospray acquisition on the same instrument family, for
+instance -- and Thyra refuses to convert one, by name: there are no pixels to
+place and no pixel size would make any. Its metadata is another matter, and
+is read in full by `thyra metadata` (see
+[CLI Reference](cli.md#thyra-metadata)).
+
 A TDF frame is one pixel whose scans are the ion mobility dimension. Thyra
 reads **every scan of the ramp** and collapses them into the one spectrum per
 pixel the MSI table holds; `--mobility-grid` writes what was collapsed as a

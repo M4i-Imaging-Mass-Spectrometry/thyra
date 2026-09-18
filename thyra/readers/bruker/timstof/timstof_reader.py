@@ -620,6 +620,11 @@ class BrukerReader(BrukerBaseMSIReader):
         # Validate and setup paths
         self._validate_data_path()
         self._detect_file_type()
+        if not self._metadata_only:
+            # Ahead of the SDK load and everything after it: an
+            # acquisition with no raster is not going to be converted
+            # whatever any of that finds.
+            self._refuse_an_acquisition_with_no_raster()
 
         # Read calibration metadata
         self._calibration_metadata = self._read_calibration_metadata()
@@ -918,6 +923,45 @@ class BrukerReader(BrukerBaseMSIReader):
         except Exception as e:
             logger.error(f"Failed to initialize database: {e}")
             raise DataError(f"Failed to open database: {e}") from e
+
+    def _refuse_an_acquisition_with_no_raster(self) -> None:
+        """Refuse to convert a ``.d`` whose frames were never placed.
+
+        ``MaldiFrameInfo`` is where a frame gets its ``(XIndexPos,
+        YIndexPos)``. A ``.d`` without it holds spectra that belong to no
+        position -- an electrospray run on a timsTOF-family instrument,
+        for instance -- and there is no image to write, whatever pixel
+        size is supplied.
+
+        Raised only for a conversion. ``metadata_only=True`` builds the
+        reader anyway, because everything such a file says about the mass
+        spectrometry is still readable and worth reading; that is what
+        ``thyra metadata`` and :func:`thyra.preview_msi` do with it.
+
+        Asked before the SDK is loaded and through a connection of its
+        own, rather than through ``self.conn``, which does not exist yet
+        at that point: opening a vendor DLL and a file whose conversion
+        is already refused is work for an answer nobody gets.
+
+        Raises:
+            ConversionRefused: When the database has no ``MaldiFrameInfo``
+                table.
+        """
+        with closing(open_read_only(self.db_path)) as conn:
+            found = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND "
+                "name = 'MaldiFrameInfo'"
+            ).fetchone()
+        if found is not None:
+            return
+        raise ConversionRefused(
+            f"{self.data_path.name} has no MaldiFrameInfo table, so its "
+            "frames carry no pixel positions and there is no image to "
+            "convert -- no pixel size makes one. Thyra converts imaging "
+            "acquisitions. What this file records about the mass "
+            "spectrometry is still readable: run 'thyra metadata' on it "
+            "to write that out as a metadata document."
+        )
 
     def _create_metadata_extractor(self) -> MetadataExtractor:
         """Create Bruker metadata extractor."""
@@ -1506,15 +1550,22 @@ class BrukerReader(BrukerBaseMSIReader):
         return all(w.is_mobility_resolved for w in schedule.windows)
 
     def get_fragmentation(self) -> Optional[FragmentationSchedule]:
-        """The precursor schedule of a TDF acquisition, or ``None``.
+        """The precursor schedule of the acquisition, or ``None``.
 
-        ``None`` for TSF and for any file whose ``Frames`` table has no
-        ``MsMsType`` column: that is "cannot tell", not "MS1". Read once
-        and cached -- the schedule is a property of the method, and on
-        every MALDI file measured so far it is identical at every pixel.
+        ``None`` for any file whose ``Frames`` table has no ``MsMsType``
+        column: that is "cannot tell", not "MS1". Read once and cached --
+        the schedule is a property of the method, and on every MALDI file
+        measured so far it is identical at every pixel.
+
+        Asked of TSF as well as TDF. ``MsMsType`` and ``FrameMsMsInfo``
+        are TSF tables too, and a TSF acquisition that fragments
+        something said so all along; gating the question on TDF meant a
+        single-precursor TSF run reported no fragmentation at all, which
+        reads as "MS1" to anyone who does not know the gate was there.
+        What stays TDF-only is :attr:`has_precursor_spectra`, and with it
+        the demultiplexed sibling table: separating precursors needs the
+        mobility scan ranges, which only PASEF records.
         """
-        if self.file_type != "tdf":
-            return None
         if not self._fragmentation_read:
             self._fragmentation = self._build_fragmentation()
             self._fragmentation_read = True
@@ -1532,9 +1583,10 @@ class BrukerReader(BrukerBaseMSIReader):
         if not counts:
             return None
 
+        source = f"bruker_{self.file_type}"
         msms_frames = sum(n for kind, n in counts.items() if kind != 0)
         if msms_frames == 0:
-            return FragmentationSchedule(ms_level=1, source="bruker_tdf")
+            return FragmentationSchedule(ms_level=1, source=source)
 
         # A file holding both survey and fragment frames has no single
         # schedule per pixel, whatever the precursor tables say.
@@ -1547,7 +1599,7 @@ class BrukerReader(BrukerBaseMSIReader):
             dissociation_accession=(
                 COLLISION_INDUCED_DISSOCIATION_ACCESSION if windows[0] else None
             ),
-            source="bruker_tdf",
+            source=source,
         )
 
     def _isolation_windows(

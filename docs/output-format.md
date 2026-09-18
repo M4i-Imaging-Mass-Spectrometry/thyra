@@ -1017,7 +1017,7 @@ Beside it, when the source format provides them:
 
 | Key | Contents |
 |-----|----------|
-| `format_specific` | Vendor metadata (imzML file mode and UUID; FlexImaging areas and teaching points for solariX and rapiflex, whose `.mis` the extractor reads -- the tsf/tdf extractor does not carry them) |
+| `format_specific` | Vendor metadata (imzML file mode and UUID; FlexImaging areas and teaching points for solariX and rapiflex, whose `.mis` the extractor reads -- the tsf/tdf extractor does not carry them; `instrument_source_type` for Bruker tsf/tdf, Bruker's own code for what ionised the sample, recorded raw because its labels are not documented in the file) |
 | `acquisition_params` | Polarity, scan range, laser settings, timestamp and method name, in the vendor's spelling and unit |
 | `instrument_info` | Instrument model, serial, software version |
 | `raw_metadata` | Source metadata as read, for round-trip fidelity |

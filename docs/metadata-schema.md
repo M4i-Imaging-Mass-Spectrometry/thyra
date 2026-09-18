@@ -107,7 +107,7 @@ from the format itself.
 | Source | polarity | ionisation source | analyzer | instrument model |
 |--------|----------|-------------------|----------|------------------|
 | imzML | -- | -- | from the `<analyzer>` component cvParam | from the instrumentConfiguration (model term or `MS:1000031` value) |
-| Bruker `.d` | -- | MALDI, when the laser tables are present | TOF (timsTOF-family formats) | from the DB |
+| Bruker `.d` | from `Frames.Polarity`, when every frame agrees | MALDI, when the laser tables are present | TOF (timsTOF-family formats) | from the DB |
 | PHI ToF-SIMS | from the header | SIMS | TOF | platform name |
 | Waters `.raw` | -- | -- | -- | from `_HEADER.TXT` |
 
@@ -132,7 +132,9 @@ and carries no arrays.
 
 Bruker `.d` also fills `fragmentation` from `Frames.MsMsType` and whichever
 precursor table the acquisition uses -- `PasefFrameMsMsInfo` for PASEF frames,
-`FrameMsMsInfo` for single-precursor ones. `present: false` records a survey
+`FrameMsMsInfo` for single-precursor ones -- in a TSF acquisition as well as
+a TDF one. What stays TDF-only is the demultiplexed sibling table, which
+needs the mobility scan ranges only PASEF records. `present: false` records a survey
 acquisition; the field is left unset when the database cannot be asked at all,
 which means "not reported", not "MS1". `windows` is stored as a JSON string
 (a list of objects does not round-trip through AnnData/zarr) and decoded by

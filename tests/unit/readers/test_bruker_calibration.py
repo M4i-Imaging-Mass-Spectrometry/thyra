@@ -320,6 +320,9 @@ class TestDefaultCalibrationBehavior:
             patch.object(BrukerReader, "_read_calibration_metadata", return_value=None),
             patch.object(BrukerReader, "_initialize_sdk"),
             patch.object(BrukerReader, "_initialize_database"),
+            # The database is a no-op here, so there is no connection for
+            # the no-raster check to ask about a MaldiFrameInfo table.
+            patch.object(BrukerReader, "_refuse_an_acquisition_with_no_raster"),
             patch.object(BrukerReader, "_detect_regions", return_value=[]),
             patch.object(BrukerReader, "_select_region", return_value=(None, None)),
             patch.object(BrukerReader, "_parse_mis_alignment", return_value={}),
