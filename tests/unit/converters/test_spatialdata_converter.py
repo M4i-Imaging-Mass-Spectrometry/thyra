@@ -331,14 +331,21 @@ class TestSpatialDataConverter:
         assert converter.add_metadata.called
 
     def test_add_metadata(self, mock_reader, temp_dir):
-        """Test adding metadata to SpatialData object."""
+        """``add_metadata`` writes the root attrs, and only those.
+
+        It used to also call ``_add_comprehensive_metadata``, which hung a
+        second block on ``SpatialData.metadata``. No release of
+        SpatialData has that attribute, so on a real store the method
+        returned at its own guard and the block never existed -- this
+        test saw it only because a ``MagicMock`` was given the attribute
+        by hand. The two parts of it worth keeping are root attrs now
+        (issue #67 item 1), which is what this asserts.
+        """
         output_path = temp_dir / "test_output.zarr"
 
-        # Create mock SpatialData
         mock_sdata = MagicMock()
-        mock_sdata.metadata = {}
+        mock_sdata.attrs = {}
 
-        # Initialize converter
         converter = SpatialDataConverter(
             mock_reader,
             output_path,
@@ -347,13 +354,14 @@ class TestSpatialDataConverter:
         )
         converter._initialize_conversion()
 
-        # Add metadata
         converter.add_metadata(mock_sdata)
 
-        # Check metadata
-        assert mock_sdata.metadata["conversion_info"]["dataset_id"] == "test_dataset"
-        assert mock_sdata.metadata["conversion_info"]["pixel_size_um"] == 2.0
-        assert "conversion_info" in mock_sdata.metadata
+        attrs = mock_sdata.attrs
+        assert attrs["msi_dataset_info"]["dataset_id"] == "test_dataset"
+        assert attrs["pixel_size_x_um"] == 2.0
+        assert attrs["conversion_options"]["dataset_id"] == "test_dataset"
+        assert attrs["conversion_options"]["pixel_size_um"] == 2.0
+        assert attrs["coordinate_systems"]["global"]["unit"] == "micrometer"
 
     @patch(
         "thyra.converters.spatialdata.base_spatialdata_converter.zarr.consolidate_metadata"
