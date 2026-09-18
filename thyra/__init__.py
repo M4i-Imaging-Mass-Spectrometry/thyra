@@ -21,6 +21,7 @@ from . import converters  # This triggers converter registrations  # noqa: F401
 from . import readers  # This triggers reader registrations  # noqa: F401
 from .convert import convert_msi
 from .converters.spatialdata.converter import SpatialDataConverter  # noqa: F401
+from .metadata.document import read_metadata_document  # noqa: F401
 from .preview import MsiPreview, preview_msi  # noqa: F401
 
 # Suppress remaining dependency warnings
@@ -43,6 +44,7 @@ __all__ = [
     "__version__",
     "convert_msi",
     "preview_msi",
+    "read_metadata_document",
     "MsiPreview",
     "SpatialDataConverter",
 ]

@@ -1,11 +1,14 @@
 # thyra/metadata/schema/cli.py
-"""The ``thyra validate`` and ``thyra export-metaspace`` subcommands.
+"""The metadata subcommands: ``validate``, ``export-metaspace``, ``metadata``.
 
-Both accept either a converted SpatialData ``.zarr`` store (only the
-metadata block is read -- validating a 100 GB store is instant) or a
-standalone metadata ``.json`` document, and both take ``--merge`` to
-overlay user-supplied fields (organism, condition, matrix, ...) that
-raw files cannot provide.
+``validate`` and ``export-metaspace`` accept either a converted
+SpatialData ``.zarr`` store (only the metadata block is read --
+validating a 100 GB store is instant) or a standalone metadata ``.json``
+document.  ``metadata`` is the one that starts from the other end: it
+takes a *raw* source and writes the document a conversion would have
+stored, without converting.  All three take ``--merge`` to overlay
+user-supplied fields (organism, condition, matrix, ...) that raw files
+cannot provide.
 
 Exit status follows the conversion CLI's convention: 0 success,
 1 validation errors / no metadata found, 2 usage errors (click).
@@ -100,11 +103,15 @@ def _store_var_issues(path: Path) -> Dict[str, List[ValidationIssue]]:
         raise click.ClickException(str(exc)) from exc
 
 
-def _echo_issues(label: str, issues: List[ValidationIssue]) -> None:
-    """Print one document's findings in a stable, greppable layout."""
+def _echo_issues(label: str, issues: List[ValidationIssue], err: bool = False) -> None:
+    """Print one document's findings in a stable, greppable layout.
+
+    ``err`` sends them to stderr, which is where they belong for a
+    command whose stdout may be the document itself.
+    """
     for issue in sorted(issues, key=lambda i: (i.severity != "error", i.location)):
         location = issue.location or "(document)"
-        click.echo(f"  {issue.severity.upper()} {location}: {issue.message}")
+        click.echo(f"  {issue.severity.upper()} {location}: {issue.message}", err=err)
 
 
 @click.command("validate")
@@ -270,9 +277,75 @@ def export_metaspace_command(
         )
 
 
+@click.command("metadata")
+@click.argument("input", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--merge",
+    "merge_path",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="JSON file overlaid onto the metadata before validation.",
+)
+@click.option(
+    "-o",
+    "--output",
+    "output_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Output file (default: stdout; '-' is stdout too).",
+)
+def metadata_command(
+    input: Path, merge_path: Optional[Path], output_path: Optional[Path]
+) -> None:
+    """Write a raw MSI source's metadata document without converting it.
+
+    INPUT is a file or folder in any format Thyra reads. The document is
+    the same versioned msi_metadata block a conversion would write into
+    the store, built straight from the vendor metadata: no spectra are
+    read, no vendor SDK is loaded and nothing is written beside the
+    input.
+
+    Validation issues are reported on stderr and the exit status follows
+    them: 0 when the document conforms (warnings allowed), 1 otherwise.
+    The document is written either way -- a metadata document that does
+    not conform is still the metadata of that acquisition, and for a
+    source with no raster it is the only kind there is, since the schema
+    requires a pixel size (see docs/design-decisions.md).
+    """
+    # Imported here rather than at module scope: reading a source pulls
+    # in the reader registry and with it every reader, which `thyra
+    # validate` and `thyra export-metaspace` have no use for.
+    from ..document import read_metadata_document
+
+    try:
+        document = read_metadata_document(input)
+    except Exception as exc:
+        raise click.ClickException(f"Could not read {input}: {exc}") from exc
+
+    if merge_path is not None:
+        document = deep_merge(document, _load_json(merge_path))
+
+    _, issues = validate_document(document)
+    errors = [issue for issue in issues if issue.severity == "error"]
+
+    rendered = json.dumps(document, indent=2)
+    if output_path is None or str(output_path) == "-":
+        click.echo(rendered)
+    else:
+        output_path.write_text(rendered + "\n", encoding="utf-8")
+        click.echo(f"Wrote the metadata of {input.name} to {output_path}", err=True)
+
+    if issues:
+        click.echo(f"{input.name}:", err=True)
+        _echo_issues(input.name, issues, err=True)
+    if errors:
+        raise SystemExit(1)
+
+
 # Consumed by thyra.__main__ to dispatch `thyra <subcommand>` without
 # disturbing the positional `thyra INPUT OUTPUT` conversion interface.
 METADATA_SUBCOMMANDS: Dict[str, click.Command] = {
+    "metadata": metadata_command,
     "validate": validate_command,
     "export-metaspace": export_metaspace_command,
 }

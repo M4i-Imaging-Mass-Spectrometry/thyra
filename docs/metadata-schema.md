@@ -349,6 +349,37 @@ A unit test keeps the artifact in sync with the models; regenerate it with
 
 ---
 
+## `thyra metadata`
+
+```
+thyra metadata INPUT [--merge USER.json] [-o OUT.json]
+```
+
+Builds the same document from a **raw** source and writes it out, without
+converting anything. `INPUT` is a file or folder in any format Thyra reads;
+no spectra are decoded and no vendor SDK is loaded, so it is a header read
+whatever the dataset's size. The default output is stdout.
+
+The document is the one a conversion would have stored, with two
+differences that follow from nothing having been converted: `processing`
+is absent, and no sibling table is named. Everything else -- the
+sections, the ontology terms, the JSON shape -- is identical, so a
+document written this way and the same dataset's block read back out of a
+store compare directly.
+
+```bash
+thyra metadata raw_data.d
+thyra metadata raw_data.d --merge sample.json -o meta.json
+```
+
+An acquisition with no raster has no pixel size, which this schema
+version requires, so its document is reported as invalid and the command
+exits 1 -- while still writing the document, which is the only kind such
+an acquisition has. See
+[Design Decisions](design-decisions.md#d23-a-metadata-document-does-not-need-a-pixel-size-proposed).
+
+---
+
 ## `thyra validate`
 
 ```

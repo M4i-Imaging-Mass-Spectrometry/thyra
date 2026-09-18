@@ -8,8 +8,9 @@ thyra [OPTIONS] INPUT OUTPUT
 
 **OUTPUT** -- Path for output `.zarr` directory
 
-`thyra` also has two metadata subcommands, `thyra validate` and
-`thyra export-metaspace` -- see [Metadata subcommands](#metadata-subcommands).
+`thyra` also has three metadata subcommands, `thyra metadata`,
+`thyra validate` and `thyra export-metaspace` -- see
+[Metadata subcommands](#metadata-subcommands).
 
 !!! tip "Grouped help"
     `thyra --help` lists every option under a category heading, in this order:
@@ -544,10 +545,55 @@ the number has to come from whoever cut them.
 
 ## Metadata subcommands
 
-Both take either a converted `.zarr` store or a standalone metadata
-`.json` document. Only the metadata block is read, never the intensity
-data, so both are instant on stores of any size. See
+`validate` and `export-metaspace` take either a converted `.zarr` store
+or a standalone metadata `.json` document. Only the metadata block is
+read, never the intensity data, so both are instant on stores of any
+size. `metadata` starts from the other end: it takes a *raw* source and
+writes the document a conversion would have stored. See
 [Metadata Schema](metadata-schema.md) for the schema itself.
+
+### `thyra metadata`
+
+```
+thyra metadata INPUT [OPTIONS]
+```
+
+Writes the `msi_metadata` document for a raw source without converting
+it. **INPUT** is a file or folder in any format Thyra reads. No spectra
+are decoded, no vendor SDK is loaded and nothing is written beside the
+input, so this is a header read on a dataset of any size.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--merge PATH` | none | JSON file overlaid onto the metadata before validation |
+| `-o, --output PATH` | stdout | Output file; `-` is stdout too |
+
+Exit status is `0` when the document conforms (warnings allowed), `1`
+when it does not, `2` for usage errors. The document is written either
+way, and the validation issues go to stderr -- so `thyra metadata src
+-o meta.json` leaves you a document to look at whatever the exit status
+was, and `thyra metadata src > meta.json` keeps stdout clean.
+
+```bash
+# Look at what a folder says before spending hours converting it
+thyra metadata raw_data.d
+
+# Keep it, with the fields the file cannot know filled in
+thyra metadata raw_data.d --merge sample.json -o meta.json
+```
+
+!!! info "A source with no image still has metadata"
+    The one field the schema requires is the pixel size, because every
+    document Thyra had written until now described an image. A Bruker
+    `.d` from a run that imaged nothing -- an electrospray acquisition
+    on a timsTOF-family instrument -- states its instrument, polarity,
+    mass range, precursor schedule and acquisition time exactly as an
+    imaging run does, and states no pixel size, because there is no
+    raster. `thyra metadata` writes that document, reports the one
+    validation error, and exits `1`. Converting such a file is refused
+    with a message that says so. The split that would make the document
+    valid is proposed in
+    [Design Decisions](design-decisions.md#d23-a-metadata-document-does-not-need-a-pixel-size-proposed).
 
 ### `thyra validate`
 
