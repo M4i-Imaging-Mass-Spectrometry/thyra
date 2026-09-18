@@ -199,7 +199,7 @@ class TestAcquisitionSectionRoundTrip:
             pixel_size_um=10.0,
             resampling_config={"method": "nearest_neighbor", "target_bins": 100},
         )
-        steps = converter._processing_provenance()
+        steps = converter.uns._processing_provenance(converter._uns_context())
         assert [s.name for s in steps] == ["conversion", "mass axis resampling"]
         parameters = steps[1].parameters
         assert parameters["method"] == "nearest_neighbor"
