@@ -584,13 +584,20 @@ class TestSolarixFticr:
 
     def test_analyzer_component_is_surfaced_by_cv_name(self):
         """The componentList analyzer term, in the spelling the metadata
-        schema's ``normalize_analyzer`` accepts."""
+        schema's ``normalize_analyzer`` accepts.
+
+        The label comes from the shipped PSI-MS table, not from the file:
+        the fixture's cvParam still carries the name MS:1000079 had when it
+        was written, and the CV has since dropped its trailing "mass
+        spectrometer". Both spellings are aliases, which is what this pins
+        -- the extractor surfaces whatever the table says, and the schema
+        must still resolve it."""
+        from thyra.metadata.schema.vocab import normalize_analyzer
+
         info = self._instrument_info()
 
-        assert (
-            info["analyzer"]
-            == "fourier transform ion cyclotron resonance mass spectrometer"
-        )
+        assert info["analyzer"] == "fourier transform ion cyclotron resonance"
+        assert normalize_analyzer(info["analyzer"])[0] == "FTICR"
 
     def test_instrument_type_is_the_exact_detector_string(self):
         """``FTICRDetector`` matches ``"FT-ICR"`` and nothing else."""
