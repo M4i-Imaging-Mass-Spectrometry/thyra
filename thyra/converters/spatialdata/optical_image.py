@@ -1056,8 +1056,38 @@ class OpticalImages:
 
     @property
     def apply_alignment(self) -> bool:
-        """Whether the MSI raster is placed in optical-photo pixels."""
+        """Whether the caller asked for the raster in optical-photo pixels."""
         return self._apply_alignment
+
+    @property
+    def msi_in_pixel_space(self) -> bool:
+        """Whether the MSI raster actually lands in optical-photo pixels.
+
+        Both halves matter. The affine is built whenever FlexImaging
+        alignment data exists, ``apply_alignment`` or not -- it is needed
+        either way, because opting out uses its *inverse* to carry the
+        optical photo into micrometers. So the matrix being present says
+        only that an alignment is available, never that it was applied to
+        the raster; and the flag being set says only that it was asked
+        for, never that there was anything to apply.
+
+        Reading only the matrix is what let the store's own
+        ``coordinate_systems`` attr declare ``unit="pixel"`` on a store
+        whose every element was in micrometers (issue #288). The TIC
+        image's transform, the pixel polygons and that attr each spelled
+        the condition out separately and one of the three spelled it
+        differently, so it is written here, once, on the object that
+        holds both halves.
+
+        The polygons additionally require :attr:`alignment`, which they
+        need for the transform itself rather than for the decision. They
+        are not gated on it *alone*: the matrix is only built when
+        ``region_mappings`` is non-empty, so a .mis whose areas match no
+        region left the polygons on the alignment branch while everything
+        else took the micrometer one, and every position failed to
+        transform.
+        """
+        return self._apply_alignment and self._tic_to_image is not None
 
     @property
     def pending(self) -> Mapping[str, StreamedOpticalImage]:

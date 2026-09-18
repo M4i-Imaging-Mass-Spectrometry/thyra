@@ -37,6 +37,7 @@ from ...core.base_converter import BaseMSIConverter, PixelSizeSource
 from ...core.base_reader import BaseMSIReader
 from ...core.conversion_state import ConversionState
 from ...errors import MALFORMED_METADATA, ConversionRefused
+from ...metadata.root_attrs import RootAttrsBuilder, RootAttrsContext
 from ...metadata.schema import MSI_VAR_RESERVED_COLUMNS
 from ...metadata.types import ComprehensiveMetadata, EssentialMetadata
 from ...metadata.uns_assembler import UnsAssembler, UnsContext
@@ -689,6 +690,19 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             pixel_size_xy=self._resolved_pixel_size_xy,
             pixel_size_detection_info=self._pixel_size_detection_info,
             resampling_config=self._resampling_config,
+        )
+
+        # The store's own attrs, the assembler's sibling. The optical
+        # collaborator reaches it per call rather than here: whether the
+        # raster landed in optical-photo pixel space decides the
+        # coordinate contract, and the converter may replace the
+        # collaborator after this point.
+        self.root_attrs = RootAttrsBuilder(
+            self.reader,
+            dataset_id=self.dataset_id,
+            pixel_size_detection_info=self._pixel_size_detection_info,
+            handle_3d=self.handle_3d,
+            conversion_options=self.options,
         )
 
     def _setup_resampling(self) -> None:
@@ -2441,7 +2455,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # None for every position, and the shapes element came out with
         # zero polygons.
         use_msi_alignment = (
-            self._msi_is_in_optical_pixel_space() and self.optical.alignment is not None
+            self.optical.msi_in_pixel_space and self.optical.alignment is not None
         )
 
         if use_msi_alignment:
@@ -2588,346 +2602,39 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # Get comprehensive metadata object for detailed access
         comprehensive_metadata_obj = self.reader.get_comprehensive_metadata()
 
-        # Setup attributes and add pixel size metadata
-        self._setup_spatialdata_attrs(metadata, comprehensive_metadata_obj)
-
-        # Add comprehensive dataset metadata if supported
-        self._add_comprehensive_metadata(metadata)
-
-    def build_root_attrs(
-        self, comprehensive_metadata_obj: Any = None
-    ) -> Dict[str, Any]:
-        """The root-level attributes every write path must persist, identically.
-
-        The store's own attrs, as opposed to the table's ``uns`` block
-        :meth:`build_uns_metadata` owns. Sibling of that method and here for
-        the same reason: the streaming path used to hand-write its Zarr
-        layout and composed its own, shorter set -- 7 attributes against
-        10 on real ``pea.imzML``, missing ``coordinate_systems``,
-        ``format_specific_metadata`` and ``msi_dataset_info``.
-
-        ``coordinate_systems`` is the one that matters most in practice: it
-        is the structured contract saying what unit ``"global"`` is in, and
-        Ousia and the registration tooling read it rather than guessing.
-        A streaming store simply did not have it, and at the time the route
-        was chosen by size, so the datasets that lost it were the largest
-        ones. Every store is written through :meth:`_save_output` now, so
-        this is the one place the attrs are composed.
-
-        Sections the reader has nothing for are omitted rather than written
-        empty, matching :meth:`build_uns_metadata`.
-
-        Args:
-            comprehensive_metadata_obj: Already-read comprehensive metadata,
-                when the caller has it. ``None`` reads it from the reader.
-
-        Returns:
-            Mapping of root attribute name to value.
-        """
-        if comprehensive_metadata_obj is None:
-            comprehensive_metadata_obj = self.reader.get_comprehensive_metadata()
-
-        attrs = self._create_pixel_size_attrs()
-        self._add_comprehensive_sections(attrs, comprehensive_metadata_obj)
-        return attrs
-
-    def _setup_spatialdata_attrs(
-        self, metadata: "SpatialData", comprehensive_metadata_obj
-    ) -> None:
-        """Setup SpatialData attributes with pixel size and metadata."""
         if not hasattr(metadata, "attrs") or metadata.attrs is None:
             metadata.attrs = {}
 
         logger.info("Adding comprehensive metadata to SpatialData.attrs")
-
         metadata.attrs.update(self.build_root_attrs(comprehensive_metadata_obj))
 
-    def _create_pixel_size_attrs(self) -> Dict[str, Any]:
-        """Create pixel size and conversion metadata attributes."""
-        # Import version dynamically
-        try:
-            from ... import __version__
-
-            version = __version__
-        except ImportError:
-            version = "unknown"
-
-        # Base pixel size metadata
-        pixel_size_attrs = {
-            "pixel_size_x_um": float(self.pixel_size_um),
-            "pixel_size_y_um": float(self.pixel_size_y_um),
-            "pixel_size_units": "micrometers",
-            "coordinate_system": "physical_micrometers",
-            "msi_converter_version": version,
-            "conversion_timestamp": pd.Timestamp.now().isoformat(),
-        }
-
-        # Structured coordinate-system contract describing what "global"
-        # actually means in this zarr. Consumers (e.g. Ousia, registration
-        # tooling) read this to know what unit "global" is in and how to
-        # convert to micrometers without guessing.
-        pixel_size_attrs["coordinate_systems"] = self._build_coordinate_systems_attr(
-            version
+    def build_root_attrs(
+        self, comprehensive_metadata_obj: Any = None
+    ) -> Dict[str, Any]:
+        """The store's root attrs, composed by :class:`RootAttrsBuilder`."""
+        return self.root_attrs.build(
+            self._root_attrs_context(), comprehensive_metadata_obj
         )
 
-        # Add pixel size detection provenance if available
-        if self._pixel_size_detection_info is not None:
-            pixel_size_attrs["pixel_size_detection_info"] = dict(
-                self._pixel_size_detection_info
-            )
-            logger.info(
-                f"Added pixel size detection info: "
-                f"{self._pixel_size_detection_info}"
-            )
+    def _root_attrs_context(self) -> RootAttrsContext:
+        """What the builder needs that this conversion settled after setup.
 
-        # Add conversion metadata
+        Packed fresh per call, never cached: the pitch is adopted from
+        reader metadata, the dimensions and bounds arrive with the
+        essential metadata, and the non-empty pixel count is only final
+        once both passes have run.
+        """
         if self._dimensions is None:
             raise RuntimeError("Dimensions are not initialized")
-        pixel_size_attrs["msi_dataset_info"] = {
-            "dataset_id": self.dataset_id,
-            "total_grid_pixels": self._dimensions[0]
-            * self._dimensions[1]
-            * self._dimensions[2],
-            "non_empty_pixels": self._non_empty_pixel_count,
-            "dimensions_xyz": list(self._dimensions),
-        }
-
-        optical = self._create_optical_images_attr()
-        if optical is not None:
-            pixel_size_attrs["optical_images"] = optical
-
-        return pixel_size_attrs
-
-    def _create_optical_images_attr(self) -> Optional[Dict[str, Any]]:
-        """The store's ``optical_images`` root attr, or ``None`` for no images.
-
-        See :meth:`~thyra.converters.spatialdata.optical_image.OpticalImages.root_attr`
-        for what it says and why it is a root attr rather than an element one.
-        """
-        return self.optical.root_attr()
-
-    # Schema version for the structured `coordinate_systems` attr below.
-    # Bump when the schema shape changes in a way consumers need to notice.
-    _COORDINATE_SYSTEMS_SCHEMA_VERSION: int = 1
-
-    def _msi_is_in_optical_pixel_space(self) -> bool:
-        """Whether the MSI raster actually lands in optical-photo pixels.
-
-        Both halves matter. The affine is built whenever FlexImaging
-        alignment data exists, `apply_optical_alignment` or not -- it is
-        needed either way, because opting out uses its *inverse* to carry
-        the optical photo into micrometers. So the matrix being present
-        says only that an alignment is available, never that it was
-        applied to the raster.
-
-        Reading only the matrix is what let the store's own
-        `coordinate_systems` attr declare `unit="pixel"` on a store whose
-        every element was in micrometers (issue #288). The TIC image's
-        transform, the pixel polygons and the attr each spelled the
-        condition out separately and one of the three spelled it
-        differently; this is the one place it is written.
-
-        The polygons additionally require `optical.alignment`, which they
-        need for the transform itself rather than for the decision. They
-        are not gated on it *alone*: the matrix is only built when
-        `region_mappings` is non-empty, so a .mis whose areas match no
-        region left the polygons on the alignment branch while everything
-        else took the micrometer one, and every position failed to
-        transform.
-        """
-        return self.optical.apply_alignment and self.optical.tic_to_image is not None
-
-    def _build_coordinate_systems_attr(self, thyra_version: str) -> Dict[str, Any]:
-        """Build the structured coordinate-system contract attr.
-
-        This describes what `"global"` means in the produced zarr so that
-        downstream consumers can render and convert without guessing.
-
-        Two variants are emitted depending on whether FlexImaging optical
-        alignment was applied during conversion:
-
-        - No alignment (`global = micrometer`): the TIC image carries a
-          `Scale(pixel_size_um)` and pixel-polygon shapes are stored in
-          micrometers with `Identity`. Both elements agree at `global`.
-          `pixel_size_um_x/y` are filled with the MSI grid pixel size,
-          since "global" is in physical micrometers and there is no
-          canonical raster image other than the MSI itself.
-
-        - With alignment (`global = pixel`): the TIC image carries an
-          `Affine` mapping raster indices to optical-image pixels and
-          shapes are stored directly in optical-image pixels with
-          `Identity`. The optical image is the canonical reference.
-          `pixel_size_um_x/y` are typically unknown at conversion time
-          (FlexImaging does not generally calibrate the optical photo
-          to um); leave them null and let the consumer fill in.
-
-        - With alignment data but `apply_optical_alignment=False`: the
-          micrometer variant, exactly as the no-alignment case. The
-          matrix exists -- it is built whenever FlexImaging data is
-          present, because the opt-out path needs its inverse to carry
-          the optical photo into micrometers -- but it was not applied
-          to the raster, so nothing in the store is in optical pixels.
-          The condition is `_msi_is_in_optical_pixel_space()` rather
-          than the matrix alone for exactly this reason.
-
-        Multi-slice volumes additionally get `z_spacing_um` and
-        `z_spacing_source`. These are written **only** for volumes, so a
-        2D store is byte-identical to what earlier versions produced and
-        their absence is itself the signal that no z axis exists. That
-        is also why `convention_version` does not move: the keys are
-        purely additive, a consumer that does not do 3D is unaffected,
-        and bumping the version would make every existing consumer log a
-        "newer than I understand" warning on ordinary 2D datasets.
-
-        Note `z_spacing_um` is an absolute micrometre distance even when
-        `unit="pixel"`, because the 3D route always scales z by it
-        directly -- the optical affine only ever governs x and y.
-
-        Returns:
-            Dict suitable for storing under
-            `zarr.attrs["coordinate_systems"]`.
-        """
-        if self._msi_is_in_optical_pixel_space():
-            unit = "pixel"
-            pixel_size_um_x: Optional[float] = None
-            pixel_size_um_y: Optional[float] = None
-            # The element, not the file. This used to be
-            # `optical.primary_filename` -- the .mis <ImageFile> stem,
-            # lowercased -- which names nothing in the store: the element
-            # is <dataset_id>_optical_<suffix>, so a consumer following
-            # the documented meaning ("the canonical raster element that
-            # defines pixel space") got a key that never resolves. It is
-            # None when this store does not hold the alignment image
-            # (optical images not included, or its pixels could not be
-            # read): "global" is still that image's pixel grid, there is
-            # just no element here that is it. The filename is in
-            # `optical_images`.
-            reference_element: Optional[str] = self.optical.alignment_element
-        else:
-            unit = "micrometer"
-            pixel_size_um_x = float(self.pixel_size_um)
-            pixel_size_um_y = float(self.pixel_size_y_um)
-            reference_element = None
-
-        global_cs: Dict[str, Any] = {
-            "unit": unit,
-            "pixel_size_um_x": pixel_size_um_x,
-            "pixel_size_um_y": pixel_size_um_y,
-            "reference_element": reference_element,
-            "convention_version": self._COORDINATE_SYSTEMS_SCHEMA_VERSION,
-            "produced_by": f"thyra/{thyra_version}",
-        }
-
-        # Additive keys; `convention_version` stays 1 for the same
-        # reason as z_spacing_um below.  `raster_to_global_affine` is
-        # the explicit 3x3 row-major affine from TIC raster indices to
-        # "global" (the same mapping the TIC element's transform
-        # expresses), so a consumer that reads only attrs still gets
-        # the full placement.  `coordinate_offsets_px` preserves the
-        # source's raw acquisition-index offsets, which 0-based
-        # normalisation otherwise erases; `stage_offset_um` is their
-        # physical equivalent, written only when "global" is in
-        # micrometers so it cannot be misread in the optical-pixel
-        # variant.
-        if self._msi_is_in_optical_pixel_space():
-            global_cs["raster_to_global_affine"] = [
-                [float(v) for v in row] for row in self.optical.tic_to_image
-            ]
-        else:
-            px, py = self._resolved_pixel_size_xy()
-            global_cs["raster_to_global_affine"] = [
-                [px, 0.0, 0.0],
-                [0.0, py, 0.0],
-                [0.0, 0.0, 1.0],
-            ]
-        offsets = self._source_coordinate_offsets()
-        if offsets is not None:
-            global_cs["coordinate_offsets_px"] = [int(v) for v in offsets]
-            if unit == "micrometer":
-                global_cs["stage_offset_um"] = [
-                    float(offsets[0]) * float(self.pixel_size_um),
-                    float(offsets[1]) * float(self.pixel_size_y_um),
-                ]
-
-        if self._is_volume:
-            global_cs["z_spacing_um"] = float(self.z_spacing_um)
-            global_cs["z_spacing_source"] = self.z_spacing_source.value
-
-        return {"global": global_cs}
-
-    def _source_coordinate_offsets(self) -> Optional[Tuple[int, int, int]]:
-        """The reader's raw coordinate offsets, if it reported any."""
-        try:
-            essential = self.reader.get_essential_metadata()
-        except Exception as e:
-            logger.debug("Could not read coordinate offsets: %s", str(e))
-            return None
-        offsets = getattr(essential, "coordinate_offsets", None)
-        if offsets is None:
-            return None
-        x, y, z = offsets
-        return (int(x), int(y), int(z))
-
-    def _add_comprehensive_sections(
-        self, pixel_size_attrs: Dict[str, Any], comprehensive_metadata_obj
-    ) -> None:
-        """Add comprehensive metadata sections to attributes."""
-        if comprehensive_metadata_obj.format_specific:
-            pixel_size_attrs["format_specific_metadata"] = (
-                comprehensive_metadata_obj.format_specific
-            )
-
-        if comprehensive_metadata_obj.acquisition_params:
-            pixel_size_attrs["acquisition_parameters"] = (
-                comprehensive_metadata_obj.acquisition_params
-            )
-
-        if comprehensive_metadata_obj.instrument_info:
-            pixel_size_attrs["instrument_information"] = (
-                comprehensive_metadata_obj.instrument_info
-            )
-
-    def _add_comprehensive_metadata(self, metadata: "SpatialData") -> None:
-        """Add comprehensive dataset metadata if SpatialData supports it."""
-        if not hasattr(metadata, "metadata"):
-            return
-
-        # Start with structured metadata from base class
-        metadata_dict = self._structured_metadata.copy()
-
-        # Add SpatialData-specific enhancements
-        metadata_dict["non_empty_pixels"] = self._non_empty_pixel_count  # type: ignore[assignment]
-        metadata_dict.update(
-            {
-                "spatialdata_specific": {
-                    "zarr_compression_level": self.compression_level,
-                    "tables_count": len(getattr(metadata, "tables", {})),
-                    "shapes_count": len(getattr(metadata, "shapes", {})),
-                    "images_count": len(getattr(metadata, "images", {})),
-                },
-            }
-        )
-
-        # Add pixel size detection provenance if available
-        if self._pixel_size_detection_info is not None:
-            metadata_dict["pixel_size_provenance"] = self._pixel_size_detection_info
-
-        # Add conversion options used
-        metadata_dict["conversion_options"] = {
-            "handle_3d": self.handle_3d,
-            "pixel_size_um": self.pixel_size_um,
-            "pixel_size_y_um": self.pixel_size_y_um,
-            "z_spacing_um": self.z_spacing_um,
-            "z_spacing_source": self.z_spacing_source.value,
-            "dataset_id": self.dataset_id,
-            **self.options,
-        }
-
-        metadata.metadata = metadata_dict
-
-        logger.info(
-            f"Comprehensive metadata persisted to SpatialData with "
-            f"{len(metadata_dict)} top-level sections"
+        return RootAttrsContext(
+            optical=self.optical,
+            pixel_size_xy=self._resolved_pixel_size_xy(),
+            dimensions=self._dimensions,
+            non_empty_pixels=self._non_empty_pixel_count,
+            coordinate_bounds=self._coordinate_bounds,
+            is_volume=self._is_volume,
+            z_spacing_um=self.z_spacing_um,
+            z_spacing_source=self.z_spacing_source,
         )
 
     @abstractmethod
