@@ -464,7 +464,11 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # table -- the sinks take one row space -- which every source with
         # frame records (a Bruker TDF) has; a multi-plane source scans on
         # its own per plane, as it always did.
-        passes = self._fused_sibling_passes(units[0].key) if len(units) == 1 else None
+        passes = (
+            self.siblings.fused_passes(self._sibling_context(), units[0].key)
+            if len(units) == 1
+            else None
+        )
 
         # ``mode`` ("3d_volume" / "2d_slices") is not carried: it restated
         # ``self.handle_3d``, which every stage already has, and nothing in
@@ -564,13 +568,13 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
         for unit in units:
             unit.assembly.allocate(
-                self._register_table_scratch("summed", unit.assembly)
+                self.siblings.register_scratch("summed", unit.assembly)
             )
 
         self._matrix_size_gb(units)
 
         if passes is not None:
-            passes.finish_counting(units[0].n_rows, self._register_table_scratch)
+            passes.finish_counting(units[0].n_rows, self.siblings.register_scratch)
             if units[0].repeats.any():
                 # A position measured twice is scattered twice into every
                 # table fed from these passes, not just the summed one.
@@ -580,7 +584,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         self._scatter_pass(state)
         if passes is not None:
             passes.finish_scattering()
-            self._take_fused_results(passes)
+            self.siblings.take_fused_results(passes)
 
     def _kept_in_plane_xy(
         self, unit: _TableUnit
@@ -942,11 +946,12 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # run the raw mobility pass once for the heatmap and the grid's
         # discovery together, before uns is built -- unless both were fed
         # from the summed table's own passes already (see
-        # _fused_sibling_passes, which also planned the siblings).
-        if not self._siblings_planned:
-            self._mobility_table_key = self._plan_mobility_table(unit.key)
-            self._msms_table_key = self._plan_msms_table(unit.key)
-        self._prepare_sibling_scans(adata.obs, z_value=unit.plane)
+        # SiblingTables.fused_passes, which also planned the siblings of
+        # the one table it serves; planning is idempotent per key, so this
+        # re-decides nothing it already decided).
+        sibling_ctx = self._sibling_context()
+        self.siblings.plan(sibling_ctx, unit.key)
+        self.siblings.prepare_scans(sibling_ctx, adata.obs, z_value=unit.plane)
 
         # Add MSI metadata to .uns
         self._add_metadata_to_uns(adata)
@@ -963,8 +968,13 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
         state.tables[unit.key] = table
         state.shapes[unit.region_key] = self._create_pixel_shapes(adata)
-        self._attach_sibling_tables(
-            state, unit.key, unit.region_key, adata.obs, z_value=unit.plane
+        self.siblings.attach(
+            sibling_ctx,
+            state.tables,
+            unit.key,
+            unit.region_key,
+            adata.obs,
+            z_value=unit.plane,
         )
         state.images[f"{unit.key}_tic"] = self._tic_image(unit)
 
