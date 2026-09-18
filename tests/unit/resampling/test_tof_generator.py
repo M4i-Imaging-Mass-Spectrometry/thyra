@@ -8,18 +8,16 @@ every m/z, and keep the 800.5477 / 800.5566 pair in separate bins.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import numpy as np
 import pytest
 
-from thyra.converters.spatialdata.base_spatialdata_converter import (
-    BaseSpatialDataConverter,
-    _normalize_resampling_config,
-    _reference_params,
-    _tof_plan,
-)
 from thyra.errors import ConversionRefused
+from thyra.resampling.axis_planner import (
+    bin_count_for_width,
+    normalize_resampling_config,
+    reference_params,
+    tof_plan,
+)
 from thyra.resampling.common_axis import CommonAxisBuilder
 from thyra.resampling.data_characteristics import DataCharacteristics
 from thyra.resampling.decision_tree import ResamplingDecisionTree
@@ -39,7 +37,7 @@ from thyra.resampling.mass_axis import (
     TOFAxisGenerator,
     tof_fwhm_mda,
 )
-from thyra.resampling.types import AxisType, ResamplingMethod
+from thyra.resampling.types import AxisType, ResamplingConfig, ResamplingMethod
 
 MRT_A, MRT_B = MRT_TOF_LAW
 
@@ -141,7 +139,7 @@ class TestBinsPerFWHM:
 
         The second of ``build_physics_axis``'s two refusals, and the one
         with no direct coverage before: ``AxisType.UNKNOWN`` reached the
-        builder only through ``_normalize_resampling_config``, which is a
+        builder only through ``normalize_resampling_config``, which is a
         different function and refuses it one frame earlier. An analyser
         nobody could identify is left as ``None`` and auto-detected, not
         labelled ``UNKNOWN``.
@@ -157,71 +155,63 @@ class TestBinsPerFWHM:
 
 
 class TestConverterPlan:
-    """``_tof_plan``: the caller's pair, else the detected one; k from width or flag."""
+    """``tof_plan``: the caller's pair, else the detected one; k from width or flag."""
 
     @staticmethod
-    def _stub(**kw):
-        base = dict(
-            _width_at_mz=None,
-            _reference_mz=1000.0,
-            _tof_a=None,
-            _tof_b=None,
-            _bins_per_fwhm=None,
-            _detected_tof_law=None,
-            _detected_reference_width=None,
-        )
-        base.update(kw)
-        return SimpleNamespace(**base)
+    def _ask(**kw):
+        """What the caller asked for, with nothing else filled in."""
+        return ResamplingConfig(reference_mz=1000.0, **kw)
 
     def test_default_is_three_bins_per_fwhm_on_the_detected_law(self):
-        assert _tof_plan(self._stub(_detected_tof_law=MRT_TOF_LAW)) == (
+        assert tof_plan(self._ask(), detected_tof_law=MRT_TOF_LAW) == (
             MRT_A,
             MRT_B,
             3.0,
         )
 
     def test_callers_pair_wins(self):
-        a, b, k = _tof_plan(
-            self._stub(_tof_a=0.1, _tof_b=1e-4, _detected_tof_law=MRT_TOF_LAW)
+        a, b, k = tof_plan(
+            self._ask(tof_a=0.1, tof_b=1e-4), detected_tof_law=MRT_TOF_LAW
         )
         assert (a, b) == (0.1, 1e-4)
 
     def test_explicit_bins_per_fwhm(self):
         assert (
-            _tof_plan(self._stub(_detected_tof_law=MRT_TOF_LAW, _bins_per_fwhm=4.0))[2]
+            tof_plan(self._ask(bins_per_fwhm=4.0), detected_tof_law=MRT_TOF_LAW)[2]
             == 4.0
         )
 
     def test_width_at_reference_derives_k(self):
-        a, b, k = _tof_plan(
-            self._stub(_detected_tof_law=MRT_TOF_LAW, _width_at_mz=0.002)
-        )
+        a, b, k = tof_plan(self._ask(mass_width_da=0.002), detected_tof_law=MRT_TOF_LAW)
         assert k == pytest.approx(tof_fwhm_mda(1000.0, MRT_A, MRT_B) / 2.0)
-        width, ref = _reference_params(
-            self._stub(_detected_tof_law=MRT_TOF_LAW, _width_at_mz=0.002), "tof"
+        width, ref = reference_params(
+            self._ask(mass_width_da=0.002), "tof", detected_tof_law=MRT_TOF_LAW
         )
         assert (width, ref) == (0.002, 1000.0)
 
     def test_reference_params_report_the_realised_width(self):
-        width, ref = _reference_params(self._stub(_detected_tof_law=MRT_TOF_LAW), "tof")
+        width, ref = reference_params(self._ask(), "tof", detected_tof_law=MRT_TOF_LAW)
         assert ref == 1000.0
         assert width == pytest.approx(tof_fwhm_mda(1000.0, MRT_A, MRT_B) * 1e-3 / 3.0)
 
     def test_no_law_anywhere_is_an_error(self):
         with pytest.raises(ConversionRefused, match="--tof-law A B"):
-            _tof_plan(self._stub())
+            tof_plan(self._ask())
 
     def test_bin_count_goes_through_the_generator(self):
-        stub = self._stub(_detected_tof_law=MRT_TOF_LAW)
-        bins = BaseSpatialDataConverter._calculate_bins_from_width(
-            stub, 100.0, 1000.0, AxisType.TOF
+        bins = bin_count_for_width(
+            self._ask(),
+            100.0,
+            1000.0,
+            AxisType.TOF,
+            detected_tof_law=MRT_TOF_LAW,
         )
         assert bins == TOFAxisGenerator(MRT_A, MRT_B).bin_count(100.0, 1000.0, 3.0)
 
 
 class TestConfig:
     def test_tof_axis_and_coefficients_normalise(self):
-        cfg = _normalize_resampling_config(
+        cfg = normalize_resampling_config(
             {"axis_type": "tof", "tof_a": "0.0185", "tof_b": 9.1e-6, "bins_per_fwhm": 4}
         )
         assert cfg.axis_type is AxisType.TOF
@@ -230,7 +220,7 @@ class TestConfig:
         assert cfg.bins_per_fwhm == 4.0
 
     def test_missing_coefficients_stay_none(self):
-        cfg = _normalize_resampling_config({"axis_type": "tof"})
+        cfg = normalize_resampling_config({"axis_type": "tof"})
         assert cfg.tof_a is None and cfg.tof_b is None and cfg.bins_per_fwhm is None
 
 

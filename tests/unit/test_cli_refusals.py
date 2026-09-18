@@ -25,7 +25,7 @@ from thyra.__main__ import _validate_basic_params, _validate_output_path, main
 from thyra.convert import convert_msi, dataset_id_problem
 from thyra.errors import ConversionRefused
 
-_CONVERTER_MODULE = "thyra.converters.spatialdata.base_spatialdata_converter"
+_PLANNER_MODULE = "thyra.resampling.axis_planner"
 
 _FIXTURE_DIR = Path(__file__).resolve().parents[1] / "data" / "fixtures"
 
@@ -258,72 +258,66 @@ class TestDatasetId:
         assert convert_msi(tmp_path, tmp_path / "out.zarr", dataset_id="a/b") is False
 
 
-def _plan_stub(min_mz, max_mz, target_bins):
-    """A stand-in for the converter, carrying only what the plan reads."""
-    from thyra.resampling.types import AxisType
+def _planner(min_mz, max_mz, target_bins):
+    """A planner over a 100-1000 m/z source, given the caller's range."""
+    from thyra.resampling.axis_planner import AxisPlanner
+    from thyra.resampling.types import AxisType, ResamplingConfig
 
-    return SimpleNamespace(
-        _essential_metadata_cached=SimpleNamespace(mass_range=(100.0, 1000.0)),
-        _min_mz=min_mz,
-        _max_mz=max_mz,
-        _manual_axis_type=AxisType.CONSTANT,
-        _width_at_mz=None,
-        _target_bins=target_bins,
+    return AxisPlanner.from_metadata(
+        {"essential_metadata": {"mass_range": (100.0, 1000.0)}},
+        ResamplingConfig(
+            axis_type=AxisType.CONSTANT,
+            min_mz=min_mz,
+            max_mz=max_mz,
+            target_bins=target_bins,
+        ),
     )
 
 
 class TestTheResamplingPlan:
     """Issue #250: the range and the bin count, checked before any pass."""
 
-    def _resolve(self, stub):
-        from thyra.converters.spatialdata.base_spatialdata_converter import (
-            BaseSpatialDataConverter,
-        )
-
-        return BaseSpatialDataConverter._resolve_resampling_plan(stub)
+    def _resolve(self, planner):
+        return planner.resolve()
 
     def test_an_inverted_range_is_refused(self):
         """It used to build a descending axis, drop every peak against it,
         report "4 of 3 ... affected" from a negative count, and succeed."""
         with pytest.raises(ConversionRefused, match="empty"):
-            self._resolve(_plan_stub(600.0, 300.0, 4000))
+            self._resolve(_planner(600.0, 300.0, 4000))
 
     def test_an_empty_range_is_refused(self):
         with pytest.raises(ConversionRefused, match="empty"):
-            self._resolve(_plan_stub(500.0, 500.0, 4000))
+            self._resolve(_planner(500.0, 500.0, 4000))
 
     def test_one_bin_is_refused_rather_than_crashing(self):
         """``np.min(np.diff(axis))`` on a one-point axis is not a message."""
         with pytest.raises(ConversionRefused, match="at least 2 bins"):
-            self._resolve(_plan_stub(None, None, 1))
+            self._resolve(_planner(None, None, 1))
 
     def test_two_bins_and_a_real_range_still_plan(self):
-        min_mz, max_mz, _axis, bins = self._resolve(_plan_stub(300.0, 600.0, 2))
-        assert (min_mz, max_mz, bins) == (300.0, 600.0, 2)
+        plan = self._resolve(_planner(300.0, 600.0, 2))
+        assert (plan.min_mz, plan.max_mz, plan.target_bins) == (300.0, 600.0, 2)
 
 
 class TestUnknownResamplingConfigKeys:
     """Issue #250: a typo in the dict is warned about, not swallowed."""
 
     def test_an_unknown_key_is_named(self, thyra_logs):
-        from thyra.converters.spatialdata.base_spatialdata_converter import (
-            _normalize_resampling_config,
-        )
+        from thyra.resampling.axis_planner import normalize_resampling_config
 
-        with thyra_logs(_CONVERTER_MODULE, logging.WARNING) as records:
-            _normalize_resampling_config(
+        with thyra_logs(_PLANNER_MODULE, logging.WARNING) as records:
+            normalize_resampling_config(
                 {"method": "nearest_neighbor", "target_bin": 10}
             )
 
         assert any("'target_bin'" in r.getMessage() for r in records)
 
     def test_the_keys_it_reads_are_quiet(self, thyra_logs):
-        from thyra.converters.spatialdata.base_spatialdata_converter import (
-            _normalize_resampling_config,
-        )
+        from thyra.resampling.axis_planner import normalize_resampling_config
 
-        with thyra_logs(_CONVERTER_MODULE, logging.WARNING) as records:
-            _normalize_resampling_config(
+        with thyra_logs(_PLANNER_MODULE, logging.WARNING) as records:
+            normalize_resampling_config(
                 {
                     "method": "nearest_neighbor",
                     "axis_type": "constant",

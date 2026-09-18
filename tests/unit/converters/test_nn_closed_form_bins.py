@@ -273,10 +273,10 @@ def test_the_sibling_tables_are_what_the_search_builds(tmp_path, fused):
         FusedStubReader,
         UnfusedStubReader,
     )
-    from thyra.converters.spatialdata import base_spatialdata_converter as bsc
     from thyra.converters.spatialdata.streaming_converter import (
         StreamingSpatialDataConverter,
     )
+    from thyra.resampling import axis_planner
     from thyra.utils.windows_paths import (
         prepare_zarr_output_path,
         prepare_zarr_read_path,
@@ -285,9 +285,9 @@ def test_the_sibling_tables_are_what_the_search_builds(tmp_path, fused):
     reader_cls = FusedStubReader if fused else UnfusedStubReader
 
     def convert(tag, force_search):
-        original = bsc.usable_linearisation
+        original = axis_planner.usable_linearisation
         if force_search:
-            bsc.usable_linearisation = lambda *a, **k: None
+            axis_planner.usable_linearisation = lambda *a, **k: None
         try:
             out = prepare_zarr_output_path(tmp_path / f"{tag}.zarr", "stub")
             converter = StreamingSpatialDataConverter(
@@ -302,7 +302,7 @@ def test_the_sibling_tables_are_what_the_search_builds(tmp_path, fused):
             used = converter._axis_linearisation is not None
             return spatialdata.read_zarr(prepare_zarr_read_path(out)), used
         finally:
-            bsc.usable_linearisation = original
+            axis_planner.usable_linearisation = original
 
     closed, used_closed = convert("closed", force_search=False)
     searched, used_searched = convert("searched", force_search=True)

@@ -1,7 +1,7 @@
 # tests/unit/converters/test_bin_count_from_width.py
 """Tests for deriving a bin count from a target width at a reference m/z.
 
-``_calculate_bins_from_width`` turns "I want bins this wide at this m/z"
+``bin_count_for_width`` turns "I want bins this wide at this m/z"
 into a bin count, and ``CommonAxisBuilder.build_physics_axis`` then
 distributes that many bins according to the analyser's spacing law. The
 two have to agree: if the count is derived with a different law than the
@@ -14,16 +14,12 @@ measure the width actually realized near ``reference_mz``.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import numpy as np
 import pytest
 
-from thyra.converters.spatialdata.base_spatialdata_converter import (
-    BaseSpatialDataConverter,
-)
+from thyra.resampling.axis_planner import bin_count_for_width
 from thyra.resampling.common_axis import CommonAxisBuilder
-from thyra.resampling.types import AxisType
+from thyra.resampling.types import AxisType, ResamplingConfig
 
 ALL_AXIS_TYPES = [
     AxisType.CONSTANT,
@@ -35,17 +31,14 @@ ALL_AXIS_TYPES = [
 
 
 def _bin_count(axis_type, width_at_mz, reference_mz, min_mz, max_mz) -> int:
-    """Derive a bin count exactly the way the converter does.
+    """Derive a bin count exactly the way the conversion does.
 
-    ``_calculate_bins_from_width`` reads only ``_width_at_mz`` and
-    ``_reference_mz`` off ``self``, so a stub carrying those two
-    attributes exercises it without standing up a whole converter (which
-    would need a reader and a writable output path).
+    ``bin_count_for_width`` reads the width and the reference m/z off the
+    caller's own config, so the ask is the whole input -- no converter, no
+    reader and no writable output path.
     """
-    stub = SimpleNamespace(_width_at_mz=width_at_mz, _reference_mz=reference_mz)
-    return BaseSpatialDataConverter._calculate_bins_from_width(
-        stub, min_mz, max_mz, axis_type
-    )
+    config = ResamplingConfig(mass_width_da=width_at_mz, reference_mz=reference_mz)
+    return bin_count_for_width(config, min_mz, max_mz, axis_type)
 
 
 def _realized_width_at(axis_type, width_at_mz, reference_mz, min_mz, max_mz) -> float:
@@ -154,10 +147,8 @@ class TestDefaultWidths:
 
     def test_linear_tof_defaults_to_17_mda_at_300(self):
         """The SCiLS Lab convention for FlexImaging data."""
-        stub = SimpleNamespace(_width_at_mz=None, _reference_mz=1000.0)
-        bins = BaseSpatialDataConverter._calculate_bins_from_width(
-            stub, 100.0, 2000.0, AxisType.LINEAR_TOF
-        )
+        config = ResamplingConfig(mass_width_da=None, reference_mz=1000.0)
+        bins = bin_count_for_width(config, 100.0, 2000.0, AxisType.LINEAR_TOF)
         expected = _bin_count(AxisType.LINEAR_TOF, 0.017, 300.0, 100.0, 2000.0)
 
         assert bins == expected
@@ -172,10 +163,8 @@ class TestDefaultWidths:
         ],
     )
     def test_other_axis_types_default_to_5_mda_at_1000(self, axis_type):
-        stub = SimpleNamespace(_width_at_mz=None, _reference_mz=300.0)
-        bins = BaseSpatialDataConverter._calculate_bins_from_width(
-            stub, 100.0, 2000.0, axis_type
-        )
+        config = ResamplingConfig(mass_width_da=None, reference_mz=300.0)
+        bins = bin_count_for_width(config, 100.0, 2000.0, axis_type)
         expected = _bin_count(axis_type, 0.005, 1000.0, 100.0, 2000.0)
 
         assert bins == expected

@@ -23,9 +23,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from thyra.converters.spatialdata import base_spatialdata_converter as base_converter
 from thyra.converters.spatialdata import csc_assembly
-from thyra.converters.spatialdata.base_spatialdata_converter import _bin_width_range
 from thyra.converters.spatialdata.csc_assembly import (
     AXIS_BYTES_PER_BIN,
     AXIS_REFUSE_FRACTION,
@@ -37,6 +35,8 @@ from thyra.converters.spatialdata.streaming_converter import (
     StreamingSpatialDataConverter,
 )
 from thyra.errors import ConversionRefused
+from thyra.resampling import axis_planner
+from thyra.resampling.axis_planner import bin_width_range
 
 
 class _Meta:
@@ -175,7 +175,7 @@ class TestBinWidthsAreNotMaterialised:
         axis = np.sort(rng.random(n) * 900.0 + 100.0)
         widths = np.diff(axis)
 
-        low, high = _bin_width_range(axis)
+        low, high = bin_width_range(axis)
 
         assert low == pytest.approx(float(widths.min()))
         assert high == pytest.approx(float(widths.max()))
@@ -183,15 +183,15 @@ class TestBinWidthsAreNotMaterialised:
     @pytest.mark.parametrize("gap_at", [1, 99, 100, 101, 199, 998])
     def test_a_gap_at_a_chunk_edge_is_still_seen(self, monkeypatch, gap_at):
         """Chunks overlap by one entry; a gap between two must not be lost."""
-        monkeypatch.setattr(base_converter, "BIN_WIDTH_CHUNK", 100)
+        monkeypatch.setattr(axis_planner, "BIN_WIDTH_CHUNK", 100)
         axis = np.arange(1000, dtype=np.float64)
         axis[gap_at:] += 5.0  # one wide gap, placed on and around an edge
 
-        low, high = _bin_width_range(axis)
+        low, high = bin_width_range(axis)
 
         assert low == pytest.approx(1.0)
         assert high == pytest.approx(6.0)
 
     def test_a_degenerate_axis_is_zero(self):
-        assert _bin_width_range(np.array([500.0])) == (0.0, 0.0)
-        assert _bin_width_range(np.array([])) == (0.0, 0.0)
+        assert bin_width_range(np.array([500.0])) == (0.0, 0.0)
+        assert bin_width_range(np.array([])) == (0.0, 0.0)

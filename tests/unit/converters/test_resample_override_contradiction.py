@@ -35,32 +35,10 @@ import logging
 
 import pytest
 
-from thyra.converters.spatialdata.base_spatialdata_converter import (
-    BaseSpatialDataConverter,
-)
+from thyra.resampling.axis_planner import AxisPlanner, normalize_resampling_config
 from thyra.resampling.types import ResamplingMethod
 
-_LOGGER = "thyra.converters.spatialdata.base_spatialdata_converter"
-
-
-class _Converter:
-    """Just enough converter to run ``_setup_resampling``.
-
-    The metadata dict is what the decision tree reads; everything else on
-    the real converter is irrelevant to the check under test.
-    """
-
-    def __init__(self, metadata):
-        self._metadata = metadata
-        self._resampling_method = None
-
-    def _get_reader_metadata_for_resampling(self):
-        return self._metadata
-
-    _setup_resampling = BaseSpatialDataConverter._setup_resampling
-    _warn_if_override_contradicts_detector = (
-        BaseSpatialDataConverter._warn_if_override_contradicts_detector
-    )
+_LOGGER = "thyra.resampling.axis_planner"
 
 
 #: A sparse centroid source the detector reads as nearest-neighbour. The
@@ -81,20 +59,16 @@ _SPARSE_SOURCE = {
 
 
 def _run(config, metadata=None):
-    converter = _Converter(metadata if metadata is not None else _SPARSE_SOURCE)
-    converter._resampling_config = config
-    converter._setup_resampling()
-    return converter
+    """The planner's own setup: the method is chosen when it is built."""
+    return AxisPlanner.from_metadata(
+        metadata if metadata is not None else _SPARSE_SOURCE, config
+    )
 
 
 def _config(**overrides):
-    from thyra.converters.spatialdata.base_spatialdata_converter import (
-        _normalize_resampling_config,
-    )
-
     settings = {"method": "nearest_neighbor", "axis_type": "auto"}
     settings.update(overrides)
-    return _normalize_resampling_config(settings)
+    return normalize_resampling_config(settings)
 
 
 def _contradictions(records):
@@ -104,14 +78,14 @@ def _contradictions(records):
 class TestTheDetectorIsConsultedOnAnOverride:
     def test_it_warns_when_the_override_contradicts(self, thyra_logs):
         with thyra_logs(_LOGGER, logging.WARNING) as records:
-            converter = _run(_config(method="tic_preserving"))
+            planner = _run(_config(method="tic_preserving"))
 
         messages = _contradictions(records)
         assert len(messages) == 1, [r.getMessage() for r in records]
         assert "TIC_PRESERVING" in messages[0]
         assert "NEAREST_NEIGHBOR" in messages[0]
         # The override still applies: this reports, it does not overrule.
-        assert converter._resampling_method is ResamplingMethod.TIC_PRESERVING
+        assert planner.method is ResamplingMethod.TIC_PRESERVING
 
     def test_it_names_the_flag_that_fixes_it(self, thyra_logs):
         """A warning with no way out is just noise."""
@@ -132,18 +106,18 @@ class TestTheDetectorIsConsultedOnAnOverride:
     def test_it_is_silent_when_the_override_agrees(self, thyra_logs):
         """No noise on an explicit flag that matches the detector."""
         with thyra_logs(_LOGGER, logging.WARNING) as records:
-            converter = _run(_config(method="nearest_neighbor"))
+            planner = _run(_config(method="nearest_neighbor"))
 
         assert _contradictions(records) == []
-        assert converter._resampling_method is ResamplingMethod.NEAREST_NEIGHBOR
+        assert planner.method is ResamplingMethod.NEAREST_NEIGHBOR
 
     def test_it_is_silent_on_auto(self, thyra_logs):
         """``auto`` *is* the detector; it cannot contradict itself."""
         with thyra_logs(_LOGGER, logging.WARNING) as records:
-            converter = _run(_config(method="auto"))
+            planner = _run(_config(method="auto"))
 
         assert _contradictions(records) == []
-        assert converter._resampling_method is ResamplingMethod.NEAREST_NEIGHBOR
+        assert planner.method is ResamplingMethod.NEAREST_NEIGHBOR
 
 
 class TestTheCheckNeverBreaksAConversion:
@@ -155,21 +129,24 @@ class TestTheCheckNeverBreaksAConversion:
         a worse bug than the one being fixed.
         """
 
-        class _Exploding(_Converter):
-            def _get_reader_metadata_for_resampling(self):
+        class _Exploding(AxisPlanner):
+            def detection_metadata(self):
                 raise RuntimeError("no metadata")
 
-        converter = _Exploding(None)
-        converter._resampling_config = _config(method="tic_preserving")
-
         with thyra_logs(_LOGGER, logging.WARNING) as records:
-            converter._setup_resampling()
+            planner = _Exploding(None, _config(method="tic_preserving"))
 
-        assert converter._resampling_method is ResamplingMethod.TIC_PRESERVING
+        assert planner.method is ResamplingMethod.TIC_PRESERVING
         assert _contradictions(records) == []
 
-    def test_the_gap_tolerance_is_still_configured(self):
-        """The warning sits in the middle of ``_setup_resampling``."""
-        converter = _run(_config(method="tic_preserving", gap_tolerance_da=0.25))
+    def test_the_rest_of_the_setup_still_runs(self):
+        """The warning sits in the middle of the planner's own setup.
 
-        assert converter._gap_tolerance_da == pytest.approx(0.25)
+        The tolerance it names reaches the operator off the config the
+        planner was built from, so the method and that config are what
+        the warning must leave intact.
+        """
+        planner = _run(_config(method="tic_preserving", gap_tolerance_da=0.25))
+
+        assert planner.method is ResamplingMethod.TIC_PRESERVING
+        assert planner.config.gap_tolerance_da == pytest.approx(0.25)

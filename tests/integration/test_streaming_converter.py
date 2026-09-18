@@ -178,7 +178,7 @@ def test_resampling_plan_uses_real_bins_for_width_based_config():
             use_csc="auto",
             resampling_config=config,
         )
-        _, _, _, target_bins = converter._resolve_resampling_plan()
+        target_bins = converter.axis_planner.resolve().target_bins
 
     assert target_bins == pytest.approx(180_000, rel=0.01), (
         f"Expected ~180,000 bins from the 5 mDa width, got {target_bins:,}. "

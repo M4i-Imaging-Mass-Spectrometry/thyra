@@ -39,14 +39,8 @@ from ...core.conversion_state import ConversionState
 from ...errors import MALFORMED_METADATA, ConversionRefused
 from ...metadata.root_attrs import RootAttrsBuilder, RootAttrsContext
 from ...metadata.schema import MSI_VAR_RESERVED_COLUMNS
-from ...metadata.types import ComprehensiveMetadata, EssentialMetadata
 from ...metadata.uns_assembler import UnsAssembler, UnsContext
-from ...resampling import ResamplingDecisionTree, ResamplingMethod
-from ...resampling.binning import usable_linearisation
-from ...resampling.mass_axis.tof_generator import (
-    DEFAULT_BINS_PER_FWHM,
-    TOFAxisGenerator,
-)
+from ...resampling.axis_planner import AxisPlanner, normalize_resampling_config
 from ...resampling.mobility_grid import (
     MOBILITY_CHANNELS,
     MobilityGrid,
@@ -54,37 +48,11 @@ from ...resampling.mobility_grid import (
     report_channel_width,
 )
 from ...resampling.strategies import ResamplingStrategy, build_strategy
-from ...resampling.types import AxisLinearisation, AxisType, ResamplingConfig
+from ...resampling.types import AxisLinearisation, ResamplingConfig
 from ._chunking import table_write_config
 from .optical_image import OpticalImages
 
 logger = logging.getLogger(__name__)
-
-
-#: Axis entries differenced at once by :func:`_bin_width_range`. 32 MB of
-#: float64 at a time; read at call time so a test can shrink it.
-BIN_WIDTH_CHUNK = 1 << 22
-
-
-def _bin_width_range(axis: NDArray[np.float64]) -> Tuple[float, float]:
-    """The narrowest and widest gap between consecutive axis entries.
-
-    Chunked, because the obvious ``np.diff(axis)`` allocates a second
-    array the length of the axis to produce two numbers for a log line --
-    1.6 GB of it on the 200M-bin axis issue #251 measures. Chunks overlap
-    by one entry so no gap falls between two of them.
-    """
-    axis = np.asarray(axis, dtype=np.float64)
-    if axis.size < 2:
-        return 0.0, 0.0
-    low = np.inf
-    high = -np.inf
-    for start in range(0, axis.size - 1, BIN_WIDTH_CHUNK):
-        stop = min(start + BIN_WIDTH_CHUNK + 1, axis.size)
-        widths = np.diff(axis[start:stop])
-        low = min(low, float(widths.min()))
-        high = max(high, float(widths.max()))
-    return low, high
 
 
 @contextmanager
@@ -105,147 +73,6 @@ def _suppress_upstream_warnings():
             category=UserWarning,
         )
         yield
-
-
-def _resolve_config_enum(raw: Any, by_name: Dict[str, Any], key: str) -> Any:
-    """Resolve one resampling-config value to its enum member.
-
-    ``None``, ``"auto"`` and ``""`` all mean "decide this automatically"
-    and resolve to ``None``.
-
-    The CLI is protected by ``click.Choice``, but the Python API takes
-    whatever the caller passes. Reject anything unrecognised rather than
-    dropping it: silently treating ``"tic_preserving "`` or a typo as
-    "auto-detect" hands back a conversion that ignored the request
-    without saying so.
-
-    Args:
-        raw: The value as supplied by the caller.
-        by_name: Accepted string spellings mapped to enum members.
-        key: The config key, used in error messages.
-
-    Raises:
-        ConversionRefused: If ``raw`` names no accepted value, or is
-            neither a string nor one of the accepted enum members.
-    """
-    if raw is None:
-        return None
-
-    valid = ", ".join(repr(name) for name in ["auto", *by_name])
-
-    if isinstance(raw, str):
-        if raw in ("auto", ""):
-            return None
-        if raw not in by_name:
-            raise ConversionRefused(
-                f"Unknown resampling_config[{key!r}] value {raw!r}. "
-                f"Valid values are: {valid}."
-            )
-        return by_name[raw]
-
-    if raw in by_name.values():
-        return raw
-
-    raise ConversionRefused(
-        f"Unsupported resampling_config[{key!r}] value {raw!r}. "
-        f"Pass one of {valid}, or the matching enum member."
-    )
-
-
-#: Every key :func:`_normalize_resampling_config` reads out of a
-#: ``resampling_config`` dict. Anything else in the dict is a typo or a
-#: leftover, and is warned about rather than ignored.
-_RESAMPLING_CONFIG_KEYS = frozenset(
-    {
-        "method",
-        "axis_type",
-        "target_bins",
-        "width_at_mz",
-        "reference_mz",
-        "min_mz",
-        "max_mz",
-        "gap_tolerance_da",
-        "tof_a",
-        "tof_b",
-        "bins_per_fwhm",
-    }
-)
-
-
-def _normalize_resampling_config(
-    config: Union[Dict[str, Any], "ResamplingConfig"],
-) -> "ResamplingConfig":
-    """Normalise a resampling config dict or dataclass to a ResamplingConfig.
-
-    Accepts either a plain dict (as produced by _build_resampling_config in
-    __main__.py) or an already-constructed ResamplingConfig dataclass and
-    returns a ResamplingConfig in both cases.
-
-    Raises:
-        ConversionRefused: If ``method`` or ``axis_type`` is not a
-            recognised value.
-    """
-    if isinstance(config, ResamplingConfig):
-        return config
-
-    # A key this function does not read changes nothing, and used to
-    # change nothing silently: ``{"target_bin": 4000}`` was accepted and
-    # the axis built from the default (issue #250). Said once, with the
-    # keys that would have worked, rather than refused -- a caller
-    # passing an extra key is not necessarily wrong, but a caller with a
-    # typo always is.
-    unknown = sorted(set(config) - _RESAMPLING_CONFIG_KEYS)
-    if unknown:
-        logger.warning(
-            "resampling_config holds %s, which %s not read and %s no effect. "
-            "Known keys: %s.",
-            ", ".join(repr(key) for key in unknown),
-            "is" if len(unknown) == 1 else "are",
-            "has" if len(unknown) == 1 else "have",
-            ", ".join(sorted(_RESAMPLING_CONFIG_KEYS)),
-        )
-
-    from ...resampling.types import DEFAULT_REFERENCE_MZ, AxisType
-
-    # Only the methods the resampling pipeline actually implements, and
-    # only the axis types CommonAxisBuilder has a generator for. These
-    # deliberately match the CLI's click.Choice lists.
-    method_by_name = {
-        "nearest_neighbor": ResamplingMethod.NEAREST_NEIGHBOR,
-        "tic_preserving": ResamplingMethod.TIC_PRESERVING,
-    }
-    axis_type_by_name = {
-        "constant": AxisType.CONSTANT,
-        "linear_tof": AxisType.LINEAR_TOF,
-        "reflector_tof": AxisType.REFLECTOR_TOF,
-        "tof": AxisType.TOF,
-        "orbitrap": AxisType.ORBITRAP,
-        "fticr": AxisType.FTICR,
-    }
-
-    reference_mz = config.get("reference_mz")
-
-    def _optional_float(key: str) -> Optional[float]:
-        value = config.get(key)
-        return None if value is None else float(value)
-
-    return ResamplingConfig(
-        method=_resolve_config_enum(config.get("method"), method_by_name, "method"),
-        axis_type=_resolve_config_enum(
-            config.get("axis_type"), axis_type_by_name, "axis_type"
-        ),
-        target_bins=config.get("target_bins"),
-        mass_width_da=config.get("width_at_mz"),
-        reference_mz=(
-            DEFAULT_REFERENCE_MZ if reference_mz is None else float(reference_mz)
-        ),
-        min_mz=config.get("min_mz"),
-        max_mz=config.get("max_mz"),
-        gap_tolerance_da=config.get("gap_tolerance_da"),
-        tof_a=_optional_float("tof_a"),
-        tof_b=_optional_float("tof_b"),
-        bins_per_fwhm=_optional_float("bins_per_fwhm"),
-    )
 
 
 #: How far a marginal may sit from the column it mirrors, relative to the
@@ -284,126 +111,6 @@ def _current_ratio_block(
         "current_ratio_pixel_min": float(np.nanmin(per_pixel)),
         "current_ratio_pixel_max": float(np.nanmax(per_pixel)),
     }
-
-
-def _regate_tic_preserving(converter, tree, axis_type) -> None:
-    """Re-ask the TIC-preserving gate about the axis that will be built.
-
-    ``_setup_resampling`` picks the method from the detector chain, which
-    gates ``TIC_PRESERVING`` on the detector's *own* axis choice.
-    ``--mass-axis-type`` overrides that choice, and it is applied here in
-    ``_resolve_resampling_plan``, after the method has been chosen. The two
-    then come apart and the gate's premise is gone: TIC-preserving
-    resampling is exact only when the source grid law and the target axis
-    are the same law.
-
-    Both detectors that reach ``TIC_PRESERVING`` -- ``RapiflexDetector``
-    (CONSTANT) and ``WatersProfileDetector`` (LINEAR_TOF) -- declare a
-    source law equal to their own axis, so the early gate always cleared
-    and the conversion then interpolated onto whatever axis was asked for.
-    ``docs/resampling.md`` measures the cost: two ions of equal abundance
-    come back with their ratio distorted by up to 13.4x. Nothing downstream
-    sees it, because the per-pixel TIC still balances exactly -- preserving
-    it is what the operator does.
-
-    Auto-selected methods only. An explicit ``--resample-method`` is the
-    caller's decision, honoured with a warning instead (D15); overruling it
-    here is what #246 deliberately rejected. On the auto path with no axis
-    override this re-derives the same answer, so it is a no-op.
-
-    A module-level function taking the converter, like
-    :func:`_reference_params`, rather than a method. ``_resolve_resampling_plan``
-    is called unbound against duck-typed stubs in the suite -- a
-    ``SimpleNamespace`` carrying only the attributes the plan reads
-    (``tests/unit/test_cli_refusals.py``) and a harness that names the methods
-    it borrows (``tests/unit/converters/``). A method here would make every
-    such stub fail on attribute lookup the moment this was extracted, which is
-    exactly what happened while writing it; a plain function does not ask
-    ``converter`` for anything the plan did not already need.
-
-    Args:
-        converter: The converter whose resampling method may be downgraded.
-        tree: The decision tree to ask.
-        axis_type: The axis the conversion will build.
-    """
-    if not getattr(converter, "_resampling_method_was_auto", False):
-        return
-    if converter._resampling_method is not ResamplingMethod.TIC_PRESERVING:
-        return
-
-    regated = tree.select_strategy_for_axis(
-        converter._get_cached_metadata_for_resampling(), axis_type
-    )
-    if regated is not converter._resampling_method:
-        logger.info(
-            "Resampling method downgraded to %s: the mass axis resolved "
-            "to %s, which is not the source grid law.",
-            regated.name,
-            axis_type.name,
-        )
-        converter._resampling_method = regated
-
-
-def _reference_params(converter: Any, axis_name: str) -> Tuple[float, float]:
-    """``(width_da, reference_mz)`` for the axis about to be built.
-
-    Precedence: the caller's ``--resample-width-at-mz`` /
-    ``--resample-reference-mz``; then the width the detected instrument
-    declared (``_detected_reference_width``, set on the auto path only);
-    then the per-axis-type default -- 17 mDa at m/z 300 for ``linear_tof``,
-    chosen to be close to the axis SCiLS Lab produces for FlexImaging data,
-    and 5 mDa at m/z 1000 for everything else.
-
-    Module-level so that ``_calculate_bins_from_width`` and
-    ``_get_reference_params`` cannot drift apart, and so that either can be
-    driven on a bare stub carrying only the three attributes.
-    """
-    if converter._width_at_mz is not None:
-        return converter._width_at_mz, converter._reference_mz
-    if axis_name == "tof":
-        # The law and the bins-per-FWHM fix the width everywhere; report
-        # the one realised at the reference m/z.
-        a, b, k = _tof_plan(converter)
-        reference_mz = float(converter._reference_mz)
-        return float(TOFAxisGenerator(a, b).bin_width_at(reference_mz, k)), reference_mz
-    detected = getattr(converter, "_detected_reference_width", None)
-    if detected is not None:
-        return float(detected[0]), float(detected[1])
-    if axis_name == "linear_tof":
-        return 0.017, 300.0
-    return 0.005, 1000.0
-
-
-def _tof_plan(converter: Any) -> Tuple[float, float, float]:
-    """``(A, B, bins_per_fwhm)`` for an ``AxisType.TOF`` axis.
-
-    The law is the caller's ``tof_a``/``tof_b`` pair, else the pair the
-    detected instrument declared (``_detected_tof_law``). ``bins_per_fwhm``
-    is derived from ``--resample-width-at-mz`` at the reference m/z when
-    that was given, so the width flag means the same thing on every axis
-    type; otherwise it is the API's ``bins_per_fwhm``, else 3.
-    """
-    a = getattr(converter, "_tof_a", None)
-    b = getattr(converter, "_tof_b", None)
-    if a is None or b is None:
-        law = getattr(converter, "_detected_tof_law", None)
-        if law is None:
-            raise ConversionRefused(
-                "A 'tof' mass axis needs the width law's coefficients: pass "
-                "--tof-law A B, or convert a run whose instrument declares "
-                "them (SELECT SERIES MRT centroid, timsTOF, PHI nanoTOF)."
-            )
-        a, b = law
-    generator = TOFAxisGenerator(float(a), float(b))
-    if converter._width_at_mz is not None:
-        k = generator.bins_per_fwhm_for(
-            float(converter._reference_mz), float(converter._width_at_mz)
-        )
-    else:
-        k = getattr(converter, "_bins_per_fwhm", None)
-        if k is None:
-            k = DEFAULT_BINS_PER_FWHM
-    return float(a), float(b), float(k)
 
 
 class BaseSpatialDataConverter(BaseMSIConverter, ABC):
@@ -548,25 +255,25 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         self._non_empty_pixel_count: int = 0
         # The m/z range a peak has to be inside to be kept, as opposed to
-        # the span of the axis points themselves. Filled by
-        # _build_resampled_mass_axis(); ``None`` means "no resampled axis
-        # was built", and the span is then the axis's own. See
+        # the span of the axis points themselves. Adopted from the planner
+        # in _setup_mass_axis(); ``None`` means "no resampled axis was
+        # built", and the span is then the axis's own. See
         # :func:`thyra.resampling.binning.kept_mz_range`.
         self._axis_range: Optional[Tuple[float, float]] = None
         # The coordinate the common mass axis may be indexed through, once
-        # _build_resampled_mass_axis() has built the axis and
-        # usable_linearisation() has checked it; None means every placement
-        # onto it is a search (D21). It belongs to the axis, not to the
+        # the planner has built the axis and usable_linearisation() has
+        # checked it; None means every placement onto it is a search
+        # (D21). It belongs to the axis, not to the
         # strategy that bins with it, which is why the sibling sinks read
         # it here rather than off ``_resampler``: an interpolated
         # conversion still writes sibling tables, and they still place
         # peaks onto this axis.
         self._axis_linearisation: Optional[AxisLinearisation] = None
         # The operator that places one spectrum onto the common mass axis:
-        # built beside the axis by _build_resampled_mass_axis(), from the
-        # method the config or the detector chain settled on. ``None``
-        # means no resampled axis was built, and the spectrum is mapped
-        # onto the reader's own axis instead (--no-resample).
+        # built beside the axis in _setup_mass_axis(), from the method the
+        # config or the detector chain settled on. ``None`` means no
+        # resampled axis was built, and the spectrum is mapped onto the
+        # reader's own axis instead (--no-resample).
         self._resampler: Optional[ResamplingStrategy] = None
         # Intensities dropped for being non-finite or negative, and
         # whether that has been said yet. See _count_unusable_intensities().
@@ -592,12 +299,13 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             self.pixel_size_y_um = float(detected_y)
             self._log_anisotropic_raster()
         self._resampling_config = (
-            _normalize_resampling_config(resampling_config)
+            normalize_resampling_config(resampling_config)
             if resampling_config is not None
             else None
         )
-        # Filled by _build_resampled_mass_axis(); consumed by the uns
-        # assembler's processing provenance, through _uns_context().
+        # What the planner resolved, adopted in _setup_mass_axis();
+        # consumed by the uns assembler's processing provenance, through
+        # _uns_context().
         self._resolved_resampling_plan: Optional[Dict[str, Any]] = None
 
         # The mobility-resolved sibling table (see mobility_table.py): whether
@@ -644,26 +352,14 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         self._write_msms_table = bool(msms_table)
         self._msms_table_key: Optional[str] = None
 
-        # Metadata caches (populated lazily during conversion). These have
-        # to exist before _setup_resampling below: its strategy selection
-        # extracts the reader's metadata through them, and every extractor
-        # swallows failures at DEBUG. With the caches assigned after it,
-        # that first extraction hit AttributeError on every field, the
-        # decision tree saw an empty dict, and *every* reader's method was
-        # chosen by DefaultDetector -- nearest_neighbor -- while the axis
-        # type, resolved later on the properly cached metadata, came from
-        # the right detector. Nothing noticed while the detectors agreed;
-        # the Waters profile route is the first to ask for tic_preserving.
-        self._essential_metadata_cached: Optional[EssentialMetadata] = None
-        self._comprehensive_metadata_cached: Optional[ComprehensiveMetadata] = None
-        self._spectrum_metadata_cached: Optional[Dict[str, Any]] = None
-        self._resampling_metadata_cached: Optional[Dict[str, Any]] = None
-
-        # Set up resampling if enabled
-        if self._resampling_config:
-            self._setup_resampling()
-            # Note: _build_resampled_mass_axis() will be called in _initialize_conversion()
-            # after reader metadata is fully loaded
+        # Everything that decides which m/z values the store will carry:
+        # the method, the axis law, the bin width and the range, and the
+        # caches the detectors are read through. Built here because an
+        # explicit ``--resample-method`` is checked against the detector
+        # chain while there is still someone to warn (issue #246); the axis
+        # itself is laid in _setup_mass_axis(), once the reader's metadata
+        # is loaded.
+        self.axis_planner = AxisPlanner(self.reader, self._resampling_config)
 
         # The store's optical images and everything they own: the
         # FlexImaging alignment, the TIC-to-image affine, which file became
@@ -704,279 +400,6 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             handle_3d=self.handle_3d,
             conversion_options=self.options,
         )
-
-    def _setup_resampling(self) -> None:
-        """Set up resampling configuration and strategy."""
-        if not self._resampling_config:
-            return
-
-        config = self._resampling_config
-        method = config.method
-        axis_type = config.axis_type
-
-        # If method is None or "auto", use DecisionTree to determine strategy
-        if method is None:
-            try:
-                # Get metadata from reader for instrument detection
-                metadata = self._get_reader_metadata_for_resampling()
-                tree = ResamplingDecisionTree()
-                detected_method = tree.select_strategy(metadata)
-                logger.info(f"Auto-detected resampling method: {detected_method}")
-                self._resampling_method = detected_method
-            except NotImplementedError as e:
-                logger.error(f"Auto-detection failed: {e}")
-                logger.info("Falling back to nearest_neighbor for resampling")
-                self._resampling_method = ResamplingMethod.NEAREST_NEIGHBOR
-        else:
-            # Use provided method directly (already an enum)
-            self._resampling_method = method
-            self._warn_if_override_contradicts_detector(method, config)
-
-        # Whether the method above was chosen by the detector chain rather than
-        # named by the caller. The TIC-preserving gate governs auto-selection
-        # only -- an explicit method is taken as given and merely warned about
-        # (D15) -- so _resolve_resampling_plan needs to know which this was
-        # before it re-asks the gate against the axis it settles on.
-        self._resampling_method_was_auto = method is None
-
-        logger.info(f"Using resampling method: {self._resampling_method}")
-
-        # Store axis_type override if provided (will be used in _build_resampled_mass_axis)
-        self._manual_axis_type = axis_type
-
-        # Store resampling parameters from the ResamplingConfig dataclass
-        self._target_bins = config.target_bins
-        self._min_mz = config.min_mz
-        self._max_mz = config.max_mz
-        self._width_at_mz = config.mass_width_da
-        self._reference_mz = config.reference_mz
-        # Filled by _resolve_resampling_plan when the detected instrument
-        # declares a bin width and the caller set none.
-        self._detected_reference_width: Optional[Tuple[float, float]] = None
-        # The two-term TOF width law (AxisType.TOF): the caller's pair, or
-        # the detected instrument's when the axis resolves to TOF without one.
-        self._tof_a = config.tof_a
-        self._tof_b = config.tof_b
-        self._bins_per_fwhm = config.bins_per_fwhm
-        self._detected_tof_law: Optional[Tuple[float, float]] = None
-        self._gap_tolerance_da = config.gap_tolerance_da
-        if self._gap_tolerance_da is not None:
-            logger.info(
-                f"Interpolation gap tolerance: {self._gap_tolerance_da} Da "
-                "(target bins farther than this from any source m/z are zeroed)"
-            )
-
-    def _warn_if_override_contradicts_detector(
-        self, method: ResamplingMethod, config: Any
-    ) -> None:
-        """Say so when an explicit ``--resample-method`` overrules the detector.
-
-        The detector has a verdict for every source; until #246 only the
-        ``auto`` path ever asked for it, so an explicit method was applied
-        with nothing checked and nothing said. The asymmetry is the whole
-        defect: ``tic_preserving`` on a Bruker TDF -- for which the
-        detector chooses nearest-neighbour -- interpolates across the gaps
-        of a sparse centroid list and fills the axis. Measured on a
-        713-frame PASEF acquisition: 423,386,757 stored non-zeros against
-        302,106, a 583 MB table against 7.6 MB, 5.9 GB of peak RSS against
-        0.5. Per-pixel TIC is identical either way, so the TIC identity
-        cannot see it; what breaks is the siblings, and quietly (the
-        heatmap marginal against the stored mean spectrum came to rel 68).
-
-        This is the same bug class as #168 on PHI ToF-SIMS, which was fixed
-        *by* adding a detector -- which is exactly why a detector is not
-        enough on its own. A detector only steers ``auto``.
-
-        Why a warning and not a refusal or an automatic gap tolerance is
-        design decision D15 in ``docs/design-decisions.md``. In short: the
-        remedy already has a flag, and nothing stored changes.
-
-        Args:
-            method: The method the caller asked for.
-            config: The resampling config, read for a gap tolerance that
-                is already in force (``self._gap_tolerance_da`` is not
-                assigned until later in :meth:`_setup_resampling`).
-        """
-        try:
-            detected = ResamplingDecisionTree().select_strategy(
-                self._get_reader_metadata_for_resampling()
-            )
-        except Exception as exc:
-            # Detection is advisory here. A source it cannot classify must
-            # still convert with the method that was actually asked for.
-            #
-            # Broad on purpose, and it stays broad (issue #280). Narrowing
-            # it to the exceptions a detector chain can raise looks right
-            # and breaks ``test_a_source_the_detector_cannot_classify_
-            # still_converts``, which pins the stronger promise this
-            # docstring makes: *whatever* goes wrong in the advisory check,
-            # the method the caller asked for is still applied. A
-            # conversion that failed because an advisory check raised would
-            # be a worse defect than any this catch can hide, and the catch
-            # hides it at DEBUG rather than swallowing it silently.
-            logger.debug(
-                "Could not check --resample-method against the detector: %s",
-                str(exc),
-            )
-            return
-
-        if detected is method:
-            return
-
-        message = (
-            "Resampling method %s was given explicitly, but this source's "
-            "detector chose %s for it. "
-        )
-        args: List[Any] = [method.name, detected.name]
-
-        if method is ResamplingMethod.TIC_PRESERVING:
-            tolerance = getattr(config, "gap_tolerance_da", None)
-            if tolerance is None:
-                message += (
-                    "Interpolating a source the detector reads as sparse "
-                    "fills the whole axis: every bin between two measured "
-                    "points gets a fabricated intensity, the stored matrix "
-                    "grows by orders of magnitude, and per-pixel TIC still "
-                    "balances so no total reveals it. Pass "
-                    "--resample-gap-tolerance to discard bins no measured "
-                    "m/z vouches for, or drop the override."
-                )
-            else:
-                message += (
-                    "--resample-gap-tolerance %s Da is set, so bins further "
-                    "than that from a measured m/z are discarded rather "
-                    "than interpolated across."
-                )
-                args.append(tolerance)
-
-        logger.warning(message, *args)
-
-    def _get_cached_metadata_for_resampling(self) -> Dict[str, Any]:
-        """Get cached metadata for resampling decision tree to avoid multiple reader calls."""
-        if self._resampling_metadata_cached is not None:
-            return self._resampling_metadata_cached
-
-        # If not cached yet, extract and cache it
-        return self._get_reader_metadata_for_resampling()
-
-    def _get_reader_metadata_for_resampling(self) -> Dict[str, Any]:
-        """Extract metadata from reader for resampling decision tree."""
-        metadata: Dict[str, Any] = {}
-
-        # Extract different types of metadata
-        self._extract_essential_metadata(metadata)
-        self._extract_comprehensive_metadata(metadata)
-        self._extract_spectrum_metadata(metadata)
-
-        # Cache for later reuse
-        self._resampling_metadata_cached = metadata
-        return metadata
-
-    def _extract_essential_metadata(self, metadata: Dict[str, Any]) -> None:
-        """Extract essential metadata for resampling decisions.
-
-        The reader call keeps a broad catch: it is the boundary, and what
-        surfaces there was raised by a vendor SDK, an XML parser or sqlite.
-        Reading the result is narrowed, because that is Thyra's own code
-        against an object Thyra built (issue #280).
-        """
-        try:
-            # Use cached essential metadata if available
-            if self._essential_metadata_cached is not None:
-                essential = self._essential_metadata_cached
-            else:
-                essential = self.reader.get_essential_metadata()
-                self._essential_metadata_cached = essential
-        except Exception as e:
-            logger.debug(f"Could not read essential metadata: {e}")
-            return
-
-        try:
-            if hasattr(essential, "source_path"):
-                metadata["source_path"] = str(essential.source_path)
-
-            # Add essential metadata for resampling decisions
-            metadata["essential_metadata"] = {
-                "spectrum_type": getattr(essential, "spectrum_type", None),
-                "dimensions": essential.dimensions,
-                "mass_range": essential.mass_range,
-                "source_path": str(essential.source_path),
-                "total_peaks": getattr(essential, "total_peaks", None),
-                "n_spectra": getattr(essential, "n_spectra", None),
-            }
-        except MALFORMED_METADATA as e:
-            logger.debug(f"Could not extract essential metadata: {e}")
-
-    def _extract_comprehensive_metadata(self, metadata: Dict[str, Any]) -> None:
-        """Extract comprehensive metadata including Bruker GlobalMetadata.
-
-        Split the same way :meth:`_extract_essential_metadata` is: the
-        reader call is the boundary and keeps its breadth, the two
-        extractions below it are Thyra reading an object Thyra built and
-        are narrowed (issue #280).
-        """
-        try:
-            # Use cached comprehensive metadata if available
-            if self._comprehensive_metadata_cached is not None:
-                comp_meta = self._comprehensive_metadata_cached
-            else:
-                comp_meta = self.reader.get_comprehensive_metadata()
-                self._comprehensive_metadata_cached = comp_meta
-        except Exception as e:
-            logger.debug(f"Could not read comprehensive metadata: {e}")
-            return
-
-        try:
-            self._extract_bruker_metadata(metadata, comp_meta)
-            self._extract_instrument_info(metadata, comp_meta)
-        except MALFORMED_METADATA as e:
-            logger.debug(f"Could not extract comprehensive metadata: {e}")
-
-    def _extract_bruker_metadata(self, metadata: Dict[str, Any], comp_meta) -> None:
-        """Extract Bruker GlobalMetadata from comprehensive metadata."""
-        if (
-            hasattr(comp_meta, "raw_metadata")
-            and "global_metadata" in comp_meta.raw_metadata
-        ):
-            metadata["GlobalMetadata"] = comp_meta.raw_metadata["global_metadata"]
-            logger.debug(
-                f"Extracted Bruker GlobalMetadata with keys: "
-                f"{list(metadata['GlobalMetadata'].keys())}"
-            )
-
-    def _extract_instrument_info(self, metadata: Dict[str, Any], comp_meta) -> None:
-        """Extract instrument_info for fallback detection."""
-        if hasattr(comp_meta, "instrument_info"):
-            metadata["instrument_info"] = comp_meta.instrument_info
-            logger.debug(f"Extracted instrument_info: {comp_meta.instrument_info}")
-
-        # Extract format_specific for FlexImaging detection
-        if hasattr(comp_meta, "format_specific"):
-            metadata["format_specific"] = comp_meta.format_specific
-            logger.debug(f"Extracted format_specific: {comp_meta.format_specific}")
-
-        # Extract acquisition_params for additional detection
-        if hasattr(comp_meta, "acquisition_params"):
-            metadata["acquisition_params"] = comp_meta.acquisition_params
-            logger.debug(
-                f"Extracted acquisition_params: {comp_meta.acquisition_params}"
-            )
-
-    def _extract_spectrum_metadata(self, metadata: Dict[str, Any]) -> None:
-        """Extract ImzML-specific spectrum metadata."""
-        try:
-            if hasattr(self.reader, "get_spectrum_metadata"):
-                # Use cached spectrum metadata if available
-                if self._spectrum_metadata_cached is not None:
-                    spec_meta = self._spectrum_metadata_cached
-                else:
-                    spec_meta = self.reader.get_spectrum_metadata()
-                    self._spectrum_metadata_cached = spec_meta
-
-                if spec_meta:
-                    metadata.update(spec_meta)
-        except Exception as e:
-            logger.debug(f"Could not extract spectrum metadata: {e}")
 
     def convert(self) -> bool:
         """Run the base workflow; release the tables' scratch on every exit path.
@@ -1663,307 +1086,15 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         """Apply :meth:`build_uns_metadata` to an AnnData about to be written."""
         self.uns.apply(adata, self._uns_context())
 
-    def _calculate_bins_from_width(
-        self, min_mz: float, max_mz: float, axis_type
-    ) -> int:
-        """Calculate optimal number of bins from desired width at reference m/z.
-
-        Args:
-            min_mz: Minimum m/z of the mass range
-            max_mz: Maximum m/z of the mass range
-            axis_type: The axis type (determines physics-based spacing)
-
-        Returns:
-            Calculated number of bins
-        """
-        # Calculate bins based on axis type physics
-        if hasattr(axis_type, "value"):
-            axis_name = axis_type.value
-        else:
-            axis_name = str(axis_type).split(".")[-1].lower()
-
-        width_at_mz, reference_mz = _reference_params(self, axis_name)
-
-        logger.info(
-            f"Calculating bins for {width_at_mz*1000:.1f} mDa width at m/z {reference_mz:.1f}"
-        )
-
-        if axis_name == "reflector_tof":
-            # REFLECTOR_TOF: constant relative resolution (width ∝ m/z)
-            # relative_resolution = reference_mz / width_at_mz
-            # For logarithmic spacing: bins ≈ ln(max_mz/min_mz) * (reference_mz / width_at_mz)
-            relative_resolution = reference_mz / width_at_mz
-            bins = int(np.log(max_mz / min_mz) * relative_resolution)
-
-        elif axis_name == "tof":
-            # TOF: bin width = sqrt(A m + B m^2) / k. The generator carries
-            # the closed-form integral of 1 / width, so the count is exact.
-            a, b, k = _tof_plan(self)
-            bins = TOFAxisGenerator(a, b).bin_count(min_mz, max_mz, k)
-            logger.info(
-                "TOF width law A=%.4g mDa^2/Da, B=%.4g, %.2f bins per FWHM",
-                a,
-                b,
-                k,
-            )
-
-        elif axis_name == "linear_tof":
-            # LINEAR_TOF: bin width = k * sqrt(m/z), where k = width_at_mz / sqrt(reference_mz)
-            # Number of bins: n = (2/k) * (sqrt(max_mz) - sqrt(min_mz))
-            # This matches SCiLS Lab's "Linear TOF" mass axis calculation
-            k = width_at_mz / np.sqrt(reference_mz)
-            bins = int((2.0 / k) * (np.sqrt(max_mz) - np.sqrt(min_mz)))
-
-        elif axis_name == "orbitrap":
-            # ORBITRAP: bin_width = k * (m/z)^1.5 with k = width_at_mz /
-            # reference_mz^1.5. Integrating dm / w(m) over the range gives
-            #   bins = 2 * (1/sqrt(min_mz) - 1/sqrt(max_mz)) *
-            #          (reference_mz^1.5 / width_at_mz)
-            # The factor 2 comes from d(m^-0.5)/dm = -1/2 * m^-1.5 and was
-            # missing, which halved the bin count and made every bin twice
-            # the requested width.
-            scaling_factor = (reference_mz**1.5) / width_at_mz
-            bins = int(2 * (1 / np.sqrt(min_mz) - 1 / np.sqrt(max_mz)) * scaling_factor)
-
-        elif axis_name == "fticr":
-            # FTICR: width ∝ m/z^2, i.e. bin_width = k * (m/z)^2 with
-            # k = width_at_mz / reference_mz^2. FTICRAxisGenerator lays the
-            # axis out uniformly in 1/mz, so the bin count is the 1/mz span
-            # divided by the step k:
-            #   bins = (1/min_mz - 1/max_mz) * (reference_mz^2 / width_at_mz)
-            # Without this branch an FT-ICR axis took its bin count from the
-            # uniform formula below, so the realized width at reference_mz was
-            # not the width that was asked for.
-            scaling_factor = (reference_mz**2) / width_at_mz
-            bins = int((1 / min_mz - 1 / max_mz) * scaling_factor)
-
-        else:
-            # LINEAR/CONSTANT: uniform spacing
-            # bins = (max_mz - min_mz) / width_at_mz
-            bins = int((max_mz - min_mz) / width_at_mz)
-
-        # Ensure minimum bin count
-        bins = max(100, bins)
-
-        logger.info(f"Calculated {bins} bins for {axis_name} axis type")
-        return bins
-
-    def _get_reference_params(self, axis_type) -> Tuple[float, float]:
-        """Get reference width and m/z for the given axis type.
-
-        Explicit setting first, then the width the detected instrument
-        asked for, then the axis-type default; see :func:`_reference_params`.
-        """
-        if hasattr(axis_type, "value"):
-            axis_name = axis_type.value
-        else:
-            axis_name = str(axis_type).split(".")[-1].lower()
-        return _reference_params(self, axis_name)
-
-    def _resolve_resampling_plan(
-        self,
-    ) -> Tuple[float, float, Any, int]:
-        """Resolve mass range, axis type, and target bin count for resampling.
-
-        Single source of truth used by both ``_build_resampled_mass_axis`` and
-        the size estimator. Caches essential metadata lazily.
-
-        Returns:
-            (min_mz, max_mz, axis_type, target_bins)
-        """
-        if self._essential_metadata_cached is None:
-            self._essential_metadata_cached = self.reader.get_essential_metadata()
-
-        mass_range = self._essential_metadata_cached.mass_range
-        min_mz = mass_range[0] if self._min_mz is None else self._min_mz
-        max_mz = mass_range[1] if self._max_mz is None else self._max_mz
-
-        # An inverted range has no axis to lay. Unchecked, it built a
-        # descending one, dropped every peak against it, reported "4 of 3
-        # in the first spectrum affected" from a negative count, and
-        # succeeded with an empty store (issue #250).
-        if not (min_mz < max_mz):
-            raise ConversionRefused(
-                f"The resampling mass range [{min_mz:g}, {max_mz:g}] m/z is "
-                "empty: the minimum has to be below the maximum. "
-                + (
-                    "Both come from the source's own mass range."
-                    if self._min_mz is None and self._max_mz is None
-                    else "Check --resample-min-mz / --resample-max-mz."
-                )
-            )
-
-        tree = ResamplingDecisionTree()
-        if hasattr(self, "_manual_axis_type") and self._manual_axis_type is not None:
-            axis_type = self._manual_axis_type
-        else:
-            metadata = self._get_cached_metadata_for_resampling()
-            axis_type = tree.select_axis_type(metadata)
-            # A detector's width goes with the axis law it chose, so it is
-            # consulted only on the auto path and only when the caller has
-            # not set a width of their own.
-            if self._width_at_mz is None:
-                self._detected_reference_width = tree.select_reference_width(metadata)
-
-        _regate_tic_preserving(self, tree, axis_type)
-
-        # A TOF axis without the caller's own coefficients takes the pair
-        # the instrument declares -- on the auto path (an MRT centroid
-        # conversion) and when --mass-axis-type tof was asked for by name
-        # (a timsTOF opting in).
-        if axis_type is AxisType.TOF and (
-            getattr(self, "_tof_a", None) is None
-            or getattr(self, "_tof_b", None) is None
-        ):
-            self._detected_tof_law = tree.select_tof_law(
-                self._get_cached_metadata_for_resampling()
-            )
-        elif (
-            axis_type is not AxisType.TOF and getattr(self, "_tof_a", None) is not None
-        ):
-            logger.warning(
-                "--tof-law was given but the mass axis resolved to %s, which "
-                "does not use a width law; it is ignored. Pass "
-                "--mass-axis-type tof to use it.",
-                getattr(axis_type, "value", axis_type),
-            )
-
-        if self._width_at_mz is not None or self._target_bins is None:
-            target_bins = self._calculate_bins_from_width(min_mz, max_mz, axis_type)
-        else:
-            target_bins = self._target_bins
-
-        # A one-point axis has no bin width, and the log line that
-        # reports one reduced an empty array: "zero-size array to
-        # reduction operation minimum which has no identity", raised out
-        # of initialization rather than said as a refusal (issue #250).
-        if target_bins < 2:
-            raise ConversionRefused(
-                f"A mass axis needs at least 2 bins, got {target_bins}. "
-                "One point is a single m/z value, not an axis: it has no bin "
-                "width and nothing can be resampled onto it."
-            )
-
-        return min_mz, max_mz, axis_type, target_bins
-
-    def _build_resampled_mass_axis(self) -> None:
-        """Build resampled mass axis using physics-based generators."""
-        from ...resampling.common_axis import CommonAxisBuilder
-
-        min_mz, max_mz, axis_type, target_bins = self._resolve_resampling_plan()
-
-        # Determine reference parameters for physics generators
-        reference_width, reference_mz = self._get_reference_params(axis_type)
-
-        # Kept for provenance: the processing step must declare what was
-        # actually done, and with "auto" settings the requested config
-        # says nothing about the method, axis and bin width the decision
-        # tree resolved to.  See the uns assembler's processing provenance.
-        self._resolved_resampling_plan = {
-            "method": getattr(self, "_resampling_method", None),
-            "axis_type": axis_type,
-            "target_bins": target_bins,
-            "min_mz": min_mz,
-            "max_mz": max_mz,
-            "mass_width_da": reference_width,
-            "reference_mz": reference_mz,
-        }
-        tof_law: Optional[Tuple[float, float]] = None
-        if axis_type is AxisType.TOF:
-            a, b, k = _tof_plan(self)
-            tof_law = (a, b)
-            self._resolved_resampling_plan.update(
-                {"tof_a": a, "tof_b": b, "bins_per_fwhm": k}
-            )
-
-        if hasattr(self, "_manual_axis_type") and self._manual_axis_type is not None:
-            logger.info(f"Using manually specified axis type: {axis_type}")
-        else:
-            logger.info(f"Auto-detected axis type: {axis_type}")
-
-        logger.info(
-            f"Building resampled mass axis: {min_mz:.2f} - {max_mz:.2f} m/z, "
-            f"{target_bins} bins"
-        )
-
-        # Build the physics-based axis
-        builder = CommonAxisBuilder()
-
-        if hasattr(axis_type, "value") and axis_type.value != "constant":
-            # Use physics-based generator with reference parameters
-            mass_axis = builder.build_physics_axis(
-                min_mz=min_mz,
-                max_mz=max_mz,
-                num_bins=target_bins,
-                axis_type=axis_type,
-                reference_mz=reference_mz,
-                reference_width=reference_width,
-                tof_law=tof_law,
-            )
-            logger.info(
-                f"Built physics-based {axis_type} mass axis with "
-                f"{len(mass_axis.mz_values)} points"
-            )
-        else:
-            # Fall back to uniform axis
-            mass_axis = builder.build_uniform_axis(min_mz, max_mz, target_bins)
-            logger.info(
-                f"Built uniform mass axis with " f"{len(mass_axis.mz_values)} points"
-            )
-
-        # Override the parent's common mass axis
-        self._common_mass_axis = mass_axis.mz_values.astype(np.float64)
-        if self._common_mass_axis is None:
-            raise RuntimeError("Common mass axis is None after assignment")
-
-        # The range the bins were laid across, kept because a physics axis
-        # reports bin *centres* and so stops half a bin short of it at
-        # either end. It, not the axis's own span, is what decides whether
-        # a peak is in range -- see kept_mz_range() (issue #239).
-        self._axis_range = (float(min_mz), float(max_mz))
-
-        # Bin sizes for the log line, in chunks. ``np.diff`` over the whole
-        # axis is another float64 array of its length -- 1.6 GB on a 200M
-        # bin axis, allocated for two numbers in one INFO line (#251).
-        min_bin_size, max_bin_size = _bin_width_range(self._common_mass_axis)
-
-        # A positive narrowest gap is "strictly ascending", which the
-        # closed-form bin index needs and this log line already computed.
-        self._axis_linearisation = usable_linearisation(
-            mass_axis.linearisation, self._common_mass_axis, min_bin_size
-        )
-
-        # The axis and the operator that places spectra onto it are built
-        # together and never separately: the triple below is everything a
-        # strategy is allowed to know about the axis, and the method and
-        # the gap tolerance are everything it is allowed to know about the
-        # request. Nothing else in the converter decides what resampling
-        # does to a spectrum.
-        self._resampler = build_strategy(
-            self._resampling_method,
-            self._common_mass_axis,
-            self._axis_range,
-            self._axis_linearisation,
-            self._gap_tolerance_da,
-        )
-
-        min_bin_size *= 1000  # Convert to mDa
-        max_bin_size *= 1000
-
-        logger.info(
-            f"Resampled mass axis created: {len(self._common_mass_axis)} bins, "
-            f"range {self._common_mass_axis[0]:.2f}-{self._common_mass_axis[-1]:.2f} m/z, "
-            f"bin sizes {min_bin_size:.2f}-{max_bin_size:.2f} mDa ({axis_type})"
-        )
-
     def _initialize_conversion(self) -> None:
         """Override parent initialization to preserve resampled mass axis."""
         logger.info("Loading essential dataset information...")
         try:
             # Load essential metadata first (fast, single query for Bruker)
             essential = self.reader.get_essential_metadata()
-            # Cache for reuse during resampling setup
-            self._essential_metadata_cached = essential
+            # Hand it to the planner rather than let it ask again: on a
+            # Bruker source that is a query, not an attribute.
+            self.axis_planner.adopt_essential_metadata(essential)
 
             self._dimensions = essential.dimensions
             if any(d <= 0 for d in self._dimensions):
@@ -2037,66 +1168,47 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             raise
 
     def _setup_mass_axis(self) -> None:
-        """Set up the common mass axis (resampled or raw), and refuse one too wide.
+        """Adopt the common mass axis the planner settles, and check it.
 
-        The width is checked *before* the resampled axis is built, from
-        the bin count the plan resolved. Everything the conversion holds
-        per bin -- the axis, ``total_intensity``, ``avg_spectrum``, the
-        ``var`` frame, the count array, the column pointers -- comes to
-        about 200 bytes, so a wide axis is expensive long before the count
-        array's own 1 GiB ceiling notices: 200M bins on a six-pixel
-        dataset passed that ceiling and took 67.5 GB (issue #251). A raw
-        axis is checked too, after the reader hands it over, since the
-        per-bin structures are still ahead of it.
+        The planner decides which m/z values the store carries -- built
+        from the resampling plan, or the source's own under
+        ``--no-resample`` -- and hands back the axis together with the
+        three things the rest of the conversion has to know about it: the
+        range the bins were laid across, the coordinate the axis may be
+        indexed through, and the method the peaks are placed with. They
+        are adopted together, because the four must never describe
+        different axes.
+
+        The memory budget travels the other way: the planner asks
+        :meth:`_refuse_wide_mass_axis` at the moment a bin count becomes
+        knowable on each route, which is before a resampled axis is
+        materialised and after a raw one has been handed over (issue
+        #251). It stays here because what it projects is the per-bin cost
+        of the CSC assembly this converter writes, not anything about the
+        axis.
         """
-        config_status = "SET" if self._resampling_config else "NOT SET"
-        logger.info(f"Mass axis mode: resampling_config={config_status}")
-        if self._resampling_config:
-            # Build resampled mass axis now that reader metadata is loaded
-            logger.info(
-                "Building RESAMPLED mass axis (resampling enabled) - "
-                "will NOT iterate through all spectra"
-            )
-            self._refuse_wide_mass_axis(self._resolve_resampling_plan()[3])
-            self._build_resampled_mass_axis()
-            if self._common_mass_axis is None:
-                raise RuntimeError(
-                    "Common mass axis is None after resampled axis build"
-                )
-            logger.info(
-                f"Built resampled mass axis with " f"{len(self._common_mass_axis)} bins"
-            )
+        settled = self.axis_planner.settle(self._refuse_wide_mass_axis)
+        self._common_mass_axis = settled.axis
+        self._axis_range = settled.axis_range
+        self._axis_linearisation = settled.linearisation
+        self._resolved_resampling_plan = settled.provenance
+
+        # The axis and the operator that places spectra onto it are
+        # adopted together and never separately: the triple below is
+        # everything a strategy is allowed to know about the axis, and the
+        # method and the gap tolerance are everything it is allowed to
+        # know about the request. Nothing else in the converter decides
+        # what resampling does to a spectrum.
+        config = self._resampling_config
+        if settled.method is None or config is None:
+            self._resampler = None
         else:
-            # No resampling - load raw mass axis as usual
-            if self.reader.has_shared_mass_axis:
-                logger.info(
-                    "Loading RAW mass axis (no resampling) - "
-                    "continuous mode, reading m/z from first spectrum only"
-                )
-            else:
-                logger.warning(
-                    "Building RAW mass axis (no resampling) - "
-                    "processed mode, iterating ALL spectra to collect unique m/z values. "
-                    "This is slow for large datasets!"
-                )
-            self._common_mass_axis = self.reader.get_common_mass_axis()
-            # A raw union axis was laid by no generator, so there is no
-            # coordinate it is uniform in and every placement onto it is a
-            # search -- which is what _map_mass_to_indices does, and no
-            # strategy is built for it. Cleared beside the axis rather
-            # than left at its initial value: the two must never disagree
-            # about which axis a linearisation describes, and that is
-            # easier to keep true if every assignment to one is an
-            # assignment to both.
-            self._axis_linearisation = None
-            if len(self._common_mass_axis) == 0:
-                raise ConversionRefused(
-                    "Common mass axis is empty. Cannot proceed with conversion."
-                )
-            self._refuse_wide_mass_axis(len(self._common_mass_axis))
-            logger.info(
-                f"Using raw mass axis with "
-                f"{len(self._common_mass_axis)} unique m/z values"
+            self._resampler = build_strategy(
+                settled.method,
+                settled.axis,
+                settled.axis_range,
+                settled.linearisation,
+                config.gap_tolerance_da,
             )
 
         self._refuse_non_finite_axis()
