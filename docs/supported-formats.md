@@ -266,6 +266,21 @@ images -- a slide overview and one or two more beside the alignment scan -- and
 they are frequently `.jpg` rather than `.tif`; all of them are carried into the
 store, but only the named one gets the teaching points' coordinate space.
 
+**The alignment image is cropped to the section it aligns.** The scan the
+`.mis` names is the whole slide, and every `.d` cut from that slide names the
+same one, so a project of many sections used to hold as many copies of one
+photo, each right for its own section and centimetres off for the others. When
+a conversion covers exactly one region -- a single-region acquisition, or one
+region of a multi-region file selected with `region=` -- the store holds only
+that region's Area box plus a 10% margin, pyramided from the crop's size, and
+the element carries a translation by the crop's origin in front of the
+transform the whole scan would have had. Nothing on the MSI side changes: the
+raster-to-image affine, the pixel polygons and `coordinate_systems` keep
+describing the whole scan's pixel grid. The `optical_images` root attr records
+the crop's origin and size and the scan's full size under `crop`, so the whole
+slide can be found again without re-reading the `.d`. A multi-region file
+converted whole is embedded whole, as before.
+
 ## Waters MassLynx
 
 A `.raw` **directory** of `_FUNC*.DAT` files, read through the MassLynxRaw and
