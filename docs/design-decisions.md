@@ -13,7 +13,8 @@ given, so a future maintainer can repeat it.
 **Status vocabulary.** *Implemented* means the code on `main` does this.
 *Accepted* means the decision is made and recorded but the change has not
 shipped yet. *Deferred* means no change, with the condition that would reopen
-it stated.
+it stated. *Proposed* means the shape is written down but nothing is decided:
+the entry states what it waits on, and until that arrives it binds nothing.
 
 ---
 
@@ -1880,3 +1881,97 @@ reads as tidier and quietly makes a sibling table written beside a
 same bin (D21) at a cost no measurement would explain. The sinks still map
 peaks themselves rather than through `NearestNeighborStrategy.map_to_bins`;
 #353 closes that by giving them the strategy.
+
+---
+
+## D23. A metadata document does not need a pixel size (PROPOSED)
+
+**Proposal.** Split `msi_metadata` into a **core** every mass-spectrometry
+acquisition can fill and an **imaging profile** that adds what only a raster
+has. `ms_analysis.pixel_size_um`, today the schema's one required field,
+moves into the profile. A document that states no profile is a valid core
+document; a document that states the imaging profile must carry the pitch,
+exactly as every document does now.
+
+**Status:** Proposed 2026-09-18, not decided. It waits on a partner schema
+(below) so that the split lands where a layered model already in progress
+expects it, rather than being guessed at and then reconciled.
+
+### What forced it
+
+`thyra metadata` can now build the block from a source that will never be
+converted, and the first such source read was a Bruker `.d` from a run that
+imaged nothing. Everything the schema asks about the mass spectrometry was
+there -- instrument model, positive polarity, a 100 to 8000 mass range, one
+precursor at m/z 3888 isolated over a 10 Da window at two collision
+energies, the acquisition timestamp with its UTC offset, the method file
+name. What was not there was a pixel size, because there is no raster, and
+no number would be one: the document is invalid by construction, on its one
+required field, for a reason that is a property of the acquisition rather
+than a gap in it.
+
+That is not a bug in the document and it is not fixed by making the field
+optional. "Optional" would say a pitch may be missing from an *image*, which
+is exactly the thing conversion refuses to do (see
+[CLI Reference](cli.md#exit-status)) and exactly the field METASPACE
+requires. The distinction the schema is missing is not present/absent, it is
+*which kind of document this is*.
+
+### The shape proposed
+
+| Section | Core | Imaging profile adds |
+|---|---|---|
+| `sample` | whole section | -- |
+| `preparation` | whole section | -- |
+| `ms_analysis` | polarity, ionisation source, analyzer, instrument model, resolving power, ion mobility, fragmentation | `pixel_size_um` |
+| `acquisition` | `acquisition_datetime`, `method_file` | `laser_power_percent`, `laser_frequency_hz`, `shots_per_pixel` |
+| `processing` | whole section | -- |
+| `provenance` | whole section | -- |
+
+Three properties the split has to keep:
+
+1. **Every document Thyra writes into a store is an imaging document.** A
+   conversion refuses without a pitch, so nothing already on disk changes
+   meaning and nothing already written stops validating.
+2. **The METASPACE export stays a mirror of the imaging profile.** Its
+   `Pixel_Size` comes straight off `ms_analysis.pixel_size_um`, and
+   METASPACE is a platform for imaging data; an export of a core-only
+   document is not a submission with a field missing, it is not a
+   submission. The export should refuse it and say which profile it needs.
+3. **The shots-per-pixel fields go with the raster, not with the laser.**
+   `shots_per_pixel` is a count *per position*, which a run with no
+   positions cannot state; `laser_power_percent` and `laser_frequency_hz`
+   are settings an untargeted MALDI run has as much as an imaging one, but
+   they are reported today only by the three formats' imaging tables, and
+   promoting them into the core would put fields in it that nothing can
+   fill. They stay in the profile until a source fills them without a
+   raster.
+
+### The objection, and why it does not win yet
+
+**"Just make the field optional and be done."** One line of model change
+against a table of sections. It loses on what the document then says: an
+optional pitch makes "this is an image and nobody recorded the pitch"
+indistinguishable from "this is not an image", and the first of those is a
+defect a consumer must not silently accept. A profile makes the two
+different documents. The cost is that a consumer must look at which profile
+a document declares before reading `ms_analysis`, which is the cost of the
+distinction being real.
+
+### Why it is not decided here
+
+The community this came from is drafting a layered metadata guideline for
+native and ion-mobility MS -- a base schema for mass spectrometry with
+technology extensions on top -- and Thyra's schema is a candidate to be
+referenced from it. A split designed against that draft is one schema in two
+layers; a split designed ahead of it is two schemas that will have to be
+reconciled, and the reconciliation would land on stored documents. The draft
+has not arrived. So this entry records the shape and the constraints, and
+the change waits.
+
+**Known limit while it waits.** `thyra metadata` on a source with no raster
+writes a document, reports `ms_analysis.pixel_size_um: Field required`, and
+exits 1. That is honest and it is not usable in a pipeline that gates on the
+exit status. Anyone who needs such a document to pass validation today has
+to supply a pitch that is not a measurement, which is the thing this schema
+exists to avoid.
