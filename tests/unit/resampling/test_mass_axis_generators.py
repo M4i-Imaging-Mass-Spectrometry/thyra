@@ -156,8 +156,8 @@ class TestGeneratorInterface:
         axis. Nothing reached them, so they drifted: the FT-ICR variant
         computed its step as ``k / width_da`` instead of ``k``, two of them
         returned descending axes, and the Linear TOF one assigned its step
-        twice. Width-driven sizing goes through
-        ``_calculate_bins_from_width`` instead.
+        twice. Width-driven sizing goes through ``bin_count_for_width``
+        instead.
         """
         assert not hasattr(generator_cls(), removed)
 
@@ -184,16 +184,11 @@ class TestWidthPrediction:
     def test_prediction_matches_realized_width(
         self, generator_cls, axis_type, probe_mz
     ):
-        from types import SimpleNamespace
+        from thyra.resampling.axis_planner import bin_count_for_width
+        from thyra.resampling.types import ResamplingConfig
 
-        from thyra.converters.spatialdata.base_spatialdata_converter import (
-            BaseSpatialDataConverter,
-        )
-
-        stub = SimpleNamespace(_width_at_mz=WIDTH_AT_REF, _reference_mz=REFERENCE_MZ)
-        bins = BaseSpatialDataConverter._calculate_bins_from_width(
-            stub, MIN_MZ, MAX_MZ, axis_type
-        )
+        ask = ResamplingConfig(mass_width_da=WIDTH_AT_REF, reference_mz=REFERENCE_MZ)
+        bins = bin_count_for_width(ask, MIN_MZ, MAX_MZ, axis_type)
         mz = _build(axis_type, bins).mz_values
         widths = np.diff(mz)
         centres = (mz[:-1] + mz[1:]) / 2

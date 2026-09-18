@@ -396,7 +396,7 @@ class PhiToFSIMSDetector(InstrumentDetector):
     # :class:`WatersMRTCentroidDetector`: a TOF axis is sized in bins per
     # peak width, and the law plus ``DEFAULT_BINS_PER_FWHM`` already fix the
     # width at every m/z. A width declared here would be a second spelling
-    # of the same quantity, and ``_reference_params`` would never read it --
+    # of the same quantity, and ``reference_params`` would never read it --
     # it answers for a ``tof`` axis before it consults a detector's width.
 
     @property

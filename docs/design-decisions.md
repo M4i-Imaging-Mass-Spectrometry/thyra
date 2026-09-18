@@ -1630,7 +1630,7 @@ oversampled. This matches how the MRT and timsTOF pairs were derived.
 **Why `get_reference_width` stays `None`.** A `tof` axis is sized in bins per
 peak width, so the law and `DEFAULT_BINS_PER_FWHM` already fix the bin width at
 every m/z. Declaring a width as well would be a second spelling of the same
-quantity, and `_reference_params` answers for a `tof` axis before it ever
+quantity, and `reference_params` answers for a `tof` axis before it ever
 consults a detector's width -- it would be dead code. Same reasoning as
 `WatersMRTCentroidDetector`.
 
@@ -1828,7 +1828,7 @@ acceptance test -- every stored byte unchanged -- so it went first, in two
 steps: PR #366 moved the pure functions into `thyra/resampling/`, this one
 moved the state and the methods that read it. What the split buys is the
 contract above. `build_strategy`'s middle three arguments are exactly the
-triple the `AxisPlanner` of #352 will return, so the planner can be lifted
+triple the `AxisPlanner` of #352 returns, so the planner could be lifted
 out without the operator noticing, and the operator became testable
 without standing up a converter: the test files that drove it stopped
 posing as one through `SimpleNamespace` and `MethodType` and construct a
@@ -1870,7 +1870,7 @@ than once per spectrum.
 **What the strategy is not given.** The axis's linearisation is not the
 strategy's to own, even though the binning strategy is the only thing that
 uses it to resample. It is a property of the axis -- one of the triple
-`AxisPlanner` will return -- and the sibling sinks place peaks onto that
+`AxisPlanner` returns -- and the sibling sinks place peaks onto that
 same axis whichever method the spectra took, including an interpolated
 one. So the converter keeps it as `_axis_linearisation`, assigned and
 cleared beside the axis itself, and passes a copy to `build_strategy`.

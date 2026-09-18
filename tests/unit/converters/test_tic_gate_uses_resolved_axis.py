@@ -31,9 +31,7 @@ from __future__ import annotations
 
 import pytest
 
-from thyra.converters.spatialdata.base_spatialdata_converter import (
-    BaseSpatialDataConverter,
-)
+from thyra.resampling.axis_planner import AxisPlanner
 from thyra.resampling.decision_tree import ResamplingDecisionTree
 from thyra.resampling.types import AxisType, ResamplingConfig, ResamplingMethod
 
@@ -43,47 +41,18 @@ from thyra.resampling.types import AxisType, ResamplingConfig, ResamplingMethod
 _RAPIFLEX = {"format_specific": {"format": "Rapiflex"}}
 
 
-class _EssentialMetadata:
-    """Only the field ``_resolve_resampling_plan`` reads."""
+def _planner(metadata, *, axis_type=None, method=None) -> AxisPlanner:
+    """A planner over one source, carrying the caller's two flags.
 
-    def __init__(self, mass_range=(300.0, 1100.0)):
-        self.mass_range = mass_range
-
-
-class _Converter:
-    """Just enough converter to run the two methods under test.
-
-    ``_setup_resampling`` picks the method; ``_resolve_resampling_plan``
-    settles the axis. The bug lives in the gap between them, so the test has
-    to run both in order rather than either alone.
+    The gate lives in the gap between two decisions the planner makes in
+    order -- the method, settled when it is built, and the axis, settled
+    by ``resolve()`` -- so the test has to run both rather than either
+    alone.
     """
-
-    def __init__(self, metadata, *, axis_type=None, method=None):
-        self._resampling_config = ResamplingConfig(
-            method=method, axis_type=axis_type, mass_width_da=0.1
-        )
-        self._metadata = metadata
-        self._resampling_method = None
-        self._resampling_metadata_cached = metadata
-        self._essential_metadata_cached = _EssentialMetadata()
-
-    def _get_reader_metadata_for_resampling(self):
-        return self._metadata
-
-    _get_cached_metadata_for_resampling = (
-        BaseSpatialDataConverter._get_cached_metadata_for_resampling
+    return AxisPlanner.from_metadata(
+        {"essential_metadata": {"mass_range": (300.0, 1100.0)}, **metadata},
+        ResamplingConfig(method=method, axis_type=axis_type, mass_width_da=0.1),
     )
-    _setup_resampling = BaseSpatialDataConverter._setup_resampling
-    _warn_if_override_contradicts_detector = (
-        BaseSpatialDataConverter._warn_if_override_contradicts_detector
-    )
-    _resolve_resampling_plan = BaseSpatialDataConverter._resolve_resampling_plan
-    _get_reference_params = BaseSpatialDataConverter._get_reference_params
-    _calculate_bins_from_width = BaseSpatialDataConverter._calculate_bins_from_width
-
-    def plan(self):
-        self._setup_resampling()
-        return self._resolve_resampling_plan()
 
 
 class TestTheGateAtTheDecisionTree:
@@ -121,19 +90,19 @@ class TestTheGateThroughTheConverter:
 
     def test_axis_override_downgrades_the_auto_selected_method(self):
         """#286. ``--mass-axis-type fticr`` alone, method left on auto."""
-        converter = _Converter(_RAPIFLEX, axis_type=AxisType.FTICR)
-        _, _, axis_type, _ = converter.plan()
+        planner = _planner(_RAPIFLEX, axis_type=AxisType.FTICR)
+        axis_type = planner.resolve().axis_type
 
         assert axis_type is AxisType.FTICR, "the override still decides the axis"
-        assert converter._resampling_method is ResamplingMethod.NEAREST_NEIGHBOR
+        assert planner.method is ResamplingMethod.NEAREST_NEIGHBOR
 
     def test_without_an_override_tic_preserving_survives(self):
         """The control. Rapiflex on its own axis is the exact case."""
-        converter = _Converter(_RAPIFLEX)
-        _, _, axis_type, _ = converter.plan()
+        planner = _planner(_RAPIFLEX)
+        axis_type = planner.resolve().axis_type
 
         assert axis_type is AxisType.CONSTANT
-        assert converter._resampling_method is ResamplingMethod.TIC_PRESERVING
+        assert planner.method is ResamplingMethod.TIC_PRESERVING
 
     def test_an_explicit_method_is_still_honoured(self):
         """D15: an explicit method is the caller's decision, warned not moved.
@@ -142,20 +111,20 @@ class TestTheGateThroughTheConverter:
         ``tic_preserving`` here would silently overrule the caller, which is
         the behaviour #246 deliberately rejected.
         """
-        converter = _Converter(
+        planner = _planner(
             _RAPIFLEX,
             axis_type=AxisType.FTICR,
             method=ResamplingMethod.TIC_PRESERVING,
         )
-        _, _, axis_type, _ = converter.plan()
+        axis_type = planner.resolve().axis_type
 
         assert axis_type is AxisType.FTICR
-        assert converter._resampling_method is ResamplingMethod.TIC_PRESERVING
+        assert planner.method is ResamplingMethod.TIC_PRESERVING
 
     def test_a_matching_explicit_axis_is_not_disturbed(self):
         """Naming the axis the detector would have picked changes nothing."""
-        converter = _Converter(_RAPIFLEX, axis_type=AxisType.CONSTANT)
-        _, _, axis_type, _ = converter.plan()
+        planner = _planner(_RAPIFLEX, axis_type=AxisType.CONSTANT)
+        axis_type = planner.resolve().axis_type
 
         assert axis_type is AxisType.CONSTANT
-        assert converter._resampling_method is ResamplingMethod.TIC_PRESERVING
+        assert planner.method is ResamplingMethod.TIC_PRESERVING

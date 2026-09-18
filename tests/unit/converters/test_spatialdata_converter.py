@@ -457,84 +457,68 @@ class TestSparseFormatIsGone:
 
 
 class TestNormalizeResamplingConfig:
-    """Tests for _normalize_resampling_config."""
+    """Tests for normalize_resampling_config."""
 
     def test_passthrough_dataclass(self):
         """Passing a ResamplingConfig returns it unchanged."""
-        from thyra.converters.spatialdata.base_spatialdata_converter import (
-            _normalize_resampling_config,
-        )
+        from thyra.resampling.axis_planner import normalize_resampling_config
         from thyra.resampling.types import ResamplingConfig
 
         cfg = ResamplingConfig(target_bins=500)
-        result = _normalize_resampling_config(cfg)
+        result = normalize_resampling_config(cfg)
         assert result is cfg
 
     def test_dict_target_bins(self):
         """Dict with target_bins converts correctly."""
-        from thyra.converters.spatialdata.base_spatialdata_converter import (
-            _normalize_resampling_config,
-        )
+        from thyra.resampling.axis_planner import normalize_resampling_config
         from thyra.resampling.types import ResamplingConfig
 
-        result = _normalize_resampling_config({"target_bins": 2000})
+        result = normalize_resampling_config({"target_bins": 2000})
         assert isinstance(result, ResamplingConfig)
         assert result.target_bins == 2000
 
     def test_dict_method_nearest_neighbor(self):
         """Dict method string maps to ResamplingMethod enum."""
-        from thyra.converters.spatialdata.base_spatialdata_converter import (
-            _normalize_resampling_config,
-        )
+        from thyra.resampling.axis_planner import normalize_resampling_config
         from thyra.resampling.types import ResamplingMethod
 
-        result = _normalize_resampling_config({"method": "nearest_neighbor"})
+        result = normalize_resampling_config({"method": "nearest_neighbor"})
         assert result.method == ResamplingMethod.NEAREST_NEIGHBOR
 
     def test_dict_auto_method_becomes_none(self):
         """method='auto' maps to None (use default)."""
-        from thyra.converters.spatialdata.base_spatialdata_converter import (
-            _normalize_resampling_config,
-        )
+        from thyra.resampling.axis_planner import normalize_resampling_config
 
-        result = _normalize_resampling_config({"method": "auto"})
+        result = normalize_resampling_config({"method": "auto"})
         assert result.method is None
 
     def test_dict_width_at_mz_maps_to_mass_width_da(self):
         """Dict key width_at_mz maps to ResamplingConfig.mass_width_da."""
-        from thyra.converters.spatialdata.base_spatialdata_converter import (
-            _normalize_resampling_config,
-        )
+        from thyra.resampling.axis_planner import normalize_resampling_config
 
-        result = _normalize_resampling_config({"width_at_mz": 0.01})
+        result = normalize_resampling_config({"width_at_mz": 0.01})
         assert result.mass_width_da == 0.01
 
     def test_dict_reference_mz_default(self):
         """reference_mz defaults to 1000.0 when not supplied."""
-        from thyra.converters.spatialdata.base_spatialdata_converter import (
-            _normalize_resampling_config,
-        )
+        from thyra.resampling.axis_planner import normalize_resampling_config
 
-        result = _normalize_resampling_config({})
+        result = normalize_resampling_config({})
         assert result.reference_mz == 1000.0
 
     def test_dict_reference_mz_custom(self):
         """Explicit reference_mz is preserved."""
-        from thyra.converters.spatialdata.base_spatialdata_converter import (
-            _normalize_resampling_config,
-        )
+        from thyra.resampling.axis_planner import normalize_resampling_config
 
-        result = _normalize_resampling_config({"reference_mz": 500.0})
+        result = normalize_resampling_config({"reference_mz": 500.0})
         assert result.reference_mz == 500.0
 
     def test_dict_axis_type_string(self):
         """axis_type string maps to AxisType enum."""
-        from thyra.converters.spatialdata.base_spatialdata_converter import (
-            _normalize_resampling_config,
-        )
+        from thyra.resampling.axis_planner import normalize_resampling_config
         from thyra.resampling.types import AxisType
 
-        result = _normalize_resampling_config({"axis_type": "orbitrap"})
+        result = normalize_resampling_config({"axis_type": "orbitrap"})
         assert result.axis_type == AxisType.ORBITRAP
 
 

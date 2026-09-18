@@ -180,9 +180,12 @@ def _probe_escdat(path: Path) -> bool:
 def _resampling_metadata_dict(essential: Any, comprehensive: Any) -> Dict[str, Any]:
     """Build the dict shape that ``ResamplingDecisionTree`` expects.
 
-    Mirrors ``BaseSpatialDataConverter._get_reader_metadata_for_resampling``
+    Mirrors :meth:`~thyra.resampling.axis_planner.AxisPlanner.detection_metadata`
     so the preview's auto-detection matches what the conversion would
-    actually do.
+    actually do. The planner reads the same fields off a reader it holds;
+    a preview already has the two metadata objects in hand and must not
+    touch the spectra, which is why the shape is built twice rather than
+    shared.
     """
     metadata: Dict[str, Any] = {}
 

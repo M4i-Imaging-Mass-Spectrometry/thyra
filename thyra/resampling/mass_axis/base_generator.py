@@ -15,7 +15,7 @@ class BaseAxisGenerator(ABC):
     A generator distributes ``target_bins`` bins across a mass range
     according to one analyser's spacing law. It does not decide *how many*
     bins to use: that comes from
-    ``BaseSpatialDataConverter._calculate_bins_from_width``, which
+    :func:`~thyra.resampling.axis_planner.bin_count_for_width`, which
     integrates ``1 / width(m)`` over the range so the width realized at
     ``reference_mz`` is the width the caller asked for. Generators are
     reached through :meth:`~thyra.resampling.common_axis.CommonAxisBuilder.build_physics_axis`.

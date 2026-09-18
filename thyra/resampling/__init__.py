@@ -5,6 +5,12 @@ imaging data to common mass axes, enabling consistent analysis across
 pixels and datasets.
 """
 
+from .axis_planner import (
+    AxisPlan,
+    AxisPlanner,
+    SettledAxis,
+    normalize_resampling_config,
+)
 from .common_axis import CommonAxisBuilder
 from .constants import BinaryDataType, ImzMLAccessions, SpectrumType, Thresholds
 from .data_characteristics import DataCharacteristics
@@ -37,6 +43,11 @@ __all__ = [
     # Decision tree and strategies
     "ResamplingDecisionTree",
     "CommonAxisBuilder",
+    # The axis decision
+    "AxisPlanner",
+    "AxisPlan",
+    "SettledAxis",
+    "normalize_resampling_config",
     # Per-spectrum operators (Strategy pattern)
     "ResamplingStrategy",
     "NearestNeighborStrategy",
