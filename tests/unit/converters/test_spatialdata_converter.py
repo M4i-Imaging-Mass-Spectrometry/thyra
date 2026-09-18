@@ -193,7 +193,7 @@ class TestSpatialDataConverter:
                 assert dense[60] == 200.0  # y * 10 + 50
                 assert np.count_nonzero(dense) == 2, "zeros are not stored"
         finally:
-            converter._release_table_scratch()
+            converter.siblings.release_scratch()
 
     def test_the_volume_row_index_carries_z(self, temp_dir):
         """Two pixels at the same (x, y) on different planes get different rows."""
@@ -215,7 +215,7 @@ class TestSpatialDataConverter:
             obs = converter._table_obs(unit)
             assert obs["z"].tolist() == [0] * 9 + [1] * 9
         finally:
-            converter._release_table_scratch()
+            converter.siblings.release_scratch()
 
     def test_finalize_builds_the_plane_elements(self, temp_dir):
         """Tables, shapes and TIC images, one set per plane, for real."""
@@ -254,7 +254,7 @@ class TestSpatialDataConverter:
             assert data_structures.images["test_dataset_z0_tic"].shape == (1, 3, 3)
             assert len(data_structures.shapes["test_dataset_z0_pixels"]) == 9
         finally:
-            converter._release_table_scratch(data_structures.tables)
+            converter.siblings.release_scratch(data_structures.tables)
 
     def test_finalize_builds_the_volume_elements(self, temp_dir):
         """One table with depth in obs, one 3D TIC image."""
@@ -281,7 +281,7 @@ class TestSpatialDataConverter:
             ]
             assert data_structures.images["msi_dataset_tic"].shape == (1, 2, 3, 3)
         finally:
-            converter._release_table_scratch(data_structures.tables)
+            converter.siblings.release_scratch(data_structures.tables)
 
     @patch(
         "thyra.converters.spatialdata.base_spatialdata_converter.zarr.consolidate_metadata"

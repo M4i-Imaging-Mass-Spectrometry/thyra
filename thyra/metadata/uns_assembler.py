@@ -62,7 +62,7 @@ logger = logging.getLogger(__name__)
 
 
 #: How far the heatmap's total may sit from the stored mean spectrum's and
-#: still be called equal. Looser than the converter's
+#: still be called equal. Looser than the sibling tables'
 #: ``_MARGINAL_TOLERANCE`` because the two are not the same sum reordered:
 #: the heatmap coarsens the mass axis by an integer factor and clips
 #: mobility into the edge channels, so float32 storage of the counts sets
@@ -619,7 +619,7 @@ class UnsAssembler:
         """Take a declined sibling's key back out of every table that names it.
 
         The alternative was to decide before naming -- hoist whatever makes
-        a builder decline up into the converter's ``_plan_mobility_table``
+        a builder decline up into ``SiblingTables._plan_mobility_table``
         and ``_plan_msms_table``, so a table that will not be built is
         never named. That is the cleaner shape and it is not the one
         taken: the two builders decline at eight separate points across
