@@ -1784,3 +1784,99 @@ a cliff" -- is answered above by derivation rather than by more sampling.
 searches. The sibling tables search. `--no-resample` maps through a
 different function altogether (`_map_mass_to_indices`, an exact-match
 search over the raw union axis) and is untouched.
+
+---
+
+## D22. The converter holds one resampling strategy
+
+**Status:** Implemented (2026-09-17).
+
+**Decision.** A conversion that resamples builds exactly one
+`ResamplingStrategy` when it builds its mass axis, and calls it once per
+spectrum per pass. The strategy is the whole per-spectrum operator:
+`NearestNeighborStrategy` bins, `TICPreservingStrategy` interpolates and
+rescales, both answer `resample(mzs, intensities)` with the bins that
+spectrum fills and nothing else, and both carry the out-of-range counter
+and its warn-once line. The converter reaches them through one factory,
+`build_strategy(method, axis, axis_range, linearisation, gap_tolerance_da)`
+in `thyra.resampling.strategies`, and holds the result as `_resampler`.
+Six private methods and five pieces of state leave
+`base_spatialdata_converter.py` with them. `--no-resample` is not a
+strategy: it maps onto the reader's own axis through
+`_map_mass_to_indices`, which stays on the converter. Issues #277 and #352.
+
+**Why the package that already bore these names could not be wired in.**
+It did the opposite thing with intensity. The old `NearestNeighborStrategy`
+*interpolated*: each target point took the intensity of the nearest source
+point, so a lone source peak was copied onto every target point closer to
+it than to any other, and the summed intensity scaled with how densely the
+target axis was laid. The conversion has always *binned*: each source peak
+lands in exactly one target bin and the total is preserved. The two classes
+shared a name, a module and nothing else -- the converter never imported
+them, `docs/api.md` never rendered them, and the old `TICPreservingStrategy`
+was a second copy of the interpolating operator that had already drifted
+(it lacked the declared `axis_range`, so it still carried #239's edge-bin
+bug after the converter's copy was fixed). Making the strategies real
+therefore meant replacing the class bodies with the converter's, not
+teaching the converter to call what was there. The meaning of the name
+changed; with zero consumers that is a changelog line rather than a break.
+
+**Why the operator moved before the axis planner.** #276 splits this
+converter along two seams: what decides the axis, and what places a
+spectrum on it. The operator is the smaller half and the one with a hard
+acceptance test -- every stored byte unchanged -- so it went first, in two
+steps: PR #366 moved the pure functions into `thyra/resampling/`, this one
+moved the state and the methods that read it. What the split buys is the
+contract above. `build_strategy`'s middle three arguments are exactly the
+triple the `AxisPlanner` of #352 will return, so the planner can be lifted
+out without the operator noticing, and the operator became testable
+without standing up a converter: the test files that drove it stopped
+posing as one through `SimpleNamespace` and `MethodType` and construct a
+strategy instead.
+
+**Why the contract is sparse.** `resample` returns unique ascending bin
+indices and their non-zero values, never an array of the axis's length.
+The dense form of the TIC-preserving method was 35x the cost of reading a
+zero-suppressed profile source, in the words of the comment that survives
+on `_process_spectrum`: a Waters MRT pixel stores about 15,000 samples
+against a 1.05M-bin axis, and every other bin interpolates to exactly
+zero. The dense array is available from `to_dense` for the callers that
+want one, so no strategy has to build it for a caller that does not.
+
+**What was measured.** Store identity, with `tests/tools/store_identity.py`
+(#349), against `origin/main` at `8f16d89`: `pea` (imzML, nearest
+neighbour, shared-axis cache), a TDF with mobility sibling tables, a
+TIMS-off TDF, the same imzML at `--mass-axis-type constant` (the route
+#356 made linearised), and the TDF again at `--resample-method
+tic_preserving`. Both strategies, both mapping routes -- closed form and
+search -- and the sibling sinks under an interpolated conversion are
+covered. Five dataset-runs, and zero Zarr elements differ in any pair.
+That is the acceptance criterion for the whole #276 decomposition, and it
+is what makes the change of meaning above safe to assert rather than hope.
+
+Cost on the hot path: `pea.imzML` with `--no-optical`, five warm runs per
+side, interleaved so machine drift cancels -- 12.13 s median here against
+12.28 s on `main`, a 1.2% difference in this change's favour. That is
+noise, and the honest way to say so is to report what measuring it badly
+gave: run in blocks instead of interleaved, minutes apart, the same pair
+came out 1.8% the other way. It should be a wash either way. The call the
+strategy replaced was already one Python-level dispatch per spectrum --
+the `_nn_route` flag `__init__` resolved once for exactly that reason --
+so the bound method on `_resampler` costs the same lookup and everything
+inside it is the code that was already there. The one real difference is
+that the kept range is computed once when the strategy is built rather
+than once per spectrum.
+
+**What the strategy is not given.** The axis's linearisation is not the
+strategy's to own, even though the binning strategy is the only thing that
+uses it to resample. It is a property of the axis -- one of the triple
+`AxisPlanner` will return -- and the sibling sinks place peaks onto that
+same axis whichever method the spectra took, including an interpolated
+one. So the converter keeps it as `_axis_linearisation`, assigned and
+cleared beside the axis itself, and passes a copy to `build_strategy`.
+Deriving it back out of the strategy instead was tried and rejected: it
+reads as tidier and quietly makes a sibling table written beside a
+`tic_preserving` conversion search where it used to compute, which is the
+same bin (D21) at a cost no measurement would explain. The sinks still map
+peaks themselves rather than through `NearestNeighborStrategy.map_to_bins`;
+#353 closes that by giving them the strategy.

@@ -2,12 +2,12 @@
 
 Thyra interpolates spectra onto a common mass axis in one place,
 ``tic_preserving_sparse`` in ``thyra/resampling/interpolation.py``, which
-the converter's ``BaseSpatialDataConverter._tic_preserving_resample`` calls;
-it used to be two (the converter's inline copy and a public
-``TICPreservingStrategy``), they drifted, the converter lost its rescaling
-step, and keeping the rule in this module is what stopped that happening
-again and is what the strategy classes being rebuilt on the same function
-(issue #277) will share.
+``TICPreservingStrategy`` calls and the conversion reaches only through
+that class; it used to be two (an inline copy on the converter and a
+public strategy that shared nothing with it), they drifted, the converter
+lost its rescaling step, and keeping the rule in this module is what
+stopped that happening again and what the one remaining strategy is built
+on (issue #277).
 
 Why rescaling is needed at all
 ------------------------------

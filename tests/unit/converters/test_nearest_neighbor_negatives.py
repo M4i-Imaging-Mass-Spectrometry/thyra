@@ -1,7 +1,7 @@
 # tests/unit/converters/test_nearest_neighbor_negatives.py
 """``nearest_neighbor`` must not silently discard negative bins.
 
-``_nearest_neighbor_resample`` accumulates each source peak into its nearest
+``NearestNeighborStrategy`` accumulates each source peak into its nearest
 target bin and then keeps the bins that hold something. That filter used to
 be ``accumulated > 0``, which drops a bin whose accumulated value came out
 negative -- and dropping it raises the stored total ion current above the
@@ -14,20 +14,15 @@ practice, but the invariant is cheap to hold and the failure would be silent.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import numpy as np
 import pytest
 
-from thyra.converters.spatialdata.base_spatialdata_converter import (
-    BaseSpatialDataConverter,
-)
+from thyra.resampling.strategies import NearestNeighborStrategy
 
 
 def _resample(axis, mzs, intensities):
-    stub = SimpleNamespace(_common_mass_axis=axis)
-    return BaseSpatialDataConverter._nearest_neighbor_resample(
-        stub, np.asarray(mzs, float), np.asarray(intensities, float)
+    return NearestNeighborStrategy(axis, None).resample(
+        np.asarray(mzs, float), np.asarray(intensities, float)
     )
 
 

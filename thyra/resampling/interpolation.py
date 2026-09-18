@@ -89,7 +89,8 @@ def tic_preserving_sparse(
 ) -> Tuple[NDArray[np.int_], NDArray[np.float64]]:
     """TIC-preserving resampling, evaluated only where it can be non-zero.
 
-    This is the operator ``BaseSpatialDataConverter._tic_preserving_resample``
+    This is the operator
+    :class:`~thyra.resampling.strategies.tic_preserving.TICPreservingStrategy`
     documents -- interpolate onto the axis, zero unsupported bins, rescale to
     the preserved TIC -- restricted to the axis points
     :func:`tic_support_bins` reports. Every other axis point interpolates
@@ -113,8 +114,9 @@ def tic_preserving_sparse(
             entitled to carry. ``None`` falls back to the axis's own span.
             See :func:`thyra.resampling.binning.kept_mz_range`: the two
             resampling methods have to agree on what the axis covers, so
-            this is the same range ``_nearest_neighbor_resample`` keeps
-            peaks inside.
+            this is the same range
+            :class:`~thyra.resampling.strategies.nearest_neighbor.NearestNeighborStrategy`
+            keeps peaks inside.
 
     Returns:
         ``(bin_indices, intensities)`` holding only the non-zero bins,

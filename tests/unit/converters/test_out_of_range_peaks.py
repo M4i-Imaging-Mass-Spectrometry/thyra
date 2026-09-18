@@ -1,7 +1,8 @@
 # tests/unit/converters/test_out_of_range_peaks.py
 """Peaks outside the target mass range are dropped, not folded into the edges.
 
-``_nearest_neighbor_resample`` clipped every source index into
+The converter's ``_nearest_neighbor_resample``, which is the body
+``NearestNeighborStrategy`` now carries, clipped every source index into
 ``[0, len(axis) - 1]`` and then accumulated with ``np.bincount``, so a peak
 below the axis was *added to bin 0* and one above it to the last bin.
 Narrowing the mass range -- what ``--resample-min-mz`` and
@@ -26,34 +27,16 @@ disagreeing about what the axis covers.
 from __future__ import annotations
 
 import logging
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-from thyra.converters.spatialdata.base_spatialdata_converter import (
-    BaseSpatialDataConverter,
-)
+from thyra.resampling.strategies import NearestNeighborStrategy, TICPreservingStrategy
 
 
-def _stub(axis):
-    """The converter's resampling surface, without building a converter.
-
-    Same pattern as ``test_nearest_neighbor_negatives.py``; the reporting
-    helper is bound onto it so the count and the one-shot warning are the
-    real ones rather than a test double.
-    """
-    stub = SimpleNamespace(
-        _common_mass_axis=np.asarray(axis, float),
-        _out_of_range_peaks=0,
-        _out_of_range_warned=False,
-    )
-    stub._count_out_of_range = (
-        lambda n_dropped, n_total: BaseSpatialDataConverter._count_out_of_range(
-            stub, n_dropped, n_total
-        )
-    )
-    return stub
+def _strategy(axis):
+    """The nearest-neighbour operator over one axis, counting and warning."""
+    return NearestNeighborStrategy(np.asarray(axis, float), None)
 
 
 class _CaptureWarnings:
@@ -64,7 +47,7 @@ class _CaptureWarnings:
     that state behind, so records never reach pytest's root handler.
     """
 
-    LOGGER = "thyra.converters.spatialdata.base_spatialdata_converter"
+    LOGGER = "thyra.resampling.strategies.base"
 
     def __init__(self):
         self.messages: list[str] = []
@@ -89,10 +72,8 @@ class _CaptureWarnings:
         return False
 
 
-def _resample(stub, mzs, intensities):
-    return BaseSpatialDataConverter._nearest_neighbor_resample(
-        stub, np.asarray(mzs, float), np.asarray(intensities, float)
-    )
+def _resample(strategy, mzs, intensities):
+    return strategy.resample(np.asarray(mzs, float), np.asarray(intensities, float))
 
 
 class TestEdgeBinsHoldOnlyWhatBelongsThere:
@@ -103,27 +84,27 @@ class TestEdgeBinsHoldOnlyWhatBelongsThere:
     INTENSITIES = [1000.0, 7.0, 11.0, 5000.0]
 
     def test_stored_total_is_the_in_range_peaks_only(self):
-        _, values = _resample(_stub(self.AXIS), self.MZS, self.INTENSITIES)
+        _, values = _resample(_strategy(self.AXIS), self.MZS, self.INTENSITIES)
 
         # 1090.0 before: the out-of-range 1000 and 5000 were kept.
         assert values.sum() == pytest.approx(7.0 + 11.0)
 
     def test_neither_edge_bin_exceeds_its_own_peak(self):
-        indices, values = _resample(_stub(self.AXIS), self.MZS, self.INTENSITIES)
+        indices, values = _resample(_strategy(self.AXIS), self.MZS, self.INTENSITIES)
         stored = dict(zip(indices.tolist(), values.tolist()))
 
         assert stored[0] == pytest.approx(7.0)  # was 1007.0
         assert stored[len(self.AXIS) - 1] == pytest.approx(11.0)  # was 5011.0
 
     def test_a_spectrum_entirely_outside_the_axis_stores_nothing(self):
-        indices, values = _resample(_stub(self.AXIS), [50.0, 300.0], [9.0, 9.0])
+        indices, values = _resample(_strategy(self.AXIS), [50.0, 300.0], [9.0, 9.0])
 
         assert indices.size == 0
         assert values.size == 0
 
     def test_the_endpoints_themselves_are_in_range(self):
         """Strict span means inclusive of both ends, not exclusive."""
-        indices, values = _resample(_stub(self.AXIS), [100.0, 110.0], [3.0, 4.0])
+        indices, values = _resample(_strategy(self.AXIS), [100.0, 110.0], [3.0, 4.0])
 
         assert sorted(indices.tolist()) == [0, len(self.AXIS) - 1]
         assert values.sum() == pytest.approx(7.0)
@@ -136,7 +117,9 @@ class TestEdgeBinsHoldOnlyWhatBelongsThere:
         would have kept these; the rule reaches the declared bound and
         stops.
         """
-        indices, _ = _resample(_stub(self.AXIS), [100.0 - 1e-9, 110.0 + 1e-9], [3, 4])
+        indices, _ = _resample(
+            _strategy(self.AXIS), [100.0 - 1e-9, 110.0 + 1e-9], [3, 4]
+        )
 
         assert indices.size == 0
 
@@ -149,20 +132,20 @@ class TestNothingChangesWhenEverythingIsInRange:
         mzs = [300.0, 500.0, 700.0]
         intensities = [1.0, 2.0, 3.0]
 
-        indices, values = _resample(_stub(axis), mzs, intensities)
+        indices, values = _resample(_strategy(axis), mzs, intensities)
 
         assert indices.size == 3
         assert values.sum() == pytest.approx(6.0)
 
     def test_no_warning_when_nothing_is_dropped(self):
         axis = np.linspace(250.0, 1200.0, 5_000)
-        stub = _stub(axis)
+        strategy = _strategy(axis)
 
         with _CaptureWarnings() as captured:
-            _resample(stub, [300.0, 700.0], [1.0, 2.0])
+            _resample(strategy, [300.0, 700.0], [1.0, 2.0])
 
-        assert stub._out_of_range_peaks == 0
-        assert not stub._out_of_range_warned
+        assert strategy.out_of_range_peaks == 0
+        assert not strategy._out_of_range_warned
         assert captured.messages == []
 
 
@@ -170,19 +153,19 @@ class TestTheDropIsReported:
     """Silence is what made this survive; the drop has to say so once."""
 
     def test_the_count_accumulates(self):
-        stub = _stub(np.linspace(100.0, 110.0, 11))
+        strategy = _strategy(np.linspace(100.0, 110.0, 11))
 
-        _resample(stub, [90.0, 105.0, 120.0], [1.0, 1.0, 1.0])
-        _resample(stub, [95.0, 105.0], [1.0, 1.0])
+        _resample(strategy, [90.0, 105.0, 120.0], [1.0, 1.0, 1.0])
+        _resample(strategy, [95.0, 105.0], [1.0, 1.0])
 
-        assert stub._out_of_range_peaks == 3
+        assert strategy.out_of_range_peaks == 3
 
     def test_it_warns_once_and_names_the_axis(self):
-        stub = _stub(np.linspace(100.0, 110.0, 11))
+        strategy = _strategy(np.linspace(100.0, 110.0, 11))
 
         with _CaptureWarnings() as captured:
-            _resample(stub, [90.0, 105.0], [1.0, 1.0])
-            _resample(stub, [90.0, 105.0], [1.0, 1.0])
+            _resample(strategy, [90.0, 105.0], [1.0, 1.0])
+            _resample(strategy, [90.0, 105.0], [1.0, 1.0])
 
         assert len(captured.messages) == 1, "one line per conversion, not per spectrum"
         assert "100.0000" in captured.messages[0]
@@ -192,7 +175,7 @@ class TestTheDropIsReported:
 class TestTicPreservingAlreadyAgreed:
     """The two methods must not disagree about what the axis covers.
 
-    ``_tic_preserving_resample`` never had this bug -- ``np.interp`` is
+    ``TICPreservingStrategy`` never had this bug -- ``np.interp`` is
     given ``left=0, right=0`` and the rescale target comes from
     ``preserved_tic``, which integrates only over the range the axis
     covers. Pinning it here so a future change cannot make
@@ -201,18 +184,19 @@ class TestTicPreservingAlreadyAgreed:
 
     def test_tic_preserving_keeps_only_the_in_range_share(self):
         axis = np.linspace(100.0, 110.0, 11)
-        stub = SimpleNamespace(_common_mass_axis=axis, _gap_tolerance_da=None)
+        strategy = TICPreservingStrategy(axis, None)
 
-        resampled = BaseSpatialDataConverter._tic_preserving_resample(
-            stub,
-            np.array([90.0, 100.0, 110.0, 120.0]),
-            np.array([1000.0, 7.0, 11.0, 5000.0]),
+        resampled = strategy.to_dense(
+            *strategy.resample(
+                np.array([90.0, 100.0, 110.0, 120.0]),
+                np.array([1000.0, 7.0, 11.0, 5000.0]),
+            )
         )
 
         assert resampled.sum() < 1000.0
         assert resampled.sum() == pytest.approx(
-            _resample(_stub(axis), [90.0, 100.0, 110.0, 120.0], [1000, 7, 11, 5000])[
-                1
-            ].sum(),
+            _resample(
+                _strategy(axis), [90.0, 100.0, 110.0, 120.0], [1000, 7, 11, 5000]
+            )[1].sum(),
             rel=0.5,
         )

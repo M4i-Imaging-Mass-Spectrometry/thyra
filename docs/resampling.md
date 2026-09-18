@@ -294,7 +294,8 @@ Adding `--resample-gap-tolerance 0.01` to the same command brings it down to
 Each target bin takes the intensity of the nearest original m/z value. Peaks
 stay sharp and stay put, and no intensity is invented between them. This is the
 right choice for **centroid** data, where a peak is a single discrete mass and
-smearing it across neighbouring bins would be wrong.
+smearing it across neighbouring bins would be wrong. The operator is
+`NearestNeighborStrategy` in `thyra.resampling.strategies`.
 
 The bin a peak lands in is computed, not searched for: every axis type is
 laid uniformly in one analytic coordinate (m/z itself, `sqrt`, `ln`,
@@ -319,7 +320,8 @@ Linear interpolation onto the target axis, followed by rescaling so the
 spectrum's total ion current matches the original. This is the right choice for
 **profile** data: a peak spans many points, interpolation reconstructs its shape
 on the new grid, and the rescaling step stops rebinning from quietly changing
-quantitation.
+quantitation. The operator is `TICPreservingStrategy` in
+`thyra.resampling.strategies`.
 
 Use it whenever the total ion count per pixel has to stay comparable before and
 after conversion.

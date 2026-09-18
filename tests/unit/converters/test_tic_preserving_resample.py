@@ -1,9 +1,10 @@
 # tests/unit/converters/test_tic_preserving_resample.py
 """Tests that ``tic_preserving`` resampling preserves total ion current.
 
-``_tic_preserving_resample`` used to be a bare ``np.interp`` with no
-rescaling step, which meant the one property it is named for did not hold.
-Interpolation samples the spectrum at every target point, so the output TIC
+The converter's ``_tic_preserving_resample``, the operator
+``TICPreservingStrategy`` now carries, used to be a bare ``np.interp``
+with no rescaling step, which meant the one property it is named for did
+not hold. Interpolation samples the spectrum at every target point, so the output TIC
 scaled with the width of the target axis: onto the default 190,000-bin axis
 a 4,000-point profile spectrum came back with 47x its input TIC, and a
 150-peak centroid spectrum with over 1000x. Nothing caught it because the
@@ -18,14 +19,10 @@ counts is the point rather than incidental thoroughness.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import numpy as np
 import pytest
 
-from thyra.converters.spatialdata.base_spatialdata_converter import (
-    BaseSpatialDataConverter,
-)
+from thyra.resampling.strategies import TICPreservingStrategy
 
 MZ_MIN, MZ_MAX = 250.0, 1200.0
 
@@ -35,14 +32,15 @@ BIN_COUNTS = [1_000, 4_000, 10_000, 50_000, 190_000]
 
 
 def _resample(axis, mzs, intensities):
-    """Call the resampler the way the converter does.
+    """The dense form of the strategy's result, over the whole axis.
 
-    ``_tic_preserving_resample`` reads only ``_common_mass_axis`` off
-    ``self``, so a stub carrying it exercises the method without standing
-    up a converter (which would need a reader and a writable output path).
+    The strategy needs only the axis, so no converter is stood up here
+    (which would need a reader and a writable output path). What the
+    converter stores is the sparse pair; this file is about the values,
+    so it scatters them back and asserts on the array.
     """
-    stub = SimpleNamespace(_common_mass_axis=axis)
-    return BaseSpatialDataConverter._tic_preserving_resample(stub, mzs, intensities)
+    strategy = TICPreservingStrategy(axis, None)
+    return strategy.to_dense(*strategy.resample(mzs, intensities))
 
 
 def _axis(bins, lo=MZ_MIN, hi=MZ_MAX):

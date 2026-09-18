@@ -1,7 +1,7 @@
 # tests/unit/converters/test_nn_shared_axis_cache.py
 """The shared-axis nearest-neighbor cache must be an invisible optimization.
 
-``_nearest_neighbor_resample`` caches the peak-to-bin mapping the first time
+``NearestNeighborStrategy`` caches the peak-to-bin mapping the first time
 it sees a spectrum and reuses it for every later spectrum carrying the same
 m/z array -- which is every spectrum, on a shared-axis reader (continuous
 imzML, Rapiflex, Waters, PHI). The cache must never change a result:
@@ -22,28 +22,16 @@ from types import MethodType, SimpleNamespace
 
 import numpy as np
 
-from thyra.converters.spatialdata.base_spatialdata_converter import (
-    BaseSpatialDataConverter,
-)
+from thyra.resampling.strategies import NearestNeighborStrategy
 
 
-def _stub(axis, cache_enabled=True):
-    """A converter stand-in with just enough state for the resample path."""
-    stub = SimpleNamespace(
-        _common_mass_axis=np.asarray(axis, float),
-        _nn_shared_cache=None if cache_enabled else False,
-        _nn_cache_misses=0,
-        _out_of_range_peaks=0,
-        _out_of_range_warned=True,  # count, but stay quiet
-    )
-    for name in (
-        "_nearest_neighbor_resample",
-        "_nn_resample_via_cache",
-        "_build_nn_shared_cache",
-        "_count_out_of_range",
-    ):
-        setattr(stub, name, MethodType(getattr(BaseSpatialDataConverter, name), stub))
-    return stub
+def _strategy(axis, cache_enabled=True):
+    """The nearest-neighbour operator over one axis, cache on or off."""
+    strategy = NearestNeighborStrategy(np.asarray(axis, float), None)
+    strategy._out_of_range_warned = True  # count, but stay quiet
+    if not cache_enabled:
+        strategy._shared_cache = False
+    return strategy
 
 
 def _spectra(rng, mzs, n):
@@ -62,18 +50,18 @@ class TestHitsMatchTheGenericPath:
         axis = np.linspace(100.0, 1000.0, 5_000)
         mzs = np.sort(rng.uniform(100.0, 1000.0, 2_000))
 
-        cached = _stub(axis)
-        generic = _stub(axis, cache_enabled=False)
+        cached = _strategy(axis)
+        generic = _strategy(axis, cache_enabled=False)
 
         for ints in _spectra(rng, mzs, 6):
-            got = cached._nearest_neighbor_resample(mzs, ints)
-            want = generic._nearest_neighbor_resample(mzs, ints)
+            got = cached.resample(mzs, ints)
+            want = generic.resample(mzs, ints)
             np.testing.assert_array_equal(got[0], want[0])
             np.testing.assert_array_equal(got[1], want[1])  # exact, not approx
             assert got[0].dtype == want[0].dtype
             assert got[1].dtype == want[1].dtype
 
-        assert cached._nn_shared_cache not in (None, False), "cache never built"
+        assert cached._shared_cache not in (None, False), "cache never built"
 
     def test_equal_valued_copy_hits(self):
         rng = np.random.default_rng(4)
@@ -81,14 +69,14 @@ class TestHitsMatchTheGenericPath:
         mzs = np.sort(rng.uniform(100.0, 1000.0, 500))
         ints = rng.exponential(10.0, mzs.size)
 
-        stub = _stub(axis)
-        first = stub._nearest_neighbor_resample(mzs, ints)
+        stub = _strategy(axis)
+        first = stub.resample(mzs, ints)
         # A fresh, equal-valued array (what continuous imzML yields when the
         # block is re-decoded) must hit, not rebuild or miss.
-        again = stub._nearest_neighbor_resample(mzs.copy(), ints)
+        again = stub.resample(mzs.copy(), ints)
         np.testing.assert_array_equal(first[0], again[0])
         np.testing.assert_array_equal(first[1], again[1])
-        assert stub._nn_cache_misses == 0
+        assert stub._cache_misses == 0
 
     def test_out_of_range_counting_is_identical(self):
         axis = np.linspace(400.0, 800.0, 1_000)
@@ -96,15 +84,15 @@ class TestHitsMatchTheGenericPath:
         mzs = np.array([300.0, 350.0, 500.0, 900.0])
         ints = np.array([1.0, 2.0, 3.0, 4.0])
 
-        cached = _stub(axis)
-        generic = _stub(axis, cache_enabled=False)
+        cached = _strategy(axis)
+        generic = _strategy(axis, cache_enabled=False)
         for _ in range(3):
-            got = cached._nearest_neighbor_resample(mzs, ints)
-            want = generic._nearest_neighbor_resample(mzs, ints)
+            got = cached.resample(mzs, ints)
+            want = generic.resample(mzs, ints)
             np.testing.assert_array_equal(got[0], want[0])
             np.testing.assert_array_equal(got[1], want[1])
 
-        assert cached._out_of_range_peaks == generic._out_of_range_peaks == 9
+        assert cached.out_of_range_peaks == generic.out_of_range_peaks == 9
 
 
 class TestMissesStayCorrect:
@@ -115,37 +103,37 @@ class TestMissesStayCorrect:
         other = np.sort(rng.uniform(100.0, 1000.0, 400))  # same size, new values
         ints = np.ones(400)
 
-        stub = _stub(axis)
-        stub._nearest_neighbor_resample(first, ints)  # builds the cache
-        got = stub._nearest_neighbor_resample(other, ints)
-        want = _stub(axis, cache_enabled=False)._nearest_neighbor_resample(other, ints)
+        stub = _strategy(axis)
+        stub.resample(first, ints)  # builds the cache
+        got = stub.resample(other, ints)
+        want = _strategy(axis, cache_enabled=False).resample(other, ints)
         np.testing.assert_array_equal(got[0], want[0])
         np.testing.assert_array_equal(got[1], want[1])
-        assert stub._nn_cache_misses == 1
+        assert stub._cache_misses == 1
 
     def test_processed_mode_disables_the_cache(self):
         rng = np.random.default_rng(6)
         axis = np.linspace(100.0, 1000.0, 3_000)
-        stub = _stub(axis)
+        stub = _strategy(axis)
 
         for _ in range(8):
             n = int(rng.integers(50, 200))
             mzs = np.sort(rng.uniform(100.0, 1000.0, n))
-            stub._nearest_neighbor_resample(mzs, np.ones(n))
+            stub.resample(mzs, np.ones(n))
 
-        assert stub._nn_shared_cache is False, "five misses must disable it"
+        assert stub._shared_cache is False, "five misses must disable it"
 
     def test_unsorted_mzs_are_not_cached(self):
         axis = np.linspace(100.0, 1000.0, 1_000)
         mzs = np.array([500.0, 300.0, 700.0])  # descending start: not ascending
         ints = np.array([1.0, 2.0, 3.0])
 
-        stub = _stub(axis)
-        got = stub._nearest_neighbor_resample(mzs, ints)
-        want = _stub(axis, cache_enabled=False)._nearest_neighbor_resample(mzs, ints)
+        stub = _strategy(axis)
+        got = stub.resample(mzs, ints)
+        want = _strategy(axis, cache_enabled=False).resample(mzs, ints)
         np.testing.assert_array_equal(got[0], want[0])
         np.testing.assert_array_equal(got[1], want[1])
-        assert stub._nn_shared_cache is False
+        assert stub._shared_cache is False
 
 
 class TestIdentityMassIndices:

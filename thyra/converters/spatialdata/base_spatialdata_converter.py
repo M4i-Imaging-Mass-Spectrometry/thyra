@@ -48,14 +48,7 @@ from ...metadata.schema import (
 )
 from ...metadata.types import ComprehensiveMetadata, EssentialMetadata
 from ...resampling import ResamplingDecisionTree, ResamplingMethod
-from ...resampling.binning import (
-    SharedAxisNNCache,
-    kept_mz_range,
-    nn_accumulate,
-    nn_map_to_bins,
-    usable_linearisation,
-)
-from ...resampling.interpolation import tic_preserving_sparse
+from ...resampling.binning import usable_linearisation
 from ...resampling.mass_axis.tof_generator import (
     DEFAULT_BINS_PER_FWHM,
     TOFAxisGenerator,
@@ -66,6 +59,7 @@ from ...resampling.mobility_grid import (
     build_mobility_grid,
     report_channel_width,
 )
+from ...resampling.strategies import ResamplingStrategy, build_strategy
 from ...resampling.types import AxisLinearisation, AxisType, ResamplingConfig
 from ._chunking import table_write_config
 from .optical_image import OpticalImages
@@ -628,17 +622,27 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         )
 
         self._non_empty_pixel_count: int = 0
-        # Peaks discarded for falling outside the target mass range, and
-        # whether the one-line summary has been emitted yet. See
-        # _count_out_of_range().
-        self._out_of_range_peaks: int = 0
-        self._out_of_range_warned: bool = False
         # The m/z range a peak has to be inside to be kept, as opposed to
         # the span of the axis points themselves. Filled by
         # _build_resampled_mass_axis(); ``None`` means "no resampled axis
         # was built", and the span is then the axis's own. See
         # :func:`thyra.resampling.binning.kept_mz_range`.
         self._axis_range: Optional[Tuple[float, float]] = None
+        # The coordinate the common mass axis may be indexed through, once
+        # _build_resampled_mass_axis() has built the axis and
+        # usable_linearisation() has checked it; None means every placement
+        # onto it is a search (D21). It belongs to the axis, not to the
+        # strategy that bins with it, which is why the sibling sinks read
+        # it here rather than off ``_resampler``: an interpolated
+        # conversion still writes sibling tables, and they still place
+        # peaks onto this axis.
+        self._axis_linearisation: Optional[AxisLinearisation] = None
+        # The operator that places one spectrum onto the common mass axis:
+        # built beside the axis by _build_resampled_mass_axis(), from the
+        # method the config or the detector chain settled on. ``None``
+        # means no resampled axis was built, and the spectrum is mapped
+        # onto the reader's own axis instead (--no-resample).
+        self._resampler: Optional[ResamplingStrategy] = None
         # Intensities dropped for being non-finite or negative, and
         # whether that has been said yet. See _count_unusable_intensities().
         self._unusable_intensities: int = 0
@@ -737,19 +741,6 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             self._setup_resampling()
             # Note: _build_resampled_mass_axis() will be called in _initialize_conversion()
             # after reader metadata is fully loaded
-
-        # Shared-axis nearest-neighbor cache. Continuous imzML, Rapiflex,
-        # Waters and PHI all hand every spectrum the same m/z array, so the
-        # peak-to-bin mapping is computed once and verified per spectrum by
-        # array equality instead of being re-derived by searchsorted. None
-        # means "not built yet"; False means "tried and the data does not
-        # share an axis, stop checking". See _nearest_neighbor_resample.
-        self._nn_shared_cache: Any = None
-        self._nn_cache_misses: int = 0
-        # The resampled axis's own linearisation, once _build_resampled_mass_axis()
-        # has built the axis and usable_linearisation() has checked it;
-        # None means the nearest-neighbour mapping searches (D21).
-        self._nn_linearisation: Optional[AxisLinearisation] = None
 
         # The store's optical images and everything they own: the
         # FlexImaging alignment, the TIC-to-image affine, which file became
@@ -1249,7 +1240,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 self.reader,
                 self._common_mass_axis,
                 n_spectra=self._get_total_spectra_count(),
-                linearisation=self._nn_linearisation,
+                linearisation=self._axis_linearisation,
             )
         except Exception as e:
             logger.error("Could not build the mass-mobility heatmap: %s", str(e))
@@ -1423,7 +1414,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                     if discovery is not None
                     else "Mobility heatmap"
                 ),
-                linearisation=self._nn_linearisation,
+                linearisation=self._axis_linearisation,
             )
         except Exception as e:
             logger.error("Could not scan the mobility spectra: %s", str(e))
@@ -1518,7 +1509,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 self.reader,
                 self._common_mass_axis,
                 n_grid,
-                self._nn_linearisation,
+                self._axis_linearisation,
             )
         if heatmap is None and discovery is None and msms is None:
             return None
@@ -1528,7 +1519,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             heatmap=heatmap,
             discovery=discovery,
             msms=msms,
-            linearisation=self._nn_linearisation,
+            linearisation=self._axis_linearisation,
         )
 
     def _take_fused_results(self, passes: Any) -> None:
@@ -1709,7 +1700,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             grid=self._mobility_grid,
             discovery=discovery,
             scratch=scratch,
-            linearisation=self._nn_linearisation,
+            linearisation=self._axis_linearisation,
         )
 
     def _build_msms_sibling(
@@ -1743,7 +1734,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             z_value=z_value,
             scratch=scratch,
             accumulator=accumulator,
-            linearisation=self._nn_linearisation,
+            linearisation=self._axis_linearisation,
         )
 
     @staticmethod
@@ -2366,8 +2357,22 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         # A positive narrowest gap is "strictly ascending", which the
         # closed-form bin index needs and this log line already computed.
-        self._nn_linearisation = usable_linearisation(
+        self._axis_linearisation = usable_linearisation(
             mass_axis.linearisation, self._common_mass_axis, min_bin_size
+        )
+
+        # The axis and the operator that places spectra onto it are built
+        # together and never separately: the triple below is everything a
+        # strategy is allowed to know about the axis, and the method and
+        # the gap tolerance are everything it is allowed to know about the
+        # request. Nothing else in the converter decides what resampling
+        # does to a spectrum.
+        self._resampler = build_strategy(
+            self._resampling_method,
+            self._common_mass_axis,
+            self._axis_range,
+            self._axis_linearisation,
+            self._gap_tolerance_da,
         )
 
         min_bin_size *= 1000  # Convert to mDa
@@ -2505,11 +2510,13 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             self._common_mass_axis = self.reader.get_common_mass_axis()
             # A raw union axis was laid by no generator, so there is no
             # coordinate it is uniform in and every placement onto it is a
-            # search. Cleared beside the axis rather than left at its
-            # initial value: the two must never disagree about which axis
-            # a linearisation describes, and that is easier to keep true
-            # if every assignment to one is an assignment to both.
-            self._nn_linearisation = None
+            # search -- which is what _map_mass_to_indices does, and no
+            # strategy is built for it. Cleared beside the axis rather
+            # than left at its initial value: the two must never disagree
+            # about which axis a linearisation describes, and that is
+            # easier to keep true if every assignment to one is an
+            # assignment to both.
+            self._axis_linearisation = None
             if len(self._common_mass_axis) == 0:
                 raise ConversionRefused(
                     "Common mass axis is empty. Cannot proceed with conversion."
@@ -2617,11 +2624,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         """Record intensities dropped as unusable, warning once.
 
         Once per conversion rather than once per spectrum, for the reason
-        :meth:`_count_out_of_range` gives: a source with negatives usually
-        has them in every spectrum. ``_unusable_intensities`` keeps the
-        running total, and like that counter it counts *calls*, so it
-        double-counts a two-pass conversion; read the warning for the
-        per-spectrum figure.
+        ``ResamplingStrategy``'s out-of-range counter gives: a source with
+        negatives usually has them in every spectrum.
+        ``_unusable_intensities`` keeps the running total, and like that
+        counter it counts *calls*, so it double-counts a two-pass
+        conversion; read the warning for the per-spectrum figure.
         """
         self._unusable_intensities += n_dropped
         if self._unusable_intensities_warned:
@@ -2682,289 +2689,6 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             minlength=unique.size,
         )
         return unique.astype(indices.dtype, copy=False), summed
-
-    def _count_out_of_range(self, n_dropped: int, n_total: int) -> None:
-        """Record peaks discarded for lying outside the target mass range.
-
-        Narrowing the mass range is deliberate, so dropping the peaks
-        outside it is the correct answer and not an error -- but it is not
-        something a user should have to infer either, since the previous
-        behaviour conserved the total exactly and so left no trace a TIC
-        check could find.
-
-        Warns once per conversion rather than once per spectrum: a
-        narrowed range typically excludes peaks in every spectrum, and on
-        xenium that is 918,855 identical lines. ``_out_of_range_peaks``
-        keeps the running total; note it counts resample *calls*, and the
-        converter resamples every spectrum twice (once per pass), so it
-        is a lower bound on nothing and an upper bound on nothing -- read
-        the warning, not the counter, if you want a per-spectrum figure.
-
-        Args:
-            n_dropped: Peaks outside the axis in this spectrum.
-            n_total: Peaks in this spectrum before filtering.
-        """
-        self._out_of_range_peaks += n_dropped
-
-        if self._out_of_range_warned or self._common_mass_axis is None:
-            return
-        self._out_of_range_warned = True
-        lo_mz, hi_mz = kept_mz_range(
-            self._common_mass_axis, getattr(self, "_axis_range", None)
-        )
-        logger.warning(
-            "Dropping peaks that fall outside the target mass range "
-            "[%.4f, %.4f] m/z -- %d of %d in the first spectrum affected. "
-            "They are discarded, not folded into the edge bins. Widen the "
-            "resampling range to keep them.",
-            lo_mz,
-            hi_mz,
-            n_dropped,
-            n_total,
-        )
-
-    def _nearest_neighbor_resample(
-        self, mzs: NDArray[np.float64], intensities: NDArray[np.float64]
-    ) -> Tuple[NDArray[np.int_], NDArray[np.float64]]:
-        """Resample spectrum using nearest neighbor interpolation.
-
-        Maps each m/z value to its nearest bin in the common mass axis and
-        accumulates intensities. Returns only non-zero bins for efficiency.
-
-        Peaks outside the axis are **dropped**, not folded into the edge
-        bins. They used to be clipped to bin 0 or the last bin and then
-        accumulated there, so narrowing the mass range -- the most ordinary
-        thing ``--resample-min-mz`` / ``--resample-max-mz`` are for --
-        piled everything below the floor onto the first bin and everything
-        above the ceiling onto the last. On real ``pea.imzML`` resampled to
-        400-800 m/z, bin 0 held 654,158 counts where a real peak there is
-        around 80. The total was conserved exactly, so a TIC check could
-        not see it; the peak was simply in the wrong place, 1,634x the
-        median interior bin.
-
-        "In range" is the **declared** ``[min_mz, max_mz]``, which is the
-        outer bin edges and so at most half a bin beyond the first and last
-        centre -- see :func:`thyra.resampling.binning.kept_mz_range` for why the axis points
-        themselves are the wrong test and why the rule stops there. A peak
-        further out is dropped, not clamped. ``_tic_preserving_resample``
-        follows the same range, so the two methods agree on what the axis
-        covers.
-
-        Args:
-            mzs: Original m/z values from spectrum
-            intensities: Corresponding intensity values
-
-        Returns:
-            Tuple of (bin_indices, accumulated_intensities) containing only non-zero bins
-        """
-        if mzs.size == 0:
-            return np.array([], dtype=np.int_), np.array([], dtype=np.float64)
-
-        # Ensure common mass axis is initialized
-        if self._common_mass_axis is None:
-            raise ValueError("Common mass axis is not initialized")
-
-        axis = self._common_mass_axis
-
-        # Shared-axis fast path: when every spectrum carries the same m/z
-        # array -- continuous imzML; every other reader, Waters and PHI
-        # included, reports has_shared_mass_axis = False -- the peak-to-bin
-        # mapping is a property of the axis pair, not of the spectrum. It is
-        # computed once; each later spectrum only proves its m/z array is
-        # the same one -- an exact array comparison, which is far cheaper
-        # than re-deriving the mapping by binary search per spectrum.
-        # ``False`` means the cache disabled itself (processed-mode data).
-        # getattr rather than a bare read: test harnesses drive this method
-        # unbound on a stub that predates the cache, and they exercise the
-        # generic path below, which is exactly what "no cache" selects.
-        if getattr(self, "_nn_shared_cache", False) is not False:
-            result = self._nn_resample_via_cache(axis, mzs, intensities)
-            if result is not None:
-                return result
-
-        lo_mz, hi_mz = kept_mz_range(axis, getattr(self, "_axis_range", None))
-        in_range = (mzs >= lo_mz) & (mzs <= hi_mz)
-        if not in_range.all():
-            self._count_out_of_range(int(mzs.size - in_range.sum()), int(mzs.size))
-            mzs = mzs[in_range]
-            intensities = intensities[in_range]
-            if mzs.size == 0:
-                return np.array([], dtype=np.int_), np.array([], dtype=np.float64)
-
-        return nn_accumulate(
-            nn_map_to_bins(axis, mzs, getattr(self, "_nn_linearisation", None)),
-            intensities,
-        )
-
-    def _build_nn_shared_cache(
-        self, axis: NDArray[np.float64], mzs: NDArray[np.float64]
-    ) -> Optional[SharedAxisNNCache]:
-        """Precompute the nearest-neighbor mapping for one m/z array.
-
-        Returns None when the array cannot be cached -- empty, or not
-        ascending, which the contiguous in-range slice below relies on.
-        The mapping itself comes from the same :func:`thyra.resampling.binning.nn_map_to_bins`
-        the generic path uses, so a cache hit and a fresh computation
-        agree bin for bin.
-        """
-        if mzs.size == 0 or not bool(np.all(mzs[1:] >= mzs[:-1])):
-            return None
-
-        # Ascending m/z makes the in-range subset one contiguous slice,
-        # with the same inclusive endpoints as the generic path's mask --
-        # the declared range, not the axis's own span (kept_mz_range).
-        lo_mz, hi_mz = kept_mz_range(axis, getattr(self, "_axis_range", None))
-        lo = int(np.searchsorted(mzs, lo_mz, side="left"))
-        hi = int(np.searchsorted(mzs, hi_mz, side="right"))
-
-        cache = SharedAxisNNCache()
-        cache.key = mzs.copy()
-        cache.key_ref = mzs
-        cache.n_total = int(mzs.size)
-        cache.n_dropped = int(mzs.size - (hi - lo))
-        cache.lo = lo
-        cache.hi = hi
-        if hi <= lo:
-            cache.starts = None
-            cache.bins = np.array([], dtype=np.int_)
-            return cache
-
-        idx = nn_map_to_bins(axis, mzs[lo:hi], getattr(self, "_nn_linearisation", None))
-        # Ascending m/z onto an ascending axis gives non-decreasing bins,
-        # so equal bins form contiguous runs.
-        starts = np.concatenate(([0], np.flatnonzero(np.diff(idx)) + 1))
-        if starts.size == idx.size:
-            # Every peak in its own bin: per-spectrum work reduces to a
-            # zero-filter over the raw intensities.
-            cache.starts = None
-            cache.bins = idx.astype(np.int_, copy=False)
-        else:
-            cache.starts = starts
-            cache.bins = idx[starts].astype(np.int_, copy=False)
-        return cache
-
-    def _nn_resample_via_cache(
-        self,
-        axis: NDArray[np.float64],
-        mzs: NDArray[np.float64],
-        intensities: NDArray[np.float64],
-    ) -> Optional[Tuple[NDArray[np.int_], NDArray[np.float64]]]:
-        """Resample through the shared-axis cache, or return None to decline.
-
-        The cache is built from the first spectrum seen. A hit requires the
-        spectrum's m/z array to be the cached one -- same object, or equal
-        element for element -- so a lying reader cannot get a stale mapping;
-        it can only miss. After five consecutive misses the cache disables
-        itself so processed-mode data stops paying for the comparison
-        (its size check is O(1) in the common case anyway).
-        """
-        cache = self._nn_shared_cache
-        if cache is False:
-            return None
-        if cache is None:
-            cache = self._build_nn_shared_cache(axis, mzs)
-            if cache is None:
-                self._nn_shared_cache = False
-                return None
-            self._nn_shared_cache = cache
-
-        if not (
-            mzs is cache.key_ref
-            or (mzs.size == cache.n_total and bool(np.array_equal(mzs, cache.key)))
-        ):
-            self._nn_cache_misses += 1
-            if self._nn_cache_misses > 4:
-                self._nn_shared_cache = False
-            return None
-
-        if cache.n_dropped:
-            self._count_out_of_range(cache.n_dropped, cache.n_total)
-        if cache.hi <= cache.lo:
-            return np.array([], dtype=np.int_), np.array([], dtype=np.float64)
-
-        # Match bincount's float64 promotion so cached and generic results
-        # carry the same rounding.
-        vals = intensities[cache.lo : cache.hi].astype(np.float64, copy=False)
-        if cache.starts is None:
-            sums = vals
-        else:
-            sums = np.add.reduceat(vals, cache.starts)
-        keep = sums != 0
-        return cache.bins[keep], sums[keep]
-
-    def _tic_preserving_resample(
-        self, mzs: NDArray[np.float64], intensities: NDArray[np.float64]
-    ) -> NDArray[np.float64]:
-        """Resample onto the common axis, preserving total ion current.
-
-        Linear interpolation onto the target axis, followed by rescaling so
-        the resampled spectrum carries the same total ion current as the
-        input -- the behaviour ``ResamplingMethod.TIC_PRESERVING`` and
-        docs/resampling.md both describe.
-
-        The rescaling is not cosmetic. Interpolation samples the spectrum at
-        every target point, so the raw interpolated sum scales with the
-        density of the target axis rather than staying fixed. Onto the
-        default 190,000-bin axis, 4,000 source points came back with 47x the
-        input TIC, and a 150-peak centroid spectrum with over 1000x.
-
-        The TIC preserved is the share of the spectrum lying inside the
-        target axis range -- see ``thyra.resampling.tic``, which holds the
-        rule and the reasoning, shared with
-        ``thyra.resampling.interpolation.tic_preserving_sparse`` below.
-        When the axis spans the spectrum, which is the default, that share
-        is the whole input TIC.
-
-        When ``ResamplingConfig.gap_tolerance_da`` is set, bins farther than
-        that from any source m/z are zeroed before the rescale, so
-        interpolation cannot claim regions nothing was measured in. See
-        ``thyra.resampling.gaps``.
-
-        Args:
-            mzs: Original m/z values from the spectrum.
-            intensities: Corresponding intensity values.
-
-        Returns:
-            Intensities on the common mass axis, of the axis's length.
-        """
-        if self._common_mass_axis is None:
-            raise RuntimeError("Common mass axis is not initialized")
-
-        axis = self._common_mass_axis
-        indices, values = tic_preserving_sparse(
-            axis,
-            mzs,
-            intensities,
-            getattr(self, "_gap_tolerance_da", None),
-            getattr(self, "_axis_range", None),
-        )
-        resampled = np.zeros(len(axis))
-        resampled[indices] = values
-        return resampled
-
-    def _tic_preserving_resample_sparse(
-        self, mzs: NDArray[np.float64], intensities: NDArray[np.float64]
-    ) -> Tuple[NDArray[np.int_], NDArray[np.float64]]:
-        """The sparse form of :meth:`_tic_preserving_resample`.
-
-        Same operator, same numbers: only the axis points the interpolant
-        can be non-zero at are evaluated, and only the non-zero results are
-        returned, as ``(bin_indices, intensities)`` the way the
-        nearest-neighbour path does. On a zero-suppressed profile source --
-        a Waters MRT pixel stores ~15,000 samples in clusters around its
-        peaks, on a 1.05M-bin axis -- this is what turns a 570 s conversion
-        into one that is bounded by reading the file. See
-        :func:`thyra.resampling.interpolation.tic_preserving_sparse`.
-        """
-        if self._common_mass_axis is None:
-            raise RuntimeError("Common mass axis is not initialized")
-        return tic_preserving_sparse(
-            self._common_mass_axis,
-            mzs,
-            intensities,
-            getattr(self, "_gap_tolerance_da", None),
-            getattr(self, "_axis_range", None),
-        )
 
     def build_region_numbers(self, x_values, y_values) -> NDArray[np.int32]:
         """``obs["region_number"]`` for the given pixel positions, in row order.

@@ -41,10 +41,10 @@ def kept_mz_range(
     The rule is the **declared** range, which is the outer bin edges, which
     is at most half a bin beyond the first and last centre. That bound is
     what keeps this from becoming the clamp
-    :meth:`BaseSpatialDataConverter._nearest_neighbor_resample` documents:
-    a peak further out than the range is still dropped, so narrowing the
-    range with ``--resample-min-mz`` cannot pile the discarded part of the
-    spectrum onto bin 0.
+    :meth:`~thyra.resampling.strategies.nearest_neighbor.NearestNeighborStrategy.resample`
+    documents: a peak further out than the range is still dropped, so
+    narrowing the range with ``--resample-min-mz`` cannot pile the
+    discarded part of the spectrum onto bin 0.
 
     A uniform axis is ``np.linspace(min_mz, max_mz, n)``, whose end points
     *are* the declared bounds, so nothing changes there -- nor for
@@ -278,8 +278,10 @@ def nn_accumulate(
 class SharedAxisNNCache:
     """Precomputed nearest-neighbor mapping for one recurring m/z array.
 
-    Built the first time :meth:`_nearest_neighbor_resample` sees a spectrum,
-    and reused for every later spectrum that carries the same m/z array.
+    Built the first time
+    :class:`~thyra.resampling.strategies.nearest_neighbor.NearestNeighborStrategy`
+    sees a spectrum, and reused for every later spectrum that carries the
+    same m/z array.
     ``key`` is a private copy so a caller-side mutation of the original
     array cannot fool the equality check; ``key_ref`` keeps the original
     object for the O(1) identity test that readers yielding one shared
