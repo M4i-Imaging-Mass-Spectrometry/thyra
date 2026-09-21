@@ -2,6 +2,236 @@
 
 <!-- version list -->
 
+## v4.0.0 (2026-09-21)
+
+### Bug Fixes
+
+- **bruker**: Find optical images that are not TIFF
+  ([`e7d4987`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/e7d49873cfb2a008f2beba66b54623b11bb63dec))
+
+- **converters**: Close the two gaps in the Windows rename retry
+  ([`a33dc51`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a33dc5105607ded7b256168f418742819f37b638))
+
+- **converters**: Reference_element names an element, not the .mis filename
+  ([`e864bed`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/e864bedb35512ab156e7ab3444ee9ba6b608c172))
+
+- **converters**: Stop the converter burying its own defects in warnings
+  ([`6e84fda`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/6e84fda907fc4e1a032593e6621e9b510f796d52))
+
+- **converters**: Take a declined sibling's name back out of the store
+  ([`682d355`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/682d355ec34ad28bc537a8d076b56fb1defc9430))
+
+- **converters**: Tolerate a reader without the new optional method
+  ([`67877be`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/67877bed755d911c299e31a9a61a9b8216a55075))
+
+- **fixtures**: Put the committed acquisition back when the swap fails
+  ([`ed366e6`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/ed366e6a4283d23dad7d690b0b980ca46a4664bc))
+
+- **imzml**: Refuse a document that declares no spectra, by name
+  ([`fc3df74`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/fc3df74762feb05f7b6f07dc26eb1ac33c31db05))
+
+- **lint**: Pin mypy's platform so the gate does not depend on the runner
+  ([`e3d6dc5`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/e3d6dc5ae0b77966765210441421436f6714f80b))
+
+- **metadata**: Refuse an unconvertible pixel-size unit as a refusal
+  ([`e1ac371`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/e1ac371ef7e459cbbc3e663f15cac4fae8318d08))
+
+- **notebooks**: Choose the TIC by name, run off Colab, and stop on failure
+  ([`5bd3014`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/5bd30149ae55c7d6fe60bf8c2cd5b251c8115b76))
+
+- **packaging**: Ship the PEP 561 marker the classifier already promised
+  ([`2113662`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/211366218378d174aaf13260ece9a5393de4f77b))
+
+- **preview**: Say which shortfall sent an imzML back to the full parse
+  ([`abf1771`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/abf17715b8e06add8ac0f51070552b2443ab148e))
+
+- **registry**: Say what the lock covers, and delete what it did not
+  ([`e0cb9b7`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/e0cb9b74da5b39fa658f1f8c6780256741fa1f50))
+
+- **resampling**: PHI bins follow measured peak width, not the digitiser grid
+  ([`864eff1`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/864eff1a77959f7cb78c1c638ced443e8fe2d6cf))
+
+- **tools**: Keep the caller's path out of the generated imzML, and say what the seed fixes
+  ([`3127389`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/31273893af3c430700cfcd28e6347ec8522c5ca1))
+
+- **utils**: Defer to Zarr's own rename retry once it has one
+  ([`b09552c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/b09552c1df2fd712879eee3edac90896c264df0d))
+
+### Build System
+
+- **test**: Declare PyYAML, which two tests import and only dask supplies
+  ([`38655c5`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/38655c59e78a2cadcc47bc505abb31964d1c3f0b))
+
+### Documentation
+
+- A migration guide for 4.0.0
+  ([`e4c31c2`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/e4c31c269d6e35ce4ad9143d58f76fefca34534a))
+
+- Correct the bins-per-peak statistics; 70% under three, not 39%
+  ([`afec2a1`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/afec2a14cd5aace07457741efa367ba2864152a5))
+
+- D21, the closed-form bin index, with the measurements behind it
+  ([`4141785`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/4141785a5395fd97bffc34fe5580dc859ff76c15))
+
+- The open-time comparison was cold against warm; 1.8x, not 4x
+  ([`c37f9aa`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/c37f9aab4f150044e30f5a9cfa0866ec7a701b17))
+
+- Tidy wording in three handouts and a workflow comment
+  ([`f68d59c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f68d59c62bb0c97fdf99fa54bd17d179405fac64))
+
+- Write every docstring section in the convention the repo declares
+  ([`7def2f8`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/7def2f8fb52bfed1ff706b3afb91f91b20a7071f))
+
+- **ci**: Correct six claims this branch itself made false
+  ([`6b63bb3`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/6b63bb38eab01491c8b7a5eae9884a9d1895ae0b))
+
+- **core**: Give the seven spine modules a module docstring
+  ([`c56790c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/c56790c08b813a8a57daec462039c3c4f84c25b0))
+
+- **decisions**: D9 has shipped; mark it Implemented
+  ([`281df1a`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/281df1a15f0d0cf05def5eebfaf57b5b31b0f5ab))
+
+- **decisions**: Record that lint gates the release, and recount D18's contexts
+  ([`b7b1565`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/b7b15652d6eabb0062111e8edd62809c4b275955))
+
+- **deps**: Correct the stale click note in pyproject
+  ([`695616a`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/695616a0180ad4828d52099bcf983785fceab48c))
+
+- **handouts**: Drop the tool name from the two style sections
+  ([`4167b19`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/4167b19297da516566db783b290b02726bc9dfc6))
+
+- **migration**: Add the two v4 breaks the guide was missing
+  ([`3748d60`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/3748d60a947df1b38ab70124c85ef26f751be6d0))
+
+- **schema**: Name the uns boundary, and stop hiding the dependency
+  ([`229cc1c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/229cc1cbe63f7fc9215dfd7ae47d4b209ae09cdd))
+
+- **utils**: Name the zarr release that carries the upstream retry
+  ([#362](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/362),
+  [`6b79635`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/6b796357f6d4ee9dbdcc2a15d443a2d97db12178))
+
+### Features
+
+- **converters**: Say in the store where each optical image came from
+  ([`896b4ef`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/896b4efe7679ad19e20f9ce5e94438a790f38013))
+
+- **metadata**: Add the normalised acquisition section to msi_metadata (0.6.0)
+  ([#370](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/370),
+  [`2eea29c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/2eea29cb54f439cf3f85253c96dc3a470ccf9a70))
+
+- **optical**: Crop the alignment image to the section a conversion covers
+  ([#373](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/373),
+  [`ca9177d`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/ca9177dd0767635492a7582b9495eb35ee613fcc))
+
+- **preview**: Report the acquisition regions of a multi-region input
+  ([`dc68ee1`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/dc68ee1e67fcc3b7edae9d5dbbe69fb5b9d90278))
+
+### Performance Improvements
+
+- **convert**: Compare bins pairwise instead of diffing them
+  ([`9a41288`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/9a41288aeac9749bc193f16227dbf8c42c01b9e4))
+
+- **converters**: Compute the nearest-neighbour bin index instead of searching for it
+  ([`f5c095d`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f5c095d1dee9c315ab6c5d26db328ecd43e041c2))
+
+- **converters**: Place the sibling tables' m/z by the closed form too
+  ([`af9eed2`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/af9eed2937307f59fca4f507899eb381048ca078))
+
+- **preview**: Answer an imzML preview from the head of the document
+  ([`a3ec990`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a3ec9904c18c82ec1824c4043723e1e8aacbe1f5))
+
+- **preview**: Stop the mass-range scan at the first spectrum of a continuous-mode imzML
+  ([#372](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/372),
+  [`8f16d89`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/8f16d892a41a6cff82b019c9466acfc872fc75e7))
+
+### Refactoring
+
+- **convert**: Annotate the front door with the types it constructs
+  ([`f8590ae`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f8590aea9fe5d9f90ad203c9021c04db8907b21e))
+
+- **convert**: Convert_msi owns the reader it opened
+  ([`58d1582`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/58d15822b1424edef9d4f4ec537f2b6e402336e3))
+
+- **converters**: Lift the optical images into an OpticalImages collaborator
+  ([`a09b372`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a09b37204d9cc837b3cbfcd9d43aefc807c4d32f))
+
+- **core**: Type the conversion state, replacing Dict[str, Any]
+  ([`fb0c772`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/fb0c772a3bdc9a3dc8fc09246e83eaade64485cf))
+
+- **metadata**: Delete the two dead fields on EssentialMetadata
+  ([`76d8821`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/76d88216475fb7d65c7411a3d1517bc57387d261))
+
+- **metadata**: Lift the store's root attrs into a RootAttrsBuilder
+  ([#376](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/376),
+  [`2efcb25`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/2efcb2506ac2d53d8b656c911900546c3a81fb34))
+
+- **metadata**: Lift the table uns block into an UnsAssembler
+  ([#375](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/375),
+  [`e8f4da6`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/e8f4da668ca50a256d8b9250c16dca32af3e0348))
+
+- **readers**: One convention for declining a capability
+  ([`af13c64`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/af13c6413d93bd0f30dcdf728d174b863ca57869))
+
+- **readers**: Remove batch_size, which selected nothing
+  ([`067cac6`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/067cac6bbadf724286b5c5a973b121bbd10001ef))
+
+- **resampling**: Lift what decides the mass axis into an AxisPlanner
+  ([#377](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/377),
+  [`ca7618a`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/ca7618ae0c24f0201b5ed71f420024a7ac4ad80e))
+
+- **resampling**: Make the resampling strategies the operator the converter runs
+  ([#374](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/374),
+  [`67b7f2f`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/67b7f2ff56e430bbda34a7c78a70c85087e26ce6))
+
+- **resampling**: Move the binning and interpolation operators out of the converter
+  ([`1e2cc8e`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/1e2cc8e89e43df4f4fb1b3976d26f168b16d4dad))
+
+- **utils**: Retire the Windows rename shim, closes #341
+  ([#368](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/368),
+  [`52d0a52`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/52d0a521adafd2fba22269137f5c1eae285ea936))
+
+### Testing
+
+- A store-identity harness for the converter decomposition
+  ([#349](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/349),
+  [`8c9ce17`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/8c9ce17920e0f00346b3c9eba48247b4de3cf68c))
+
+- Read the isolated stdout before click closes it
+  ([`759587f`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/759587f1694406313a058f7e68099e8f5c03fd78))
+
+- **converters**: Build OpticalImages without a converter
+  ([`411ec38`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/411ec384c46bc5e952f8af6363d20912138e9ae7))
+
+- **fixtures**: Refuse before the build script deletes what it rebuilds
+  ([`4447bfb`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/4447bfb079f907d3a15d57f4e1c55a3595be2dcc))
+
+- **lanes**: Decide lane membership from the directory, not a decorator
+  ([`6579b01`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/6579b011e0fe341b000ea238768fbe5a27201309))
+
+- **logging**: Move two tests PR #324 added onto the thyra_logs fixture
+  ([`9d5f0bf`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/9d5f0bfa479203a1c49f784a6a1d215ec058681e))
+
+- **logging**: Put the dropped-image test on thyra_logs, not caplog
+  ([`a861082`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a861082e14c8fa016c814e067e3f80f86d72e509))
+
+- **logging**: Stop one CLI test deciding what every later test can capture
+  ([`f6e6a51`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f6e6a51d7ff797c6c6542e610149096c035a6fd6))
+
+- **preview**: The empty-file fallback no longer pays for a parse
+  ([`2e7b426`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/2e7b42647a2cedfa4a287289febc93423d739dd7))
+
+- **readers**: One conformance suite for all seven readers
+  ([`45106b5`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/45106b51fe75d983bf4c6251f76174a00a56aba5))
+
+### Breaking Changes
+
+- **imzml**: An imzML whose <spectrumList> holds no <spectrum> elements now raises
+  `ConversionRefused` out of the reader's parser initialisation, where it raised `IndexError` out of
+  pyimzml's constructor. `ConversionRefused` subclasses `ValueError`, so a caller catching
+  `Exception`, `ValueError` or `ConversionRefused` gains the message and loses nothing; one catching
+  `IndexError` -- which was never an outcome Thyra documented or intended -- no longer sees it.
+
+
 ## v3.23.3 (2026-09-14)
 
 ### Bug Fixes
