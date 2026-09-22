@@ -28,6 +28,7 @@ from .models import (
     PixelSizeUm,
     ProcessingStep,
     Provenance,
+    ResolvingPower,
 )
 from .vocab import (
     normalize_analyzer,
@@ -322,9 +323,18 @@ def _build_instrument_fields(
     fields: Dict[str, Any] = {}
     fmt_defaults = _FORMAT_DEFAULTS.get((source_format or "").lower(), {})
 
-    source = normalize_ionisation_source(
-        _first_string(acquisition, ("ionisation_source", "ion_source", "technique"))
+    reported_source = _first_string(
+        acquisition, ("ionisation_source", "ion_source", "technique")
     )
+    source = normalize_ionisation_source(reported_source)
+    if reported_source is not None and source is None:
+        # "Unset beats guessed" is the rule, but a spelling the alias table
+        # does not know should be findable in a log rather than only as a
+        # field that is quietly missing (issue #388).
+        logger.debug(
+            "Ionisation source %r matches no known spelling; left unset",
+            reported_source,
+        )
     if source is None and format_specific.get("is_maldi"):
         source = normalize_ionisation_source("maldi")
     if source is None and "ionisation_source" in fmt_defaults:
@@ -332,10 +342,14 @@ def _build_instrument_fields(
     if source is not None:
         fields["ionisation_source"], fields["ionisation_source_term"] = source
 
-    analyzer = normalize_analyzer(
-        _first_string(instrument, ("analyzer", "mass_analyzer"))
-        or _first_string(acquisition, ("analyzer", "mass_analyzer"))
-    )
+    reported_analyzer = _first_string(
+        instrument, ("analyzer", "mass_analyzer")
+    ) or _first_string(acquisition, ("analyzer", "mass_analyzer"))
+    analyzer = normalize_analyzer(reported_analyzer)
+    if reported_analyzer is not None and analyzer is None:
+        logger.debug(
+            "Analyzer %r matches no known spelling; left unset", reported_analyzer
+        )
     if analyzer is None and "analyzer" in fmt_defaults:
         analyzer = normalize_analyzer(fmt_defaults["analyzer"])
     if analyzer is not None:
@@ -345,7 +359,45 @@ def _build_instrument_fields(
     if instrument_model is not None:
         fields["instrument_model"] = instrument_model
 
+    resolving_power = _build_resolving_power(acquisition, instrument)
+    if resolving_power is not None:
+        fields["detector_resolving_power"] = resolving_power
+
     return fields
+
+
+# The two keys an extractor writes when the source states its resolving
+# power: the value and the m/z it is quoted at.  Both are needed -- a
+# resolving power without its reference m/z is not comparable between
+# analyzers, which is why the schema field is the pair.  Probed in
+# ``instrument_info`` first, then ``acquisition_params``.  No shipped
+# extractor writes them yet: the Waters extractor's ``declared_resolution``
+# is not mapped here because what MassLynx means by it has not been
+# verified against an acquisition, and a Bruker method's resolution setting
+# is a mode, not a number.  A Thermo scan trailer states both directly.
+_RESOLVING_POWER_KEYS = ("resolving_power",)
+_RESOLVING_POWER_AT_MZ_KEYS = ("resolving_power_at_mz",)
+
+
+def _build_resolving_power(
+    acquisition: Dict[str, Any], instrument: Dict[str, Any]
+) -> Optional[ResolvingPower]:
+    """The stated resolving power and its reference m/z, or ``None``."""
+    for mapping in (instrument, acquisition):
+        value = _first_number(mapping, _RESOLVING_POWER_KEYS)
+        at_mz = _first_number(mapping, _RESOLVING_POWER_AT_MZ_KEYS)
+        if value is None and at_mz is None:
+            continue
+        if value is None or at_mz is None or value <= 0.0 or at_mz <= 0.0:
+            logger.debug(
+                "Resolving power reported without a usable value and reference "
+                "m/z (%r at %r); left unset",
+                value,
+                at_mz,
+            )
+            return None
+        return ResolvingPower(value=value, at_mz=at_mz)
+    return None
 
 
 def _build_ms_analysis(

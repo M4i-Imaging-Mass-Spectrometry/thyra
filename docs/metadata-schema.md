@@ -178,8 +178,15 @@ target** (`MS:1000827`) -- the m/z the quadrupole was set to -- and not
 `MS:1000744`, a selected ion whose m/z was measured. mzPeak keeps the two in
 separate files for the same reason; do not read either as a monoisotopic mass.
 
-Everything else -- organism, tissue, condition, matrix, resolving power --
-cannot come from a raw file and stays empty until you provide it.
+`detector_resolving_power` is filled when the source states both the value
+and the m/z it is quoted at (an extractor reports them as `resolving_power`
+and `resolving_power_at_mz`); one without the other is not written, because
+a resolving power is not comparable without its reference m/z. No shipped
+reader states the pair today, so for the formats Thyra converts it is
+supplied by you like the fields below.
+
+Everything else -- organism, tissue, condition, matrix -- cannot come from
+a raw file and stays empty until you provide it.
 
 ### Processing history
 
