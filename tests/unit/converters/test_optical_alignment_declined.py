@@ -75,7 +75,7 @@ def _install(converter, cls, *, apply_alignment: bool) -> None:
     """Give ``converter`` an ``OpticalImages`` of class ``cls``."""
     converter.optical = cls(
         converter.reader,
-        converter.output_path,
+        converter._store_path,
         converter.dataset_id,
         include=False,
         apply_alignment=apply_alignment,

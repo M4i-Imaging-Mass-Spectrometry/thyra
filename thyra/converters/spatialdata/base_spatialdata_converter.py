@@ -276,7 +276,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # SiblingContext` (see :meth:`_sibling_context`).
         self.siblings = SiblingTables(
             self.reader,
-            self._scratch_parent,
+            self._store_path,
             write_mobility_table=write_mobility_table,
             mobility_heatmap=mobility_heatmap,
             mobility_grid=mobility_grid,
@@ -300,9 +300,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # which element and the placeholders waiting for their pixels. Built
         # last because it is handed this converter's pitch accessor, which
         # only reads a settled pitch once the reader's metadata is in.
+        # Handed the store accessor for the same reason: the pixels stream
+        # after the write, and ``output_path`` can be reassigned in between.
         self.optical = OpticalImages(
             self.reader,
-            self.output_path,
+            self._store_path,
             self.dataset_id,
             include=include_optical,
             apply_alignment=apply_optical_alignment,
@@ -387,17 +389,6 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             mobility_heatmap=self._ensure_mobility_heatmap,
         )
 
-    def _scratch_parent(self) -> Path:
-        """The directory a table's CSC scratch is made in.
-
-        Read when a scratch is made, never cached: ``convert_msi`` shortens
-        the output path before it builds a converter, but a caller that
-        stands one up itself assigns the shortened path afterwards, and the
-        scratch has to follow the store rather than the path the converter
-        was handed.
-        """
-        return self.output_path.parent
-
     def _sibling_context(self) -> SiblingContext:
         """What the sibling tables need that this conversion decided after setup.
 
@@ -446,6 +437,26 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         contradicted each other (issue #228).
         """
         return (float(self.pixel_size_um), float(self.pixel_size_y_um))
+
+    def _store_path(self) -> Path:
+        """Where this conversion's store is being written, right now.
+
+        ``output_path`` is not fixed at construction. ``convert_msi``
+        shortens it for Windows (``prepare_zarr_output_path``) *before*
+        building the converter, so the production route is safe, but a
+        caller that stands a converter up itself has to shorten afterwards
+        -- the CLI's ``_quarantine_partial_output`` says as much, and the
+        suite does it in ``test_internal_failures_are_not_warnings``.
+
+        The one accessor both collaborators that outlive construction are
+        handed, rather than a snapshot each: :class:`SiblingTables` makes
+        every table's scratch in its parent, and :class:`OpticalImages`
+        streams its pixels into it once the write has returned. What the
+        converter does with the path itself -- the write, the consolidate
+        -- reads ``output_path`` directly, at call time, which is the same
+        thing.
+        """
+        return self.output_path
 
     def _add_metadata_to_uns(self, adata) -> None:
         """Apply :meth:`build_uns_metadata` to an AnnData about to be written."""

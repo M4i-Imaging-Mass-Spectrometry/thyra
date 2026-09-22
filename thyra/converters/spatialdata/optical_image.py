@@ -974,7 +974,7 @@ class OpticalImages:
     def __init__(
         self,
         reader: "BaseMSIReader",
-        output_path: Path,
+        output_path: Callable[[], Path],
         dataset_id: str,
         *,
         include: bool,
@@ -990,8 +990,18 @@ class OpticalImages:
                 through ``getattr``/``hasattr`` -- a reader here is whatever
                 satisfies the interface, not necessarily a
                 :class:`~thyra.core.base_reader.BaseMSIReader` subclass.
-            output_path: The store being written. Read only after it exists,
-                by :meth:`stream_pending_pixels` and :meth:`forget_image`.
+            output_path: The store being written, called when it is needed
+                rather than read here: the converter's output path is not
+                fixed at construction. ``convert_msi`` shortens it for
+                Windows before building the converter, but a caller that
+                stands one up itself has to do that afterwards, and the
+                converter reads its own ``output_path`` at call time
+                everywhere else. Capturing the path here streamed the
+                pixels into whatever the store was called before the
+                reassignment, which left the element the SpatialData write
+                declared holding nothing but its fill value. Called only
+                after the store exists, by :meth:`stream_pending_pixels`
+                and :meth:`forget_image`.
             dataset_id: Names the per-dataset coordinate system each image is
                 placed in, and prefixes every element name.
             include: Whether to put optical images in the store at all.
@@ -1004,7 +1014,7 @@ class OpticalImages:
                 this object is built.
         """
         self.reader = reader
-        self.output_path = output_path
+        self._output_path = output_path
         self.dataset_id = dataset_id
         self._include = bool(include)
         self._apply_alignment = bool(apply_alignment)
@@ -1608,17 +1618,18 @@ class OpticalImages:
             The number of images whose pixels are now in the store.
         """
         pending, self._pending = self._pending, {}
+        store = self._output_path()
         streamed = 0
         for image in pending.values():
             logger.info(f"Streaming optical image pixels: '{image.name}'")
             try:
-                image.stream_pixels(self.output_path)
+                image.stream_pixels(store)
             except Exception as e:  # mirrors the per-image guard in add_images
                 logger.warning(
                     f"Failed to load optical image {image.source.path.name}: {e}; "
                     f"dropping '{image.name}' from the store"
                 )
-                image.discard(self.output_path)
+                image.discard(store)
                 self.forget_image(image.name)
                 continue
             streamed += 1
@@ -1645,7 +1656,7 @@ class OpticalImages:
             self._alignment_element = None
         try:
             root = zarr.open_group(
-                str(self.output_path), mode="r+", use_consolidated=False
+                str(self._output_path()), mode="r+", use_consolidated=False
             )
             optical = root.attrs.get("optical_images")
             if isinstance(optical, dict):

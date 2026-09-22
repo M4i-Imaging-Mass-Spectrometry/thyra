@@ -605,6 +605,54 @@ def test_converters_stream_the_pixels_after_the_write(rgb_tiff: Path, tmp_path: 
     np.testing.assert_array_equal(sdata.images["ds_optical_highres"].values, whole)
 
 
+def test_the_pixels_follow_an_output_path_reassigned_after_construction(
+    rgb_tiff: Path, tmp_path: Path
+):
+    """A converter whose output path moved after it was built still fills its store.
+
+    ``convert_msi`` shortens the output path for Windows
+    (``prepare_zarr_output_path``) *before* it builds the converter, so the
+    production route never moves it. A caller that stands a converter up
+    itself has to shorten afterwards: ``test_internal_failures_are_not_warnings``
+    does it three times, and the CLI's ``_quarantine_partial_output`` records
+    that ``convert_msi`` "resolves and may extend the output path".
+
+    ``OpticalImages`` captured the path at construction, so it streamed into
+    whatever the store had been called before the move, while the converter
+    wrote, scratched and consolidated at a path it read at call time. What
+    came out was a store whose optical element had its metadata, its chunk
+    grid and its name in the root attrs, and not one pixel -- every chunk
+    still the fill value -- and a conversion reported as failed, because
+    dropping the element again went to the same absent path and that failure
+    is the one ``stream_pending_pixels`` deliberately propagates.
+    """
+    from thyra.converters.spatialdata.streaming_converter import (
+        StreamingSpatialDataConverter,
+    )
+
+    declared = tmp_path / "declared.zarr"
+    written = tmp_path / "written.zarr"
+
+    converter = StreamingSpatialDataConverter(
+        _mock_reader(rgb_tiff),
+        declared,
+        dataset_id="ds",
+        pixel_size_um=10.0,
+        use_csc=True,
+    )
+    converter.output_path = written
+
+    assert converter.convert() is True
+    assert converter.optical.pending == {}
+    assert not declared.exists()
+
+    whole = _cyx(rgb_tiff)
+    _, levels, _ = _read_element(written, "ds_optical_highres")
+    np.testing.assert_array_equal(levels["s0"][1], whole)
+    sdata = SpatialData.read(str(written))
+    np.testing.assert_array_equal(sdata.images["ds_optical_highres"].values, whole)
+
+
 @pytest.fixture
 def truncated_tiff(tmp_path: Path) -> Path:
     """Header intact, strips cut: probe succeeds, decoding fails."""

@@ -1,8 +1,9 @@
 """The sibling tables decided, and declined, without a conversion (#353).
 
 Every test here stands :class:`~thyra.converters.spatialdata.sibling_tables.SiblingTables`
-up on a reader stub and a temporary directory -- no converter, no store, no
-source read -- and asks it the questions a conversion asks it.
+up on a reader stub and an accessor for the store it would be writing -- no
+converter, no store, no source read -- and asks it the questions a
+conversion asks it.
 
 That is the point of the module's existence. The same decisions used to be
 seventeen private methods on the base converter, reachable only by driving
@@ -191,7 +192,7 @@ class TestPlanning:
 
     def test_a_shared_feature_axis_names_the_mobility_table(self, tmp_path: Path):
         reader = _SharedButEmpty()
-        siblings = SiblingTables(reader, lambda: tmp_path)
+        siblings = SiblingTables(reader, lambda: tmp_path / "out.zarr")
 
         siblings.plan(_context(siblings, reader), _TABLE_KEY)
 
@@ -203,7 +204,7 @@ class TestPlanning:
     ):
         """``GridStubReader`` carries mobility per pixel, not as a feature axis."""
         reader = GridStubReader()
-        siblings = SiblingTables(reader, lambda: tmp_path)
+        siblings = SiblingTables(reader, lambda: tmp_path / "out.zarr")
 
         with thyra_logs("thyra", logging.INFO) as records:
             siblings.plan(_context(siblings, reader), _TABLE_KEY)
@@ -213,7 +214,9 @@ class TestPlanning:
 
     def test_the_grid_route_names_it_and_resolves_one_grid(self, tmp_path: Path):
         reader = GridStubReader()
-        siblings = SiblingTables(reader, lambda: tmp_path, mobility_grid=True)
+        siblings = SiblingTables(
+            reader, lambda: tmp_path / "out.zarr", mobility_grid=True
+        )
 
         siblings.plan(_context(siblings, reader), _TABLE_KEY)
 
@@ -222,7 +225,9 @@ class TestPlanning:
 
     def test_turning_it_off_names_nothing(self, tmp_path: Path):
         reader = _SharedButEmpty()
-        siblings = SiblingTables(reader, lambda: tmp_path, write_mobility_table=False)
+        siblings = SiblingTables(
+            reader, lambda: tmp_path / "out.zarr", write_mobility_table=False
+        )
 
         siblings.plan(_context(siblings, reader), _TABLE_KEY)
 
@@ -235,7 +240,9 @@ class TestPlanning:
                 return False
 
         reader = _Flat()
-        siblings = SiblingTables(reader, lambda: tmp_path, mobility_grid=True)
+        siblings = SiblingTables(
+            reader, lambda: tmp_path / "out.zarr", mobility_grid=True
+        )
 
         siblings.plan(_context(siblings, reader), _TABLE_KEY)
 
@@ -284,7 +291,7 @@ class TestTheMsmsRefusalOrder:
         self, tmp_path: Path, thyra_logs
     ):
         reader = _incapable(_schedule(1))
-        siblings = SiblingTables(reader, lambda: tmp_path)
+        siblings = SiblingTables(reader, lambda: tmp_path / "out.zarr")
 
         with thyra_logs("thyra", logging.INFO) as records:
             siblings.plan(_context(siblings, reader), _TABLE_KEY)
@@ -297,7 +304,7 @@ class TestTheMsmsRefusalOrder:
     def test_a_reader_that_cannot_split_is_told_that(self, tmp_path: Path, thyra_logs):
         """The fallback still fires for a schedule with nothing wrong with it."""
         reader = _incapable(_schedule(2))
-        siblings = SiblingTables(reader, lambda: tmp_path)
+        siblings = SiblingTables(reader, lambda: tmp_path / "out.zarr")
 
         with thyra_logs("thyra", logging.INFO) as records:
             siblings.plan(_context(siblings, reader), _TABLE_KEY)
@@ -307,7 +314,7 @@ class TestTheMsmsRefusalOrder:
 
     def test_a_separable_schedule_names_the_table(self, tmp_path: Path):
         reader = _fragmenting(GridStubReader, n_windows=2)
-        siblings = SiblingTables(reader, lambda: tmp_path)
+        siblings = SiblingTables(reader, lambda: tmp_path / "out.zarr")
 
         siblings.plan(_context(siblings, reader), _TABLE_KEY)
 
@@ -323,7 +330,7 @@ class TestADeclinedSiblingIsUnnamed:
     """
 
     def _attach(self, tmp_path: Path, reader: Any):
-        siblings = SiblingTables(reader, lambda: tmp_path)
+        siblings = SiblingTables(reader, lambda: tmp_path / "out.zarr")
         ctx = _context(siblings, reader)
         siblings.plan(ctx, _TABLE_KEY)
         assert siblings.mobility_table_key == f"{_TABLE_KEY}_mobility"
@@ -393,7 +400,7 @@ class TestPlanningIsIdempotentPerKey:
 
     def test_a_second_ask_for_the_same_table_re_names_nothing(self, tmp_path: Path):
         reader = _SharedButEmpty()
-        siblings = SiblingTables(reader, lambda: tmp_path)
+        siblings = SiblingTables(reader, lambda: tmp_path / "out.zarr")
         ctx = _context(siblings, reader)
 
         siblings.plan(ctx, _TABLE_KEY)
@@ -407,7 +414,7 @@ class TestPlanningIsIdempotentPerKey:
 
     def test_the_next_slice_gets_its_own_decision(self, tmp_path: Path):
         reader = _SharedButEmpty()
-        siblings = SiblingTables(reader, lambda: tmp_path)
+        siblings = SiblingTables(reader, lambda: tmp_path / "out.zarr")
         ctx = _context(siblings, reader)
 
         siblings.plan(ctx, _TABLE_KEY)
@@ -420,17 +427,17 @@ class TestTheScratchGoes:
     """The directories a table's memmaps live in, and the order they go in."""
 
     def test_a_registered_directory_is_made_next_to_the_output(self, tmp_path: Path):
-        store = tmp_path / "store"
-        store.mkdir()
-        siblings = SiblingTables(GridStubReader(), lambda: store)
+        output = tmp_path / "store" / "out.zarr"
+        output.parent.mkdir()
+        siblings = SiblingTables(GridStubReader(), lambda: output)
 
         scratch = siblings.register_scratch("summed", None)
 
-        assert scratch.parent == store
+        assert scratch.parent == output.parent
         assert scratch.name.startswith(".thyra_summed_")
         assert scratch.is_dir()
 
-    def test_the_parent_is_read_when_the_scratch_is_made(self, tmp_path: Path):
+    def test_the_store_is_read_when_the_scratch_is_made(self, tmp_path: Path):
         """The scratch follows the store, not the path handed over first.
 
         ``convert_msi`` shortens the output path before it builds a
@@ -438,22 +445,25 @@ class TestTheScratchGoes:
         shortened path afterwards -- and the scratch a table's memmaps
         live in has to land beside the store that is actually written,
         on the same filesystem as it.
+
+        Reading the accessor once and keeping the answer puts the scratch
+        beside ``first``, which this fails on.
         """
         first = tmp_path / "given"
         second = tmp_path / "written"
         first.mkdir()
         second.mkdir()
-        parent = first
-        siblings = SiblingTables(GridStubReader(), lambda: parent)
+        output = first / "out.zarr"
+        siblings = SiblingTables(GridStubReader(), lambda: output)
 
-        parent = second
+        output = second / "out.zarr"
         scratch = siblings.register_scratch("summed", None)
 
         assert scratch.parent == second
         assert not any(p.name.startswith(".thyra_") for p in first.iterdir())
 
     def test_releasing_removes_it(self, tmp_path: Path):
-        siblings = SiblingTables(GridStubReader(), lambda: tmp_path)
+        siblings = SiblingTables(GridStubReader(), lambda: tmp_path / "out.zarr")
         scratch = siblings.register_scratch("mobility", None)
 
         siblings.release_scratch()
@@ -462,7 +472,7 @@ class TestTheScratchGoes:
 
     def test_the_tables_are_dropped_before_anything_is_unlinked(self, tmp_path: Path):
         """Windows will not delete a mapped file, and the table is the map."""
-        siblings = SiblingTables(GridStubReader(), lambda: tmp_path)
+        siblings = SiblingTables(GridStubReader(), lambda: tmp_path / "out.zarr")
         scratch = siblings.register_scratch("summed", None)
         tables = {_TABLE_KEY: object()}
 
@@ -473,7 +483,7 @@ class TestTheScratchGoes:
 
     def test_releasing_twice_is_harmless(self, tmp_path: Path):
         """``convert``'s ``finally`` runs after ``_save_output`` already did."""
-        siblings = SiblingTables(GridStubReader(), lambda: tmp_path)
+        siblings = SiblingTables(GridStubReader(), lambda: tmp_path / "out.zarr")
         siblings.register_scratch("summed", None)
 
         siblings.release_scratch()
