@@ -16,6 +16,15 @@ The import block is ordered deliberately and carries ``# noqa: E402``: the
 dependency warning configuration has to run before the libraries that emit
 those warnings are imported, so the usual "imports first" rule is
 inverted on purpose here.
+
+**What it does not import at module scope is ``thyra.convert``** (issue
+#381). Binding ``convert_msi`` here meant every invocation paid for the
+converter, ``pandas`` and ``spatialdata`` before click had parsed a single
+argument -- including ``thyra --version`` and the two subcommands,
+``validate`` and ``metadata``, that never reach a converter at all. The
+conversion command imports it where it calls it. Tests that replace the
+conversion patch ``thyra.convert.convert_msi``, which is the function
+rather than a second name for it.
 """
 
 # Configure dependencies to suppress warnings BEFORE any imports
@@ -30,12 +39,6 @@ from uuid import uuid4  # noqa: E402
 import click  # noqa: E402
 
 from thyra import __version__  # noqa: E402
-from thyra.convert import (  # noqa: E402
-    convert_msi,
-    dataset_id_problem,
-    quarantine_partial_output,
-)
-from thyra.core.registry import detect_format  # noqa: E402
 from thyra.resampling.mobility_grid import MOBILITY_CHANNELS  # noqa: E402
 from thyra.utils.logging_config import setup_logging  # noqa: E402
 
@@ -80,6 +83,8 @@ def _validate_basic_params(pixel_size: Optional[float], dataset_id: str) -> None
         raise click.BadParameter(
             "Pixel size must be a finite positive number", param_hint="pixel_size"
         )
+    from thyra.convert import dataset_id_problem
+
     # Emptiness used to be the whole check, so an id with a space or a
     # slash was refused by SpatialData only at the write, after both
     # passes over the source (issue #250).
@@ -207,6 +212,8 @@ def _validate_input_path(input: Path) -> None:
                 f"found: {ibd_path}"
             )
     elif input.is_dir() and input.suffix.lower() == ".d":
+        from thyra.core.registry import detect_format
+
         # Several Bruker formats share the .d extension (timsTOF via
         # analysis.tsf/.tdf, solariX via peaks.sqlite), so delegate to the
         # registry's detection rather than duplicating the marker files
@@ -563,6 +570,8 @@ def _quarantine_partial_output(output: Path) -> None:
     store already moved aside does not exist here, so this returns
     immediately.
     """
+    from thyra.convert import quarantine_partial_output
+
     quarantine_partial_output(output)
 
 
@@ -1090,6 +1099,9 @@ def main(
 
     # If input folder has multiple .d datasets, let the user choose
     input = _select_bruker_dataset(input)
+
+    from thyra.convert import convert_msi
+    from thyra.core.registry import detect_format
 
     # Before any work: say which of the given options this source ignores.
     # Detection failures are left to the conversion, which reports them

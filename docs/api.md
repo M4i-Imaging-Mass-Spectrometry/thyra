@@ -375,6 +375,14 @@ class MyFormatReader(BaseMSIReader):
     ...
 ```
 
+The decorator runs when your module is imported, and the format is
+available from that point on. Thyra's own readers work the same way, but
+nothing imports them up front: the registry holds a table of
+`format -> module` and imports a format's module the first time that
+format is looked up or detected. So `import thyra` loads no reader, no
+converter and no `spatialdata`, and importing the metadata schema on its
+own costs a pydantic model rather than the whole imaging stack.
+
 ::: thyra.core.registry.detect_format
     options:
       show_root_heading: true

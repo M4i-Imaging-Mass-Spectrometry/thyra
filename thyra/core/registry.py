@@ -2,9 +2,25 @@
 
 Two jobs that look like one. Registration is a decorator
 (:func:`register_reader`, :func:`register_converter`) that runs at import
-time, so importing :mod:`thyra.readers` is what populates the tables;
-nothing scans the filesystem for plugins. Detection is
-:func:`detect_format`, and it is the harder half.
+time, so importing a reader's module is what populates the tables; nothing
+scans the filesystem for plugins. Detection is :func:`detect_format`, and
+it is the harder half.
+
+**Which module to import is a table here, and the import happens on first
+use** (issue #381). ``thyra/readers/__init__.py`` used to import every
+reader package so the decorators ran, which made ``import thyra`` -- and
+therefore ``import thyra.metadata.schema``, since a parent package always
+initialises first -- pull in every reader, every converter and
+``spatialdata``: 3.5 s and 3,580 modules on the interpreter these numbers
+were measured on, before any work. :data:`_READER_MODULES` and
+:data:`_CONVERTER_MODULES` name the module that declares each format's
+decorator, and a lookup imports it if the format is not in the table yet.
+
+There is still one resolution path, not two: every lookup calls
+:meth:`MSIRegistry._ensure_registered` first, whether or not the format is
+already there, and a module that has already been imported costs a
+``sys.modules`` hit. Nothing registers twice, because nothing imports
+twice.
 
 **Extensions are not enough, which is why detection inspects the path.**
 ``.imzML`` and ``.d`` map straight to a format, but ``.raw`` is claimed by
@@ -17,20 +33,21 @@ user believes is supported is the least actionable message this package
 could give.
 
 The ``RLock`` guards the registration tables and nothing else. It is not a
-general thread-safety claim: the tables are filled while ``thyra.readers``
-imports and only read afterwards. The lazy import below used to memoise
+general thread-safety claim: a table gains a format the first time that
+format is looked up and is only read afterwards. The lazy import below used to memoise
 into an unsynchronised module global -- the one piece of mutable global
 state here, and the one piece the lock did not reach -- and that global is
 gone rather than locked (issue #284). :func:`_get_bruker_folder_structure`
 says why locking it would have been worse than leaving it alone.
 """
 
+import importlib
 import logging
 import re
 import zipfile
 from pathlib import Path
 from threading import RLock
-from typing import Dict, NoReturn, Type
+from typing import Dict, Mapping, NoReturn, Type
 
 from ..errors import ConversionRefused
 from .base_converter import BaseMSIConverter
@@ -38,14 +55,47 @@ from .base_reader import BaseMSIReader
 
 logger = logging.getLogger(__name__)
 
+#: Which module declares ``@register_reader(format)`` for each format.
+#:
+#: The decorators remain the only thing that registers; this says where to
+#: find them so the import can wait until the format is asked for. Keeping
+#: the two in step is not left to care: ``tests/unit/test_registry.py``
+#: parses every module under ``thyra/readers/`` for decorator calls and
+#: asserts this table names exactly those formats, and for each one the
+#: module the decorator is actually written in.
+_READER_MODULES: Mapping[str, str] = {
+    "bruker": "thyra.readers.bruker.timstof.timstof_reader",
+    "imzml": "thyra.readers.imzml.imzml_reader",
+    "mzpeak": "thyra.readers.mzpeak.mzpeak_reader",
+    "phi": "thyra.readers.phi.phi_reader",
+    "rapiflex": "thyra.readers.bruker.rapiflex.rapiflex_reader",
+    "solarix": "thyra.readers.bruker.solarix.solarix_reader",
+    "waters": "thyra.readers.waters.waters_reader",
+}
+
+#: The same table for output formats. One entry, and the import it names is
+#: what pulls in ``spatialdata`` -- which is the whole 2.7 s the metadata
+#: layer used to pay for nothing (issue #381).
+_CONVERTER_MODULES: Mapping[str, str] = {
+    "spatialdata": "thyra.converters.spatialdata.converter",
+}
+
 
 def _get_bruker_folder_structure():
-    """Import ``BrukerFolderStructure`` and ``BrukerFormat`` late, to break a cycle.
+    """Import ``BrukerFolderStructure`` and ``BrukerFormat`` late.
 
-    Their module reaches this one through ``thyra.readers.__init__``, which
-    imports every reader package so the ``@register_reader`` decorators run.
-    Importing them at module scope here would close that cycle, so the
-    import is deferred to call time.
+    Two reasons, and the first outlived the second. The import used to
+    close a cycle -- their package reached this module back through
+    ``thyra.readers.__init__``, which imported every reader package so the
+    ``@register_reader`` decorators ran. Issue #381 emptied that front
+    door, so there is no cycle left to break.
+
+    What is left is that detection must not drag the Bruker reader stack
+    in. This function runs on every ``.d`` path and on every directory
+    that reached :meth:`MSIRegistry._detect_directory_format`, including
+    Waters ones, and ``folder_structure`` costs a ``.mis`` parser and
+    nothing more. A module-scope import would put it on the path of
+    ``import thyra`` again.
 
     It is a plain import and deliberately not memoised. It used to assign
     the pair to a module-level global under an unsynchronised
@@ -402,11 +452,49 @@ class MSIRegistry:
                     f"Bruker .d directory missing analysis files: {input_path}"
                 ) from e
 
+    def _ensure_registered(
+        self, format_name: str, table: Dict[str, type], modules: Mapping[str, str]
+    ) -> None:
+        """Import the module that registers ``format_name``, if there is one.
+
+        Called before every lookup, so there is one resolution path rather
+        than an eager one and a lazy one. A format already in ``table``
+        returns after a dict lookup; an unknown format with no table entry
+        returns too, and the caller raises the refusal that names what is
+        available.
+
+        **The import is taken outside the lock, deliberately.** Holding it
+        across an import is the deadlock shape issue #284 measured on this
+        exact pair of locks: the holder waits for the module's import lock
+        while a thread part-way through that import waits for the registry
+        lock inside a ``@register_reader`` decorator. Releasing first costs
+        a re-check -- two threads can import the same module concurrently,
+        which CPython's per-module import lock serialises anyway, and the
+        decorator writing the same class into the same key twice is
+        harmless.
+
+        A module that has already been imported does not register again:
+        ``importlib.import_module`` returns the cached module without
+        re-running it. That matters only where something empties the tables
+        by hand (``TestRegistry`` in ``tests/unit/test_registry.py``, which
+        restores them itself); nothing in the package does.
+        """
+        with self._lock:
+            if format_name in table:
+                return
+            module_path = modules.get(format_name)
+
+        if module_path is None:
+            return
+
+        importlib.import_module(module_path)
+
     def get_reader_class(self, format_name: str) -> Type[BaseMSIReader]:
         """Get reader class."""
+        self._ensure_registered(format_name, self._readers, _READER_MODULES)
         with self._lock:
             if format_name not in self._readers:
-                available = list(self._readers.keys())
+                available = self._known(self._readers, _READER_MODULES)
                 raise ConversionRefused(
                     f"No reader for format "
                     f"'{format_name}'. "
@@ -416,14 +504,28 @@ class MSIRegistry:
 
     def get_converter_class(self, format_name: str) -> Type[BaseMSIConverter]:
         """Get converter class."""
+        self._ensure_registered(format_name, self._converters, _CONVERTER_MODULES)
         with self._lock:
             if format_name not in self._converters:
-                available = list(self._converters.keys())
+                available = self._known(self._converters, _CONVERTER_MODULES)
                 raise ConversionRefused(
                     f"No converter for format '{format_name}'. Available: "
                     f"{available}"
                 )
             return self._converters[format_name]
+
+    @staticmethod
+    def _known(table: Mapping[str, type], modules: Mapping[str, str]) -> list:
+        """List the formats this registry can serve, loaded or not.
+
+        The refusal used to list the keys registered so far. That was the
+        same set every time while every reader was imported up front; with
+        the imports deferred it would be whatever the process happened to
+        have touched, so a user who mistyped ``imzml`` before converting
+        anything would be told ``Available: []``. The union of the two
+        tables is the answer that does not depend on history.
+        """
+        return sorted(set(table) | set(modules))
 
 
 # Global registry instance

@@ -42,13 +42,8 @@ Example usage:
     >>> print(f"Instrument info: {comprehensive.instrument_info}")
 """
 
-# Format-specific extractors (re-export from extractors submodule)
-from .extractors import (
-    BrukerMetadataExtractor,
-    ImzMLMetadataExtractor,
-    get_extractor_for_format,
-    list_supported_formats,
-)
+import importlib
+from typing import TYPE_CHECKING, Any, List
 
 # Core data types
 from .types import ComprehensiveMetadata, EssentialMetadata
@@ -57,6 +52,29 @@ from .types import ComprehensiveMetadata, EssentialMetadata
 from .uns_compat import sanitize_uns_string_arrays
 
 # Base classes - import delayed to avoid circular imports
+
+if TYPE_CHECKING:  # pragma: no cover - for type checkers, not at runtime
+    from .extractors import (
+        BrukerMetadataExtractor,
+        ImzMLMetadataExtractor,
+        get_extractor_for_format,
+        list_supported_formats,
+    )
+
+#: The extractors are re-exported lazily (:pep:`562`).
+#:
+#: They read vendor sources, so they pull the reader-side stack: the imzML
+#: header extractor imports a reader module and ``MetadataExtractor``
+#: brings ``thyra.core`` and with it ``pandas``. Doing that here put all of
+#: it on the path of ``import thyra.metadata.schema``, which describes
+#: documents and reads no vendor file at all (issue #381). Naming an
+#: extractor still imports them.
+_LAZY_EXTRACTORS = (
+    "BrukerMetadataExtractor",
+    "ImzMLMetadataExtractor",
+    "get_extractor_for_format",
+    "list_supported_formats",
+)
 
 
 # Public API
@@ -108,6 +126,8 @@ def create_extractor(format_name: str, *args, **kwargs):
         >>> conn = open_read_only("data.d/analysis.tsf")
         >>> extractor = create_extractor('bruker', conn, Path("data.d"))
     """
+    from .extractors import get_extractor_for_format
+
     extractor_class = get_extractor_for_format(format_name)
     return extractor_class(*args, **kwargs)
 
@@ -141,3 +161,16 @@ def get_metadata_summary(extractor) -> dict:
         "is_3d": essential.is_3d,
         "has_pixel_size": essential.has_pixel_size,
     }
+
+
+def __getattr__(name: str) -> Any:
+    """Import the extractors the first time one of their names is used."""
+    if name in _LAZY_EXTRACTORS:
+        value = getattr(importlib.import_module(".extractors", __name__), name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> List[str]:
+    return sorted(set(globals()) | set(__all__))
