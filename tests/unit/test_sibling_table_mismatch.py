@@ -121,16 +121,14 @@ def _table(rows):
 class TestTheMismatchIsAWarningForEverySibling:
     """The grid says it at WARNING; the split said the same thing at INFO."""
 
-    _MODULE = "thyra.converters.spatialdata.base_spatialdata_converter"
+    _MODULE = "thyra.converters.spatialdata.sibling_tables"
 
     def _record(self, split_rows, summed_rows):
-        from thyra.converters.spatialdata.base_spatialdata_converter import (
-            BaseSpatialDataConverter,
-        )
+        from thyra.converters.spatialdata.sibling_tables import SiblingTables
 
         table = _table(split_rows)
         with _records(self._MODULE, logging.INFO) as records:
-            BaseSpatialDataConverter._record_demultiplexed_current(
+            SiblingTables._record_demultiplexed_current(
                 table, _table(summed_rows), "msi_z0"
             )
         return table, records
@@ -149,13 +147,11 @@ class TestTheMismatchIsAWarningForEverySibling:
         assert table.uns["demultiplexed_current"]["current_ratio"] == pytest.approx(1.0)
 
     def test_the_grid_reports_the_same_disagreement_the_same_way(self):
-        from thyra.converters.spatialdata.base_spatialdata_converter import (
-            BaseSpatialDataConverter,
-        )
+        from thyra.converters.spatialdata.sibling_tables import SiblingTables
 
         table = _table([[11.0, 0.0]])
         with _records(self._MODULE, logging.INFO) as records:
-            BaseSpatialDataConverter._record_mobility_marginal(
+            SiblingTables._record_mobility_marginal(
                 table, _table([[10.0, 0.0]]), "msi_z0"
             )
 

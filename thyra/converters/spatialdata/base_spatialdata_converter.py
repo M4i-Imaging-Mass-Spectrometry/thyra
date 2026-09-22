@@ -36,21 +36,17 @@ from spatialdata.transformations import Identity
 from ...core.base_converter import BaseMSIConverter, PixelSizeSource
 from ...core.base_reader import BaseMSIReader
 from ...core.conversion_state import ConversionState
-from ...errors import MALFORMED_METADATA, ConversionRefused
+from ...errors import ConversionRefused
 from ...metadata.root_attrs import RootAttrsBuilder, RootAttrsContext
 from ...metadata.schema import MSI_VAR_RESERVED_COLUMNS
 from ...metadata.uns_assembler import UnsAssembler, UnsContext
 from ...resampling.axis_planner import AxisPlanner, normalize_resampling_config
-from ...resampling.mobility_grid import (
-    MOBILITY_CHANNELS,
-    MobilityGrid,
-    build_mobility_grid,
-    report_channel_width,
-)
+from ...resampling.mobility_grid import MOBILITY_CHANNELS
 from ...resampling.strategies import ResamplingStrategy, build_strategy
 from ...resampling.types import AxisLinearisation, ResamplingConfig
 from ._chunking import table_write_config
 from .optical_image import OpticalImages
+from .sibling_tables import SiblingContext, SiblingTables
 
 logger = logging.getLogger(__name__)
 
@@ -73,44 +69,6 @@ def _suppress_upstream_warnings():
             category=UserWarning,
         )
         yield
-
-
-#: How far a marginal may sit from the column it mirrors, relative to the
-#: largest value in the summed table, and still be called exact. Summing
-#: the same float64 values in a different order is the only difference
-#: under ``--tdf-spectrum scan_sum``.
-_MARGINAL_TOLERANCE = 1e-9
-
-
-def _current_ratio_block(
-    table: Any, summed_key: str, summed: Any
-) -> Optional[Dict[str, Any]]:
-    """How much of the summed table's ion current a sibling holds, per pixel.
-
-    A sibling's row sum over every one of its columns is that pixel's ion
-    current, and so is the summed table's, so the two row sums compare
-    directly. Both matrices sit on memmaps, and a row sum is one pass
-    over each -- nothing the size of a matrix is held in RAM, which is
-    why this is the whole comparison: a cell-by-cell deviation between
-    the grid table's marginal and the summed table needs the product and
-    the difference materialised, each as large as the summed table, and
-    the route that writes both never holds either. ``None`` when the two
-    cannot be compared (a row count mismatch, no ion current at all),
-    which is not a disagreement.
-    """
-    if summed is None:
-        return None
-    totals = np.asarray(summed.X.sum(axis=1)).ravel().astype(np.float64)
-    split = np.asarray(table.X.sum(axis=1)).ravel().astype(np.float64)
-    if split.size != totals.size or not totals.any():
-        return None
-    per_pixel = split / np.where(totals == 0, np.nan, totals)
-    return {
-        "summed_table": summed_key,
-        "current_ratio": float(split.sum() / totals.sum()),
-        "current_ratio_pixel_min": float(np.nanmin(per_pixel)),
-        "current_ratio_pixel_max": float(np.nanmax(per_pixel)),
-    }
 
 
 class BaseSpatialDataConverter(BaseMSIConverter, ABC):
@@ -308,49 +266,25 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # _uns_context().
         self._resolved_resampling_plan: Optional[Dict[str, Any]] = None
 
-        # The mobility-resolved sibling table (see mobility_table.py): whether
-        # to write one, and -- once a finalize step has decided for its slice
-        # -- the element key it gets, so the MSI table's uns can name it.
-        self._write_mobility_table = bool(write_mobility_table)
-        self._mobility_table_key: Optional[str] = None
-        # The common mobility grid (see resampling/mobility_grid.py): the
-        # second way to fill the same sibling, for a source whose pixels
-        # each carry their own mobility values. Resolved once by
-        # _plan_mobility_table, so the MSI table's metadata block and the
-        # sibling describe the same grid.
-        self._mobility_grid_enabled = bool(mobility_grid)
-        self._mobility_bins = int(mobility_bins)
-        self._mobility_bounds = (mobility_min, mobility_max)
-        self._mobility_grid: Optional[MobilityGrid] = None
-        self._mobility_grid_resolved = False
-        # The grid's discovery pass for the slice being written, when the
-        # converter ran it fused with the heatmap's pass (see
-        # _prepare_sibling_scans); consumed by _attach_sibling_tables.
-        self._grid_discovery: Any = None
-        # The MS/MS table's accumulator when the converter fed it from the
-        # summed table's own passes (see fused_passes.py); consumed by
-        # _attach_sibling_tables like the grid's discovery.
-        self._msms_accumulator: Any = None
-        # Whether the sibling sinks were fed from the summed table's passes
-        # already, so _prepare_sibling_scans has nothing left to scan; and
-        # whether the sibling tables were planned before those passes.
-        self._sibling_scans_done = False
-        self._siblings_planned = False
-        # Scratch directories holding the memmapped matrices of every table
-        # until it is written; released by _release_table_scratch.
-        self._table_scratch: List[Tuple[Any, Path]] = []
-        # The mass-mobility heatmap (see mobility_heatmap.py): built once
-        # per conversion, on first demand, and shared by every uns block
-        # that asks for it. ``_built`` distinguishes "not yet" from
-        # "tried, nothing to write".
-        self._mobility_heatmap_enabled = bool(mobility_heatmap)
-        self._mobility_heatmap_block: Optional[Dict[str, Any]] = None
-        self._mobility_heatmap_built = False
-        # The demultiplexed MS/MS sibling (see msms_table.py): on by default, and
-        # -- once a finalize step has decided for its slice -- the element
-        # key it gets, so the MSI table's uns can name it.
-        self._write_msms_table = bool(msms_table)
-        self._msms_table_key: Optional[str] = None
+        # The tables written beside the summed one -- the mobility-resolved
+        # sibling and the demultiplexed MS/MS sibling -- and everything that
+        # decides them: the mobility grid one of them bins onto, the raw
+        # pass they share with the mass-mobility heatmap, and the scratch
+        # directories every table's memmaps live in until it is written.
+        # Everything it reads that a conversion decides later travels per
+        # call in a :class:`~thyra.converters.spatialdata.sibling_tables.
+        # SiblingContext` (see :meth:`_sibling_context`).
+        self.siblings = SiblingTables(
+            self.reader,
+            self._scratch_parent,
+            write_mobility_table=write_mobility_table,
+            mobility_heatmap=mobility_heatmap,
+            mobility_grid=mobility_grid,
+            mobility_bins=mobility_bins,
+            mobility_min=mobility_min,
+            mobility_max=mobility_max,
+            write_msms_table=msms_table,
+        )
 
         # Everything that decides which m/z values the store will carry:
         # the method, the axis law, the bin width and the range, and the
@@ -412,7 +346,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         try:
             return super().convert()
         finally:
-            self._release_table_scratch()
+            self.siblings.release_scratch()
 
     def build_uns_metadata(self) -> Dict[str, Any]:
         """The provenance block every table of this conversion carries.
@@ -444,625 +378,56 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         block is written from whatever regions are known, or omitted.
         """
         return UnsContext(
-            mobility_table_key=self._mobility_table_key,
-            msms_table_key=self._msms_table_key,
-            mobility_grid=self._mobility_grid,
+            mobility_table_key=self.siblings.mobility_table_key,
+            msms_table_key=self.siblings.msms_table_key,
+            mobility_grid=self.siblings.mobility_grid,
             resolved_resampling_plan=self._resolved_resampling_plan,
             region_info=getattr(self, "_region_info", None),
             pixel_size_source=self.pixel_size_source,
             mobility_heatmap=self._ensure_mobility_heatmap,
         )
 
+    def _scratch_parent(self) -> Path:
+        """The directory a table's CSC scratch is made in.
+
+        Read when a scratch is made, never cached: ``convert_msi`` shortens
+        the output path before it builds a converter, but a caller that
+        stands one up itself assigns the shortened path afterwards, and the
+        scratch has to follow the store rather than the path the converter
+        was handed.
+        """
+        return self.output_path.parent
+
+    def _sibling_context(self) -> SiblingContext:
+        """What the sibling tables need that this conversion decided after setup.
+
+        Packed fresh per call for the same reason :meth:`_uns_context` is:
+        the common mass axis and its linearisation are laid in
+        :meth:`_setup_mass_axis`, the grid dimensions in
+        :meth:`_initialize_conversion`, and the three delegates are read
+        off collaborators a test may have replaced since.
+        """
+        return SiblingContext(
+            mass_axis=self._common_mass_axis,
+            linearisation=self._axis_linearisation,
+            dimensions=self._dimensions,
+            n_spectra=self._get_total_spectra_count,
+            build_uns=self.build_uns_metadata,
+            fragmentation=self.uns.fragmentation,
+            unname_declined=self.uns.unname_declined_siblings,
+        )
+
     def _ensure_mobility_heatmap(self) -> Optional[Dict[str, Any]]:
-        """Build the heatmap the first time it is asked for; cache the result.
+        """The conversion's mass-mobility heatmap block, built on first demand.
 
-        Needs the common mass axis, so it can only run after
-        ``_initialize_conversion``. A failure is logged and leaves the
-        summed table untouched: the block is additive, and a store
-        without it is still complete.
+        The converter's orchestration point, as
+        :meth:`build_uns_metadata` is the ``uns`` assembler's: it packs
+        what it knows and hands it over. The block is a sibling concern --
+        built from the raw mobility pass the sibling tables share -- that
+        lands in the summed table's own ``uns``, which is why the
+        assembler asks for it through a callable.
         """
-        if self._mobility_heatmap_built:
-            return self._mobility_heatmap_block
-        self._mobility_heatmap_built = True
-        if not self._mobility_heatmap_enabled:
-            return None
-        try:
-            if not self.reader.has_ion_mobility:
-                return None
-        except Exception as e:  # pragma: no cover - reader-defined
-            logger.warning("Could not inspect the mobility axis: %s", str(e))
-            return None
-        if self._common_mass_axis is None:
-            logger.warning(
-                "No mass-mobility heatmap: the common mass axis is not built yet"
-            )
-            return None
-        from .mobility_heatmap import build_mobility_heatmap
-
-        try:
-            self._mobility_heatmap_block = build_mobility_heatmap(
-                self.reader,
-                self._common_mass_axis,
-                n_spectra=self._get_total_spectra_count(),
-                linearisation=self._axis_linearisation,
-            )
-        except Exception as e:
-            logger.error("Could not build the mass-mobility heatmap: %s", str(e))
-            self._mobility_heatmap_block = None
-        return self._mobility_heatmap_block
-
-    def _plan_mobility_table(self, table_key: str) -> Optional[str]:
-        """The key of the mobility table this slice gets, or ``None``.
-
-        Decided before the MSI table's ``uns`` is built so the two agree,
-        which for the grid route also means the grid itself is resolved
-        here: the summed table's metadata block names it, and the sibling
-        must be binned onto the very grid that was named.
-
-        Two mechanisms can fill the same key -- a shared feature axis
-        (nothing to decide) or a common grid (opt in) -- and a source that
-        allows neither gets no table, said by name rather than silently.
-        """
-        if not self._write_mobility_table:
-            return None
-        try:
-            if not self.reader.has_ion_mobility:
-                return None
-            shared = bool(self.reader.has_shared_mobility_axis)
-        except Exception as e:  # pragma: no cover - reader-defined
-            logger.warning("Could not inspect the mobility axis: %s", str(e))
-            return None
-        from .mobility_table import mobility_table_key
-
-        if shared:
-            return mobility_table_key(table_key)
-        if not self._mobility_grid_enabled:
-            logger.info(
-                "No mobility-resolved table: %s carries mobility per pixel "
-                "rather than as a shared feature axis. Pass --mobility-grid "
-                "to bin it onto a common mobility grid.",
-                type(self.reader).__name__,
-            )
-            return None
-        if not self._mobility_grid_resolved:
-            self._mobility_grid_resolved = True
-            self._mobility_grid = self._resolve_mobility_grid()
-        if self._mobility_grid is None:
-            return None
-        return mobility_table_key(table_key)
-
-    def _resolve_mobility_grid(self) -> Optional[MobilityGrid]:
-        """The common mobility grid this conversion bins onto, or ``None``.
-
-        Bounds come from the axis values unless the caller overrode them:
-        the per-scan 1/K0 of a real file overhangs its declared
-        acquisition range, and the mass-mobility heatmap already bins over
-        the values, so anything else breaks the index-for-index mapping
-        between the two. Every refusal is said by name.
-        """
-        from .mobility_table import (
-            MAX_GRID_VAR_ENTRIES,
-            grid_refusal,
-            grid_var_bound,
-            mobility_grid_range,
-        )
-
-        if self._common_mass_axis is None:
-            logger.warning(
-                "No mobility-resolved table: the common mass axis is not "
-                "built yet, so the grid's m/z bins are unknown"
-            )
-            return None
-        try:
-            measured = mobility_grid_range(self.reader)
-        except Exception as e:  # pragma: no cover - reader-defined
-            logger.warning("Could not read the mobility axis values: %s", str(e))
-            return None
-        lower, upper = self._mobility_bounds
-        if measured is None and (lower is None or upper is None):
-            logger.warning(
-                "No mobility-resolved table: the source's mobility axis "
-                "carries no per-scan values to bin over (a reader opened "
-                "without its vendor library cannot supply them). Give "
-                "--mobility-min and --mobility-max to bin over a stated range."
-            )
-            return None
-        span = measured or (0.0, 0.0)
-        try:
-            grid = build_mobility_grid(
-                span[0] if lower is None else float(lower),
-                span[1] if upper is None else float(upper),
-                self._mobility_bins,
-            )
-        except ValueError as e:
-            logger.warning("No mobility-resolved table: %s", str(e))
-            return None
-        refusal = grid_refusal(self.reader, self._common_mass_axis, grid)
-        if refusal is not None:
-            logger.warning("No mobility-resolved table: %s", refusal)
-            return None
-        unit = None
-        axis = self.reader.get_mobility_axis()
-        if axis is not None and axis.unit_name:
-            unit = str(axis.unit_name)
-        logger.info(
-            "Mobility grid: %d %s channels over [%.5f, %.5f]%s",
-            grid.n_channels,
-            grid.law,
-            grid.lower,
-            grid.upper,
-            "" if unit is None else f" {unit}",
-        )
-        report_channel_width(grid)
-        bound = grid_var_bound(self._common_mass_axis, grid)
-        if bound > MAX_GRID_VAR_ENTRIES:
-            # A bound above the ceiling settles nothing -- real occupancy
-            # runs an order of magnitude below it -- so it is said and the
-            # source is read; the count decides (see var_ceiling_refusal).
-            logger.info(
-                "The mobility grid spans %s (m/z bin, channel) pairs, above "
-                "the var ceiling of %s. Most of them will be empty; the "
-                "table is refused only if the pairs that carry signal pass "
-                "the ceiling too.",
-                f"{bound:,}",
-                f"{MAX_GRID_VAR_ENTRIES:,}",
-            )
-        return grid
-
-    def _prepare_sibling_scans(
-        self, obs: pd.DataFrame, z_value: Optional[int] = None
-    ) -> None:
-        """Run the raw mobility pass once for everything that needs it.
-
-        Called by a finalize step right after the sibling tables are
-        planned and before the summed table's ``uns`` is built, with the
-        ``obs`` the siblings will mirror. When a grid table is planned its
-        discovery pass -- which occupied cells there are, and how many
-        rows each holds -- is fused into the heatmap's pass, so the two
-        share one read *and* one mapping of every point onto the mass
-        axis; the mapping is the larger cost of the two. The heatmap is
-        built here once and cached for every ``uns`` block that asks; a
-        route that never calls this still gets it from
-        :meth:`_ensure_mobility_heatmap` on first demand.
-
-        A no-op when the sinks were already fed from the summed table's
-        own passes (a reader that hands its frames over as records; see
-        ``fused_passes.py``).
-        """
-        if self._sibling_scans_done:
-            return
-        self._grid_discovery = None
-        try:
-            if not self.reader.has_ion_mobility:
-                return
-        except Exception as e:  # pragma: no cover - reader-defined
-            logger.warning("Could not inspect the mobility axis: %s", str(e))
-            return
-        if self._common_mass_axis is None:
-            return
-        from .mobility_heatmap import finish_mobility_heatmap, scan_mobility
-
-        heatmap = self._pending_heatmap()
-        discovery = self._pending_grid_discovery(obs, z_value)
-        sinks = [sink for sink in (heatmap, discovery) if sink is not None]
-        if not sinks:
-            return
-        try:
-            scan_mobility(
-                self.reader,
-                self._common_mass_axis,
-                *sinks,
-                n_spectra=self._get_total_spectra_count(),
-                description=(
-                    "Mobility heatmap + grid"
-                    if discovery is not None
-                    else "Mobility heatmap"
-                ),
-                linearisation=self._axis_linearisation,
-            )
-        except Exception as e:
-            logger.error("Could not scan the mobility spectra: %s", str(e))
-            if heatmap is not None:
-                self._mobility_heatmap_built = True
-                self._mobility_heatmap_block = None
-            return
-        if heatmap is not None:
-            self._mobility_heatmap_built = True
-            self._mobility_heatmap_block = finish_mobility_heatmap(heatmap)
-        if discovery is not None:
-            discovery.finish()
-            self._grid_discovery = discovery
-
-    def _pending_heatmap(self) -> Any:
-        """An empty heatmap accumulator, when one is wanted and not yet built."""
-        if not self._mobility_heatmap_enabled or self._mobility_heatmap_built:
-            return None
-        from .mobility_heatmap import prepare_mobility_heatmap
-
-        return prepare_mobility_heatmap(self.reader, self._common_mass_axis)
-
-    def _pending_grid_discovery(self, obs: pd.DataFrame, z_value: Optional[int]) -> Any:
-        """The grid's discovery accumulator, when a grid table is planned."""
-        if self._mobility_table_key is None or self._mobility_grid is None:
-            return None
-        from .mobility_table import GridDiscovery, row_lookup
-
-        try:
-            return GridDiscovery(
-                self._common_mass_axis,
-                self._mobility_grid,
-                row_lookup(obs, z_value, None),
-                int(len(obs)),
-            )
-        except MemoryError as e:
-            logger.warning("No mobility-resolved table: %s", str(e))
-            return None
-
-    def _new_sibling_scratch(self, prefix: str) -> Path:
-        """A scratch directory for one sibling's memmaps, next to the output."""
-        from .csc_assembly import scratch_directory
-
-        return scratch_directory(f".thyra_{prefix}_", parent=self.output_path.parent)
-
-    def _register_table_scratch(self, prefix: str, assembly: Any) -> Path:
-        """A scratch directory for ``assembly``, released with the others once written."""
-        scratch = self._new_sibling_scratch(prefix)
-        self._table_scratch.append((assembly, scratch))
-        return scratch
-
-    def _fused_sibling_passes(self, table_key: str) -> Any:
-        """The sibling sinks to feed from the summed table's own passes, or ``None``.
-
-        Only for a reader that hands its frames over as records
-        (:attr:`~thyra.core.base_reader.BaseMSIReader.has_frame_scans`);
-        plans the siblings of ``table_key`` first, since the sinks are
-        theirs. ``None`` when nothing wants the frames, in which case the
-        passes read the summed spectra as they always did and
-        :meth:`_prepare_sibling_scans` scans on its own later.
-        """
-        if not self.reader.has_frame_scans:
-            return None
-        if self._common_mass_axis is None or self._dimensions is None:
-            return None
-        self._mobility_table_key = self._plan_mobility_table(table_key)
-        self._msms_table_key = self._plan_msms_table(table_key)
-        self._siblings_planned = True
-        from .fused_passes import SiblingPasses
-        from .mobility_table import GridDiscovery
-        from .msms_table import new_msms_accumulator
-
-        n_x, n_y, n_z = self._dimensions
-        n_grid = int(n_x * n_y * n_z)
-        heatmap = self._pending_heatmap()
-        discovery = None
-        if self._mobility_table_key is not None and self._mobility_grid is not None:
-            try:
-                # Rows are handed to the sinks by the passes themselves,
-                # so the lookup a standalone pass would use is not needed.
-                discovery = GridDiscovery(
-                    self._common_mass_axis,
-                    self._mobility_grid,
-                    lambda coords: None,
-                    n_grid,
-                )
-            except MemoryError as e:
-                logger.warning("No mobility-resolved table: %s", str(e))
-        msms = None
-        if self._msms_table_key is not None:
-            msms = new_msms_accumulator(
-                self.reader,
-                self._common_mass_axis,
-                n_grid,
-                self._axis_linearisation,
-            )
-        if heatmap is None and discovery is None and msms is None:
-            return None
-        self._sibling_scans_done = True
-        return SiblingPasses(
-            self._common_mass_axis,
-            heatmap=heatmap,
-            discovery=discovery,
-            msms=msms,
-            linearisation=self._axis_linearisation,
-        )
-
-    def _take_fused_results(self, passes: Any) -> None:
-        """Keep what the fused passes built for the finalize step to write."""
-        if passes.heatmap_wanted:
-            self._mobility_heatmap_built = True
-            self._mobility_heatmap_block = passes.heatmap_block
-        self._grid_discovery = passes.discovery
-        self._msms_accumulator = passes.msms
-
-    def _release_table_scratch(self, tables: Optional[Dict[str, Any]] = None) -> None:
-        """Drop every table's memmaps and remove their scratch directories.
-
-        Called once the store is written. ``tables`` is the mapping that
-        still holds the tables; it is emptied first, because a mapped file
-        cannot be deleted on Windows and the AnnData is what keeps it
-        mapped. Idempotent, so the ``finally`` of ``convert`` can call it
-        too.
-        """
-        from .csc_assembly import remove_scratch
-
-        if not self._table_scratch:
-            return
-        if tables is not None:
-            tables.clear()
-        pending = self._table_scratch
-        self._table_scratch = []
-        for assembly, path in pending:
-            if assembly is not None:
-                assembly.release()
-            remove_scratch(path)
-
-    def _attach_sibling_tables(
-        self,
-        state: ConversionState,
-        table_key: str,
-        region_key: str,
-        obs: pd.DataFrame,
-        z_value: Optional[int] = None,
-    ) -> None:
-        """Build the sibling tables of ``table_key`` and add them.
-
-        No-op for a sibling :meth:`_plan_mobility_table` or
-        :meth:`_plan_msms_table` did not name for this slice.
-
-        A sibling that *was* named is not additive, and this used to say
-        it was. The summed table's ``uns`` is built before the siblings
-        are, and it carries their keys, so a failure swallowed here leaves
-        a store whose summed table points at an element nobody wrote. A
-        failure therefore propagates now (issue #280). A builder may still
-        decline by returning ``None`` -- a decision, not a failure -- and
-        the name is taken back out when it does (issue #343).
-        """
-        if self._common_mass_axis is None:
-            return
-        if self._mobility_table_key is None and self._msms_table_key is None:
-            return
-        # The siblings carry the same provenance as the summed table,
-        # minus the heatmap: that block is the summed table's navigator
-        # over the very data the siblings hold resolved or split.
-        sibling_uns = self.build_uns_metadata()
-        sibling_uns.pop("mobility_heatmap", None)
-        summed = state.tables.get(table_key)
-        declined: List[str] = []
-        if self._mobility_table_key is not None:
-            table = self._build_mobility_sibling(
-                obs, table_key, region_key, dict(sibling_uns), z_value
-            )
-            if table is None:
-                declined.append("ion_mobility")
-                self._mobility_table_key = None
-            else:
-                if self._mobility_grid is not None:
-                    self._record_mobility_marginal(table, summed, table_key)
-                state.tables[self._mobility_table_key] = table
-        if self._msms_table_key is not None:
-            table = self._build_msms_sibling(
-                obs, table_key, region_key, dict(sibling_uns), z_value
-            )
-            if table is None:
-                declined.append("fragmentation")
-                self._msms_table_key = None
-            else:
-                self._record_demultiplexed_current(table, summed, table_key)
-                state.tables[self._msms_table_key] = table
-        if declined:
-            # Every table written for this slice, not just the summed one:
-            # each sibling's uns was taken from build_uns_metadata() before
-            # either builder ran, so each carries the same stale pointer.
-            self.uns.unname_declined_siblings(
-                state.tables,
-                (table_key, self._mobility_table_key, self._msms_table_key),
-                declined,
-            )
-
-    def _build_mobility_sibling(
-        self,
-        obs: pd.DataFrame,
-        table_key: str,
-        region_key: str,
-        uns: Dict[str, Any],
-        z_value: Optional[int],
-    ) -> Optional[Any]:
-        """The mobility sibling of one slice, on a scratch directory of its own."""
-        from .mobility_table import build_mobility_table
-
-        discovery, self._grid_discovery = self._grid_discovery, None
-        # The fused passes allocate and register their own scratch; a
-        # discovery without one is scattered by the builder on a new one.
-        scratch = None if discovery is None else discovery.scratch
-        if scratch is None:
-            scratch = self._new_sibling_scratch("mobility")
-            self._table_scratch.append(
-                (None if discovery is None else discovery.assembly, scratch)
-            )
-        # Deliberately uncaught (issue #280). By the time this runs, the
-        # summed table's uns has already named this table, twice: in
-        # ``mobility_axis["resolved_table"]`` and in the versioned block at
-        # ``msi_metadata.ms_analysis.ion_mobility.resolved_table``. Turning
-        # a failure into a log line does not leave "a store without the
-        # sibling, still complete". It leaves a store pointing at an
-        # element that was never written (issue #343 has the measurement),
-        # and
-        # nothing downstream checks that the pointer resolves: no validator
-        # rule, no test. A ConversionRefused from the builder is a sentence
-        # addressed to whoever ran the conversion (csc_assembly's
-        # two-passes-disagree, mobility_table's off-axis pair); anything
-        # else is an invariant break whose traceback is the explanation.
-        # Neither is served by being swallowed here. Nothing is on disk yet
-        # at this point, so propagating costs a store that would have lied,
-        # not a store that was written.
-        return build_mobility_table(
-            self.reader,
-            obs,
-            self._common_mass_axis,
-            table_key,
-            region_key,
-            uns,
-            z_value=z_value,
-            grid=self._mobility_grid,
-            discovery=discovery,
-            scratch=scratch,
-            linearisation=self._axis_linearisation,
-        )
-
-    def _build_msms_sibling(
-        self,
-        obs: pd.DataFrame,
-        table_key: str,
-        region_key: str,
-        uns: Dict[str, Any],
-        z_value: Optional[int],
-    ) -> Optional[Any]:
-        """The demultiplexed sibling of one slice, on a scratch directory of its own."""
-        from .msms_table import build_msms_table
-
-        accumulator, self._msms_accumulator = self._msms_accumulator, None
-        scratch = None if accumulator is None else accumulator.scratch
-        if scratch is None:
-            scratch = self._new_sibling_scratch("msms")
-            self._table_scratch.append((None, scratch))
-        # Deliberately uncaught, for the reason given in
-        # :meth:`_build_mobility_sibling`: the summed table's uns already
-        # names this table, in ``msms_schedule["resolved_table"]`` and at
-        # ``msi_metadata.ms_analysis.fragmentation.resolved_table``, which
-        # schema 0.5.0 added for exactly that purpose (issue #280).
-        return build_msms_table(
-            self.reader,
-            obs,
-            self._common_mass_axis,
-            table_key,
-            region_key,
-            uns,
-            z_value=z_value,
-            scratch=scratch,
-            accumulator=accumulator,
-            linearisation=self._axis_linearisation,
-        )
-
-    @staticmethod
-    def _record_mobility_marginal(table: Any, summed: Any, summed_key: str) -> None:
-        """Say how far the grid table's marginal is from the summed table.
-
-        Summing a grid table's channels within one m/z bin must reproduce
-        that bin's column of the summed table: both are the same points,
-        binned the same way, differing only in whether mobility was kept.
-        Under ``--tdf-spectrum scan_sum`` that holds exactly; under the
-        vendor centroid it cannot, because the centroid is a peak-picked
-        spectrum over the same ramp and keeps only the current inside the
-        peaks it picks (87-96% on measured acquisitions) while the grid
-        reads raw scans. A store whose two tables disagree
-        must say by how much rather than leave a reader to find it by
-        subtraction.
-
-        The comparison is per pixel: the grid table's row sums against
-        the summed table's, which is one bounded pass over each memmap.
-        The per-cell deviation the in-memory converters used to record
-        needed the marginal and its difference from the summed table
-        materialised, each the size of the summed table, and went with
-        them (design decision D11); the current ratio is the same number
-        it always was.
-        """
-        try:
-            block = _current_ratio_block(table, summed_key, summed)
-        except MALFORMED_METADATA as e:  # pragma: no cover - defensive
-            # Two row sums over two memmaps (issue #280): a released memmap
-            # or a matrix that is not the shape it should be raises one of
-            # these. A comparison is the whole job here, so anything wider
-            # would hide the defect that broke it in a debug line.
-            logger.debug("Could not compare the mobility marginal: %s", str(e))
-            return
-        if block is None:
-            return
-        table.uns["mobility_marginal"] = block
-        exact = abs(float(block["current_ratio"]) - 1.0) <= _MARGINAL_TOLERANCE
-        log = logger.info if exact else logger.warning
-        log(
-            "The mobility grid table holds %.4fx the summed table's ion "
-            "current (per pixel %.4f to %.4f). They agree exactly only "
-            "under --tdf-spectrum scan_sum; the vendor centroid is a "
-            "peak-picked spectrum over the same scans and keeps less of "
-            "the current.",
-            block["current_ratio"],
-            block["current_ratio_pixel_min"],
-            block["current_ratio_pixel_max"],
-        )
-
-    def _plan_msms_table(self, table_key: str) -> Optional[str]:
-        """The key of the demultiplexed MS/MS table this slice gets, or ``None``.
-
-        Decided before the MSI table's ``uns`` is built so the two agree.
-        Every refusal is said by name: writing no table is the right
-        answer for an acquisition whose precursors cannot be told apart,
-        but silently writing none is not.
-        """
-        if not self._write_msms_table:
-            return None
-        from .msms_table import demultiplex_refusal, msms_table_key
-
-        # Order matters: the schedule-specific refusal is the one a user can
-        # act on ("a single precursor", "the windows carry no scan range"),
-        # while the capability check can only name the reader. Ask for the
-        # specific reason first and fall back to the generic one, or an
-        # acquisition whose precursors are merely uninteresting gets told
-        # its reader is incapable.
-        refusal = demultiplex_refusal(self.uns.fragmentation())
-        if refusal is not None:
-            logger.info("No demultiplexed MS/MS table: %s", refusal)
-            return None
-        if not self.reader.has_precursor_spectra:
-            logger.info(
-                "No demultiplexed MS/MS table: %s cannot separate the "
-                "precursors of a pixel",
-                type(self.reader).__name__,
-            )
-            return None
-        # The fragment axis is the summed table's axis whatever that axis
-        # is (design decision D6): resampled, it is the grid the user chose
-        # for the whole store; raw, it is the union of the very fragment
-        # m/z values the split re-reads, so the mapping is exact either way.
-        return msms_table_key(table_key)
-
-    @staticmethod
-    def _record_demultiplexed_current(table: Any, summed: Any, summed_key: str) -> None:
-        """Say how much of the summed table's ion current the split holds.
-
-        The two tables agree exactly under ``--tdf-spectrum scan_sum``,
-        which writing this table now selects; under an explicit
-        ``vendor_centroid`` they do not, because the vendor peak picker
-        drops the index bins it assigns to no peak while the split reads
-        raw scans, so the
-        demultiplexed table holds *more*. That is not a defect, but a
-        store whose two tables disagree must say so rather than leave a
-        reader to find it by subtraction.
-        """
-        try:
-            block = _current_ratio_block(table, summed_key, summed)
-        except MALFORMED_METADATA as e:  # pragma: no cover - defensive
-            # Same two row sums, same reasoning as _record_mobility_marginal.
-            logger.debug("Could not compare the demultiplexed current: %s", str(e))
-            return
-        if block is None:
-            return
-        table.uns["demultiplexed_current"] = block
-        if abs(float(block["current_ratio"]) - 1.0) > _MARGINAL_TOLERANCE:
-            # WARNING, not INFO. It is the same disagreement between the
-            # same two tables that the mobility grid reports at WARNING,
-            # and a reader who has to know about one has to know about
-            # the other (issue #253).
-            logger.warning(
-                "The demultiplexed table holds %.4fx the summed table's ion "
-                "current (per pixel %.4f to %.4f). Above 1 under an explicit "
-                "--tdf-spectrum vendor_centroid, which discards counts the "
-                "raw scans keep; below 1 when the schedule's windows do not "
-                "cover every scan that carries current.",
-                block["current_ratio"],
-                block["current_ratio_pixel_min"],
-                block["current_ratio_pixel_max"],
-            )
+        return self.siblings.heatmap(self._sibling_context())
 
     def _resolved_pixel_size_xy(self) -> Tuple[float, float]:
         """The in-plane pixel pitch as ``(x_um, y_um)``.
@@ -1690,7 +1055,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             # Every table was written from its memmaps; nothing holds them
             # now but this object and the caller's mapping.
             del sdata
-            self._release_table_scratch(state.tables)
+            self.siblings.release_scratch(state.tables)
             return True
         except Exception as e:
             logger.error(f"Error saving SpatialData: {e}")
