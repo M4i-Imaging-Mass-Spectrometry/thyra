@@ -17,6 +17,7 @@ obtainable, and the conversion is refused -- there are no pixels to
 place, and no pixel size would make any.
 """
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -266,6 +267,25 @@ class TestTheDocumentShape:
         _, issues = validate_document(document)
         errors = [issue for issue in issues if issue.severity == "error"]
         assert [issue.location for issue in errors] == ["ms_analysis.pixel_size_um"]
+
+    def test_the_source_is_named_not_located(self, document):
+        assert document["provenance"]["source_path"] == "electrospray.d"
+
+    def test_no_part_of_the_reading_machine_reaches_the_document(
+        self, document, no_raster
+    ):
+        """The whole point: this file is written to be sent to somebody.
+
+        Asserted over the serialised document rather than over the one
+        field, because a second field carrying the path would be the
+        same leak and this test is the one that would notice.  The
+        acquisition folder's own name is what a recipient reconciles
+        against, so it is excluded; every directory above it is the
+        machine it was read on.
+        """
+        text = json.dumps(document)
+        for part in no_raster.parent.resolve().parts:
+            assert part not in text, f"{part!r} of the source path reached the document"
 
 
 class TestTheConversionIsRefused:
