@@ -62,16 +62,16 @@ from ...core.base_converter import BaseMSIConverter, PixelSizeSource
 from ...core.base_reader import BaseMSIReader
 from ...core.conversion_state import ConversionState
 from ...errors import ConversionRefused
-from ...metadata.root_attrs import RootAttrsBuilder, RootAttrsContext
 from ...metadata.schema import MSI_VAR_RESERVED_COLUMNS
-from ...metadata.uns_assembler import UnsAssembler, UnsContext
 from ...resampling.axis_planner import AxisPlanner, normalize_resampling_config
 from ...resampling.mobility_grid import MOBILITY_CHANNELS
 from ...resampling.strategies import ResamplingStrategy, build_strategy
 from ...resampling.types import AxisLinearisation, ResamplingConfig
 from ._chunking import table_write_config
 from .optical_image import OpticalImages
+from .root_attrs import RootAttrsBuilder, RootAttrsContext
 from .sibling_tables import SiblingContext, SiblingTables
+from .uns_assembler import UnsAssembler, UnsContext
 
 logger = logging.getLogger(__name__)
 
@@ -340,7 +340,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # the same pitch accessor for the same reason, and the three other
         # things it needs that are settled here; everything it reads that a
         # conversion decides later travels per call in an
-        # :class:`~thyra.metadata.uns_assembler.UnsContext` (see
+        # :class:`~thyra.converters.spatialdata.uns_assembler.UnsContext` (see
         # :meth:`_uns_context`).
         self.uns = UnsAssembler(
             self.reader,
@@ -379,8 +379,8 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         """The provenance block every table of this conversion carries.
 
         The converter's orchestration point: it packs what it currently
-        knows into an :class:`~thyra.metadata.uns_assembler.UnsContext`
-        and hands it to :meth:`~thyra.metadata.uns_assembler.UnsAssembler.build`,
+        knows into an :class:`~thyra.converters.spatialdata.uns_assembler.UnsContext`
+        and hands it to :meth:`~thyra.converters.spatialdata.uns_assembler.UnsAssembler.build`,
         which composes the mapping. See that method for what lands in it
         and why there is exactly one place it is composed.
 

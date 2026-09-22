@@ -42,10 +42,13 @@ from thyra.converters.spatialdata.sibling_tables import (  # noqa: E402
     SiblingContext,
     SiblingTables,
 )
+from thyra.converters.spatialdata.uns_assembler import (  # noqa: E402
+    UnsAssembler,
+    UnsContext,
+)
 from thyra.core.base_converter import PixelSizeSource  # noqa: E402
 from thyra.core.msms import FragmentationSchedule, IsolationWindow  # noqa: E402
 from thyra.metadata.schema import MSI_METADATA_UNS_KEY  # noqa: E402
-from thyra.metadata.uns_assembler import UnsAssembler, UnsContext  # noqa: E402
 
 _TABLE_KEY = "stub_z0"
 _REGION_KEY = "stub_z0_pixels"

@@ -1994,7 +1994,7 @@ converter:
 | collaborator | home | takes | issue |
 |---|---|---|---|
 | `OpticalImages` | `converters/spatialdata/optical_image.py` | the reader, a store-path accessor, the dataset id, a pitch accessor | #350 |
-| `UnsAssembler` and `RootAttrsBuilder` | `metadata/uns_assembler.py`, `metadata/root_attrs.py` | the reader and what is settled at construction; everything decided during a conversion arrives per call in a context | #351 |
+| `UnsAssembler` and `RootAttrsBuilder` | `converters/spatialdata/uns_assembler.py`, `converters/spatialdata/root_attrs.py` | the reader and what is settled at construction; everything decided during a conversion arrives per call in a context | #351 |
 | `AxisPlanner` | `resampling/axis_planner.py` | a reader, or the metadata dict the detectors read, and a `ResamplingConfig` | #352 |
 | `SiblingTables` | `converters/spatialdata/sibling_tables.py` | the reader, a store-path accessor, the sibling options; the axis and grid per call in a `SiblingContext` | #353 |
 
@@ -2077,15 +2077,95 @@ axis, the grid and the regions of one conversion), not to fold.
   file, not the coupling; nothing becomes constructible alone, and the
   test each step added, the collaborator built from arguments with no
   converter anywhere, is the thing the decomposition was for.
-- *The store-writing assemblers sit in `thyra/metadata/` but only a
+- *The store-writing assemblers landed in `thyra/metadata/` but only a
   conversion runs them.* True by dependency: their inputs are converter
   types and their only caller is the converter. They landed there because
-  they assemble metadata. The boundary that matters, that nothing on the
-  document side imports them, holds and is asserted by
-  `tests/unit/test_import_boundaries.py`; where the two files sit is a
-  rename against that test, not a design question.
+  they assemble metadata, and they were moved beside the converter once
+  #382 stated the boundary (D25). The boundary that matters, that nothing
+  on the document side imports them, held before the move and is asserted
+  by `tests/unit/test_import_boundaries.py`; the move was a rename against
+  that test, not a design question.
 
 **Known limit.** The four shared variables are assigned in the base's
 `_initialize_conversion` and read in the subclass's passes, so a test of
 the loop still needs a converter with a reader; the collaborators are
 testable alone, the loop is not yet.
+
+---
+
+## D25. The metadata document depends on nothing that reads spectra
+
+**Status:** Implemented (2026-09-22) for the boundary and the address;
+the two structural changes it names are **deferred**, each with the
+condition that triggers it. Issue #382, on the findings of #381, #387 and
+#379.
+
+**Decision.** The schema (`thyra.metadata.schema`, `thyra.metadata.ontology`,
+`thyra.metadata.types`) imports nothing from the readers, the converters
+or the resampling package, and `tests/unit/test_import_boundaries.py`
+asserts it in a fresh interpreter, at import time and again while a
+document is built. Anything that can describe an acquisition may produce
+a document: what the builder consumes is the four dictionaries of
+`ComprehensiveMetadata`, an optional pixel size with its provenance, a
+source format name and an optional fragmentation report, not a
+`BaseMSIReader`. The store-writing assemblers, `UnsAssembler` and
+`RootAttrsBuilder`, are converter collaborators and live with the
+converter under `converters/spatialdata/`. The schema stays inside the
+`thyra` distribution until a second program commits to writing the
+document; then, and not before, it becomes a distribution of its own,
+which the boundary test makes a mechanical move.
+
+**Measurement.** Through the package front door the schema imported in
+2.7 s with 2,822 modules, 32 of them readers and 8 converters, plus
+spatialdata, dask and anndata. With the front door out of the way (#381,
+PR #386) the same import takes 0.14 s, 215 modules, sixteen of them
+Thyra's, and one third-party package, pydantic. The document builder
+reads exactly one field of `EssentialMetadata`, the source path. Nothing
+outside the repository imports the schema API: the one downstream
+application reads the block out of the store as a dictionary. The
+committed JSON Schema had no `$id` and the LinkML file no address; both
+are published at a versioned URL now (#387), which is what a guideline
+cites and what a non-Python implementer consumes.
+
+**Three layers by dependency, two by packaging.** Data (readers,
+converters, resampling), metadata (extractors, `ComprehensiveMetadata`,
+`document.py`) and document (`schema/`, `ontology/`) point one way, and
+the test pins the direction. They are one wheel. The middle layer's
+contract, a `MetadataSource` protocol of four methods that every reader
+already satisfies (`get_comprehensive_metadata`, `has_fragmentation`,
+`get_fragmentation`, `close`) and a `document_from_source` entry point
+beside `read_metadata_document`, is **deferred until the first non-reader
+source is written**: a protocol with one implementer is a class with a
+docstring, and every abstraction in this repository built before its
+second caller has been deleted or restated (D7, D10, the routers of D11).
+The vendor extractors stay where they are for the same reason: none of
+them needs the schema or a reader class, so moving 3,333 lines buys
+nothing the boundary test does not.
+
+**Which axis each change moves.** This entry is about how the *code* is
+layered. How the *document* is layered, a core every acquisition can fill
+and an imaging profile that adds the raster, is D23 and moves on a
+`schema_version` bump, not a package change. The one place they touch: a
+core-only document is what a non-imaging source produces, so D23 is what
+makes the protocol above worth having. A dependency, not a merger.
+
+**The objection, and why it does not win.** Split the distribution now,
+because a guideline will not reference a subpackage of a converter. What a
+guideline references is a versioned schema at a stable address, which
+exists, and what a non-Python implementer consumes is the JSON Schema and
+the LinkML source, neither of which is a wheel. A second wheel before a
+second writer is an orphan package with one dependant and two release
+trains for one maintainer: the release automation stamps one version into
+one `pyproject`, and a workspace needs a changelog, a compatibility policy
+across packages and someone to approve a schema change that is not a
+Thyra change. The `schema_version` inside the document is already
+versioned independently of the package, so the rule exists; the
+governance does not, and it is not free.
+
+**Known limit.** `ComprehensiveMetadata.essential` is required, and its
+docstring promises fields a source with no spectra has no honest value
+for (dimensions, bounds, counts). The first non-reader source makes it
+optional on the document path, one branch in a builder that already
+tolerates `comprehensive is None`. Until then `thyra metadata` on a
+non-imaging source describes it correctly and fails validation on the
+pixel size, which is D23's limit, not this one's.

@@ -1,4 +1,4 @@
-# tests/unit/metadata/test_root_attrs.py
+# tests/unit/converters/test_root_attrs.py
 """The store's root attrs, built from arguments, with no converter anywhere.
 
 The sibling of ``test_uns_assembler.py`` and the point of the same split
@@ -20,8 +20,8 @@ from typing import Any, Dict, Optional
 import numpy as np
 import pytest
 
+from thyra.converters.spatialdata.root_attrs import RootAttrsBuilder, RootAttrsContext
 from thyra.core.base_converter import ZSpacingSource
-from thyra.metadata.root_attrs import RootAttrsBuilder, RootAttrsContext
 from thyra.metadata.types import ComprehensiveMetadata, EssentialMetadata
 
 

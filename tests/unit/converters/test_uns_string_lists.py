@@ -19,7 +19,7 @@ import json
 import numpy as np
 import pytest
 
-from thyra.metadata.uns_assembler import _jsonify_string_lists
+from thyra.converters.spatialdata.uns_assembler import _jsonify_string_lists
 
 
 def test_list_of_dicts_becomes_json():
