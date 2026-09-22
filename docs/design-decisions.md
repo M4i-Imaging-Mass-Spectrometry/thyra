@@ -1975,3 +1975,117 @@ exits 1. That is honest and it is not usable in a pipeline that gates on the
 exit status. Anyone who needs such a document to pass validation today has
 to supply a pitch that is not a measurement, which is the thing this schema
 exists to avoid.
+
+---
+
+## D24. The converter is the two-pass loop and four collaborators
+
+**Status:** Implemented (2026-09-22), issues #276 and #349 to #354. The
+one question the decomposition left open, whether the two converter
+modules fold into one, is **deferred** below with the condition that
+reopens it.
+
+**Decision.** The SpatialData converter is the lifecycle and the write
+path (`base_spatialdata_converter.py`), the two-pass loop
+(`streaming_converter.py`), and four collaborators the converter holds
+rather than inherits, each constructible and testable without a
+converter:
+
+| collaborator | home | takes | issue |
+|---|---|---|---|
+| `OpticalImages` | `converters/spatialdata/optical_image.py` | the reader, a store-path accessor, the dataset id, a pitch accessor | #350 |
+| `UnsAssembler` and `RootAttrsBuilder` | `metadata/uns_assembler.py`, `metadata/root_attrs.py` | the reader and what is settled at construction; everything decided during a conversion arrives per call in a context | #351 |
+| `AxisPlanner` | `resampling/axis_planner.py` | a reader, or the metadata dict the detectors read, and a `ResamplingConfig` | #352 |
+| `SiblingTables` | `converters/spatialdata/sibling_tables.py` | the reader, a store-path accessor, the sibling options; the axis and grid per call in a `SiblingContext` | #353 |
+
+Beside them the per-spectrum operator became a `ResamplingStrategy`
+(D22, #277). What is left on the converter is what the plan on #276 said
+should be: `__init__`, `convert`, `_initialize_conversion`, the mass-axis
+guards, the `var` frame, the pixel shapes and region numbers, the three
+context packers, `_save_output`, and the two-pass loop with its table
+units.
+
+Two rules the collaborators follow, each learned from a defect on the
+way. **A collaborator the converter can replace is read per call, never
+captured**: `OpticalImages` captured the converter's pitch accessor in
+its constructor and a test that swapped `converter.optical` reproduced
+issue #288, so every delegate travels in a context packed fresh at the
+call. **A deferred import is a patch seam, not a cost**: the sibling
+builders are imported inside the methods that call them because the #343
+tests patch `mobility_table.build_mobility_table`, and a module-level
+import binds the name before the patch can (measured, the whole import
+chain is 2.5 ms; cost was never the reason).
+
+**What was measured.** Every step ran `tests/tools/store_identity.py`
+(#349) against `main` at its base, every Zarr array and attribute
+hashed, and the recount below was taken from the AST at each merge, not
+from reading the modules.
+
+| step | merged as | `base_spatialdata_converter.py` lines / methods / broad catches | new home (lines) | store identity against its base |
+|---|---|---|---|---|
+| filed, `97184f5` | | 4,174 / 85 / 27 | | |
+| planned, `f4c11b7` | | 4,628 / 90 / 20 | | |
+| 1, optical | PR #361 | 4,098 / 79 / 17 | `optical_image.py` 710 to 1,451 | 13 stores, 0 differences |
+| #277 A, the pure operator | PR #366 | 3,666 / 79 / 17 | `resampling/binning.py` 307 | 5 dataset-runs, 0 |
+| #277 B, the strategies | PR #374 | 3,383 / 73 / 17 | `resampling/strategies/` 507 | 5 dataset-runs, 0 |
+| 2a, the `uns` block | PR #375 | 2,941 / 60 / 14 | `metadata/uns_assembler.py` 668 | 3 datasets, 0 |
+| 2b, the root attrs | PR #376 | 2,648 / 53 / 13 | `metadata/root_attrs.py` 374 | 3 datasets, 3 differences, all the root attrs #67 item 1 added on purpose |
+| 3, the axis planner | PR #377 | 1,760 / 40 / 9 | `resampling/axis_planner.py` 1,198 | 13 dataset-runs, 0 |
+| 4, the sibling tables | PR #378 | 1,125 / 26 / 3 | `sibling_tables.py` 977 | 10 stores, 0 |
+
+`streaming_converter.py` is 1,078 lines and 24 methods at `f4c11b7` and
+1,079 and 24 after step 4: the loop was already what it should be. The
+broad `except Exception` catches went from 27 in one file to 3 there and
+20 across the modules above, which is the 20 the plan started from: they
+moved with their methods, none was added and none was removed by the
+decomposition (narrowing them was #280). The lines across the same
+modules grew, 6,715 to 7,996, and the growth is the contexts, the
+docstrings and the tests that build each collaborator alone. Line count
+was never the point; that those tests exist is.
+
+**The fold, deferred.** `BaseSpatialDataConverter` is an ABC with one
+subclass (D11), and the plan asked whether the two modules should still
+be two once the collaborators existed. The measurement that decides it is
+what the subclass still reaches into: every `self.<name>` in
+`streaming_converter.py` defined on the base chain and not in the
+subclass. At `f4c11b7` that was 27 names over 47 sites; at `88d926a` it
+is **14 names over 35 sites**, and the 13 names that went were all
+collaborator extractions. Of the 35 sites, 23 are four pieces of
+per-conversion state, `_dimensions` (10, unchanged since `f4c11b7`),
+`_common_mass_axis` (5), `_resampler` (5) and `_region_map` (3), and most
+of the other twelve are template-method calls a subclass is meant to make
+(`_create_pixel_shapes`, `_create_mass_dataframe`,
+`_drop_unusable_intensities`, `_coalesce_duplicate_bins`). The coupling
+that remains is data, not behaviour: two peers of the same size sharing
+four variables that both genuinely need.
+
+So the two modules stay two. The reach-ins that made the split look wrong
+when #276 was filed were symptoms of the missing collaborators and went
+without a fold; what a fold would buy now is the removal of two abstract
+hooks and one `super().__init__`, at the cost of a 2,200-line module
+whose two halves have different reasons to change (the lifecycle and
+the write path change when spatialdata does; the loop changes when the
+scatter does). The condition that reopens this: a change that needs a
+fifth piece of shared state, or a second subclass, or a reach-in count
+that grows past 35 again. The response then is to lift the state into a
+collaborator of its own (the four variables are the shape of one: the
+axis, the grid and the regions of one conversion), not to fold.
+
+**Objections considered.**
+
+- *Mixins would have cut the file at a tenth of the cost.* They cut the
+  file, not the coupling; nothing becomes constructible alone, and the
+  test each step added, the collaborator built from arguments with no
+  converter anywhere, is the thing the decomposition was for.
+- *The store-writing assemblers sit in `thyra/metadata/` but only a
+  conversion runs them.* True by dependency: their inputs are converter
+  types and their only caller is the converter. They landed there because
+  they assemble metadata. The boundary that matters, that nothing on the
+  document side imports them, holds and is asserted by
+  `tests/unit/test_import_boundaries.py`; where the two files sit is a
+  rename against that test, not a design question.
+
+**Known limit.** The four shared variables are assigned in the base's
+`_initialize_conversion` and read in the subclass's passes, so a test of
+the loop still needs a converter with a reader; the collaborators are
+testable alone, the loop is not yet.

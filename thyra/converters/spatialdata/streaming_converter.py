@@ -1,16 +1,39 @@
 # thyra/converters/spatialdata/streaming_converter.py
 
-"""The MSI-to-SpatialData converter: two passes, every table built out of core.
+"""The two-pass loop of the SpatialData converter: every table built out of core.
 
-- Pass 1 counts entries per m/z column and records which grid positions
-  carry a spectrum; pass 2 scatters straight into memory-mapped CSC
-  arrays (``csc_assembly.CscAssembly``, shared with the sibling tables).
-- Each table is an AnnData over those memmaps, parsed by spatialdata's
-  ``TableModel`` and written by spatialdata's own writer, so the matrix is
-  never a scipy object in RAM and the on-disk layout is anndata's.
+What this module owns (design decision D24): the table units, one per z
+plane or one for the volume (``_TableUnit``, ``_plan_tables``,
+``_locate``); the two passes over the source (``_count_pass``,
+``_scatter_pass``) and the per-spectrum step they share
+(``_process_spectrum``); the refusal of a conversion nothing survived; the
+per-region averages; and the finalize step that turns each unit's memmaps
+into an AnnData, parses it through spatialdata's ``TableModel`` and gives
+it its ``obs``, its shapes and its TIC image (``_finalize_table``,
+``_table_obs``, ``_tic_image``).
+
+- Pass 1 resamples every spectrum onto the common mass axis, counts the
+  entries each m/z column will hold and records which grid positions
+  carry a spectrum; pass 2 resamples again -- the strategy is
+  deterministic -- and scatters straight into memory-mapped CSC arrays
+  (``csc_assembly.CscAssembly``, shared with the sibling tables).
+- Each table is an AnnData over those memmaps and is written by
+  spatialdata's own writer, so the matrix is never a scipy object in RAM
+  and the on-disk layout is anndata's.
 - One table per z plane (``handle_3d=False``) or one for the whole volume
   (``handle_3d=True``), the way the in-memory converters it replaced wrote
-  them.
+  them (D11).
+
+What it deliberately does not do: lay the axis, build the strategy, read
+the source's metadata, or write the store -- those are the lifecycle in
+``base_spatialdata_converter.py``, which this subclasses. When the reader
+hands its frames over as records, the sibling sinks are fed from these
+same two passes (D5), but the sinks belong to ``SiblingTables``; this
+module only asks for them and feeds them. It reads four things the base
+lays for it -- the grid dimensions, the common mass axis, the strategy
+and the region map -- and the base reads nothing of its state back: the
+three hooks the base workflow calls, ``_create_data_structures``,
+``_process_spectra`` and ``_finalize_data``, are the whole contract.
 """
 
 import logging
