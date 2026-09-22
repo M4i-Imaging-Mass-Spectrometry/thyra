@@ -330,10 +330,23 @@ added), 0.3.0 (`ion_mobility.resolved_table` and `ion_mobility.grid` added),
 (`fragmentation.resolved_table` added), 0.6.0 (the `acquisition` section
 added).
 
-The JSON Schema rendering is committed at
+The JSON Schema rendering is published at a fixed, versioned address,
+which is also its `$id`:
+
+```
+https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.6.0/msi_metadata.schema.json
+```
+
+Every version gets its own folder under that path and a published folder
+is never edited; there is deliberately no `latest`. The LinkML source of
+the same version is served beside it as `msi_metadata.linkml.yaml`. A
+program that writes the document without Thyra validates against that
+address; see [Writing the Metadata Document](writing-the-metadata-document.md).
+
+The same file is committed at
 `thyra/metadata/schema/msi_metadata_schema_v0_6.json` and ships in the
-wheel, so non-Python consumers can validate documents without importing
-Thyra:
+wheel, so a Python consumer can validate documents offline without
+importing Thyra:
 
 ```python
 from importlib import resources
@@ -346,8 +359,11 @@ schema = json.loads(
 )
 ```
 
-A unit test keeps the artifact in sync with the models; regenerate it with
-`python -m thyra.metadata.schema.generate` after a model change.
+Unit tests keep the package artifact in sync with the models and the
+published copy in sync with the package artifact; regenerate both with
+`python -m thyra.metadata.schema.generate` after a model change. A
+version bump creates a new folder under `docs/schema/`; the previous
+version's folder stays as it is.
 
 ---
 
