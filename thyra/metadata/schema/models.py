@@ -55,6 +55,28 @@ MSI_METADATA_UNS_KEY = "msi_metadata"
 # The committed JSON Schema artifact for this schema version.
 SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_6.json"
 
+# Where every published version of the schema is served (issue #385).
+# ``docs/schema/<version>/`` is copied verbatim onto the documentation
+# site, so the artifacts committed there are reachable at these addresses
+# by any validator in any language, with no Python installed.  A version
+# folder is never edited once published: a new ``schema_version`` is a
+# new folder, and nothing is served under a moving name such as
+# ``latest``, because a document that names its schema version must keep
+# validating against the same bytes for as long as the site exists.
+MSI_METADATA_SCHEMA_URL_BASE = (
+    "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema"
+)
+MSI_METADATA_SCHEMA_ID = (
+    f"{MSI_METADATA_SCHEMA_URL_BASE}/{MSI_METADATA_SCHEMA_VERSION}"
+    "/msi_metadata.schema.json"
+)
+MSI_METADATA_LINKML_ID = (
+    f"{MSI_METADATA_SCHEMA_URL_BASE}/{MSI_METADATA_SCHEMA_VERSION}"
+    "/msi_metadata.linkml.yaml"
+)
+# The draft pydantic's ``model_json_schema()`` emits.
+_JSON_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
+
 # Fixed var column conventions for the MSI table.  ``mz`` is required
 # and written by every converter; the remaining names are reserved for
 # annotation results so downstream consumers can rely on one spelling
@@ -740,7 +762,21 @@ class MSIMetadata(_SchemaModel):
     written by the converter for every store; ``acquisition`` is written
     when the reader reports at least one of its facts and is absent --
     not empty -- otherwise.
+
+    The emitted JSON Schema carries ``$id`` and ``$schema`` so that the
+    committed artifact names its own published address; they are added
+    here, on the root model, rather than pasted into the file, so the
+    sync test that compares the file with ``model_json_schema()`` keeps
+    holding.
     """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "$id": MSI_METADATA_SCHEMA_ID,
+            "$schema": _JSON_SCHEMA_DIALECT,
+        },
+    )
 
     schema_version: str = Field(
         default=MSI_METADATA_SCHEMA_VERSION,

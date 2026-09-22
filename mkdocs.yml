@@ -84,6 +84,7 @@ nav:
   - Resampling: resampling.md
   - Output Format: output-format.md
   - Metadata Schema: metadata-schema.md
+  - Writing the Metadata Document: writing-the-metadata-document.md
   - Coordinate Systems: coordinate-systems.md
   - imzML Parser Notes: imzml-parser-notes.md
   - PHI ToF-SIMS Notes: phi-tofsims-notes.md

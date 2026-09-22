@@ -1,10 +1,20 @@
 # thyra/metadata/schema/generate.py
-"""Regenerate the committed JSON Schema artifact.
+"""Regenerate the committed schema artifacts.
 
-The JSON Schema rendering of the pydantic models is committed next to
-the models (``msi_metadata_schema_v0_5.json``) so that non-Python
-consumers can validate documents without importing Thyra.  A unit test
-asserts the committed file matches the models; when it fails, rerun::
+Two copies of the JSON Schema rendering of the pydantic models exist,
+and this script writes both:
+
+* next to the models, under the name in ``SCHEMA_JSON_FILENAME``, so the
+  wheel ships it and a Python consumer can load it with
+  ``importlib.resources``;
+* under ``docs/schema/<version>/`` in the repository, together with a
+  copy of the LinkML source, so the documentation site serves both at
+  the addresses ``MSI_METADATA_SCHEMA_ID`` and ``MSI_METADATA_LINKML_ID``
+  name.  That folder is append-only: a published version is never edited
+  again, and a new ``schema_version`` is a new folder.
+
+Unit tests assert the committed files match the models and each other;
+when one fails, rerun::
 
     python -m thyra.metadata.schema.generate
 
@@ -13,21 +23,46 @@ bump in ``MSI_METADATA_SCHEMA_VERSION`` that the change warrants).
 """
 
 import json
+import shutil
 from pathlib import Path
 
-from .models import SCHEMA_JSON_FILENAME, MSIMetadata
+from .models import MSI_METADATA_SCHEMA_VERSION, SCHEMA_JSON_FILENAME, MSIMetadata
+
+LINKML_FILENAME = "msi_metadata.linkml.yaml"
+PUBLISHED_JSON_FILENAME = "msi_metadata.schema.json"
+PUBLISHED_LINKML_FILENAME = "msi_metadata.linkml.yaml"
+
+
+def render_json_schema() -> str:
+    """The JSON Schema text for the current models, as committed."""
+    schema = MSIMetadata.model_json_schema()
+    return json.dumps(schema, indent=2, sort_keys=True) + "\n"
+
+
+def published_dir(repo_root: Path, version: str = MSI_METADATA_SCHEMA_VERSION) -> Path:
+    """The docs folder that serves one schema version."""
+    return repo_root / "docs" / "schema" / version
 
 
 def main() -> None:
-    """Write the JSON Schema for the current models next to this module."""
-    schema = MSIMetadata.model_json_schema()
-    target = Path(__file__).with_name(SCHEMA_JSON_FILENAME)
-    target.write_text(
-        json.dumps(schema, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+    """Write the package artifact, then the published copies when in a checkout."""
+    here = Path(__file__).resolve().parent
+    text = render_json_schema()
+    target = here.with_name(here.name) / SCHEMA_JSON_FILENAME
+    target.write_text(text, encoding="utf-8", newline="\n")
     print(f"Wrote {target}")
+
+    repo_root = here.parents[2]
+    docs = repo_root / "docs"
+    if not docs.is_dir():
+        print("No docs/ beside the package; published copies not written.")
+        return
+    out = published_dir(repo_root)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / PUBLISHED_JSON_FILENAME).write_text(text, encoding="utf-8", newline="\n")
+    shutil.copyfile(here / LINKML_FILENAME, out / PUBLISHED_LINKML_FILENAME)
+    print(f"Wrote {out / PUBLISHED_JSON_FILENAME}")
+    print(f"Wrote {out / PUBLISHED_LINKML_FILENAME}")
 
 
 if __name__ == "__main__":
