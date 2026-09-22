@@ -155,14 +155,14 @@ class TestBuildMsiMetadata:
         assert analysis.ionisation_source_term is not None
         assert analysis.ionisation_source_term.accession == "MS:1000398"
 
-    def test_an_unknown_source_spelling_is_logged_not_guessed(self, caplog):
-        with caplog.at_level("DEBUG", logger="thyra.metadata.schema.builder"):
+    def test_an_unknown_source_spelling_is_logged_not_guessed(self, thyra_logs):
+        with thyra_logs("thyra.metadata.schema.builder", "DEBUG") as records:
             meta = build_msi_metadata(
                 _comprehensive(acquisition_params={"ionisation_source": "laser magic"}),
                 pixel_size_um=(20.0, 20.0),
             )
         assert meta.ms_analysis.ionisation_source is None
-        assert any("laser magic" in record.message for record in caplog.records)
+        assert any("laser magic" in record.getMessage() for record in records)
 
     def test_resolving_power_is_filled_from_the_value_and_its_reference_mz(self):
         meta = build_msi_metadata(

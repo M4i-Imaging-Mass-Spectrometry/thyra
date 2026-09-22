@@ -323,35 +323,11 @@ def _build_instrument_fields(
     fields: Dict[str, Any] = {}
     fmt_defaults = _FORMAT_DEFAULTS.get((source_format or "").lower(), {})
 
-    reported_source = _first_string(
-        acquisition, ("ionisation_source", "ion_source", "technique")
-    )
-    source = normalize_ionisation_source(reported_source)
-    if reported_source is not None and source is None:
-        # "Unset beats guessed" is the rule, but a spelling the alias table
-        # does not know should be findable in a log rather than only as a
-        # field that is quietly missing (issue #388).
-        logger.debug(
-            "Ionisation source %r matches no known spelling; left unset",
-            reported_source,
-        )
-    if source is None and format_specific.get("is_maldi"):
-        source = normalize_ionisation_source("maldi")
-    if source is None and "ionisation_source" in fmt_defaults:
-        source = normalize_ionisation_source(fmt_defaults["ionisation_source"])
+    source = _resolve_source(acquisition, format_specific, fmt_defaults)
     if source is not None:
         fields["ionisation_source"], fields["ionisation_source_term"] = source
 
-    reported_analyzer = _first_string(
-        instrument, ("analyzer", "mass_analyzer")
-    ) or _first_string(acquisition, ("analyzer", "mass_analyzer"))
-    analyzer = normalize_analyzer(reported_analyzer)
-    if reported_analyzer is not None and analyzer is None:
-        logger.debug(
-            "Analyzer %r matches no known spelling; left unset", reported_analyzer
-        )
-    if analyzer is None and "analyzer" in fmt_defaults:
-        analyzer = normalize_analyzer(fmt_defaults["analyzer"])
+    analyzer = _resolve_analyzer(acquisition, instrument, fmt_defaults)
     if analyzer is not None:
         fields["analyzer"], fields["analyzer_term"] = analyzer
 
@@ -364,6 +340,47 @@ def _build_instrument_fields(
         fields["detector_resolving_power"] = resolving_power
 
     return fields
+
+
+def _resolve_source(
+    acquisition: Dict[str, Any],
+    format_specific: Dict[str, Any],
+    fmt_defaults: Dict[str, Any],
+) -> Optional[Tuple[str, Any]]:
+    """The ionisation source: reported, else implied by the format."""
+    reported = _first_string(
+        acquisition, ("ionisation_source", "ion_source", "technique")
+    )
+    source = normalize_ionisation_source(reported)
+    if reported is not None and source is None:
+        # "Unset beats guessed" is the rule, but a spelling the alias table
+        # does not know should be findable in a log rather than only as a
+        # field that is quietly missing (issue #388).
+        logger.debug(
+            "Ionisation source %r matches no known spelling; left unset", reported
+        )
+    if source is None and format_specific.get("is_maldi"):
+        source = normalize_ionisation_source("maldi")
+    if source is None and "ionisation_source" in fmt_defaults:
+        source = normalize_ionisation_source(fmt_defaults["ionisation_source"])
+    return source
+
+
+def _resolve_analyzer(
+    acquisition: Dict[str, Any],
+    instrument: Dict[str, Any],
+    fmt_defaults: Dict[str, Any],
+) -> Optional[Tuple[str, Any]]:
+    """The mass analyzer: reported, else implied by the format."""
+    reported = _first_string(
+        instrument, ("analyzer", "mass_analyzer")
+    ) or _first_string(acquisition, ("analyzer", "mass_analyzer"))
+    analyzer = normalize_analyzer(reported)
+    if reported is not None and analyzer is None:
+        logger.debug("Analyzer %r matches no known spelling; left unset", reported)
+    if analyzer is None and "analyzer" in fmt_defaults:
+        analyzer = normalize_analyzer(fmt_defaults["analyzer"])
+    return analyzer
 
 
 # The two keys an extractor writes when the source states its resolving
