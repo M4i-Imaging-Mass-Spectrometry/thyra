@@ -52,10 +52,11 @@ class ConversionRefused(ValueError):
 #: the conversion and a log line is not delivery.
 #:
 #: It lives here, beside that refusal, because both the converter and
-#: :mod:`thyra.metadata.uns_assembler` catch it, and neither module is a
-#: home for it: the converter imports the assembler, so the assembler
-#: cannot import the tuple back without a cycle, and the converter's error
-#: policy does not belong inside :mod:`thyra.metadata`.
+#: :mod:`thyra.converters.spatialdata.uns_assembler` catch it, and neither
+#: module is a home for it: the converter imports the assembler, so the
+#: assembler cannot import the tuple back without a cycle, and the
+#: metadata document's own refusals (:mod:`thyra.metadata.schema`) must
+#: not depend on the converter package to name what they catch.
 MALFORMED_METADATA = (AttributeError, KeyError, TypeError, ValueError)
 
 

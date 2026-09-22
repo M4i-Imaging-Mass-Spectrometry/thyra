@@ -1,8 +1,8 @@
-# thyra/metadata/root_attrs.py
+# thyra/converters/spatialdata/root_attrs.py
 
 """The store's own attrs: what one conversion writes at the Zarr root.
 
-Sibling of :mod:`thyra.metadata.uns_assembler`, and here for the same
+Sibling of :mod:`.uns_assembler`, and here for the same
 reason. ``uns`` is the table's provenance; these are the store's, and the
 two used to be composed by twenty-odd methods of one converter reading
 its own attributes, so the only way to ask what a given input produces
@@ -26,8 +26,8 @@ from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Tuple
 import pandas as pd
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from ..converters.spatialdata.optical_image import OpticalImages
-    from ..core.base_reader import BaseMSIReader
+    from ...core.base_reader import BaseMSIReader
+    from .optical_image import OpticalImages
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +156,7 @@ class RootAttrsBuilder:
     def _pixel_size_attrs(self, ctx: RootAttrsContext) -> Dict[str, Any]:
         """Pixel size, conversion provenance and the coordinate contract."""
         try:
-            from .. import __version__
+            from ... import __version__
 
             version = __version__
         except ImportError:

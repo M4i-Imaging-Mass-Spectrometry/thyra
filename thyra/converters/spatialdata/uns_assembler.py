@@ -1,4 +1,4 @@
-# thyra/metadata/uns_assembler.py
+# thyra/converters/spatialdata/uns_assembler.py
 
 """The provenance block every table's ``uns`` carries, built from arguments.
 
@@ -18,6 +18,15 @@ converter is constructed and several change between one table and the
 next. Only the four things settled at construction time (the reader, the
 pitch accessor, the pixel-size detection info and the resampling config)
 are constructor arguments.
+
+**It lives with the converter, not with the metadata package**, because
+only a conversion runs it: its inputs are converter types (a pixel-size
+source, a resampling config, a mobility grid, a reader) and its one caller
+is :class:`~.base_spatialdata_converter.BaseSpatialDataConverter`. It
+landed under ``thyra/metadata/`` first because it assembles metadata;
+by dependency it is a converter collaborator, and the document side of
+that package (``schema/``, ``ontology/``, ``types.py``) imports nothing
+from here or from any converter (design decision D25).
 
 **Exceptions are logged as text here, never as objects**, for the reason
 ``base_spatialdata_converter``'s module docstring gives at length: a
@@ -43,8 +52,8 @@ from typing import (
 
 import numpy as np
 
-from ..errors import MALFORMED_METADATA
-from .schema import (
+from ...errors import MALFORMED_METADATA
+from ...metadata.schema import (
     MSI_METADATA_UNS_KEY,
     ProcessingStep,
     SoftwareRef,
@@ -53,10 +62,10 @@ from .schema import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from ..core.base_converter import PixelSizeSource
-    from ..core.base_reader import BaseMSIReader
-    from ..resampling.mobility_grid import MobilityGrid
-    from ..resampling.types import ResamplingConfig
+    from ...core.base_converter import PixelSizeSource
+    from ...core.base_reader import BaseMSIReader
+    from ...resampling.mobility_grid import MobilityGrid
+    from ...resampling.types import ResamplingConfig
 
 logger = logging.getLogger(__name__)
 

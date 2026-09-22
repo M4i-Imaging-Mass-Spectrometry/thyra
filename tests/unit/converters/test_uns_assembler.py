@@ -16,10 +16,10 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pytest
 
+from thyra.converters.spatialdata.uns_assembler import UnsAssembler, UnsContext
 from thyra.core.base_converter import PixelSizeSource
 from thyra.metadata.schema import MSI_METADATA_UNS_KEY
 from thyra.metadata.types import ComprehensiveMetadata, EssentialMetadata
-from thyra.metadata.uns_assembler import UnsAssembler, UnsContext
 
 _REGIONS = [{"region_number": 1, "n_spectra": 9}]
 
@@ -260,7 +260,7 @@ class TestTheFragmentationSchedule:
         reader = _StubReader(fragmentation=_StubSchedule(3))
         assembler = _assembler(reader)
 
-        with thyra_logs("thyra.metadata", logging.WARNING) as records:
+        with thyra_logs("thyra.converters.spatialdata", logging.WARNING) as records:
             assembler.build(_context())
             assembler.build(_context())
 
@@ -271,7 +271,7 @@ class TestTheFragmentationSchedule:
     def test_a_single_precursor_is_not_warned_about(self, thyra_logs):
         assembler = _assembler(_StubReader(fragmentation=_StubSchedule(1)))
 
-        with thyra_logs("thyra.metadata", logging.WARNING) as records:
+        with thyra_logs("thyra.converters.spatialdata", logging.WARNING) as records:
             assembler.build(_context())
 
         assert not [r for r in records if "precursors per pixel" in r.message]
@@ -344,7 +344,7 @@ class TestTheReaderBoundary:
             def get_comprehensive_metadata(self):
                 raise RuntimeError("the vendor library said no")
 
-        with thyra_logs("thyra.metadata", logging.WARNING) as records:
+        with thyra_logs("thyra.converters.spatialdata", logging.WARNING) as records:
             uns = _assembler(_Refusing()).build(_context())
 
         assert uns == {}
