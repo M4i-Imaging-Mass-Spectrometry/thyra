@@ -96,6 +96,51 @@ class TestSchedule:
         """The property that makes a summed MS/MS spectrum a chimera."""
         assert _pasef_schedule().merges_precursors
 
+    def test_one_precursor_at_two_collision_energies_does_not_merge(self):
+        """Two isolation events, one precursor: nothing is mixed (issue #383).
+
+        The shape of a real timsTOF-family acquisition read for a
+        document: 120 fragment frames of one precursor at m/z 3888, 34 at
+        50 eV then 86 at 60 eV. Grouped by energy that is two windows, and
+        the old rule called the summed spectrum a chimera of two
+        precursors. It holds fragments of one.
+        """
+        schedule = FragmentationSchedule(
+            ms_level=2,
+            windows=(
+                IsolationWindow.from_full_width(3888.0, 10.0, collision_energy=50.0),
+                IsolationWindow.from_full_width(3888.0, 10.0, collision_energy=60.0),
+            ),
+        )
+
+        assert len(schedule.windows) == 2
+        assert schedule.n_precursors == 1
+        assert not schedule.merges_precursors
+        assert schedule.to_uns()["n_windows"] == 2
+        assert schedule.to_uns()["merges_precursors"] is False
+
+    def test_the_same_mass_in_two_mobility_slices_is_two_precursors(self):
+        """Isomers are targeted this way on a PASEF instrument.
+
+        The identity is the demultiplexer's: target m/z and the scan range
+        it was isolated over. Same mass, disjoint slices of the ramp, two
+        precursors -- summing them would undo the separation the ramp gave.
+        """
+        schedule = FragmentationSchedule(
+            ms_level=2,
+            windows=(
+                IsolationWindow.from_full_width(
+                    500.0, 1.0, collision_energy=30.0, scan_begin=100, scan_end=200
+                ),
+                IsolationWindow.from_full_width(
+                    500.0, 1.0, collision_energy=30.0, scan_begin=400, scan_end=500
+                ),
+            ),
+        )
+
+        assert schedule.n_precursors == 2
+        assert schedule.merges_precursors
+
     def test_an_ms1_run_is_not_msms(self):
         schedule = FragmentationSchedule(ms_level=1)
 
@@ -208,6 +253,22 @@ class TestBuilder:
         assert [w.target for w in block.windows] == [313.275, 353.320, 936.578]
         assert block.windows[0].lower_offset == 0.5
         assert block.windows[0].scan_begin == 2933
+
+    def test_one_precursor_at_two_energies_is_not_a_merge_in_the_document(self):
+        """The versioned block follows the same rule as the schedule (issue #383)."""
+        schedule = FragmentationSchedule(
+            ms_level=2,
+            windows=(
+                IsolationWindow.from_full_width(3888.0, 10.0, collision_energy=50.0),
+                IsolationWindow.from_full_width(3888.0, 10.0, collision_energy=60.0),
+            ),
+            dissociation_accession=COLLISION_INDUCED_DISSOCIATION_ACCESSION,
+        )
+
+        block = _build_fragmentation(schedule.to_extractor_report())
+
+        assert block is not None and len(block.windows) == 2
+        assert not block.merges_precursors
 
     def test_a_window_without_a_usable_target_is_dropped(self):
         """A precursor list is what a consumer acts on; never invent one."""

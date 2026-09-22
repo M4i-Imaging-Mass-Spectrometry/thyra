@@ -557,8 +557,8 @@ carries **`uns["msms_schedule"]`**:
 | key | value |
 |---|---|
 | `ms_level` | `2` for a fragment spectrum; the block is absent for MS1 |
-| `n_windows` | number of precursors isolated per pixel |
-| `merges_precursors` | `True` when more than one, so the stored spectrum sums them |
+| `n_windows` | number of isolation windows per pixel: isolation *events*, of which one precursor can own several (the same mass at two collision energies is two windows) |
+| `merges_precursors` | `True` when the windows isolate more than one distinct precursor (by target m/z and mobility scan range), so the stored spectrum sums them; one precursor fragmented twice does not merge |
 | `constant_across_pixels` | whether every pixel was fragmented on the same schedule |
 | `isolation_window_target` | `float64[n]`: the isolated m/z of each window |
 | `isolation_window_lower_offset` / `_upper_offset` | `float64[n]`: the window spans `target - lower` to `target + upper` |
