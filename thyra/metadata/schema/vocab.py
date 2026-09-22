@@ -42,10 +42,19 @@ _POLARITY_ALIASES: Dict[str, str] = {
 IONISATION_SOURCE_ACCESSIONS: Dict[str, str] = {
     "MALDI": "MS:1000075",  # matrix-assisted laser desorption ionization
     "ESI": "MS:1000073",  # electrospray ionization
+    # A child of ESI in PSI-MS, kept distinct because a source that reports
+    # "NSI" (every Thermo scan filter does) means it and not plain ESI.
+    "nanoESI": "MS:1000398",  # nanoelectrospray
+    "APCI": "MS:1000070",  # atmospheric pressure chemical ionization
+    "APPI": "MS:1000382",  # atmospheric pressure photoionization
     "DESI": "MS:1002011",  # desorption electrospray ionization
     "SIMS": "MS:1000402",  # secondary ionization
 }
 
+# The table started imaging-shaped (MALDI, DESI, SIMS) because every source
+# that reached it was an imaging one.  The first non-imaging file described
+# reported "nanoelectrospray" and silently lost the field (issue #388); the
+# electrospray family below is what that file and its relatives say.
 _IONISATION_SOURCE_ALIASES: Dict[str, str] = {
     "maldi": "MALDI",
     "matrix-assisted laser desorption ionization": "MALDI",
@@ -54,6 +63,21 @@ _IONISATION_SOURCE_ALIASES: Dict[str, str] = {
     "electrospray": "ESI",
     "electrospray ionization": "ESI",
     "electrospray ionisation": "ESI",
+    "nsi": "nanoESI",
+    "nanoesi": "nanoESI",
+    "nano-esi": "nanoESI",
+    "nano esi": "nanoESI",
+    "nanoelectrospray": "nanoESI",
+    "nano-electrospray": "nanoESI",
+    "nano electrospray": "nanoESI",
+    "nanoelectrospray ionization": "nanoESI",
+    "nanoelectrospray ionisation": "nanoESI",
+    "apci": "APCI",
+    "atmospheric pressure chemical ionization": "APCI",
+    "atmospheric pressure chemical ionisation": "APCI",
+    "appi": "APPI",
+    "atmospheric pressure photoionization": "APPI",
+    "atmospheric pressure photoionisation": "APPI",
     "desi": "DESI",
     "desorption electrospray ionization": "DESI",
     "desorption electrospray ionisation": "DESI",

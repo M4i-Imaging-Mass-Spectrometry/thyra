@@ -141,6 +141,69 @@ class TestBuildMsiMetadata:
             )
             assert meta.ms_analysis.instrument_model == "rapifleX"
 
+    def test_a_nanoelectrospray_source_reaches_the_document(self):
+        # The first non-imaging source described reported this and lost
+        # the field, because the alias table knew only imaging sources.
+        meta = build_msi_metadata(
+            _comprehensive(
+                acquisition_params={"ionisation_source": "nanoelectrospray"}
+            ),
+            pixel_size_um=(20.0, 20.0),
+        )
+        analysis = meta.ms_analysis
+        assert analysis.ionisation_source == "nanoESI"
+        assert analysis.ionisation_source_term is not None
+        assert analysis.ionisation_source_term.accession == "MS:1000398"
+
+    def test_an_unknown_source_spelling_is_logged_not_guessed(self, thyra_logs):
+        with thyra_logs("thyra.metadata.schema.builder", "DEBUG") as records:
+            meta = build_msi_metadata(
+                _comprehensive(acquisition_params={"ionisation_source": "laser magic"}),
+                pixel_size_um=(20.0, 20.0),
+            )
+        assert meta.ms_analysis.ionisation_source is None
+        assert any("laser magic" in record.getMessage() for record in records)
+
+    def test_resolving_power_is_filled_from_the_value_and_its_reference_mz(self):
+        meta = build_msi_metadata(
+            _comprehensive(
+                instrument_info={"resolving_power": 8750, "resolving_power_at_mz": 200}
+            ),
+            pixel_size_um=(20.0, 20.0),
+        )
+        power = meta.ms_analysis.detector_resolving_power
+        assert power is not None
+        assert (power.value, power.at_mz) == (8750.0, 200.0)
+
+    def test_resolving_power_is_also_read_from_acquisition_params(self):
+        meta = build_msi_metadata(
+            _comprehensive(
+                acquisition_params={
+                    "resolving_power": "60000",
+                    "resolving_power_at_mz": "400",
+                }
+            ),
+            pixel_size_um=(20.0, 20.0),
+        )
+        power = meta.ms_analysis.detector_resolving_power
+        assert power is not None
+        assert (power.value, power.at_mz) == (60000.0, 400.0)
+
+    def test_resolving_power_without_its_reference_mz_stays_unset(self):
+        # A resolving power is not comparable without the m/z it is quoted
+        # at, so half the pair is not written as if it were whole.
+        for info in (
+            {"resolving_power": 8750},
+            {"resolving_power_at_mz": 200},
+            {"resolving_power": 0, "resolving_power_at_mz": 200},
+            {"resolving_power": 8750, "resolving_power_at_mz": -1},
+            {"resolving_power": [8000, 9000], "resolving_power_at_mz": 200},
+        ):
+            meta = build_msi_metadata(
+                _comprehensive(instrument_info=info), pixel_size_um=(20.0, 20.0)
+            )
+            assert meta.ms_analysis.detector_resolving_power is None, info
+
     def test_built_block_passes_validation(self):
         from thyra.metadata.schema import validate_document
 

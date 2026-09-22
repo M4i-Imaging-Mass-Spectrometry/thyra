@@ -69,6 +69,13 @@ class TestNormalizeIonisationSource:
             ("matrix-assisted laser desorption ionization", "MALDI", "MS:1000075"),
             ("DESI", "DESI", "MS:1002011"),
             ("esi", "ESI", "MS:1000073"),
+            # The electrospray family a non-imaging source reports; a Thermo
+            # scan filter says "NSI" and the tune data "nanoelectrospray".
+            ("NSI", "nanoESI", "MS:1000398"),
+            ("nanoelectrospray", "nanoESI", "MS:1000398"),
+            ("nano-ESI", "nanoESI", "MS:1000398"),
+            ("APCI", "APCI", "MS:1000070"),
+            ("atmospheric pressure photoionization", "APPI", "MS:1000382"),
             ("TOF-SIMS", "SIMS", "MS:1000402"),
             ("secondary ion mass spectrometry", "SIMS", "MS:1000402"),
         ],
