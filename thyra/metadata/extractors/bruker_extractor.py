@@ -57,8 +57,41 @@ class BrukerMetadataExtractor(MetadataExtractor):
         cursor.execute(imaging_bounds_query)
         return {row[0]: float(row[1]) for row in cursor.fetchall()}
 
+    @staticmethod
+    def _has_table(cursor, name: str) -> bool:
+        """Whether ``name`` is a table of this database.
+
+        Asked rather than caught, because the two imaging tables are
+        absent for a reason a caller acts on -- the acquisition has no
+        raster -- while a query that fails for any other reason should
+        still surface.
+        """
+        cursor.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (name,),
+        )
+        return cursor.fetchone() is not None
+
+    def _has_frame_positions(self, cursor) -> bool:
+        """Whether the frames were placed on a raster.
+
+        ``MaldiFrameInfo`` is the table that gives every frame an
+        ``(XIndexPos, YIndexPos)``.  A ``.d`` written by a run that
+        imaged nothing -- an electrospray acquisition on a timsOmni, say
+        -- has neither it nor ``MaldiFrameLaserInfo``, and everything
+        this extractor reports about the raster is then unavailable
+        while everything it reports about the mass spectrometry is not.
+        """
+        return self._has_table(cursor, "MaldiFrameInfo")
+
     def _query_laser_info(self, cursor):
-        """Query beam scan sizes from laser info."""
+        """Query beam scan sizes from laser info, or ``None``.
+
+        ``None`` both when ``MaldiFrameLaserInfo`` has no rows and when
+        the acquisition has no such table at all.
+        """
+        if not self._has_table(cursor, "MaldiFrameLaserInfo"):
+            return None
         laser_query = """
         SELECT BeamScanSizeX, BeamScanSizeY, SpotSize
         FROM MaldiFrameLaserInfo
@@ -93,6 +126,20 @@ class BrukerMetadataExtractor(MetadataExtractor):
             """
             cursor.execute(frame_query)
         return cursor.fetchone()
+
+    def _query_frame_count(self, cursor) -> int:
+        """How many frames the acquisition holds.
+
+        The count off ``Frames``, which every ``.d`` has, for the case
+        where there is no ``MaldiFrameInfo`` to count rows of.
+        """
+        try:
+            cursor.execute("SELECT COUNT(*) FROM Frames")
+            result = cursor.fetchone()
+            return int(result[0]) if result and result[0] else 0
+        except sqlite3.OperationalError as e:
+            logger.warning(f"Could not count frames: {e}")
+            return 0
 
     def _query_total_peaks(self, cursor):
         """Query total peaks from NumPeaks column.
@@ -180,20 +227,66 @@ class BrukerMetadataExtractor(MetadataExtractor):
             bounds_data.get("ImagingAreaMaxYIndexPos", max_y_raw or 0),
         )
 
+    def _essential_without_a_raster(
+        self,
+        cursor,
+        mass_range: Tuple[float, float],
+        total_peaks: int,
+    ) -> EssentialMetadata:
+        """The record for a ``.d`` whose frames were never placed.
+
+        Everything the mass spectrometry says is here; everything the
+        raster would have said is the zero that means "none".  The
+        absent ``pixel_size`` is what :func:`thyra.convert.convert_msi`
+        refuses on, and :class:`~thyra.readers.bruker.timstof.BrukerReader`
+        refuses earlier and more specifically for a conversion, so the
+        record only ever reaches a metadata-only caller.
+        """
+        return EssentialMetadata(
+            dimensions=(0, 0, 1),
+            coordinate_bounds=(0.0, 0.0, 0.0, 0.0),
+            mass_range=mass_range,
+            pixel_size=None,
+            n_spectra=self._query_frame_count(cursor),
+            total_peaks=total_peaks,
+            source_path=str(self.data_path),
+        )
+
     def _extract_essential_impl(self) -> EssentialMetadata:
-        """Extract essential metadata with proper coordinate normalization."""
+        """Extract essential metadata with proper coordinate normalization.
+
+        ``GlobalMetadata`` and ``Frames`` are read first because every
+        Bruker ``.d`` has them.  The two MALDI tables hold the raster and
+        are consulted only once they are known to exist: asking for
+        ``MaldiFrameLaserInfo`` up front made the whole metadata block
+        unreachable for an acquisition that imaged nothing, which failed
+        with ``no such table: MaldiFrameLaserInfo`` before even the mass
+        range had been read.
+        """
         cursor = self.conn.cursor()
 
         # Query database tables
         bounds_data = self._query_imaging_bounds(cursor)
-        laser_result = self._query_laser_info(cursor)
-        frame_result = self._query_frame_info(cursor)
         if self._skip_total_peaks:
             total_peaks = 0
         else:
             total_peaks = self._query_total_peaks(cursor)
 
         try:
+            min_mass, max_mass = self._validate_mass_range(bounds_data)
+            mass_range = (float(min_mass), float(max_mass))
+
+            if not self._has_frame_positions(cursor):
+                logger.info(
+                    "%s has no MaldiFrameInfo table: the acquisition placed "
+                    "no frames on a raster, so the metadata describes no "
+                    "image.",
+                    self.data_path.name,
+                )
+                return self._essential_without_a_raster(cursor, mass_range, total_peaks)
+
+            laser_result = self._query_laser_info(cursor)
+            frame_result = self._query_frame_info(cursor)
             if not frame_result:
                 raise ValueError("No data found in MaldiFrameInfo table")
 
@@ -208,17 +301,15 @@ class BrukerMetadataExtractor(MetadataExtractor):
             max_x = float(imaging_max_x - imaging_min_x)
             max_y = float(imaging_max_y - imaging_min_y)
 
-            # Extract beam sizes and validate mass range
+            # Extract beam sizes
             beam_x, beam_y, spot_size = (
                 laser_result if laser_result else (None, None, None)
             )
-            min_mass, max_mass = self._validate_mass_range(bounds_data)
 
             # Build final metadata objects
             dimensions = self._calculate_dimensions_from_coords(0.0, max_x, 0.0, max_y)
             coordinate_bounds = (0.0, float(max_x), 0.0, float(max_y))
             pixel_size = self._resolve_pixel_size_um(beam_x, beam_y)
-            mass_range = (float(min_mass), float(max_mass))
             _, _, _, _, frame_count = frame_result
             n_spectra = int(frame_count) if frame_count else 0
 
@@ -353,11 +444,44 @@ class BrukerMetadataExtractor(MetadataExtractor):
             "ion_mobility": self._extract_ion_mobility(),
         }
 
+        source_type = self._instrument_source_type()
+        if source_type is not None:
+            format_specific["instrument_source_type"] = source_type
+
         # Add calibration metadata if available
         if self.calibration_metadata:
             format_specific["calibration"] = self.calibration_metadata
 
         return format_specific
+
+    def _instrument_source_type(self) -> Optional[int]:
+        """``GlobalMetadata.InstrumentSourceType``, as the file states it.
+
+        Bruker's own code for what ionised the sample.  Recorded raw and
+        deliberately not mapped onto an ionisation term: the MALDI
+        imaging acquisitions available carry ``1`` and an electrospray
+        timsOmni run carries ``11``, which is two points on an enum
+        whose labels Bruker does not document in the file.  Guessing the
+        rest would put a CV accession in the store on the strength of
+        two samples, where ``ms_analysis.ionisation_source`` is instead
+        left unset -- which is what an unset field is for.  A MALDI run
+        still fills that field, from the laser tables, as before.
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT Value FROM GlobalMetadata WHERE Key = " "'InstrumentSourceType'"
+            )
+            result = cursor.fetchone()
+        except sqlite3.OperationalError:
+            return None
+        if not result or result[0] is None:
+            return None
+        try:
+            return int(str(result[0]).strip())
+        except (TypeError, ValueError):
+            logger.debug("InstrumentSourceType is not an integer: %r", result[0])
+            return None
 
     def _extract_ion_mobility(self) -> Dict[str, Any]:
         """Describe the mobility dimension of the acquisition.
@@ -410,7 +534,55 @@ class BrukerMetadataExtractor(MetadataExtractor):
         # Extract timing parameters
         self._extract_timing_params(cursor, params)
 
+        # Polarity, which is a per-frame column rather than a global key
+        self._extract_polarity(cursor, params)
+
         return params
+
+    def _extract_polarity(self, cursor, params: Dict[str, Any]) -> None:
+        """Record the ion polarity when every frame agrees on one.
+
+        ``Frames.Polarity`` is a single character per frame, ``'+'`` or
+        ``'-'``, which :func:`~thyra.metadata.schema.vocab.normalize_polarity`
+        already understands.  It is the only place a Bruker ``.d`` states
+        the polarity, so before this the field was simply never filled
+        for any Bruker source.
+
+        A file whose frames disagree is left unset rather than reduced to
+        one of its two values: an alternating-polarity acquisition has no
+        single truthful answer, and the same rule is what
+        :func:`~thyra.metadata.schema.builder._polarity_from_cv_params`
+        applies to an imzML that declares both.  Only the selected
+        region's frames are asked about when a region is selected.
+        """
+        try:
+            if self._region is not None:
+                cursor.execute(
+                    "SELECT DISTINCT f.Polarity FROM Frames f "
+                    "JOIN MaldiFrameInfo m ON f.Id = m.Frame "
+                    "WHERE m.RegionNumber = ? AND f.Polarity IS NOT NULL "
+                    "LIMIT 2",
+                    (self._region,),
+                )
+            else:
+                cursor.execute(
+                    "SELECT DISTINCT Polarity FROM Frames "
+                    "WHERE Polarity IS NOT NULL LIMIT 2"
+                )
+            rows = cursor.fetchall()
+        except sqlite3.OperationalError:
+            logger.debug("Frames has no Polarity column")
+            return
+        if len(rows) != 1:
+            if len(rows) > 1:
+                logger.info(
+                    "Frames record more than one polarity; the acquisition "
+                    "alternated and no single value is recorded."
+                )
+            return
+        value = rows[0][0]
+        if isinstance(value, str) and value.strip():
+            params["polarity"] = value.strip()
 
     def _extract_laser_params(self, cursor, params: Dict[str, Any]) -> None:
         """Extract laser parameters: per-frame settings, then beam geometry.
@@ -542,7 +714,14 @@ class BrukerMetadataExtractor(MetadataExtractor):
         return instrument
 
     def _extract_global_metadata(self) -> Dict[str, Any]:
-        """Extract all global metadata from database."""
+        """Extract all global metadata from database.
+
+        The two reads are separate because they can fail separately: a
+        ``.d`` with no raster has no ``MaldiFrameLaserInfo`` and a
+        perfectly good ``GlobalMetadata``, and one ``try`` around both
+        would have dropped the per-frame block silently while keeping
+        the global one only because it was assigned first.
+        """
         raw_metadata: Dict[str, Any] = {}
         cursor = self.conn.cursor()
 
@@ -552,7 +731,13 @@ class BrukerMetadataExtractor(MetadataExtractor):
             for key, value in cursor.fetchall():
                 global_metadata[key] = value
             raw_metadata["global_metadata"] = global_metadata
+        except sqlite3.OperationalError:
+            logger.debug("GlobalMetadata table not found or accessible")
 
+        if not self._has_table(cursor, "MaldiFrameLaserInfo"):
+            return raw_metadata
+
+        try:
             # Extract frame info for tests that expect it
             cursor.execute(
                 "SELECT Id, SpotXPos, SpotYPos, BeamScanSizeX, BeamScanSizeY "
@@ -570,9 +755,8 @@ class BrukerMetadataExtractor(MetadataExtractor):
                     }
                 )
             raw_metadata["frame_info"] = frame_info
-
         except sqlite3.OperationalError:
-            logger.debug("GlobalMetadata table not found or accessible")
+            logger.debug("MaldiFrameLaserInfo is not readable")
 
         return raw_metadata
 

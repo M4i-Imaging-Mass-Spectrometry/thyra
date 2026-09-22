@@ -107,7 +107,7 @@ from the format itself.
 | Source | polarity | ionisation source | analyzer | instrument model |
 |--------|----------|-------------------|----------|------------------|
 | imzML | -- | -- | from the `<analyzer>` component cvParam | from the instrumentConfiguration (model term or `MS:1000031` value) |
-| Bruker `.d` | -- | MALDI, when the laser tables are present | TOF (timsTOF-family formats) | from the DB |
+| Bruker `.d` | from `Frames.Polarity`, when every frame agrees | MALDI, when the laser tables are present | TOF (timsTOF-family formats) | from the DB |
 | PHI ToF-SIMS | from the header | SIMS | TOF | platform name |
 | Waters `.raw` | -- | -- | -- | from `_HEADER.TXT` |
 
@@ -132,7 +132,9 @@ and carries no arrays.
 
 Bruker `.d` also fills `fragmentation` from `Frames.MsMsType` and whichever
 precursor table the acquisition uses -- `PasefFrameMsMsInfo` for PASEF frames,
-`FrameMsMsInfo` for single-precursor ones. `present: false` records a survey
+`FrameMsMsInfo` for single-precursor ones -- in a TSF acquisition as well as
+a TDF one. What stays TDF-only is the demultiplexed sibling table, which
+needs the mobility scan ranges only PASEF records. `present: false` records a survey
 acquisition; the field is left unset when the database cannot be asked at all,
 which means "not reported", not "MS1". `windows` is stored as a JSON string
 (a list of objects does not round-trip through AnnData/zarr) and decoded by
@@ -346,6 +348,37 @@ schema = json.loads(
 
 A unit test keeps the artifact in sync with the models; regenerate it with
 `python -m thyra.metadata.schema.generate` after a model change.
+
+---
+
+## `thyra metadata`
+
+```
+thyra metadata INPUT [--merge USER.json] [-o OUT.json]
+```
+
+Builds the same document from a **raw** source and writes it out, without
+converting anything. `INPUT` is a file or folder in any format Thyra reads;
+no spectra are decoded and no vendor SDK is loaded, so it is a header read
+whatever the dataset's size. The default output is stdout.
+
+The document is the one a conversion would have stored, with two
+differences that follow from nothing having been converted: `processing`
+is absent, and no sibling table is named. Everything else -- the
+sections, the ontology terms, the JSON shape -- is identical, so a
+document written this way and the same dataset's block read back out of a
+store compare directly.
+
+```bash
+thyra metadata raw_data.d
+thyra metadata raw_data.d --merge sample.json -o meta.json
+```
+
+An acquisition with no raster has no pixel size, which this schema
+version requires, so its document is reported as invalid and the command
+exits 1 -- while still writing the document, which is the only kind such
+an acquisition has. See
+[Design Decisions](design-decisions.md#d23-a-metadata-document-does-not-need-a-pixel-size-proposed).
 
 ---
 

@@ -83,6 +83,13 @@ _ANALYZER_ALIASES: Dict[str, str] = {
     "orbitrap": "Orbitrap",
     "fticr": "FTICR",
     "ft-icr": "FTICR",
+    # Both PSI-MS labels for MS:1000079. The imzML extractor surfaces the
+    # label from the shipped table rather than the one in the file, so a CV
+    # release that renames a term changes what arrives here: this one lost
+    # its trailing "mass spectrometer" between CV 4.1.x and the table Thyra
+    # shipped before it. An alias that is no longer the current label is kept
+    # because documents and files carrying it exist.
+    "fourier transform ion cyclotron resonance": "FTICR",
     "fourier transform ion cyclotron resonance mass spectrometer": "FTICR",
     "ion trap": "Ion trap",
 }

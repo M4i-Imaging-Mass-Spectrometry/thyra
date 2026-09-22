@@ -78,18 +78,24 @@ def read_msi_metadata_blocks(store_path: Union[str, Path]) -> Dict[str, Dict[str
                     logger.warning(
                         "Table %s has an unparseable processing section", name
                     )
-        _decode_isolation_windows(block, name)
+        decode_isolation_windows(block, name)
         blocks[name] = block
 
     return blocks
 
 
-def _decode_isolation_windows(block: Dict[str, Any], name: str) -> None:
+def decode_isolation_windows(block: Dict[str, Any], name: str) -> None:
     """Parse ``ms_analysis.fragmentation.windows`` back from its JSON string.
 
     Stored as JSON for the same reason ``processing`` is -- a list of
     objects does not round-trip through AnnData/zarr. Decoded in place so
     callers see the parsed form either way.
+
+    Public because the store is not the only place the packed form
+    appears: :func:`~thyra.metadata.schema.builder.build_metadata_document`
+    calls it on a freshly built block, so a document written straight
+    from a raw file and one read back out of a converted store have the
+    same shape.
     """
     fragmentation = block.get("ms_analysis")
     if not isinstance(fragmentation, dict):

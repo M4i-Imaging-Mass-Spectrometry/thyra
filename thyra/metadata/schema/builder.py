@@ -8,6 +8,7 @@ acquisition) or from vendor metadata that directly encodes the fact
 (a Bruker dataset with a ``MaldiFrameLaserInfo`` table is MALDI).
 """
 
+import json
 import logging
 import math
 import re
@@ -16,6 +17,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 from ..types import ComprehensiveMetadata
 from .models import (
+    MSI_METADATA_UNS_KEY,
     Acquisition,
     Fragmentation,
     IonMobility,
@@ -655,6 +657,78 @@ def build_msi_metadata(
             ),
         ),
     )
+
+
+# A pitch to get ``MSAnalysis`` built when the source states none. It is
+# removed from the document in the same breath, inside
+# :func:`build_metadata_document`, and never reaches a caller: the field
+# is mandatory in schema 0.6.0 and the model cannot be instantiated
+# without one, which is precisely the constraint a non-imaging document
+# runs into.
+_PITCH_STAND_IN = (1.0, 1.0)
+
+
+def build_metadata_document(
+    comprehensive: Optional[ComprehensiveMetadata],
+    *,
+    pixel_size_um: Optional[Tuple[float, float]],
+    pixel_size_source: Optional[str] = None,
+    source_format: Optional[str] = None,
+    processing: Optional[List[ProcessingStep]] = None,
+    fragmentation: Any = None,
+) -> Dict[str, Any]:
+    """The ``msi_metadata`` document for a source that was not converted.
+
+    The same shape :func:`~thyra.metadata.schema.store_io.read_msi_metadata_blocks`
+    hands back for a converted store, so one dataset's metadata reads
+    the same whether it came from the raw file or from the store: real
+    lists for ``processing`` and for the isolation windows, where
+    :meth:`MSIMetadata.to_uns_dict` packs both into JSON strings because
+    AnnData/zarr cannot round-trip a list of objects.
+
+    Args:
+        comprehensive: The reader's comprehensive metadata, or ``None``.
+        pixel_size_um: The in-plane raster pitch, or ``None`` when the
+            source states none.  Nothing that writes a store passes
+            ``None``: a conversion refuses without a pitch, so every
+            stored block has one.  A metadata-only read has no such
+            guarantee -- a Bruker ``.d`` that imaged nothing has no
+            raster and no pitch -- and the field is then left out rather
+            than filled with a number nobody measured.  Schema 0.6.0
+            makes it mandatory, so such a document does not validate;
+            that is the finding this command exists to show, not a
+            defect in the document.
+        pixel_size_source: How the pitch was determined, when it was.
+        source_format: Detected input format name, when known.
+        processing: Steps performed so far; empty for an unconverted
+            source, which has had nothing done to it.
+        fragmentation: What the reader reported about fragmentation, as
+            :meth:`thyra.core.msms.FragmentationSchedule.to_extractor_report`
+            renders it.
+
+    Returns:
+        The document as a plain dict.  Sibling-table fields are absent:
+        no sibling was written, because nothing was written.
+    """
+    from .store_io import decode_isolation_windows
+
+    meta = build_msi_metadata(
+        comprehensive,
+        pixel_size_um=pixel_size_um or _PITCH_STAND_IN,
+        pixel_size_source=pixel_size_source,
+        source_format=source_format,
+        processing=processing,
+        fragmentation=fragmentation,
+    )
+    document = meta.to_uns_dict()
+    if pixel_size_um is None:
+        document.get("ms_analysis", {}).pop("pixel_size_um", None)
+
+    stored = document.get("processing")
+    if isinstance(stored, str):
+        document["processing"] = json.loads(stored)
+    decode_isolation_windows(document, MSI_METADATA_UNS_KEY)
+    return document
 
 
 # The sibling tables named in ``ms_analysis``, and the fields of each

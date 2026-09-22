@@ -236,10 +236,15 @@ with ImzMLReader("sample.imzML") as reader:
 
 The versioned, ontology-mapped `uns["msi_metadata"]` block every store
 carries. See [Metadata Schema](metadata-schema.md) for the storage
-contract, the CLI (`thyra validate`, `thyra export-metaspace`), and the
-versioning rules.
+contract, the CLI (`thyra metadata`, `thyra validate`,
+`thyra export-metaspace`), and the versioning rules.
+
+`read_metadata_document` builds the block from a *raw* source instead of
+reading it back out of a store, so the same document is available before
+a conversion and for a source that will never be converted at all.
 
 ```python
+from thyra import read_metadata_document
 from thyra.metadata.schema import (
     read_msi_metadata_blocks,
     to_metaspace,
@@ -249,6 +254,9 @@ from thyra.metadata.schema import (
 blocks = read_msi_metadata_blocks("output.zarr")
 meta, issues = validate_document(blocks["msi_dataset_z0"])
 submission, warnings = to_metaspace(meta)
+
+# The same document, from the raw file rather than the store
+document = read_metadata_document("raw_data.d")
 ```
 
 ::: thyra.metadata.schema.models.MSIMetadata
@@ -262,6 +270,11 @@ submission, warnings = to_metaspace(meta)
       heading_level: 3
 
 ::: thyra.metadata.schema.store_io.read_msi_metadata_blocks
+    options:
+      show_root_heading: true
+      heading_level: 3
+
+::: thyra.metadata.document.read_metadata_document
     options:
       show_root_heading: true
       heading_level: 3
