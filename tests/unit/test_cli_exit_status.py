@@ -38,7 +38,7 @@ class TestExitStatus:
         imzml_path, _, _, _ = create_minimal_imzml
         output_path = temp_dir / "out.zarr"
 
-        monkeypatch.setattr("thyra.__main__.convert_msi", lambda *a, **k: False)
+        monkeypatch.setattr("thyra.convert.convert_msi", lambda *a, **k: False)
 
         result = _invoke(runner, imzml_path, output_path)
 
@@ -53,7 +53,7 @@ class TestExitStatus:
         imzml_path, _, _, _ = create_minimal_imzml
         output_path = temp_dir / "out.zarr"
 
-        monkeypatch.setattr("thyra.__main__.convert_msi", lambda *a, **k: True)
+        monkeypatch.setattr("thyra.convert.convert_msi", lambda *a, **k: True)
 
         result = _invoke(runner, imzml_path, output_path)
 
@@ -215,7 +215,7 @@ class TestPartialOutputQuarantine:
             (output_path / "zarr.json").write_text("{}")
             return False
 
-        monkeypatch.setattr("thyra.__main__.convert_msi", fake_convert)
+        monkeypatch.setattr("thyra.convert.convert_msi", fake_convert)
 
         result = _invoke(runner, imzml_path, output_path)
 
@@ -247,7 +247,7 @@ class TestPartialOutputQuarantine:
             (output_path / "zarr.json").write_text("{}")
             raise KeyboardInterrupt
 
-        monkeypatch.setattr("thyra.__main__.convert_msi", interrupted)
+        monkeypatch.setattr("thyra.convert.convert_msi", interrupted)
 
         result = _invoke(runner, imzml_path, output_path)
 
@@ -266,7 +266,7 @@ class TestPartialOutputQuarantine:
             output_path.mkdir(parents=True)
             return False
 
-        monkeypatch.setattr("thyra.__main__.convert_msi", fake_convert)
+        monkeypatch.setattr("thyra.convert.convert_msi", fake_convert)
 
         result = _invoke(runner, imzml_path, output_path)
 
@@ -281,7 +281,7 @@ class TestPartialOutputQuarantine:
         imzml_path, _, _, _ = create_minimal_imzml
         output_path = temp_dir / "out.zarr"
 
-        monkeypatch.setattr("thyra.__main__.convert_msi", lambda *a, **k: False)
+        monkeypatch.setattr("thyra.convert.convert_msi", lambda *a, **k: False)
 
         result = _invoke(runner, imzml_path, output_path)
 
@@ -307,7 +307,7 @@ class TestOptimizeChunksDeprecation:
         imzml_path, _, _, _ = create_minimal_imzml
         output_path = temp_dir / "out.zarr"
 
-        monkeypatch.setattr("thyra.__main__.convert_msi", lambda *a, **k: True)
+        monkeypatch.setattr("thyra.convert.convert_msi", lambda *a, **k: True)
 
         result = _invoke(runner, imzml_path, output_path, "--optimize-chunks")
 
@@ -328,7 +328,7 @@ class TestOptimizeChunksDeprecation:
         imzml_path, _, _, _ = create_minimal_imzml
         output_path = temp_dir / "out.zarr"
 
-        monkeypatch.setattr("thyra.__main__.convert_msi", lambda *a, **k: True)
+        monkeypatch.setattr("thyra.convert.convert_msi", lambda *a, **k: True)
 
         result = _invoke(runner, imzml_path, output_path, "--optimize-chunks")
 
@@ -343,7 +343,7 @@ class TestOptimizeChunksDeprecation:
         imzml_path, _, _, _ = create_minimal_imzml
         output_path = temp_dir / "out.zarr"
 
-        monkeypatch.setattr("thyra.__main__.convert_msi", lambda *a, **k: True)
+        monkeypatch.setattr("thyra.convert.convert_msi", lambda *a, **k: True)
 
         result = _invoke(runner, imzml_path, output_path)
 
@@ -357,7 +357,7 @@ class TestOptimizeChunksDeprecation:
         imzml_path, _, _, _ = create_minimal_imzml
         output_path = temp_dir / "out.zarr"
 
-        monkeypatch.setattr("thyra.__main__.convert_msi", lambda *a, **k: False)
+        monkeypatch.setattr("thyra.convert.convert_msi", lambda *a, **k: False)
 
         result = _invoke(runner, imzml_path, output_path, "--optimize-chunks")
 

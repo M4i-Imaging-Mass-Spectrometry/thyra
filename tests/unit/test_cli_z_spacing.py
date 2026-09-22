@@ -21,7 +21,6 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-import thyra.__main__ as cli
 from thyra.__main__ import main
 
 
@@ -39,7 +38,10 @@ def captured_call(monkeypatch):
         seen.update(kwargs)
         return True
 
-    monkeypatch.setattr(cli, "convert_msi", _fake_convert_msi)
+    # Patched on ``thyra.convert`` rather than on the CLI module: the
+    # command imports it where it calls it, so the CLI holds no second name
+    # for it to replace (issue #381).
+    monkeypatch.setattr("thyra.convert.convert_msi", _fake_convert_msi)
     return seen
 
 

@@ -147,7 +147,7 @@ class TestCommandLineInterface:
             handle_3d_value = kwargs.get("handle_3d", False)
             return True
 
-        monkeypatch.setattr("thyra.__main__.convert_msi", mock_convert_msi)
+        monkeypatch.setattr("thyra.convert.convert_msi", mock_convert_msi)
 
         # Set up command line arguments with 3D handling
         monkeypatch.setattr(
@@ -190,7 +190,7 @@ class TestCommandLineInterface:
         monkeypatch.setattr("thyra.__main__.setup_logging", mock_setup_logging)
 
         # Mock convert_msi to always return True
-        monkeypatch.setattr("thyra.__main__.convert_msi", lambda *args, **kwargs: True)
+        monkeypatch.setattr("thyra.convert.convert_msi", lambda *args, **kwargs: True)
 
         # Set up command line arguments with debug log level
         monkeypatch.setattr(

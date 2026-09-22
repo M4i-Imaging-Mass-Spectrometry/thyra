@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from ...core.base_extractor import MetadataExtractor
-from ...resampling.constants import ImzMLAccessions, SpectrumType
+from ..constants import ImzMLAccessions, SpectrumType
 from ..types import ComprehensiveMetadata, EssentialMetadata
 from .imzml_extractor import UM_PER_UNIT
 

@@ -2,7 +2,12 @@
 Tests for the simplified format registry system.
 """
 
+import ast
+import subprocess
+import sys
 import threading
+from pathlib import Path
+from typing import Dict, Optional
 
 import pytest
 
@@ -361,3 +366,136 @@ def test_spatialdata_converter_is_always_a_class():
     the branch and the flag are gone; the name has one type.
     """
     assert isinstance(thyra.SpatialDataConverter, type)
+
+
+class TestTheModuleTableMatchesTheDecorators:
+    """The one thing lazy registration can get silently wrong (issue #381).
+
+    Registration is still a decorator; what changed is that nothing imports
+    every reader up front to run them, so the registry carries a table
+    saying which module to import for a given format. A reader added with
+    a decorator and not with a table entry would not be found at all, and a
+    table entry naming the wrong module would import something that
+    registers a different format -- both of which look like "that format is
+    not supported" at the far end of a conversion the user has already
+    started.
+
+    So the table is checked against the source rather than against a second
+    hand-written list. The decorator calls are read out of every module
+    under ``thyra/readers/`` and ``thyra/converters/`` with ``ast``, which
+    imports nothing: a test that imported them to find the registrations
+    would populate the tables as a side effect and could no longer tell
+    whether the table or the import had done it.
+    """
+
+    @staticmethod
+    def _registered_format(node: ast.AST, function: str) -> Optional[str]:
+        """The format name in ``function("name")``, or ``None``.
+
+        Covers both spellings in the tree: ``@register_reader("imzml")`` on
+        a class, and ``register_converter("spatialdata")(cls)`` called
+        after the class body. ``ast.walk`` reaches the inner call of the
+        second, so one test against ``ast.Call`` catches both.
+        """
+        if not isinstance(node, ast.Call):
+            return None
+        if not isinstance(node.func, ast.Name) or node.func.id != function:
+            return None
+        if len(node.args) != 1 or not isinstance(node.args[0], ast.Constant):
+            return None
+        value = node.args[0].value
+        return value if isinstance(value, str) else None
+
+    @classmethod
+    def _declared(cls, package: str, function: str) -> Dict[str, str]:
+        """``format -> dotted module path`` for every decorator in ``package``."""
+        root = Path(thyra.__file__).resolve().parent.parent
+        declared: Dict[str, str] = {}
+        for path in sorted((root / "thyra" / package).rglob("*.py")):
+            dotted = ".".join(path.relative_to(root).with_suffix("").parts)
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                format_name = cls._registered_format(node, function)
+                if format_name is None:
+                    continue
+                assert format_name not in declared, (
+                    f"{function}({format_name!r}) appears in both "
+                    f"{declared[format_name]} and {dotted}; the table can "
+                    f"only name one of them"
+                )
+                declared[format_name] = dotted
+        return declared
+
+    def test_every_reader_decorator_has_a_table_entry(self):
+        assert self._declared("readers", "register_reader") == dict(
+            registry_module._READER_MODULES
+        )
+
+    def test_every_converter_decorator_has_a_table_entry(self):
+        assert self._declared("converters", "register_converter") == dict(
+            registry_module._CONVERTER_MODULES
+        )
+
+    @pytest.mark.parametrize("format_name", sorted(registry_module._READER_MODULES))
+    def test_each_entry_resolves_to_a_reader(self, format_name):
+        """The table is only right if importing what it names registers.
+
+        Equality with the decorator calls above is a source-level check;
+        this one drives the lookup, so an entry naming a module that fails
+        to import, or that registers under a different name than the
+        decorator literal suggests, fails here.
+        """
+        assert issubclass(get_reader_class(format_name), BaseMSIReader)
+
+    def test_the_converter_entry_resolves(self):
+        assert issubclass(get_converter_class("spatialdata"), BaseMSIConverter)
+
+    def test_a_miss_names_every_format_the_table_knows(self):
+        """``Available:`` must not depend on what the process has touched.
+
+        The refusal used to list the registered keys, which was every
+        format while every reader was imported at startup. Deferred, that
+        would be whatever happened to have been looked up already -- so a
+        user who mistyped a format before converting anything would be told
+        ``Available: []``, which is both wrong and unhelpful.
+        """
+        with pytest.raises(ConversionRefused) as excinfo:
+            get_reader_class("mzml")
+
+        message = str(excinfo.value)
+        for format_name in registry_module._READER_MODULES:
+            assert format_name in message
+
+
+def test_a_format_is_imported_only_when_it_is_looked_up():
+    """The deferral is real, not a table that something else fills in.
+
+    In-process this cannot be seen: the test session has imported every
+    reader long before this runs. The child imports ``thyra``, checks that
+    the PHI reader's module is absent, resolves the format, and checks that
+    it is now there -- which is the whole of issue #381 in four lines.
+
+    PHI is the subject because nothing else in the package imports it, so
+    an incidental import cannot make this pass.
+    """
+    source = """
+import sys
+
+import thyra
+from thyra.core.registry import get_reader_class
+
+module = "thyra.readers.phi.phi_reader"
+assert module not in sys.modules, "importing thyra imported a reader"
+reader = get_reader_class("phi")
+assert module in sys.modules, "the lookup did not import the reader"
+print("OK", reader.__name__)
+"""
+    proc = subprocess.run(
+        [sys.executable, "-c", source],
+        capture_output=True,
+        text=True,
+        cwd=Path(thyra.__file__).resolve().parent.parent,
+    )
+
+    assert proc.returncode == 0, f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
+    assert proc.stdout.startswith("OK PhiReader")

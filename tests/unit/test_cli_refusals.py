@@ -230,7 +230,7 @@ class TestOutputPathParent:
         def never(*_args, **_kwargs):  # pragma: no cover - must not run
             raise AssertionError("the conversion started")
 
-        monkeypatch.setattr("thyra.__main__.convert_msi", never)
+        monkeypatch.setattr("thyra.convert.convert_msi", never)
         result = runner.invoke(main, [str(imzml_path), str(blocker / "out.zarr")])
 
         assert result.exit_code == 2, result.output
