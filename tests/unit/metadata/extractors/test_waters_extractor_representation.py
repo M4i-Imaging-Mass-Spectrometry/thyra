@@ -17,9 +17,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from thyra.metadata.constants import SpectrumType
 from thyra.metadata.extractors.waters_extractor import WatersMetadataExtractor
 from thyra.readers.waters.instrument import WatersInstrument
-from thyra.resampling.constants import SpectrumType
 from thyra.resampling.data_characteristics import DataCharacteristics
 
 from .test_waters_extractor import _make_grid_and_ml

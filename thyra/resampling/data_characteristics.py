@@ -3,7 +3,8 @@
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-from .constants import SpectrumType, Thresholds
+from ..metadata.constants import SpectrumType
+from .constants import Thresholds
 
 
 @dataclass

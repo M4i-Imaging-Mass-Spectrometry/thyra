@@ -29,8 +29,8 @@ from ...core.mass_axis import (
 from ...core.mobility import MobilityAxis, classify_mobility_array
 from ...core.registry import register_reader
 from ...errors import ConversionRefused
+from ...metadata.constants import ImzMLAccessions, normalize_spectrum_type
 from ...metadata.extractors.imzml_extractor import ImzMLMetadataExtractor
-from ...resampling.constants import ImzMLAccessions, normalize_spectrum_type
 from ...utils.imzml_coordinate_base import coordinate_bases
 from ...utils.pyimzml_direct import read_spectrum_mzs_only
 from ._pyimzml_compat import ensure_lenient_cv_param_values

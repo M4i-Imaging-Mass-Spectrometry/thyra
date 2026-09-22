@@ -10,14 +10,14 @@ from pyimzml.ImzMLParser import ImzMLParser
 
 from ...core.base_extractor import MetadataExtractor
 from ...errors import ConversionRefused
-from ...resampling.constants import (
+from ...utils.imzml_coordinate_base import coordinate_bases
+from ...utils.pyimzml_direct import read_spectrum_mzs_only
+from ..constants import (
     BinaryDataType,
     ImzMLAccessions,
     SpectrumType,
     normalize_spectrum_type,
 )
-from ...utils.imzml_coordinate_base import coordinate_bases
-from ...utils.pyimzml_direct import read_spectrum_mzs_only
 from ..ontology.cache import ONTOLOGY
 from ..types import ComprehensiveMetadata, EssentialMetadata
 

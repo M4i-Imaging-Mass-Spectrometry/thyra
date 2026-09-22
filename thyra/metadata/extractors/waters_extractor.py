@@ -14,7 +14,7 @@ from numpy.typing import NDArray
 from tqdm import tqdm
 
 from ...core.base_extractor import MetadataExtractor
-from ...resampling.constants import SpectrumType
+from ..constants import SpectrumType
 from ..types import ComprehensiveMetadata, EssentialMetadata
 
 if TYPE_CHECKING:
