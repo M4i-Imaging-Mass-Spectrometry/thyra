@@ -4,10 +4,14 @@
 The class owns every piece of optical state a conversion has: the
 FlexImaging alignment, the TIC-to-image affine, which file became which
 element, and the placeholders waiting for their pixels. That it can be
-built from a reader, an output path and a dataset id -- and exercised
-end to end from there -- is what "the state has one owner" means; the
-converter's own optical tests go through ``convert()`` and so cannot
-tell a collaborator from a mixin.
+built from a reader, an accessor for the output path and a dataset id
+-- and exercised end to end from there -- is what "the state has one
+owner" means; the converter's own optical tests go through ``convert()``
+and so cannot tell a collaborator from a mixin.
+
+The output path is an accessor rather than a path because the pixels are
+streamed long after this object is built, and the converter's
+``output_path`` is not fixed at construction. See the last three tests.
 
 The alignment numbers here are derived from
 ``TeachingPointAlignment.compute_area_alignment``'s own rule (a region's
@@ -18,14 +22,19 @@ a run, so a change to the affine has to be a deliberate one.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pytest
 import tifffile
+import zarr
 from spatialdata.transformations import Affine, Identity
 
-from thyra.converters.spatialdata.optical_image import OpticalImages
+from thyra.converters.spatialdata.optical_image import (
+    OpticalImages,
+    StreamedOpticalImage,
+)
 
 #: One Area, in optical-photo pixels: (100, 200) to (500, 600).
 AREA = {"name": "Area0", "p1": (100, 200), "p2": (500, 600)}
@@ -67,9 +76,10 @@ class _StubReader:
 def _optical(tmp_path: Path, reader: _StubReader, **kwargs: Any) -> OpticalImages:
     kwargs.setdefault("include", True)
     kwargs.setdefault("apply_alignment", True)
+    kwargs.setdefault("output_path", lambda: tmp_path / "out.zarr")
     return OpticalImages(
         reader,
-        tmp_path / "out.zarr",
+        kwargs.pop("output_path"),
         "ds",
         pixel_size_xy=lambda: PIXEL_SIZE,
         **kwargs,
@@ -211,3 +221,112 @@ def test_excluded_optical_images_leave_every_piece_of_state_empty(
     assert optical.sources == {}
     assert optical.alignment_element is None
     assert optical.root_attr() is None
+
+
+# --- The store is read when it is used, not when this object is built -------
+#
+# Everything above stops at the declaration. The three reads of the output
+# path all happen after it: the pixels stream once the SpatialData write
+# that carried the placeholders has returned, and a dropped image is
+# discarded and unrecorded after that again.
+#
+# ``convert_msi`` shortens the output path for Windows
+# (``prepare_zarr_output_path``) *before* it builds the converter, so the
+# production route never moves it underneath this object. A caller that
+# stands a converter up itself has to shorten afterwards, and does --
+# ``test_internal_failures_are_not_warnings`` does it three times, and the
+# CLI's ``_quarantine_partial_output`` records that ``convert_msi``
+# "resolves and may extend the output path". This object used to capture
+# the path at construction and so kept the pre-move spelling, while the
+# converter wrote the store, made its scratch directories and consolidated
+# from a path it read at call time.
+
+
+def _moving_store(tmp_path: Path, tiff: Path):
+    """A collaborator with its images declared, and the converter it reads."""
+    converter = SimpleNamespace(output_path=tmp_path / "before.zarr")
+    optical = _optical(
+        tmp_path,
+        _StubReader([tiff]),
+        output_path=lambda: converter.output_path,
+    )
+    optical.compute_alignment()
+    optical.add_images({})
+    assert list(optical.pending) == ["ds_optical_highres"]
+    return converter, optical
+
+
+def test_the_pixels_stream_into_the_store_being_written_now(
+    tmp_path: Path, tiff: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The store the converter holds when the pixels stream, not before."""
+    converter, optical = _moving_store(tmp_path, tiff)
+
+    handed: List[Path] = []
+    monkeypatch.setattr(
+        StreamedOpticalImage,
+        "stream_pixels",
+        lambda self, store_path: handed.append(Path(store_path)),
+    )
+
+    converter.output_path = tmp_path / "after.zarr"
+    assert optical.stream_pending_pixels() == 1
+
+    assert handed == [tmp_path / "after.zarr"]
+
+
+def test_a_dropped_image_is_discarded_from_that_same_store(
+    tmp_path: Path, tiff: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tolerant branch reads the path once, and it is the current one.
+
+    An image whose pixels will not decode is taken back out of the store,
+    which is only ever the store the placeholder was written into.
+    """
+    converter, optical = _moving_store(tmp_path, tiff)
+
+    discarded: List[Path] = []
+
+    def _refuse(self, store_path: Path) -> None:
+        raise RuntimeError("strips are truncated")
+
+    monkeypatch.setattr(StreamedOpticalImage, "stream_pixels", _refuse)
+    monkeypatch.setattr(
+        StreamedOpticalImage,
+        "discard",
+        lambda self, store_path: discarded.append(Path(store_path)),
+    )
+
+    converter.output_path = tmp_path / "after.zarr"
+    assert optical.stream_pending_pixels() == 0
+
+    assert discarded == [tmp_path / "after.zarr"]
+
+
+def test_unrecording_a_dropped_image_corrects_the_store_being_written_now(
+    tmp_path: Path, tiff: Path
+) -> None:
+    """The third read, and the one whose failure is silent.
+
+    ``forget_image`` swallows everything it cannot do into a warning,
+    because it runs on a store the conversion has just written. Pointed at
+    a store that was never written it would warn and return, leaving the
+    real store's root attrs naming an element with no pixels -- exactly
+    the state the method exists to prevent.
+    """
+    converter, optical = _moving_store(tmp_path, tiff)
+    declared = optical.root_attr()
+    assert declared is not None
+
+    # Only the store the conversion is writing now exists on disk, with the
+    # attrs the SpatialData write would have carried into it.
+    converter.output_path = tmp_path / "after.zarr"
+    root = zarr.open_group(str(converter.output_path), mode="w")
+    root.attrs["optical_images"] = declared
+
+    optical.forget_image("ds_optical_highres")
+
+    reread = zarr.open_group(str(converter.output_path), mode="r")
+    assert "optical_images" not in reread.attrs.asdict()
+    assert optical.root_attr() is None
+    assert not (tmp_path / "before.zarr").exists()

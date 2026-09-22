@@ -300,9 +300,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # which element and the placeholders waiting for their pixels. Built
         # last because it is handed this converter's pitch accessor, which
         # only reads a settled pitch once the reader's metadata is in.
+        # Handed the store accessor for the same reason: the pixels stream
+        # after the write, and ``output_path`` can be reassigned in between.
         self.optical = OpticalImages(
             self.reader,
-            self.output_path,
+            self._store_path,
             self.dataset_id,
             include=include_optical,
             apply_alignment=apply_optical_alignment,
@@ -446,6 +448,23 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         contradicted each other (issue #228).
         """
         return (float(self.pixel_size_um), float(self.pixel_size_y_um))
+
+    def _store_path(self) -> Path:
+        """Where this conversion's store is being written, right now.
+
+        ``output_path`` is not fixed at construction. ``convert_msi``
+        shortens it for Windows (``prepare_zarr_output_path``) *before*
+        building the converter, so the production route is safe, but a
+        caller that stands a converter up itself has to shorten afterwards
+        -- the CLI's ``_quarantine_partial_output`` says as much, and the
+        suite does it in ``test_internal_failures_are_not_warnings``.
+
+        Everything the converter itself does with the path already reads it
+        at call time: the write, the scratch directories, the consolidate.
+        This is the accessor a collaborator that outlives construction gets
+        instead of a snapshot, so it reads the same path they do.
+        """
+        return self.output_path
 
     def _add_metadata_to_uns(self, adata) -> None:
         """Apply :meth:`build_uns_metadata` to an AnnData about to be written."""
