@@ -84,7 +84,7 @@ class _StubReader:
 
 
 class _StubSchedule:
-    """The four things the assembler reads off a fragmentation schedule."""
+    """The five things the assembler reads off a fragmentation schedule."""
 
     is_msms = True
 
@@ -94,8 +94,12 @@ class _StubSchedule:
         )
 
     @property
+    def n_precursors(self) -> int:
+        return len({w.target for w in self.windows})
+
+    @property
     def merges_precursors(self) -> bool:
-        return len(self.windows) > 1
+        return self.n_precursors > 1
 
     def to_uns(self) -> Dict[str, Any]:
         return {"ms_level": 2, "targets": [w.target for w in self.windows]}

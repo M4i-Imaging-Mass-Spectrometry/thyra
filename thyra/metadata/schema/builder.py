@@ -15,6 +15,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
+from ...core.msms import distinct_precursors
 from ..types import ComprehensiveMetadata
 from .models import (
     MSI_METADATA_UNS_KEY,
@@ -605,7 +606,7 @@ def _build_fragmentation(
         present=True,
         ms_level=max(ms_level, 2),
         constant_across_pixels=bool(reported.get("constant_across_pixels", True)),
-        merges_precursors=len(windows) > 1,
+        merges_precursors=distinct_precursors(windows) > 1,
         dissociation_term=term if windows else None,
         windows=windows,
         resolved_table=resolved_table,

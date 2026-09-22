@@ -131,6 +131,37 @@ class TestSinglePrecursor:
         assert not window.is_mobility_resolved
 
 
+class TestOnePrecursorTwice:
+    def test_two_collision_energies_are_two_windows_and_one_precursor(self, tdf):
+        """The case issue #383 was filed on, as the TDF records it.
+
+        ``FrameMsMsInfo`` groups by trigger mass, width and energy, so a
+        method that fragments one precursor at two energies yields two
+        rows. Both are reported -- each energy is a fact about the
+        acquisition -- and the summed spectrum is still one precursor's.
+        """
+        frames = _all_frame_ids(tdf)
+        split = len(frames) // 3
+        with _frames(tdf) as conn:
+            conn.execute("UPDATE Frames SET MsMsType = 2")
+            conn.executemany(
+                "INSERT INTO FrameMsMsInfo (Frame, Parent, TriggerMass, "
+                "IsolationWidth, PrecursorCharge, CollisionEnergy) "
+                "VALUES (?, NULL, 3888.0, 10.0, NULL, ?)",
+                [
+                    (frame, 50.0 if i < split else 60.0)
+                    for i, frame in enumerate(frames)
+                ],
+            )
+
+        schedule = _read(tdf)
+
+        assert len(schedule.windows) == 2
+        assert sorted(w.collision_energy for w in schedule.windows) == [50.0, 60.0]
+        assert schedule.n_precursors == 1
+        assert not schedule.merges_precursors
+
+
 class TestPasef:
     def test_the_schedule_is_the_distinct_window_set(self, tdf):
         _make_pasef(tdf, _all_frame_ids(tdf))

@@ -404,17 +404,21 @@ class UnsAssembler:
         schedule = self._fragmentation_schedule
         if schedule is None or not schedule.merges_precursors:
             return
-        targets = ", ".join(f"{w.target:g}" for w in schedule.windows[:6])
-        if len(schedule.windows) > 6:
+        # Each precursor once: a mass isolated at two collision energies
+        # is two windows and one precursor (issue #383).
+        distinct = list(dict.fromkeys(f"{w.target:g}" for w in schedule.windows))
+        targets = ", ".join(distinct[:6])
+        if len(distinct) > 6:
             targets += ", ..."
         logger.warning(
-            "This acquisition isolates %d precursors per pixel (%s). Thyra "
-            "sums them into one spectrum per pixel, so the stored spectrum "
-            "holds fragments of all of them and cannot be attributed to a "
-            "single precursor. The schedule is recorded in "
+            "This acquisition isolates %d precursors per pixel (%s) over %d "
+            "isolation windows. Thyra sums them into one spectrum per pixel, "
+            "so the stored spectrum holds fragments of all of them and cannot "
+            "be attributed to a single precursor. The schedule is recorded in "
             "uns['msms_schedule'].",
-            len(schedule.windows),
+            schedule.n_precursors,
             targets,
+            len(schedule.windows),
         )
 
     def _collect_msms_schedule(self, uns: Dict[str, Any], ctx: UnsContext) -> None:

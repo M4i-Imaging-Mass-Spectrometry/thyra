@@ -120,6 +120,15 @@ class FragmentationSchedule:
         return self.ms_level > 1
 
     @property
+    def n_precursors(self) -> int:
+        """How many distinct precursors the schedule isolates per pixel.
+
+        See :func:`distinct_precursors`: windows are isolation *events*,
+        and one precursor can be the subject of several.
+        """
+        return distinct_precursors(self.windows)
+
+    @property
     def merges_precursors(self) -> bool:
         """Whether one stored spectrum sums fragments of several precursors.
 
@@ -127,8 +136,13 @@ class FragmentationSchedule:
         than one precursor was isolated per pixel, so the spectrum holds
         fragments of all of them with nothing distinguishing which came
         from which.
+
+        Counted over precursors, not windows. A method that isolates one
+        mass at two collision energies records two windows and fragments
+        one precursor; summing its frames mixes nothing, and saying it
+        did was issue #383.
         """
-        return len(self.windows) > 1
+        return self.n_precursors > 1
 
     def to_uns(self) -> Dict[str, Any]:
         """The schedule as a plain ``uns`` block: arrays, no colons in keys.
@@ -225,6 +239,30 @@ def _optional_array(values: Any) -> Any:
         [np.nan if value is None else float(value) for value in values],
         dtype=np.float64,
     )
+
+
+def distinct_precursors(windows: Sequence[Any]) -> int:
+    """How many precursors a set of isolation windows isolates.
+
+    A window is an isolation *event*; a precursor is what was isolated.
+    The two differ whenever a method isolates the same mass again with
+    another parameter changed -- a second collision energy, a wider
+    window -- and then the frames still fragment one precursor, however
+    many rows the schedule holds.
+
+    The identity is the one the demultiplexer's precursor axis already
+    uses (``msms_table._precursor_axis``): the target m/z and the mobility
+    scan range it was isolated over. The same mass isolated in two
+    disjoint slices of the ramp is two precursors, because that is how an
+    isomer pair is targeted on a PASEF instrument, and summing them would
+    undo exactly the separation the ramp provided. Anything without a
+    scan range is told apart by its mass alone.
+
+    Takes any objects with ``target``, ``scan_begin`` and ``scan_end``
+    attributes, so the reader's :class:`IsolationWindow` and the schema's
+    model of it count the same way (issue #383).
+    """
+    return len({(float(w.target), w.scan_begin, w.scan_end) for w in windows})
 
 
 def windows_overlap(windows: Sequence[IsolationWindow]) -> bool:
