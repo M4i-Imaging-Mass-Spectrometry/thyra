@@ -276,7 +276,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # SiblingContext` (see :meth:`_sibling_context`).
         self.siblings = SiblingTables(
             self.reader,
-            self._scratch_parent,
+            self._store_path,
             write_mobility_table=write_mobility_table,
             mobility_heatmap=mobility_heatmap,
             mobility_grid=mobility_grid,
@@ -389,17 +389,6 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             mobility_heatmap=self._ensure_mobility_heatmap,
         )
 
-    def _scratch_parent(self) -> Path:
-        """The directory a table's CSC scratch is made in.
-
-        Read when a scratch is made, never cached: ``convert_msi`` shortens
-        the output path before it builds a converter, but a caller that
-        stands one up itself assigns the shortened path afterwards, and the
-        scratch has to follow the store rather than the path the converter
-        was handed.
-        """
-        return self.output_path.parent
-
     def _sibling_context(self) -> SiblingContext:
         """What the sibling tables need that this conversion decided after setup.
 
@@ -459,10 +448,13 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         -- the CLI's ``_quarantine_partial_output`` says as much, and the
         suite does it in ``test_internal_failures_are_not_warnings``.
 
-        Everything the converter itself does with the path already reads it
-        at call time: the write, the scratch directories, the consolidate.
-        This is the accessor a collaborator that outlives construction gets
-        instead of a snapshot, so it reads the same path they do.
+        The one accessor both collaborators that outlive construction are
+        handed, rather than a snapshot each: :class:`SiblingTables` makes
+        every table's scratch in its parent, and :class:`OpticalImages`
+        streams its pixels into it once the write has returned. What the
+        converter does with the path itself -- the write, the consolidate
+        -- reads ``output_path`` directly, at call time, which is the same
+        thing.
         """
         return self.output_path
 

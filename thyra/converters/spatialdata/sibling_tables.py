@@ -22,7 +22,7 @@ used to leave its name behind -- a store whose summed table pointed at an
 element nobody wrote, reported as a success. It was found, and could only
 be tested, by driving ``convert()`` end to end with a stub reader. The
 same decision is now one method call on a collaborator that needs a
-reader and an output directory and nothing else.
+reader and the store it would write and nothing else.
 
 **Three orderings here are load-bearing and all three read like
 oversights**, so each is stated where it happens:
@@ -199,7 +199,7 @@ class SiblingTables:
     def __init__(
         self,
         reader: BaseMSIReader,
-        scratch_parent: Callable[[], Path],
+        store_path: Callable[[], Path],
         *,
         write_mobility_table: bool = True,
         mobility_heatmap: bool = True,
@@ -223,12 +223,12 @@ class SiblingTables:
                 ``has_frame_scans``); the builders read the rest. A reader
                 here is whatever satisfies that interface, not necessarily
                 a :class:`~thyra.core.base_reader.BaseMSIReader` subclass.
-            scratch_parent: The directory a table's scratch is made in --
-                the output store's own parent, so the memmaps and the
-                store they are written into share a filesystem. Called
-                when a scratch is made rather than read here, because the
-                output path a converter was *given* is not always the one
-                it writes: ``prepare_zarr_output_path`` shortens it on
+            store_path: The store this conversion is writing. A table's
+                scratch is made in its parent, so the memmaps and the store
+                they are written into share a filesystem. Called when a
+                scratch is made rather than read here, because the output
+                path a converter was *given* is not always the one it
+                writes: ``prepare_zarr_output_path`` shortens it on
                 Windows, and a caller that stands a converter up itself
                 assigns the shortened path afterwards. Reading it once at
                 construction would put the scratch beside a path nothing
@@ -249,7 +249,7 @@ class SiblingTables:
                 wanted.
         """
         self.reader = reader
-        self.scratch_parent = scratch_parent
+        self.store_path = store_path
 
         # The mobility-resolved sibling (see mobility_table.py): whether to
         # write one, and -- once a finalize step has decided for its slice --
@@ -704,7 +704,7 @@ class SiblingTables:
         """A scratch directory for one sibling's memmaps, next to the output."""
         from .csc_assembly import scratch_directory
 
-        return scratch_directory(f".thyra_{prefix}_", parent=self.scratch_parent())
+        return scratch_directory(f".thyra_{prefix}_", parent=self.store_path().parent)
 
     def register_scratch(self, prefix: str, assembly: Any) -> Path:
         """A scratch directory for ``assembly``, released with the others once written."""
