@@ -1,6 +1,31 @@
 # thyra/converters/spatialdata/base_spatialdata_converter.py
 
-"""The SpatialData write path every converter shares.
+"""The lifecycle and the write path of the SpatialData converter.
+
+What this module owns, after the decomposition of issue #276 (design
+decision D24): building the four collaborators and the axis planner
+(``__init__``); running the base workflow with the tables' scratch
+released on every exit (``convert``); reading the source's essential
+metadata, adopting its pitch and z spacing, laying the common mass axis
+and computing the optical alignment (``_initialize_conversion``); the
+guards on that axis (``_refuse_wide_mass_axis``,
+``_refuse_non_finite_axis``); the per-spectrum hygiene both strategies
+share (``_drop_unusable_intensities``, ``_coalesce_duplicate_bins``); the
+``var`` frame, the region numbers and the pixel shapes; the three context
+packers that hand a collaborator what a conversion decided after
+construction; and ``_save_output``, the one place every element reaches
+spatialdata's writer.
+
+What it deliberately does not do: place a spectrum on the axis (a
+``ResamplingStrategy``, D22), decide the axis (``AxisPlanner``, #352),
+compose ``uns`` or the root attrs (``UnsAssembler``, ``RootAttrsBuilder``,
+#351), load or align an optical image (``OpticalImages``, #350), or plan,
+scan, build or name a sibling table (``SiblingTables``, #353). Each of
+those is constructible without a converter, which is the point of the
+split. The two-pass loop that fills the tables is the subclass in
+``streaming_converter.py``; the two share four pieces of per-conversion
+state, laid here and read there: the grid dimensions, the common mass
+axis, the strategy and the region map.
 
 **Exceptions are logged as text here, never as objects.** Every
 ``logger.warning("...: %s", str(e))`` in this file could read ``e`` and
