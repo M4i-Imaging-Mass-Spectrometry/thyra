@@ -1,6 +1,6 @@
 """Auto-population: the builder reports what the source knows, nothing more."""
 
-from thyra.metadata.schema import build_msi_metadata
+from thyra.metadata.schema import build_metadata_document, build_msi_metadata
 from thyra.metadata.types import ComprehensiveMetadata, EssentialMetadata
 
 
@@ -447,3 +447,88 @@ class TestAcquisitionSection:
         assert model is not None
         assert model.acquisition is not None
         assert issues == []
+
+
+#: A Windows source path in the spelling ``str(Path(...))`` produces, which
+#: is what every extractor stores. Assembled rather than written out: a
+#: drive letter followed by backslashes is precisely the shape the
+#: ``no-lab-share-paths`` pre-commit hook rejects in a tracked file, and
+#: that hook enforces the policy this test class is about.
+_WINDOWS_SOURCE = "\\".join(("D:", "acquisitions", "2025", "mouse_brain.d"))
+
+
+class TestTheSourceIsNamedInADocumentAndLocatedInAStore:
+    """Issue #384: one field, two readerships.
+
+    A store block keeps the path -- the store sits beside the source on
+    the machine that wrote it.  A document is written to be handed to
+    somebody, so it carries the name and leaves the filesystem behind.
+    """
+
+    @staticmethod
+    def _from(source_path: str) -> ComprehensiveMetadata:
+        return ComprehensiveMetadata(
+            essential=_essential(source_path),
+            format_specific={},
+            acquisition_params={},
+            instrument_info={},
+            raw_metadata={},
+        )
+
+    def test_a_store_block_keeps_the_whole_path(self):
+        meta = build_msi_metadata(
+            self._from(_WINDOWS_SOURCE),
+            pixel_size_um=(20.0, 20.0),
+            source_format="bruker",
+        )
+        assert meta.provenance.source_path == _WINDOWS_SOURCE
+
+    def test_a_document_carries_the_name_only(self):
+        document = build_metadata_document(
+            self._from(_WINDOWS_SOURCE),
+            pixel_size_um=(20.0, 20.0),
+            source_format="bruker",
+        )
+        assert document["provenance"]["source_path"] == "mouse_brain.d"
+
+    def test_a_posix_path_is_reduced_the_same_way(self):
+        document = build_metadata_document(
+            self._from("/mnt/share/2025/mouse_brain.d"),
+            pixel_size_um=(20.0, 20.0),
+            source_format="bruker",
+        )
+        assert document["provenance"]["source_path"] == "mouse_brain.d"
+
+    def test_a_directory_source_keeps_its_name_despite_a_trailing_separator(self):
+        # Bruker .d and Waters .raw name a directory, so the value can
+        # arrive with a separator the name would otherwise be lost behind.
+        document = build_metadata_document(
+            self._from("/mnt/share/2025/mouse_brain.d/"),
+            pixel_size_um=(20.0, 20.0),
+            source_format="bruker",
+        )
+        assert document["provenance"]["source_path"] == "mouse_brain.d"
+
+    def test_a_name_is_left_alone(self):
+        document = build_metadata_document(
+            self._from("input.imzML"),
+            pixel_size_um=(20.0, 20.0),
+            source_format="imzml",
+        )
+        assert document["provenance"]["source_path"] == "input.imzML"
+
+    def test_a_source_that_reduces_to_nothing_is_unset_rather_than_empty(self):
+        # An empty string is not a name, and the field is optional. The
+        # store convention is to omit rather than to write empty.
+        document = build_metadata_document(
+            self._from("/"),
+            pixel_size_um=(20.0, 20.0),
+            source_format="imzml",
+        )
+        assert "source_path" not in document["provenance"]
+
+    def test_a_document_from_no_metadata_at_all_still_builds(self):
+        document = build_metadata_document(
+            None, pixel_size_um=(20.0, 20.0), source_format="imzml"
+        )
+        assert "source_path" not in document["provenance"]

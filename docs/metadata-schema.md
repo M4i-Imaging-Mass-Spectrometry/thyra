@@ -75,7 +75,7 @@ how it was prepared) and are supplied by you -- see
 | `processing` | list of `{name, software {name, version, uri}, parameters}` | ordered steps, oldest first | -- |
 | `provenance` | `thyra_version` | text, required | -- |
 | | `source_format` | `"imzml"`, `"bruker"`, ... | -- |
-| | `source_path` | text | -- |
+| | `source_path` | text, the source's path in a store block and its name alone in a document | -- |
 | | `pixel_size_source` | `"automatic"` / `"manual"` / `"default"` | -- |
 
 An ontology term is always the pair
@@ -385,12 +385,18 @@ converting anything. `INPUT` is a file or folder in any format Thyra reads;
 no spectra are decoded and no vendor SDK is loaded, so it is a header read
 whatever the dataset's size. The default output is stdout.
 
-The document is the one a conversion would have stored, with two
-differences that follow from nothing having been converted: `processing`
-is absent, and no sibling table is named. Everything else -- the
-sections, the ontology terms, the JSON shape -- is identical, so a
-document written this way and the same dataset's block read back out of a
-store compare directly.
+The document is the one a conversion would have stored, with three
+differences. Two follow from nothing having been converted: `processing`
+is absent, and no sibling table is named. The third follows from where
+the document goes: `provenance.source_path` is the source's **name**,
+where a store block carries the path it was converted from. A store sits
+on the machine that wrote it and the path is provenance a reader can act
+on; a document is written to be handed to somebody, and an absolute path
+describes a filesystem they do not have while carrying a user directory
+to a machine that has no use for it. Everything else -- the sections, the
+ontology terms, the JSON shape -- is identical, so a document written
+this way and the same dataset's block read back out of a store compare
+directly.
 
 ```bash
 thyra metadata raw_data.d

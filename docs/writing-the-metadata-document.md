@@ -143,3 +143,10 @@ store carries the same document in `table.uns["msi_metadata"]`, and
 `read_msi_metadata_blocks` returns it in the same shape, so a document
 written from a raw file and the block read out of that file's store
 compare directly.
+
+One field differs between the two, and a writer of documents should
+follow it: `provenance.source_path` is the source's **name** in a
+standalone document, and the path it was converted from in a block
+inside a store. A store sits on the machine that wrote it; a document is
+written to travel, and the directories above the source describe a
+filesystem its reader does not have.

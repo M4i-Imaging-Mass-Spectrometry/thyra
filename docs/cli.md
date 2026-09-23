@@ -574,6 +574,11 @@ way, and the validation issues go to stderr -- so `thyra metadata src
 -o meta.json` leaves you a document to look at whatever the exit status
 was, and `thyra metadata src > meta.json` keeps stdout clean.
 
+The document names the source rather than locating it: `source_path`
+carries `raw_data.d`, not the directory it was read from. A document is
+written to be sent to somebody, and nothing in it should have to be
+edited out first.
+
 ```bash
 # Look at what a folder says before spending hours converting it
 thyra metadata raw_data.d

@@ -738,6 +738,53 @@ def build_msi_metadata(
 _PITCH_STAND_IN = (1.0, 1.0)
 
 
+def _name_the_source(document: Dict[str, Any]) -> None:
+    """Reduce ``provenance.source_path`` to the source's name, in place.
+
+    A block inside a store keeps the whole path.  The store sits on the
+    machine that wrote it, the two are usually neighbours, and which
+    folder an element was converted from is provenance a reader of that
+    store can act on.
+
+    A document is the opposite on every count: it is small, it is
+    portable, and ``thyra metadata`` exists to produce one that can be
+    handed to somebody else.  An absolute path in it describes a
+    filesystem the recipient does not have, while carrying a user
+    directory and the acquisition folder's name to a machine that has no
+    use for either.  The name is the part a recipient can reconcile
+    against the acquisition; the rest is the machine it was read on.
+
+    Same reduction as ``acquisition.method_file`` and for the same
+    reason (see :func:`_file_name`).  It runs here rather than in
+    :func:`build_msi_metadata` because the difference is not in the
+    field, it is in what is being written: only a document is meant to
+    travel.
+
+    Trailing separators are stripped first, which :func:`_file_name`
+    does not do for a method file and does not need to.  Two of the
+    formats Thyra reads name a *directory* -- Bruker ``.d`` and Waters
+    ``.raw`` -- so a source path ending in a separator is ordinary here
+    where it never is for a file.
+    """
+    # Indexed, not probed: ``provenance`` is required on the model and
+    # ``thyra_version`` is required within it, so the section always
+    # survives ``exclude_none`` and ``to_uns_dict`` never drops it.  A
+    # guard here would be unreachable, and for a step whose whole job is
+    # to take something out it would be the wrong failure mode anyway --
+    # a shape this does not recognise should stop the document being
+    # written, not silently leave the path in it.
+    provenance = document["provenance"]
+    source = provenance.get("source_path")
+    if not isinstance(source, str):
+        # Unset, which is what a source Thyra could not name looks like.
+        return
+    name = _file_name(source.rstrip("/\\"))
+    if name is None:
+        provenance.pop("source_path", None)
+    else:
+        provenance["source_path"] = name
+
+
 def build_metadata_document(
     comprehensive: Optional[ComprehensiveMetadata],
     *,
@@ -793,6 +840,7 @@ def build_metadata_document(
     document = meta.to_uns_dict()
     if pixel_size_um is None:
         document.get("ms_analysis", {}).pop("pixel_size_um", None)
+    _name_the_source(document)
 
     stored = document.get("processing")
     if isinstance(stored, str):
