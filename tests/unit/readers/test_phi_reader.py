@@ -4,6 +4,7 @@ Builds synthetic .raw files matching the documented layout so the reader can
 be exercised without a multi-hundred-megabyte vendor file.
 """
 
+import json
 import struct
 
 import numpy as np
@@ -470,6 +471,75 @@ class TestFlightTimeSurvivesConversion:
             + cal["mass_offset_used"]
         ) ** 2
         np.testing.assert_allclose(recomputed, table.var["mz"].to_numpy(), rtol=1e-9)
+
+
+class TestPeopleStayOutOfTheStore:
+    """SmartSoft records the acquisition-PC path and has operator and user fields.
+
+    The header reaches the store as JSON, the one vendor dictionary the
+    step every other one passes through cannot see into, so it is checked
+    on a store written end to end: nothing the header says about a person
+    or a folder may be anywhere in ``uns`` or the root attributes.
+    """
+
+    PERSON = "Qwerty Operatorperson"
+    FOLDER = "qwertyfolder"
+    # A quote and a micro sign both reach the stored JSON as escapes that
+    # start with a backslash, which is not what makes a value a path.
+    COMMENT = 'probe "A" at 5 \u00b5m'
+
+    @pytest.fixture
+    def raw_with_people(self, tmp_path):
+        acquired = f"D:\\SmartSoft\\Data\\{self.FOLDER}\\run42.raw"
+        text = make_header().rstrip(b"\x00").decode("latin-1")
+        # Top-level entries come before the first [Section].
+        text = text.replace(
+            "SOFH\r\n",
+            f"SOFH\r\nAcqFilename: {acquired}\r\nOperator: {self.PERSON}\r\n"
+            f"Comment: {self.COMMENT}\r\n",
+            1,
+        ).replace(
+            "EOFH\r\n",
+            "[Data Manager]\r\n"
+            f"User Name={self.PERSON}\r\n"
+            "User Company=Example Institute\r\n"
+            f"Acquisition Filename={acquired}\r\n"
+            "EOFH\r\n",
+        )
+        header = text.encode("latin-1")
+        assert len(header) <= HEADER_SIZE  # the fixture still fits its HeaderSize
+        words = [event(x, y, 3_000_000) for x in range(2) for y in range(2)]
+        path = tmp_path / "people.raw"
+        path.write_bytes(
+            header.ljust(HEADER_SIZE, b"\x00")
+            + events_block(words)
+            + block(2)
+            + block(0)
+        )
+        return path
+
+    def test_the_store_keeps_the_file_name_and_nobody(self, raw_with_people, tmp_path):
+        sd = pytest.importorskip("spatialdata")
+        from thyra.convert import convert_msi
+
+        out = tmp_path / "people.zarr"
+        assert convert_msi(raw_with_people, out, dataset_id="d")
+        sdata = sd.read_zarr(out)
+        table = next(iter(sdata.tables.values()))
+
+        stored = json.dumps({"uns": table.uns, "attrs": sdata.attrs}, default=str)
+        assert self.PERSON not in stored
+        assert self.FOLDER not in stored
+
+        entries = json.loads(table.uns["raw_metadata"]["header_entries"])
+        sections = json.loads(table.uns["raw_metadata"]["header_sections"])
+        assert entries["AcqFilename"] == "run42.raw"
+        assert "Operator" not in entries
+        assert entries["Comment"] == self.COMMENT
+        assert sections["Data Manager"] == {
+            "User Company": "Example Institute",
+            "Acquisition Filename": "run42.raw",
+        }
 
 
 class TestRegistryDetection:

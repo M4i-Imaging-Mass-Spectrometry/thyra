@@ -292,7 +292,6 @@ class TestAcquisitionSection:
                 "laser_rep_rate": 2000.0,
                 "num_summations": 200,
                 "method_name": "PDE_micebrain_DHB_pos.m",
-                "operator_name": "Admin",
             },
             "solarix",
         )

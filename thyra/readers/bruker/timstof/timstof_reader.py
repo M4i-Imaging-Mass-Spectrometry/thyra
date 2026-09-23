@@ -818,13 +818,16 @@ class BrukerReader(BrukerBaseMSIReader):
             """)
             original_datetime = cursor.fetchone()[0]
 
-        # Get additional metadata from CalibrationInfo
+        # The software version only. CalibrationInfo also records who
+        # calibrated (CalibrationUser, MobilityCalibrationUser): a person,
+        # which does nothing in a store and is not read at all -- see
+        # thyra.metadata.personal_data.
         cursor.execute(
             """
             SELECT KeyName, Value
             FROM CalibrationInfo
             WHERE CalibrationState = ?
-            AND KeyName IN ('CalibrationSoftwareVersion', 'CalibrationUser')
+            AND KeyName = 'CalibrationSoftwareVersion'
         """,
             (cal_id,),
         )
@@ -839,7 +842,6 @@ class BrukerReader(BrukerBaseMSIReader):
             "calibration_software_version": extra_info.get(
                 "CalibrationSoftwareVersion"
             ),
-            "calibration_user": extra_info.get("CalibrationUser"),
             "num_calibration_versions": num_versions,
             "recalibrated": num_versions > 1,
             "original_calibration_datetime": original_datetime,

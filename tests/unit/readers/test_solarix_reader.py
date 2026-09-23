@@ -5,6 +5,7 @@ a peaks.sqlite with hand-packed blobs plus ImagingInfo.xml and a sibling
 .mis -- so the reader can be exercised without committing any vendor data.
 """
 
+import json
 import logging
 import sqlite3
 from pathlib import Path
@@ -628,3 +629,46 @@ class TestSolarixReadOnlyUri:
                 conn.execute("DELETE FROM Spectra")
         finally:
             conn.close()
+
+
+class TestPeopleStayOutOfTheStore:
+    """The operator's name and the acquisition PC's folders stay in the source.
+
+    solariX names its operator in ``Properties`` and the ``.mis`` records
+    the method and original image as paths on the acquisition PC. The
+    operator used to reach the store twice over -- in ``uns`` and in the
+    root attributes -- so both are read back from a store written end to
+    end.
+    """
+
+    PERSON = "Qwerty Operatorperson"
+    FOLDER = "qwertyfolder"
+
+    def test_the_store_keeps_the_file_names_and_nobody(self, tmp_path):
+        sd = pytest.importorskip("spatialdata")
+        from thyra.convert import convert_msi
+
+        d_dir = make_solarix_d(tmp_path, properties={"OperatorName": self.PERSON})
+        (tmp_path / "sample.mis").write_text(
+            "<ImagingSequence><Raster>50,50</Raster>"
+            f"<Method>D:\\Methods\\{self.FOLDER}\\lipids.m</Method>"
+            f"<OriginalImage>C:\\Data\\{self.FOLDER}\\slide.tif</OriginalImage>"
+            "</ImagingSequence>",
+            encoding="utf-8",
+        )
+        out = tmp_path / "sample.zarr"
+        assert convert_msi(d_dir, out, dataset_id="d")
+        sdata = sd.read_zarr(out)
+        table = next(iter(sdata.tables.values()))
+
+        stored = json.dumps({"uns": table.uns, "attrs": sdata.attrs}, default=str)
+        assert self.PERSON not in stored
+        assert self.FOLDER not in stored
+
+        # Both copies of the acquisition parameters, and the raw table.
+        assert "operator_name" not in table.uns["acquisition_params"]
+        assert "operator_name" not in sdata.attrs["acquisition_parameters"]
+        assert "OperatorName" not in table.uns["raw_metadata"]["properties"]
+        mis = table.uns["raw_metadata"]["mis_metadata"]
+        assert mis["Method"] == "lipids.m"
+        assert mis["OriginalImage"] == "slide.tif"
