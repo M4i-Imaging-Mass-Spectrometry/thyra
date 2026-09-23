@@ -281,7 +281,7 @@ class TestSyntheticFixture:
         assert conversion["name"] == "conversion"
         assert conversion["parameters"]["tdf_spectrum"] == "scan_sum"
         assert "resolved_table" not in mobility and "grid" not in mobility
-        assert block["schema_version"] == "0.6.0"
+        assert block["schema_version"] == "0.7.0"
 
     def test_a_survey_acquisition_is_recorded_as_unfragmented(self, tmp_path, expected):
         """The fixture is MS1, and the store says so rather than staying silent.

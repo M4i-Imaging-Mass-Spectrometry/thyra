@@ -1072,7 +1072,7 @@ terms, and a schema a validator can hold it to.
 ```python
 block = msi_table.uns["msi_metadata"]
 
-print(block["schema_version"])                    # "0.6.0"
+print(block["schema_version"])                    # "0.7.0"
 print(block["ms_analysis"]["pixel_size_um"])      # {"x": 20.0, "y": 20.0}
 print(block["provenance"]["source_format"])       # "imzml"
 print(block.get("acquisition"))                   # see below; absent for imzML

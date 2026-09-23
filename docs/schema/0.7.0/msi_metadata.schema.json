@@ -503,6 +503,24 @@
           "default": null,
           "description": "PSI-MS ionisation type term."
         },
+        "manufacturer": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "MS:1001269",
+            "name": "instrument vendor"
+          },
+          "default": null,
+          "description": "Who built the instrument, in the source's own words, e.g. 'Bruker' or 'Waters'. Not normalised to a canonical list: vendors rename and merge, and the source's spelling is the fact it stated.",
+          "title": "Manufacturer"
+        },
         "pixel_size_um": {
           "$ref": "#/$defs/PixelSizeUm"
         },
@@ -538,6 +556,24 @@
           ],
           "default": null,
           "description": "PSI-MS scan polarity term (MS:1000130 / MS:1000129)."
+        },
+        "serial_number": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "MS:1000529",
+            "name": "instrument serial number"
+          },
+          "default": null,
+          "description": "Serial number of the instrument that ran the acquisition. Identifies one physical machine, which is what makes it worth recording: calibration and detector response are properties of the machine, not of the model.",
+          "title": "Serial Number"
         }
       },
       "required": [
@@ -726,7 +762,7 @@
             }
           ],
           "default": null,
-          "description": "Path of the source data at conversion time.",
+          "description": "Where the source data was read from. A block inside a store carries the path it was converted from; a standalone document carries the source's name only, because a document is written to be sent somewhere the path means nothing.",
           "title": "Source Path"
         },
         "thyra_version": {
@@ -973,7 +1009,7 @@
       "type": "object"
     }
   },
-  "$id": "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.6.0/msi_metadata.schema.json",
+  "$id": "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.7.0/msi_metadata.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "The versioned MSI metadata document.\n\n``sample`` and ``preparation`` cannot be auto-populated from raw\nfiles and default to empty; ``ms_analysis`` and ``provenance`` are\nwritten by the converter for every store; ``acquisition`` is written\nwhen the reader reports at least one of its facts and is absent --\nnot empty -- otherwise.\n\nThe emitted JSON Schema carries ``$id`` and ``$schema`` so that the\ncommitted artifact names its own published address; they are added\nhere, on the root model, rather than pasted into the file, so the\nsync test that compares the file with ``model_json_schema()`` keeps\nholding.",
@@ -1015,7 +1051,7 @@
       "description": "What the sample is; user-supplied."
     },
     "schema_version": {
-      "default": "0.6.0",
+      "default": "0.7.0",
       "description": "Semantic version of the schema this document conforms to.",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
       "title": "Schema Version",

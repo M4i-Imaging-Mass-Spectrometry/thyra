@@ -16,15 +16,15 @@ https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/<version>/msi_metad
 https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/<version>/msi_metadata.linkml.yaml
 ```
 
-The current version is `0.6.0`, so the JSON Schema is at
-<https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.6.0/msi_metadata.schema.json>
+The current version is `0.7.0`, so the JSON Schema is at
+<https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.7.0/msi_metadata.schema.json>
 and its `$id` is that same address. The LinkML source of the same version
 sits beside it.
 
 Three rules make the address safe to cite:
 
 - **A published version is never edited.** The bytes served under
-  `0.6.0` today are the bytes served under `0.6.0` in five years. A
+  `0.7.0` today are the bytes served under `0.7.0` in five years. A
   test in the repository fails if a published folder stops naming itself.
 - **A new schema version is a new folder.** Nothing is served under a
   moving name such as `latest`. A document names its version in
@@ -54,7 +54,7 @@ filled where known and omitted where not.
 
 !!! note "Documents with no pixel size"
     An acquisition with no raster has no pixel size and no honest number
-    for one, so under `0.6.0` its document does not validate. The split
+    for one, so under `0.7.0` its document does not validate. The split
     into a core every acquisition can fill and an imaging profile that
     adds the pitch is design decision D23 in
     [Design Decisions](design-decisions.md) and will arrive as a new
@@ -99,7 +99,7 @@ With any JSON Schema validator, against the address:
 pip install jsonschema requests
 python -c "
 import json, sys, jsonschema, requests
-schema = requests.get('https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.6.0/msi_metadata.schema.json').json()
+schema = requests.get('https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.7.0/msi_metadata.schema.json').json()
 jsonschema.Draft202012Validator(schema).validate(json.load(open(sys.argv[1])))
 print('ok')
 " document.json
