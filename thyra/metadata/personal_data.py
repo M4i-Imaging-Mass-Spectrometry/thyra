@@ -251,30 +251,38 @@ def _strip(value: Any) -> Any:
     if isinstance(value, _PLAIN):
         return value
     if isinstance(value, Mapping):
-        if _names_a_person(value):
-            return _DROP
-        kept: Dict[Any, Any] = {}
-        changed = False
-        for key, item in value.items():
-            if _is_person_key(key):
-                changed = True
-            elif isinstance(item, _PLAIN):
-                kept[key] = item
-            else:
-                stripped = _strip(item)
-                if stripped is not _DROP:
-                    kept[key] = stripped
-                changed = changed or stripped is not item
-        return value if not changed and type(value) is dict else kept
+        return _strip_mapping(value)
     if isinstance(value, (list, tuple)):
-        items = []
-        changed = False
-        for item in value:
-            stripped = item if isinstance(item, _PLAIN) else _strip(item)
-            if stripped is not _DROP:
-                items.append(stripped)
-            changed = changed or stripped is not item
-        if not changed:
-            return value
-        return tuple(items) if isinstance(value, tuple) else items
+        return _strip_sequence(value)
     return value
+
+
+def _strip_mapping(value: Mapping) -> Any:
+    if _names_a_person(value):
+        return _DROP
+    kept: Dict[Any, Any] = {}
+    changed = False
+    for key, item in value.items():
+        if _is_person_key(key):
+            changed = True
+        elif isinstance(item, _PLAIN):
+            kept[key] = item
+        else:
+            stripped = _strip(item)
+            if stripped is not _DROP:
+                kept[key] = stripped
+            changed = changed or stripped is not item
+    return value if not changed and type(value) is dict else kept
+
+
+def _strip_sequence(value: Any) -> Any:
+    items = []
+    changed = False
+    for item in value:
+        stripped = item if isinstance(item, _PLAIN) else _strip(item)
+        if stripped is not _DROP:
+            items.append(stripped)
+        changed = changed or stripped is not item
+    if not changed:
+        return value
+    return tuple(items) if isinstance(value, tuple) else items
