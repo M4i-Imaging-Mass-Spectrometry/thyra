@@ -79,18 +79,49 @@ class TestPeopleAreNotCopied:
             "states": [{"Id": 3}],
         }
 
-    def test_the_psi_contact_terms_are_dropped_and_the_affiliation_kept(self):
-        params = [
-            {"accession": "MS:1000586", "name": "contact name", "value": PERSON},
-            {"accession": "MS:1000589", "name": "contact email", "value": "q@x.org"},
-            {"accession": "MS:1001755", "name": "contact phone number", "value": "1"},
-            {"accession": "MS:1000590", "name": "contact affiliation", "value": "Uni"},
-        ]
-        assert strip_personal_data({"contacts": params}) == {"contacts": [params[3]]}
+    @pytest.mark.parametrize(
+        "accession",
+        [
+            "MS:1000586",  # contact name
+            "MS:1000587",  # contact address
+            "MS:1000588",  # contact URL
+            "MS:1000589",  # contact email
+            "MS:1001755",  # contact phone number
+            "MS:1001756",  # contact fax number
+            "MS:1001757",  # contact toll-free phone number
+        ],
+    )
+    def test_every_psi_contact_term_that_reaches_the_person_is_dropped(self, accession):
+        affiliation = {"accession": "MS:1000590", "value": "Example University"}
+        params = [{"accession": accession, "value": PERSON}, affiliation]
+        assert strip_personal_data({"contacts": params}) == {"contacts": [affiliation]}
+
+    def test_a_user_parameter_named_like_a_person_field_is_dropped(self):
+        params = [{"name": "Operator", "value": PERSON}, {"name": "Laser", "value": 1}]
+        assert strip_personal_data({"userParams": params}) == {
+            "userParams": [params[1]]
+        }
+
+    @pytest.mark.parametrize(
+        "accession", [["MS:1000031", "MS:1000529"], {"id": "MS:1000586"}]
+    )
+    def test_an_accession_that_is_not_a_string_is_kept_rather_than_raising(
+        self, accession
+    ):
+        # This runs on every conversion, so a shape it does not expect must
+        # not fail one: an unhashable accession used to raise TypeError.
+        odd = {"accession": accession, "value": "x"}
+        assert strip_personal_data({"param": odd}) == {"param": odd}
 
     def test_an_email_address_is_dropped_whatever_its_key(self):
         result = strip_personal_data({"Notify": "qwerty.person@example.org", "n": 1})
         assert result == {"n": 1}
+
+    @pytest.mark.parametrize(
+        "value", ["git@github.com:org/repo.git", "Bi3@25kV", "a@b"]
+    )
+    def test_what_only_looks_like_an_address_is_kept(self, value):
+        assert strip_personal_data({"Recorded": value}) == {"Recorded": value}
 
 
 class TestPathsKeepTheirFileName:
@@ -104,6 +135,7 @@ class TestPathsKeepTheirFileName:
             (f"file:///home/{FOLDER}/raw/run.mzML", "run.mzML"),
             (f"/home/{FOLDER}/run.imzML", "run.imzML"),
             (f"C:\\Data\\{FOLDER}\\data\\sample.d\\", "sample.d"),
+            (f'"D:\\Data\\{FOLDER}\\x.d"', "x.d"),  # quoted as a whole
         ],
     )
     def test_a_path_becomes_its_last_component(self, value, expected):
@@ -120,6 +152,9 @@ class TestPathsKeepTheirFileName:
             "2025-04-22T08:59:34.395+02:00",
             "https://example.org/a/b",
             "timsTOF fleX",
+            "File: 3/5 done",  # a scheme needs its slash
+            "Mouse brain\\slice 3",  # free text: no file at the end
+            "scan=\\d+",
         ],
     )
     def test_what_only_looks_like_a_path_is_left_alone(self, value):
@@ -131,13 +166,15 @@ class TestPathsKeepTheirFileName:
         [
             {"Raster Size (µm)": "8.0"},  # json.dumps escapes the micro sign
             {"Note": 'probe "A"'},  # and a quote
-            ["a", "b"],
+            {"Path": "C:\\Data\\run.raw"},  # and a backslash, doubled
         ],
     )
     def test_a_json_document_is_not_a_path(self, document):
         # PHI keeps its header as JSON. JSON escapes start with a
         # backslash, and a rule that took any backslash for a path cut
-        # the whole document down to what followed the last one.
+        # the whole document down to what followed the last one. A JSON
+        # string is opaque here, even when it holds a path: an extractor
+        # that builds one strips its dictionary first, as PHI does.
         text = json.dumps(document)
         assert not is_path(text)
         assert strip_personal_data({"header": text}) == {"header": text}
@@ -178,7 +215,16 @@ class TestTheCopy:
         )
         assert result["pair"] == (1.0, "a.raw")
         assert result["list"] == [2, None, True]
-        assert result["array"] is array
+        assert result["array"] is array  # an array of numbers is left as it is
+
+    def test_a_table_with_nothing_to_take_out_is_shared_not_copied(self):
+        # Bruker's per-frame table has a row per pixel -- a million on a
+        # large slide -- and copying it would double it in memory for
+        # nothing.
+        frames = [{"id": i, "x_pos": i, "beam_x": 20.0} for i in range(3)]
+        result = strip_personal_data({"frame_info": frames, "Operator": PERSON})
+        assert result["frame_info"] is frames
+        assert "Operator" not in result
 
 
 class TestFileName:

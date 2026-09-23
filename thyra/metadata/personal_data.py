@@ -17,7 +17,8 @@ remembered:
 
 * **A field that names a person is not copied.** A name has no shape, so
   it is matched by what the field is: the vendor spellings in
-  :data:`PERSON_KEYS`, and, for sources that state their metadata as
+  :data:`PERSON_KEYS`, whether they are a key or the name of a user
+  parameter, and, for sources that state their metadata as
   controlled-vocabulary parameters, the PSI-MS contact terms in
   :data:`PERSON_ACCESSIONS`. A value that *is* an e-mail address is
   dropped whatever its key, because an address does have a shape.
@@ -37,11 +38,16 @@ Free text the lab chose -- a sample name, a method name, a project name --
 is not searched for names. It identifies the data, and a lab that writes a
 person's name into it has made the name part of the data's identity;
 nothing here could tell it from any other word.
+
+A dictionary that an extractor turns into a JSON string before handing it
+on is opaque here, so that extractor strips it first: PHI does, for its
+header and for the blocks appended to its file.
 """
 
 import re
 from collections.abc import Mapping
 from dataclasses import replace
+from functools import lru_cache
 from typing import Any, Dict, FrozenSet, Optional
 
 from .types import ComprehensiveMetadata
@@ -73,11 +79,19 @@ PERSON_KEYS: FrozenSet[str] = frozenset(
     }
 )
 
-#: PSI-MS contact terms whose value reaches a person: contact name, contact
-#: email, contact phone number. ``contact affiliation`` (MS:1000590) names
-#: an organisation and is kept.
+#: The PSI-MS contact attributes (MS:1000585) whose value reaches the person
+#: rather than the institution: everything but ``contact affiliation``
+#: (MS:1000590), which names an organisation and is kept.
 PERSON_ACCESSIONS: FrozenSet[str] = frozenset(
-    {"MS:1000586", "MS:1000589", "MS:1001755"}
+    {
+        "MS:1000586",  # contact name
+        "MS:1000587",  # contact address
+        "MS:1000588",  # contact URL
+        "MS:1000589",  # contact email
+        "MS:1001755",  # contact phone number
+        "MS:1001756",  # contact fax number
+        "MS:1001757",  # contact toll-free phone number
+    }
 )
 
 #: The keys under which Thyra records where it read the source, at the top
@@ -93,16 +107,24 @@ _PATH_SHAPE = re.compile(
     r"""
     ^[A-Za-z]:[\\/]     # a drive letter, with either separator
     | ^\\\\[^\\]        # a UNC share
-    | ^file:            # a file URI
+    | ^file:/           # a file URI
     | ^/[^/\s]+/        # a POSIX absolute path of two components or more
-    | ^[^\\/:*?"<>|\r\n]+\\[^:*?"<>|\r\n]*$
-                        # a relative path written on Windows: a name, a
-                        # backslash, and nothing Windows forbids in a name
+    | ^[^\\/:*?"<>|\r\n]+(?:\\[^\\/:*?"<>|\r\n]+)*
+      \\[^\\/:*?"<>|\r\n]+\.[A-Za-z0-9]{1,8}$
+                        # a relative path written on Windows, ending in a
+                        # file with an extension, with nothing in it that
+                        # Windows forbids in a name
     """,
     re.VERBOSE | re.IGNORECASE,
 )
 
-_EMAIL_SHAPE = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
+_EMAIL_SHAPE = re.compile(
+    r"^[^@\s:/<>]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$"
+)
+
+# A value of one of these types is kept as it is, and is the common case:
+# a per-frame table is thousands of rows of numbers.
+_PLAIN = (bool, int, float, bytes, type(None))
 
 _DROP = object()
 
@@ -113,16 +135,20 @@ def is_path(value: str) -> bool:
     Deliberately blind to a forward-slash string with no leading slash,
     drive letter or scheme: ``m/z``, ``1/K0``, ``Vs/cm2`` and the
     month-first date PHI writes (``06/23/2026 21:12:35``) all look like
-    that, and none of them is a path.
+    that, and none of them is a path. A relative path written with
+    backslashes counts only when it ends in a file name with an
+    extension, so free text with a backslash in it (``brain slice 3``
+    written with one, or a pattern) is left alone.
 
-    And a backslash alone is not enough. A vendor dictionary can hold a
+    A backslash alone is never enough. A vendor dictionary can hold a
     JSON document -- PHI keeps its whole header as one -- and JSON writes
     a micro sign or a quote as an escape that starts with a backslash.
     Every JSON document has quotes in it, which Windows forbids in a name,
     so none has the shape of a relative path; taken for one, it would be
-    cut down to whatever followed its last backslash.
+    cut down to whatever followed its last backslash. Quotes around a
+    value as a whole are ignored, so a quoted path is still a path.
     """
-    return bool(_PATH_SHAPE.match(value.strip()))
+    return bool(_PATH_SHAPE.match(_unquoted(value)))
 
 
 def file_name(value: str) -> Optional[str]:
@@ -139,22 +165,20 @@ def file_name(value: str) -> Optional[str]:
 def strip_personal_data(mapping: Mapping[str, Any]) -> Dict[str, Any]:
     """A copy of one vendor dictionary without the people in it.
 
-    Recurses through nested mappings and lists. A person key, a person CV
+    Recurses through nested mappings and lists. A person key, a person
     parameter and an e-mail address are dropped; a path becomes its file
-    name, and is dropped when nothing of it is left. A key in
-    :data:`LOCATING_KEYS` at the top level is kept as it is. ``mapping``
-    is not modified.
+    name. A key in :data:`LOCATING_KEYS` at the top level is kept as it
+    is. ``mapping`` is not modified, and a nested mapping or list with
+    nothing to take out is shared with it rather than copied.
     """
     result: Dict[str, Any] = {}
     for key, value in mapping.items():
         if key in LOCATING_KEYS:
             result[key] = value
-            continue
-        if _is_person_key(key):
-            continue
-        stripped = _strip(value)
-        if stripped is not _DROP:
-            result[key] = stripped
+        elif not _is_person_key(key):
+            stripped = _strip(value)
+            if stripped is not _DROP:
+                result[key] = stripped
     return result
 
 
@@ -181,35 +205,76 @@ def _strip_section(section: Any) -> Any:
     return section
 
 
+def _unquoted(value: str) -> str:
+    return value.strip().strip("\"'")
+
+
 def _is_email(value: str) -> bool:
     return bool(_EMAIL_SHAPE.match(value.strip()))
 
 
+@lru_cache(maxsize=4096)
+def _folded(key: str) -> str:
+    return re.sub(r"[\s_-]", "", key).lower()
+
+
 def _is_person_key(key: Any) -> bool:
-    if not isinstance(key, str):
-        return False
-    return re.sub(r"[\s_-]", "", key).lower() in PERSON_KEYS
+    return isinstance(key, str) and _folded(key) in PERSON_KEYS
+
+
+def _names_a_person(param: Mapping) -> bool:
+    """A contact CV parameter, or a user parameter named like a person field."""
+    accession = param.get("accession")
+    if isinstance(accession, str):
+        return accession in PERSON_ACCESSIONS
+    return "value" in param and _is_person_key(param.get("name"))
+
+
+def _strip_text(value: str) -> Any:
+    if _is_email(value):
+        return _DROP
+    if is_path(value):
+        return file_name(_unquoted(value).rstrip("\\/")) or _DROP
+    return value
 
 
 def _strip(value: Any) -> Any:
+    """``value`` without the people in it; ``value`` itself when it had none.
+
+    Handing an untouched container back rather than a copy is what keeps
+    a per-frame table -- one row per pixel, a million rows on a large
+    slide -- from being duplicated in memory for nothing. Nothing edits a
+    vendor dictionary after extraction, so sharing the rows is safe.
+    """
+    if isinstance(value, str):
+        return _strip_text(value)
+    if isinstance(value, _PLAIN):
+        return value
     if isinstance(value, Mapping):
-        if value.get("accession") in PERSON_ACCESSIONS:
+        if _names_a_person(value):
             return _DROP
         kept: Dict[Any, Any] = {}
+        changed = False
         for key, item in value.items():
             if _is_person_key(key):
-                continue
-            stripped = _strip(item)
-            if stripped is not _DROP:
-                kept[key] = stripped
-        return kept
+                changed = True
+            elif isinstance(item, _PLAIN):
+                kept[key] = item
+            else:
+                stripped = _strip(item)
+                if stripped is not _DROP:
+                    kept[key] = stripped
+                changed = changed or stripped is not item
+        return value if not changed and type(value) is dict else kept
     if isinstance(value, (list, tuple)):
-        items = [_strip(item) for item in value]
-        kept_items = [item for item in items if item is not _DROP]
-        return tuple(kept_items) if isinstance(value, tuple) else kept_items
-    if isinstance(value, str):
-        if _is_email(value):
-            return _DROP
-        if is_path(value):
-            return file_name(value.strip().rstrip("\\/")) or _DROP
+        items = []
+        changed = False
+        for item in value:
+            stripped = item if isinstance(item, _PLAIN) else _strip(item)
+            if stripped is not _DROP:
+                items.append(stripped)
+            changed = changed or stripped is not item
+        if not changed:
+            return value
+        return tuple(items) if isinstance(value, tuple) else items
     return value

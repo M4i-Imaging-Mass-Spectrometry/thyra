@@ -190,7 +190,12 @@ class PhiMetadataExtractor(MetadataExtractor):
         }
         appended = reader.block_index.appended
         if appended:
-            calibration["appended_blocks"] = json.dumps(appended)
+            # Same reason as the header below: a block appended after
+            # acquisition is written by the same software, can carry the
+            # same fields, and is opaque once it is a JSON string.
+            calibration["appended_blocks"] = json.dumps(
+                [strip_personal_data(block) for block in appended]
+            )
         # The vendor's own key names are not valid Zarr group members --
         # 'Mass/Time' contains a forward slash -- so the header is preserved
         # as JSON rather than being mangled into a group hierarchy. The

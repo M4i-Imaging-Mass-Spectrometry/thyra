@@ -75,8 +75,9 @@ suffix -- FlexImaging exports more than TIFF, and a Rapiflex `.mis` regularly
 names a `.jpg`. Which of a folder's images is the alignment image is decided by
 the `.mis`, not by the search: `<ImageFile>` names it, and Thyra resolves that
 name against the acquisition folder. (`<OriginalImage>` holds an absolute path
-on the machine that acquired the data, drive letter and all. It is kept as
-provenance and never opened.)
+on the machine that acquired the data, drive letter and all. It is never
+opened, and a store keeps only its file name, as it does for every path a
+vendor recorded -- see [Output Format](output-format.md).)
 
 ---
 

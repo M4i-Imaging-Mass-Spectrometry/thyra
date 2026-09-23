@@ -508,12 +508,20 @@ class TestPeopleStayOutOfTheStore:
         )
         header = text.encode("latin-1")
         assert len(header) <= HEADER_SIZE  # the fixture still fits its HeaderSize
+        # A block appended after acquisition is written by the same
+        # software and can carry the same fields; it is kept as JSON too.
+        appended = (
+            "AppendedBlockType: AsciiInfoBlock01\r\n"
+            f"Operator: {self.PERSON}\r\n"
+            f"AcqFilename: {acquired}\r\n"
+        ).encode("latin-1")
         words = [event(x, y, 3_000_000) for x in range(2) for y in range(2)]
         path = tmp_path / "people.raw"
         path.write_bytes(
             header.ljust(HEADER_SIZE, b"\x00")
             + events_block(words)
             + block(2)
+            + block(14, appended)
             + block(0)
         )
         return path
@@ -540,6 +548,12 @@ class TestPeopleStayOutOfTheStore:
             "User Company": "Example Institute",
             "Acquisition Filename": "run42.raw",
         }
+        appended = json.loads(
+            table.uns["raw_metadata"]["calibration"]["appended_blocks"]
+        )
+        assert appended == [
+            {"AppendedBlockType": "AsciiInfoBlock01", "AcqFilename": "run42.raw"}
+        ]
 
 
 class TestRegistryDetection:
