@@ -24,14 +24,22 @@ sits beside it.
 Three rules make the address safe to cite:
 
 - **A published version is never edited.** The bytes served under
-  `0.7.0` today are the bytes served under `0.7.0` in five years. A
-  test in the repository fails if a published folder stops naming itself.
+  `0.7.0` today are the bytes served under `0.7.0` in five years.
+  [`SHA256SUMS`](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/SHA256SUMS),
+  served beside the version folders, lists the SHA-256 of every
+  published file, and a test in the repository fails the moment one of
+  them stops matching it.
 - **A new schema version is a new folder.** Nothing is served under a
   moving name such as `latest`. A document names its version in
   `schema_version`, and a validator fetches exactly that version.
 - **The wheel ships the same file.** `importlib.resources` on
   `thyra.metadata.schema` yields byte-identical content, so a Python
   consumer offline and a validator online check against the same schema.
+
+A pinned copy kept in the same `<version>/<file>` layout, beside a
+downloaded `SHA256SUMS`, is checked with
+`sha256sum -c --ignore-missing SHA256SUMS`; `--ignore-missing` skips the
+versions not kept.
 
 ## What a document must contain
 

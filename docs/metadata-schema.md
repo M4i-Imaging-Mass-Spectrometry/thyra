@@ -375,7 +375,12 @@ Unit tests keep the package artifact in sync with the models and the
 published copy in sync with the package artifact; regenerate both with
 `python -m thyra.metadata.schema.generate` after a model change. A
 version bump creates a new folder under `docs/schema/`; the previous
-version's folder stays as it is.
+version's folder stays as it is. `docs/schema/SHA256SUMS` records the
+SHA-256 of every published file, and a unit test fails when any of them
+changes, so regenerating a version that is already published fails the
+suite instead of rewriting it. The pull request that adds a version
+folder appends that folder's lines to `SHA256SUMS`; the failing test
+prints them.
 
 ---
 

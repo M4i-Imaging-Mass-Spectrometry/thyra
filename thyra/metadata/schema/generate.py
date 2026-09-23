@@ -13,13 +13,22 @@ and this script writes both:
   name.  That folder is append-only: a published version is never edited
   again, and a new ``schema_version`` is a new folder.
 
+``docs/schema/SHA256SUMS`` records the hash of every published file, and
+a unit test fails when one stops matching, so regenerating a version
+that is already published fails the suite instead of rewriting what the
+site serves under that number.  This script never writes the list:
+regenerating a recorded hash would hide exactly the edit it exists to
+catch.  The pull request that adds a version folder appends that
+folder's lines by hand, and the failing test prints them.
+
 Unit tests assert the committed files match the models and each other;
 when one fails, rerun::
 
     python -m thyra.metadata.schema.generate
 
 and commit the result together with the model change (and the version
-bump in ``MSI_METADATA_SCHEMA_VERSION`` that the change warrants).
+bump in ``MSI_METADATA_SCHEMA_VERSION`` that the change warrants, with
+the new folder's lines in ``docs/schema/SHA256SUMS``).
 """
 
 import json
