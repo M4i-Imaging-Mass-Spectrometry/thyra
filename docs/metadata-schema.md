@@ -28,7 +28,7 @@ import spatialdata as sd
 sdata = sd.read_zarr("output.zarr")
 block = sdata.tables["msi_dataset_z0"].uns["msi_metadata"]
 
-print(block["schema_version"])                       # "0.6.0"
+print(block["schema_version"])                       # "0.7.0"
 print(block["ms_analysis"]["pixel_size_um"])         # {"x": 20.0, "y": 20.0}
 print(block["ms_analysis"]["ionisation_source"])     # "MALDI"
 print(block["ms_analysis"]["ionisation_source_term"])
@@ -63,6 +63,8 @@ how it was prepared) and are supplied by you -- see
 | | `ionisation_source`, `ionisation_source_term` | text + term | PSI-MS |
 | | `analyzer`, `analyzer_term` | text + term | PSI-MS |
 | | `instrument_model` | text | -- |
+| | `manufacturer` | text, the source's own spelling | PSI-MS (`MS:1001269`) |
+| | `serial_number` | text, identifies one physical machine | PSI-MS (`MS:1000529`) |
 | | `detector_resolving_power` | `{value, at_mz}` | -- |
 | | `pixel_size_um` | `{x, y}`, **required** | -- |
 | | `ion_mobility` | `{present, separation, separation_term, unit_term, range_lower, range_upper, num_scans, resolved_table, grid}` | PSI-MS (`MS:1002815` / `MS:1002476`, unit `MS:1002814`) |
@@ -233,6 +235,8 @@ artifact alone:
 | `ms_analysis.ionisation_source` | `MS:1000008` ionization type |
 | `ms_analysis.analyzer` | `MS:1000443` mass analyzer type |
 | `ms_analysis.instrument_model` | `MS:1000031` instrument model |
+| `ms_analysis.manufacturer` | `MS:1001269` instrument vendor |
+| `ms_analysis.serial_number` | `MS:1000529` instrument serial number |
 | `ms_analysis.detector_resolving_power` | `MS:1000800` mass resolving power |
 | `acquisition.laser_frequency_hz` | `IMS:1006000` repetition rate |
 | `acquisition.shots_per_pixel` | `IMS:1006001` laser shots per spectrum |
@@ -335,13 +339,14 @@ Versions so far: 0.1.0 (initial), 0.2.0 (`ms_analysis.ion_mobility`
 added), 0.3.0 (`ion_mobility.resolved_table` and `ion_mobility.grid` added),
 0.4.0 (`ms_analysis.fragmentation` added), 0.5.0
 (`fragmentation.resolved_table` added), 0.6.0 (the `acquisition` section
+added), 0.7.0 (`ms_analysis.manufacturer` and `ms_analysis.serial_number`
 added).
 
 The JSON Schema rendering is published at a fixed, versioned address,
 which is also its `$id`:
 
 ```
-https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.6.0/msi_metadata.schema.json
+https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.7.0/msi_metadata.schema.json
 ```
 
 Every version gets its own folder under that path and a published folder
@@ -351,7 +356,7 @@ program that writes the document without Thyra validates against that
 address; see [Writing the Metadata Document](writing-the-metadata-document.md).
 
 The same file is committed at
-`thyra/metadata/schema/msi_metadata_schema_v0_6.json` and ships in the
+`thyra/metadata/schema/msi_metadata_schema_v0_7.json` and ships in the
 wheel, so a Python consumer can validate documents offline without
 importing Thyra:
 
@@ -361,7 +366,7 @@ import json
 
 schema = json.loads(
     resources.files("thyra.metadata.schema")
-    .joinpath("msi_metadata_schema_v0_6.json")
+    .joinpath("msi_metadata_schema_v0_7.json")
     .read_text()
 )
 ```

@@ -692,10 +692,17 @@ class BrukerMetadataExtractor(MetadataExtractor):
         cursor = self.conn.cursor()
 
         # Common instrument metadata keys
+        # ``InstrumentVendor`` is a GlobalMetadata key on every tsf and
+        # tdf acquisition and was the one instrument fact this query did
+        # not ask for, so who built a timsTOF-family instrument reached
+        # no store while solariX -- reading the same key out of its own
+        # Properties table -- recorded it. Mapped to ``manufacturer``,
+        # the spelling the other extractors already use.
         instrument_keys = [
             ("InstrumentName", "instrument_name"),
             ("InstrumentSerialNumber", "instrument_serial_number"),
             ("InstrumentModel", "instrument_model"),
+            ("InstrumentVendor", "manufacturer"),
             ("SoftwareVersion", "software_version"),
             ("MzCalibrationMode", "mz_calibration_mode"),
         ]

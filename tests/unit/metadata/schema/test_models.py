@@ -84,6 +84,8 @@ class TestCvBindings:
             "MS:1000008",  # ionization type
             "MS:1000443",  # mass analyzer type
             "MS:1000031",  # instrument model
+            "MS:1001269",  # instrument vendor
+            "MS:1000529",  # instrument serial number
             "MS:1000800",  # mass resolving power
             "MS:1002892",  # ion mobility attribute
             "MS:1000511",  # ms level
