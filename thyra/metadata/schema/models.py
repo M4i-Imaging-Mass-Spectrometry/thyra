@@ -72,6 +72,8 @@ SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_7.json"
 # new folder, and nothing is served under a moving name such as
 # ``latest``, because a document that names its schema version must keep
 # validating against the same bytes for as long as the site exists.
+# ``docs/schema/SHA256SUMS`` records the hash of every published file,
+# and a unit test holds each folder to it (issue #395).
 MSI_METADATA_SCHEMA_URL_BASE = (
     "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema"
 )
