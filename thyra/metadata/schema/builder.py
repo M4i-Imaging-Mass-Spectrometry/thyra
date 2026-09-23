@@ -55,6 +55,20 @@ _FORMAT_DEFAULTS: Dict[str, Dict[str, str]] = {
 # Key spellings the extractors use for the instrument model, in
 # preference order (imzML: instrument_model; Bruker: instrument_name /
 # model; PHI: platform).
+#: Key spellings for who built the instrument, in preference order.  The
+#: extractors disagree on the word: solariX, Waters and rapiflex write
+#: ``manufacturer``, PHI writes ``vendor``.  ``manufacturer`` is
+#: preferred because it is the spelling three of the four already use;
+#: the PSI concept it binds to is MS:1001269 "instrument vendor", and
+#: the two name the same fact.
+_MANUFACTURER_KEYS = ("manufacturer", "vendor")
+
+#: Key spellings for the instrument's serial number, in preference
+#: order.  imzML (from MS:1000529) and the Bruker tsf/tdf extractor write
+#: ``instrument_serial_number``; solariX and rapiflex write
+#: ``serial_number``.
+_SERIAL_NUMBER_KEYS = ("instrument_serial_number", "serial_number")
+
 _INSTRUMENT_MODEL_KEYS = (
     "instrument_model",
     "instrument_name",
@@ -335,6 +349,14 @@ def _build_instrument_fields(
     instrument_model = _first_string(instrument, _INSTRUMENT_MODEL_KEYS)
     if instrument_model is not None:
         fields["instrument_model"] = instrument_model
+
+    manufacturer = _first_string(instrument, _MANUFACTURER_KEYS)
+    if manufacturer is not None:
+        fields["manufacturer"] = manufacturer
+
+    serial_number = _first_string(instrument, _SERIAL_NUMBER_KEYS)
+    if serial_number is not None:
+        fields["serial_number"] = serial_number
 
     resolving_power = _build_resolving_power(acquisition, instrument)
     if resolving_power is not None:

@@ -188,6 +188,20 @@ class TestWhatTheDatabaseSaysAboutTheAcquisition:
     def test_the_instrument_model_is_read(self, document):
         assert document["ms_analysis"]["instrument_model"] == "timsOmni"
 
+    def test_the_maker_and_the_machine_are_read(self, document):
+        """Issue #67 part 2, and the gap that hid it.
+
+        ``InstrumentVendor`` sits in ``GlobalMetadata`` on every tsf and
+        tdf acquisition -- it is in this fixture because it is in the
+        real schema this fixture was built from -- and the extractor's
+        instrument query did not ask for it, so who built a
+        timsTOF-family instrument reached no store.  The serial was
+        already read; it had nowhere in the block to go.
+        """
+        analysis = document["ms_analysis"]
+        assert analysis["manufacturer"] == "Bruker"
+        assert analysis["serial_number"] == "0000000.00000"
+
     def test_the_acquisition_keeps_its_utc_offset(self, document):
         assert (
             document["acquisition"]["acquisition_datetime"]

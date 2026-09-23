@@ -44,7 +44,16 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 #        start timestamp, laser power, laser repetition rate, shots per
 #        pixel and the method file name, normalised across the vendor
 #        spellings the raw ``acquisition_params`` dict keeps (issue #67).
-MSI_METADATA_SCHEMA_VERSION = "0.6.0"
+# 0.7.0: ``ms_analysis`` gained ``manufacturer`` and ``serial_number``
+#        (additive), so who built the instrument and which physical
+#        machine ran the acquisition are stated in one spelling rather
+#        than the four the raw ``instrument_info`` dict keeps (issue #67).
+#        ``provenance.source_path``'s description was corrected here
+#        rather than in 0.6.0: since #384 a document carries the source's
+#        name where a store block carries its path, and 0.6.0 described
+#        only the store.  No document's validity changes -- the value is
+#        a string either way -- and a published version is not edited.
+MSI_METADATA_SCHEMA_VERSION = "0.7.0"
 
 # Where the block lives inside a converted store:
 # ``table.uns["msi_metadata"]``.  This location is a stable contract
@@ -53,7 +62,7 @@ MSI_METADATA_SCHEMA_VERSION = "0.6.0"
 MSI_METADATA_UNS_KEY = "msi_metadata"
 
 # The committed JSON Schema artifact for this schema version.
-SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_6.json"
+SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_7.json"
 
 # Where every published version of the schema is served (issue #385).
 # ``docs/schema/<version>/`` is copied verbatim onto the documentation
@@ -568,6 +577,28 @@ class MSAnalysis(_SchemaModel):
         description="Instrument model as reported by the source.",
         json_schema_extra=_cv("MS:1000031", "instrument model"),
     )
+    manufacturer: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Who built the instrument, in the source's own words, e.g. "
+            "'Bruker' or 'Waters'. Not normalised to a canonical list: "
+            "vendors rename and merge, and the source's spelling is the "
+            "fact it stated."
+        ),
+        json_schema_extra=_cv("MS:1001269", "instrument vendor"),
+    )
+    serial_number: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Serial number of the instrument that ran the acquisition. "
+            "Identifies one physical machine, which is what makes it "
+            "worth recording: calibration and detector response are "
+            "properties of the machine, not of the model."
+        ),
+        json_schema_extra=_cv("MS:1000529", "instrument serial number"),
+    )
     detector_resolving_power: Optional[ResolvingPower] = Field(
         default=None,
         description="Resolving power at a reference m/z.",
@@ -742,7 +773,13 @@ class Provenance(_SchemaModel):
         description="Detected input format, e.g. 'imzml', 'bruker', 'phi'.",
     )
     source_path: Optional[str] = Field(
-        default=None, description="Path of the source data at conversion time."
+        default=None,
+        description=(
+            "Where the source data was read from. A block inside a store "
+            "carries the path it was converted from; a standalone "
+            "document carries the source's name only, because a document "
+            "is written to be sent somewhere the path means nothing."
+        ),
     )
     pixel_size_source: Optional[Literal["default", "manual", "automatic"]] = Field(
         default=None,

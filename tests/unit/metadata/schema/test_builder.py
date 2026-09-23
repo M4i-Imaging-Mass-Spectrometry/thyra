@@ -532,3 +532,101 @@ class TestTheSourceIsNamedInADocumentAndLocatedInAStore:
             None, pixel_size_um=(20.0, 20.0), source_format="imzml"
         )
         assert "source_path" not in document["provenance"]
+
+
+class TestInstrumentIdentity:
+    """Issue #67 part 2: who built it, and which machine it was.
+
+    One case per reader, carrying exactly the keys that reader's
+    extractor writes into ``instrument_info``.  Four spellings reach the
+    builder for two facts -- ``manufacturer`` from solariX, Waters,
+    rapiflex and (as of this change) Bruker tsf/tdf, ``vendor`` from PHI;
+    ``instrument_serial_number`` from imzML and Bruker tsf/tdf,
+    ``serial_number`` from solariX and rapiflex -- and the block states
+    each fact once.
+    """
+
+    @staticmethod
+    def _analysis(instrument_info, source_format):
+        return build_msi_metadata(
+            _comprehensive(instrument_info=instrument_info),
+            pixel_size_um=(20.0, 20.0),
+            source_format=source_format,
+        ).ms_analysis
+
+    def test_bruker_tsf_tdf(self):
+        # InstrumentVendor is a GlobalMetadata key on every tsf and tdf
+        # acquisition; the extractor did not ask for it until this change.
+        analysis = self._analysis(
+            {
+                "instrument_name": "timsOmni",
+                "instrument_serial_number": "0000000.00000",
+                "manufacturer": "Bruker",
+                "software_version": "7.2.0",
+            },
+            "bruker",
+        )
+        assert analysis.manufacturer == "Bruker"
+        assert analysis.serial_number == "0000000.00000"
+
+    def test_solarix(self):
+        analysis = self._analysis(
+            {"manufacturer": "Bruker", "serial_number": "MRMS-0001"}, "solarix"
+        )
+        assert analysis.manufacturer == "Bruker"
+        assert analysis.serial_number == "MRMS-0001"
+
+    def test_rapiflex(self):
+        analysis = self._analysis(
+            {"manufacturer": "Bruker", "serial_number": "RF-0001"}, "bruker"
+        )
+        assert analysis.manufacturer == "Bruker"
+        assert analysis.serial_number == "RF-0001"
+
+    def test_waters_states_the_maker_and_no_serial(self):
+        # MassLynx exposes no serial number, so the field stays unset
+        # rather than being filled with something that is not one.
+        analysis = self._analysis({"manufacturer": "Waters"}, "waters")
+        assert analysis.manufacturer == "Waters"
+        assert analysis.serial_number is None
+
+    def test_phi_spells_it_vendor(self):
+        analysis = self._analysis(
+            {"vendor": "Physical Electronics (PHI)", "platform": "nanoTOF"}, "phi"
+        )
+        assert analysis.manufacturer == "Physical Electronics (PHI)"
+        assert analysis.serial_number is None
+
+    def test_imzml_states_the_serial_and_no_maker(self):
+        # imzML carries MS:1000529 but no vendor term of its own: the
+        # maker is implied by the instrument model, which is not the
+        # same statement and is not guessed at here.
+        analysis = self._analysis(
+            {"instrument_model": "SolariX", "instrument_serial_number": "1849"},
+            "imzml",
+        )
+        assert analysis.serial_number == "1849"
+        assert analysis.manufacturer is None
+
+    def test_a_source_that_states_neither_leaves_both_unset(self):
+        analysis = self._analysis({}, "imzml")
+        assert analysis.manufacturer is None
+        assert analysis.serial_number is None
+
+    def test_the_vendor_spelling_is_not_preferred_over_manufacturer(self):
+        # No extractor writes both today. If one ever does, the spelling
+        # three of the four already use is the one that wins.
+        analysis = self._analysis(
+            {"manufacturer": "Bruker", "vendor": "something else"}, "bruker"
+        )
+        assert analysis.manufacturer == "Bruker"
+
+    def test_a_blank_vendor_string_is_not_a_manufacturer(self):
+        # rapiflex defaults its serial to "" when the info file has no
+        # such line; an empty string is not a fact and the model would
+        # refuse it (min_length=1).
+        analysis = self._analysis(
+            {"manufacturer": "Bruker", "serial_number": "   "}, "bruker"
+        )
+        assert analysis.manufacturer == "Bruker"
+        assert analysis.serial_number is None
