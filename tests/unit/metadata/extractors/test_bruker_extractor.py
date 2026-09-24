@@ -1,6 +1,7 @@
 # tests/unit/metadata/extractors/test_bruker_extractor.py
 import logging
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -8,6 +9,7 @@ import pytest
 
 from thyra.errors import ConversionRefused
 from thyra.metadata.extractors.bruker_extractor import BrukerMetadataExtractor
+from thyra.readers.bruker.vendor_db import open_read_only
 
 
 class TestBrukerMetadataExtractor:
@@ -358,6 +360,145 @@ class TestBrukerMetadataExtractor:
         assert params["laser_spot_size"] == 20.0
         assert params["acquisition_datetime"] == "2026-01-01T00:00:00.000+00:00"
         assert params["method_name"] == "synthetic.m"
+
+    def test_the_calibration_the_run_started_with_comes_off_the_real_schema(self):
+        """``CalibrationInfo`` lives in the analysis database, keyed by polarity.
+
+        Only the keys the calibration section needs are read. The fixture
+        also names a calibrating user and a lab-chosen reference list, and
+        carries the mobility values a real imaging TDF does, none of which
+        may reach the vendor dictionaries.
+        """
+        fixture = (
+            Path(__file__).resolve().parents[3]
+            / "data"
+            / "fixtures"
+            / "synthetic_tims.d"
+        )
+        with closing(open_read_only(fixture / "analysis.tdf")) as conn:
+            comprehensive = BrukerMetadataExtractor(conn, fixture).get_comprehensive()
+
+        assert comprehensive.format_specific["instrument_calibration"] == {
+            "calibration_datetime": "2025-12-31T23:30:00+00:00",
+            "calibration_software": "synthetic",
+            "calibration_software_version": "0",
+            "mz_standard_deviation_ppm": 0.355903,
+            "n_reference_peaks": 4,
+        }
+        held = repr(comprehensive)
+        for absent in (
+            "CalibrationUser",
+            "calibration_user",
+            "synthetic reference list",
+            "3578.047355",
+            "2025-12-31T23:20:00",
+        ):
+            assert absent not in held, absent
+        # MzCalibrationMode is a CalibrationInfo key, an undocumented code,
+        # and no longer read anywhere.
+        assert "mz_calibration_mode" not in comprehensive.instrument_info
+
+    def test_the_standard_deviation_is_what_the_arrays_give(self):
+        """The fixture's stated value follows from its own arrays, as a real
+        file's does: sqrt(sum of squared ppm errors / (n - 1)) of the
+        corrected masses against the reference masses."""
+        import math
+        import struct
+
+        fixture = (
+            Path(__file__).resolve().parents[3]
+            / "data"
+            / "fixtures"
+            / "synthetic_tims.d"
+        )
+        with closing(open_read_only(fixture / "analysis.tdf")) as conn:
+            stated = dict(
+                conn.execute(
+                    "SELECT KeyName, Value FROM CalibrationInfo WHERE KeyName IN "
+                    "('MzStandardDeviationPPM', 'ReferencePeakMasses', "
+                    "'MassesCorrectedCalibration')"
+                ).fetchall()
+            )
+        reference = struct.unpack("<4d", stated["ReferencePeakMasses"])
+        corrected = struct.unpack("<4d", stated["MassesCorrectedCalibration"])
+        errors = [(c - r) / r * 1e6 for c, r in zip(corrected, reference)]
+        sd = math.sqrt(sum(e * e for e in errors) / (len(errors) - 1))
+        assert round(sd, 6) == float(stated["MzStandardDeviationPPM"])
+
+    @staticmethod
+    def _calibration_db(frame_polarities, table_polarities):
+        """An analysis database with just the tables the calibration read uses."""
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE Frames (Id INTEGER PRIMARY KEY, Polarity CHAR(1))")
+        conn.executemany(
+            "INSERT INTO Frames VALUES (?, ?)",
+            list(enumerate(frame_polarities, start=1)),
+        )
+        conn.execute(
+            "CREATE TABLE CalibrationInfo (KeyPolarity CHAR(1), KeyName TEXT, "
+            "Value TEXT, PRIMARY KEY (KeyPolarity, KeyName))"
+        )
+        for polarity in table_polarities:
+            conn.executemany(
+                "INSERT INTO CalibrationInfo VALUES (?, ?, ?)",
+                [
+                    (
+                        polarity,
+                        "CalibrationDateTime",
+                        f"2025-01-01T00:00:00{polarity}01:00",
+                    ),
+                    (polarity, "CalibrationUser", "someone"),
+                ],
+            )
+        return conn
+
+    def test_the_rows_of_the_polarity_the_frames_ran_in_are_taken(self):
+        for frames, table, expected in (
+            ("--", "+-", "2025-01-01T00:00:00-01:00"),
+            ("++", "+-", "2025-01-01T00:00:00+01:00"),
+            ("+", "+", "2025-01-01T00:00:00+01:00"),
+            # No frames to ask: a table of one polarity is unambiguous.
+            ("", "-", "2025-01-01T00:00:00-01:00"),
+        ):
+            conn = self._calibration_db(frames, table)
+            try:
+                info = BrukerMetadataExtractor(
+                    conn, Path("/test/data.d")
+                )._extract_instrument_calibration()
+            finally:
+                conn.close()
+            assert info == {"calibration_datetime": expected}, (frames, table)
+
+    def test_no_calibration_is_guessed_between_polarities(self):
+        for frames, table in (
+            ("+-", "+-"),  # alternating frames, both polarities calibrated
+            ("+-", "-"),  # alternating frames: one calibration covers half
+            ("--", "+"),  # the frames ran in a polarity the table lacks
+            ("", "+-"),  # nothing to ask, and two to choose from
+        ):
+            conn = self._calibration_db(frames, table)
+            try:
+                info = BrukerMetadataExtractor(
+                    conn, Path("/test/data.d")
+                )._extract_instrument_calibration()
+            finally:
+                conn.close()
+            assert info == {}, (frames, table)
+
+    def test_mz_calibration_mode_is_not_read_even_where_it_is_found(self):
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE GlobalMetadata (Key TEXT PRIMARY KEY, Value TEXT)")
+        conn.executemany(
+            "INSERT INTO GlobalMetadata VALUES (?, ?)",
+            [("InstrumentVendor", "Bruker"), ("MzCalibrationMode", "2")],
+        )
+        try:
+            info = BrukerMetadataExtractor(
+                conn, Path("/test/data.d")
+            )._extract_instrument_info()
+        finally:
+            conn.close()
+        assert info == {"manufacturer": "Bruker"}
 
     def test_a_varying_per_frame_value_is_reported_as_a_range(self):
         mock_conn = self.create_mock_connection()

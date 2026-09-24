@@ -53,6 +53,16 @@ extraction on it. `synthetic_tims_expected.json` records what was written,
 pair by pair, so `tests/integration/test_bruker_tdf_synthetic.py` can check
 the reader against ground truth through the real SDK.
 
+It also carries the calibration record a real MALDI acquisition does, for the
+metadata tests: a `CalibrationInfo` table in `analysis.tdf` (the external
+calibration the run started with, whose stated standard deviation follows from
+its own arrays), and a `calibration.sqlite` beside it holding the online
+lock-mass state timsControl writes as a run starts, placeholders included
+(`MzStandardDeviationPPM` 0.000000 against one reference peak, a mobility
+calibration dated 1999-02-02). The state's per-frame calibrators repeat the
+analysis database's coefficients, so every m/z the SDK reports is the same
+with the file as without it.
+
 Three more places read it, which is why corrupting it is expensive:
 `tests/unit/readers/test_bruker_fragmentation.py` and
 `test_bruker_precursor_spectra.py` copy the directory and rewrite the copy's
@@ -66,8 +76,8 @@ the `test` dependency group, so `uv sync --group test` installs it — plain
 `uv sync`, which is what `docs/contributing.md` tells a contributor to run,
 does not. The module docstring documents the frame-block layout and the SDK's
 intensity scaling that the fixture sidesteps by declaring a 100 ms
-accumulation time. Both files are marked binary by `.gitattributes:39`, the
-same guarantee `.gitattributes:15` gives the imzML corpus.
+accumulation time. All three files are marked binary by `.gitattributes:39`,
+the same guarantee `.gitattributes:15` gives the imzML corpus.
 
 ## Three ways these files get destroyed
 

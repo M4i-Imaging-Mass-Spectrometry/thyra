@@ -66,7 +66,7 @@ IONTOF_BYTE_COUNT = 11593
 
 # The hand-written Bruker TDF acquisition and the script that produces it.
 TDF_DIR_NAME = "synthetic_tims.d"
-TDF_FILES = ["analysis.tdf", "analysis.tdf_bin"]
+TDF_FILES = ["analysis.tdf", "analysis.tdf_bin", "calibration.sqlite"]
 BUILD_SCRIPT_NAME = "build_tdf_fixture.py"
 
 
@@ -736,7 +736,7 @@ class TestCommittedBytes:
     testing anything -- with the suite green on both sides, because every other
     test in this module reads the worktree file. These read the blob.
 
-    The same questions are asked of ``synthetic_tims.d``, whose two files are
+    The same questions are asked of ``synthetic_tims.d``, whose files are
     binary by ``.gitattributes:39`` and admitted only by a single ``.gitignore``
     negation under a blanket ``*.d``. Blob equality cannot see that negation
     being deleted -- .gitignore stops applying to a path once it is in the
@@ -1099,13 +1099,14 @@ class TestTdfBuildScript:
         assert _fixture_bytes(tmp_path) == before
         assert list(tmp_path.glob(".synthetic_tims-*")) == []
 
-    def test_a_complete_run_rebuilds_both_files(self, tmp_path):
+    def test_a_complete_run_rebuilds_every_file(self, tmp_path):
         """The promise the corpus README makes for the sibling script.
 
         Deliberately not byte-equality: the module docstring records that the
         SQLite bytes move with the SQLite version and the ``.tdf_bin`` bytes
         with the zstd version. What has to hold is that a run leaves an
-        acquisition the SDK could open, and no staging tree behind.
+        acquisition the SDK could open -- ``calibration.sqlite`` beside the
+        database, as a MALDI run leaves one -- and no staging tree behind.
         """
         pytest.importorskip("zstandard")
         module = _load_the_build_script(tmp_path)

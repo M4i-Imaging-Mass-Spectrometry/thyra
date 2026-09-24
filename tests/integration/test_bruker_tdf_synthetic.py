@@ -281,7 +281,41 @@ class TestSyntheticFixture:
         assert conversion["name"] == "conversion"
         assert conversion["parameters"]["tdf_spectrum"] == "scan_sum"
         assert "resolved_table" not in mobility and "grid" not in mobility
-        assert block["schema_version"] == "0.7.0"
+        assert block["schema_version"] == "0.8.0"
+
+    def test_conversion_records_the_calibration_and_the_option_it_ran_with(
+        self, tmp_path
+    ):
+        """The external calibration reaches the store; the lock-mass state's
+        placeholders do not, and the option the library was opened with is a
+        processing step rather than a claim about the source.
+
+        The fixture's per-frame calibrators repeat the analysis database's
+        coefficients, which is why every m/z check elsewhere in this module
+        holds with ``calibration.sqlite`` present.
+        """
+        from thyra.metadata.schema import read_msi_metadata_blocks
+
+        out = _convert(tmp_path, "scan_sum")
+        block = next(iter(read_msi_metadata_blocks(out).values()))
+
+        assert block["calibration"] == {
+            "calibration_datetime": "2025-12-31T23:30:00+00:00",
+            "recalibrated": False,
+            "software": "synthetic",
+            "software_version": "0",
+            "n_reference_peaks": 4,
+            "mz_standard_deviation_ppm": 0.355903,
+        }
+        names = [step["name"] for step in block["processing"]]
+        assert names[:2] == ["conversion", "m/z calibration"]
+        step = block["processing"][1]
+        assert step["action_term"] == {
+            "accession": "MS:1001485",
+            "name": "m/z calibration",
+        }
+        assert step["parameters"] == {"use_recalibrated_state": True}
+        assert block["ms_analysis"]["n_spectra"] == 6
 
     def test_a_survey_acquisition_is_recorded_as_unfragmented(self, tmp_path, expected):
         """The fixture is MS1, and the store says so rather than staying silent.

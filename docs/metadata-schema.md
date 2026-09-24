@@ -28,7 +28,7 @@ import spatialdata as sd
 sdata = sd.read_zarr("output.zarr")
 block = sdata.tables["msi_dataset_z0"].uns["msi_metadata"]
 
-print(block["schema_version"])                       # "0.7.0"
+print(block["schema_version"])                       # "0.8.0"
 print(block["ms_analysis"]["pixel_size_um"])         # {"x": 20.0, "y": 20.0}
 print(block["ms_analysis"]["ionisation_source"])     # "MALDI"
 print(block["ms_analysis"]["ionisation_source_term"])
@@ -40,12 +40,12 @@ print(block["ms_analysis"]["ionisation_source_term"])
 
 ## The document
 
-Five sections and a processing list. `ms_analysis` and `provenance` are
-written by the converter for every store; `acquisition` is written when the
-reader reports at least one of its facts and is absent otherwise; `sample`
-and `preparation` describe things no raw file records (what the tissue was,
-how it was prepared) and are supplied by you -- see
-[Completing the metadata](#completing-the-metadata).
+Six sections and a processing list. `ms_analysis` and `provenance` are
+written by the converter for every store; `acquisition` and `calibration`
+are each written when the reader reports at least one of their facts and are
+absent otherwise; `sample` and `preparation` describe things no raw file
+records (what the tissue was, how it was prepared) and are supplied by you --
+see [Completing the metadata](#completing-the-metadata).
 
 | Section | Field | Type | Ontology |
 |---------|-------|------|----------|
@@ -67,6 +67,7 @@ how it was prepared) and are supplied by you -- see
 | | `serial_number` | text, identifies one physical machine | PSI-MS (`MS:1000529`) |
 | | `detector_resolving_power` | `{value, at_mz}` | -- |
 | | `pixel_size_um` | `{x, y}`, **required** | -- |
+| | `n_spectra` | integer, the spectra the source holds as its reader counted them | -- |
 | | `ion_mobility` | `{present, separation, separation_term, unit_term, range_lower, range_upper, num_scans, resolved_table, grid}` | PSI-MS (`MS:1002815` / `MS:1002476`, unit `MS:1002814`) |
 | | `fragmentation` | `{present, ms_level, constant_across_pixels, merges_precursors, dissociation_term, windows, resolved_table}` | PSI-MS (`MS:1000511`; windows `MS:1000827` / `828` / `829`, `MS:1000045`, `MS:1000133`) |
 | `acquisition` | `acquisition_datetime` | ISO 8601 `YYYY-MM-DDThh:mm:ss[.fff]`, with a UTC offset only when the source recorded one | -- |
@@ -74,7 +75,14 @@ how it was prepared) and are supplied by you -- see
 | | `laser_frequency_hz` | number, hertz | IMS (`IMS:1006000`) |
 | | `shots_per_pixel` | integer, laser shots summed into one pixel's spectrum | IMS (`IMS:1006001`) |
 | | `method_file` | text, the acquisition method's file name (never a path) | -- |
-| `processing` | list of `{name, software {name, version, uri}, parameters}` | ordered steps, oldest first | -- |
+| `calibration` | `calibration_datetime` | ISO 8601 at the source's precision (`YYYY-MM-DDThh:mm[:ss[.fff]]`), with a UTC offset only when the source recorded one | -- |
+| | `recalibrated` | boolean, a calibration made after the acquisition replaced the one it ran under | -- |
+| | `original_calibration_datetime` | as `calibration_datetime`, for the calibration a recalibration replaced | -- |
+| | `software`, `software_version` | text, what made the calibration, in the source's words | -- |
+| | `n_reference_peaks` | integer, the reference peaks the calibration was fitted to | -- |
+| | `mz_standard_deviation_ppm` | number, their residual in ppm (see below); never zero | -- |
+| | `lock_mass_corrected` | boolean, the m/z values were corrected against a lock mass | -- |
+| `processing` | list of `{name, action_term, software {name, version, uri}, parameters}` | ordered steps, oldest first | PSI-MS data processing action (`MS:1001485` for `m/z calibration`) |
 | `provenance` | `thyra_version` | text, required | -- |
 | | `source_format` | `"imzml"`, `"bruker"`, ... | -- |
 | | `source_path` | text, the source's path in a store block and its name alone in a document | -- |
@@ -187,6 +195,52 @@ a resolving power is not comparable without its reference m/z. No shipped
 reader states the pair today, so for the formats Thyra converts it is
 supplied by you like the fields below.
 
+`n_spectra` is the reader's own count of the spectra the source holds -- the
+ones present, not the positions the raster covers, and one region's when one
+was read. It is left unset where the reader did not count (a PHI preview
+decodes no events, so `thyra metadata` has no count for PHI), and the table can
+have fewer rows than it says: a spectrum with nothing in it is not stored.
+
+The `calibration` section describes how the source's m/z values were
+calibrated. "The calibration" is the one they rest on: the most recent
+recalibration when there is one, otherwise the calibration the acquisition
+ran under. Every field comes from what the vendor states, and only where its
+meaning was checked against real acquisitions:
+
+| Source | `calibration_datetime` | `recalibrated` | `software`, `software_version` | `n_reference_peaks`, `mz_standard_deviation_ppm` | `lock_mass_corrected` |
+|--------|------------------------|----------------|--------------------------------|--------------------------------------------------|-----------------------|
+| Bruker tsf/tdf | `CalibrationInfo.CalibrationDateTime` in the analysis database, with offset; for recalibrated data the latest `calibration.sqlite` state's time, with the database's as `original_calibration_datetime` | from `calibration.sqlite`: its first state is written at acquisition, so only a second is a recalibration; unset without the file | `CalibrationSoftware`, `CalibrationSoftwareVersion`; the latest state's source and version when recalibrated | the reference masses with a corrected mass, and `MzStandardDeviationPPM`; unset for a recalibration, since no recalibrated acquisition was at hand to check what its state records | -- |
+| PHI ToF-SIMS | the appended recalibration's `BlockAppendedDate`, no offset; unset for the header's calibration, which has no date | an appended block with new coefficients | -- | the calibrants of the calibration in force, from their measured and theoretical m/z | -- |
+| Waters `.raw` | `$$ Cal Date` and `$$ Cal Time` in `_header.txt`, to the minute, no offset | -- | -- | -- (`Cal StdDev` is 0 on every file read) | MassLynx `isLockmassCorrected` |
+| imzML, solariX, rapiflex, mzPeak | -- | -- | -- | -- | -- |
+
+`mz_standard_deviation_ppm` is the square root of the reference peaks'
+summed squared m/z errors after the calibration, in ppm, over one less than
+the number of peaks. That is Bruker's `MzStandardDeviationPPM`, recomputed
+from the file's own arrays to six decimals on four acquisitions, and PHI's
+calibrants give the same statistic: refitting their theoretical m/z against
+the flight times the stated coefficients imply reproduces the coefficients
+exactly, so each calibrant's measured m/z is its position under the fit and
+the difference its residual. A value is never written where it has nothing
+to say. A standard deviation of zero is left unset -- a timsTOF calibrated on
+two peaks fits both exactly, and the online lock-mass state a MALDI timsTOF
+writes records `0.000000` against a single reference mass and no measured
+mass at all -- and so is one over fewer than two peaks. The count stands on
+its own.
+
+Three things are deliberately not in the section. On a timsTOF, the first
+state of `calibration.sqlite` is an online lock-mass calibration, and whether
+Bruker's library applies it depends on the file: a TSF applies it when opened
+with `--use-recalibrated` (the default), a TDF gives the same m/z with it or
+without it, measured on one acquisition of each. Which calibration a
+conversion applied is therefore a processing step (below), and
+`lock_mass_corrected` is left unset for timsTOF rather than stated for data it
+may not describe. The mobility calibration's keys are not read: on the one
+imaging TDF with TIMS engaged its measured voltages are all zero and its
+standard deviation is 3578 %. And no person reaches the section:
+`CalibrationUser` and `MobilityCalibrationUser` are not read, and neither is
+the reference list's name, which is text the lab chose.
+
 Everything else -- organism, tissue, condition, matrix -- cannot come from
 a raw file and stays empty until you provide it.
 
@@ -194,22 +248,41 @@ a raw file and stays empty until you provide it.
 
 `processing` is the dataset's processing provenance, modeled on
 [mzQC](https://github.com/HUPO-PSI/mzQC): an ordered list of steps, each
-naming the software that performed it and the parameters it ran with.
-The converter records its own steps -- `conversion` always, and
-`mass axis resampling` with the resolved resampling parameters when
-resampling was enabled. Downstream tools (normalisation, peak picking,
-annotation) append theirs when they modify the store.
+naming the software that performed it and the parameters it ran with, and
+the PSI-MS data processing action it is (`action_term`) where one exists.
+The converter records its own steps -- `conversion` always, `m/z calibration`
+when the reader turned flight times or digitiser indices into m/z with a
+calibration it chose, and `mass axis resampling` with the resolved resampling
+parameters when resampling was enabled. Downstream tools (normalisation, peak
+picking, annotation) append theirs when they modify the store.
 
 ```python
 [
   {"name": "conversion",
-   "software": {"name": "thyra", "version": "3.5.0"}},
+   "software": {"name": "thyra", "version": "4.1.0"}},
+  {"name": "m/z calibration",
+   "action_term": {"accession": "MS:1001485", "name": "m/z calibration"},
+   "software": {"name": "thyra", "version": "4.1.0"},
+   "parameters": {"calibration": "appended"}},
   {"name": "mass axis resampling",
-   "software": {"name": "thyra", "version": "3.5.0"},
+   "software": {"name": "thyra", "version": "4.1.0"},
    "parameters": {"method": "nearest_neighbor", "target_bins": 50000,
                   "reference_mz": 1000.0}}
 ]
 ```
+
+The `m/z calibration` step is how a store says which calibration it holds,
+as distinct from what the source states in `calibration`: a conversion can be
+told to apply one the source does not consider current. Its parameters are
+in the reader's own terms:
+
+| Source | Parameter | Meaning |
+|--------|-----------|---------|
+| PHI ToF-SIMS | `calibration`: `"appended"` / `"header"` | the coefficients Thyra computed m/z from: the recalibration appended to the file whenever there is one, unless the reader's `use_appended_calibration` was turned off |
+| Bruker tsf/tdf | `use_recalibrated_state`: `true` / `false` | the option Bruker's library was opened with (`--use-recalibrated` / `--no-recalibrated`). The library applies the calibration itself, and what it does with a stored state differs by file type (see the `calibration` section above), so the option is recorded as the option |
+
+Other readers take the m/z values the source stores, apply nothing and
+record no step.
 
 On disk the list is stored as a JSON string (AnnData/zarr cannot
 round-trip a list of objects -- the same reason `uns["regions"]` is
@@ -270,6 +343,20 @@ standard converge:
   pulse energy is in joules)
 - acquisition method identity (`MS:1002128` names a method file format,
   not the method)
+- number of spectra of any MS level (`MS:4000059` and `MS:4000060` count MS1
+  and MS2 spectra separately)
+- when an m/z calibration was made, whether a recalibration replaced it, and
+  what software made it (`MS:1001485` m/z calibration is a processing action
+  with no attributes; `MS:1003200` software version is scoped to spectral
+  libraries)
+- an m/z calibration's fit: its residual in ppm and how many reference peaks
+  it rests on (`MS:1000014` accuracy is an analyzer attribute, `MS:4000072`
+  the error of one identified ion)
+- lock-mass correction of the m/z values
+
+`MS:1001485` itself is used, as the `action_term` of the `m/z calibration`
+processing step -- the one place the schema names a calibration as
+something done rather than something stated.
 
 ### LinkML rendering
 
@@ -340,13 +427,14 @@ added), 0.3.0 (`ion_mobility.resolved_table` and `ion_mobility.grid` added),
 0.4.0 (`ms_analysis.fragmentation` added), 0.5.0
 (`fragmentation.resolved_table` added), 0.6.0 (the `acquisition` section
 added), 0.7.0 (`ms_analysis.manufacturer` and `ms_analysis.serial_number`
-added).
+added), 0.8.0 (the `calibration` section, `ms_analysis.n_spectra` and
+the processing steps' `action_term` added).
 
 The JSON Schema rendering is published at a fixed, versioned address,
 which is also its `$id`:
 
 ```
-https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.7.0/msi_metadata.schema.json
+https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.8.0/msi_metadata.schema.json
 ```
 
 Every version gets its own folder under that path and a published folder
@@ -356,7 +444,7 @@ program that writes the document without Thyra validates against that
 address; see [Writing the Metadata Document](writing-the-metadata-document.md).
 
 The same file is committed at
-`thyra/metadata/schema/msi_metadata_schema_v0_7.json` and ships in the
+`thyra/metadata/schema/msi_metadata_schema_v0_8.json` and ships in the
 wheel, so a Python consumer can validate documents offline without
 importing Thyra:
 
@@ -366,7 +454,7 @@ import json
 
 schema = json.loads(
     resources.files("thyra.metadata.schema")
-    .joinpath("msi_metadata_schema_v0_7.json")
+    .joinpath("msi_metadata_schema_v0_8.json")
     .read_text()
 )
 ```

@@ -866,6 +866,26 @@ class BrukerReader(BrukerBaseMSIReader):
 
         return metadata
 
+    def get_applied_mz_calibration(self) -> Optional[Dict[str, Any]]:
+        """The calibration option this reader opened the vendor library with.
+
+        Bruker's library converts every digitiser index to m/z itself, and
+        Thyra's one decision is ``use_recalibrated_state``: ask for the most
+        recent state in ``calibration.sqlite``, or for the calibration the
+        acquisition recorded. What the library then does with a state is
+        its own, and it differs by file type. Measured on one acquisition
+        of each with the same library: a TSF applies the online lock-mass
+        state its MALDI acquisition wrote (the m/z drift across the run,
+        1.5 ppm by mid-run, is gone), and a TDF gives the same m/z with the
+        state, without it and without the file. So the option is recorded
+        as the option, and no more is claimed.
+
+        ``None`` for a metadata-only reader, which converts nothing.
+        """
+        if self._metadata_only:
+            return None
+        return {"use_recalibrated_state": bool(self.use_recalibrated_state)}
+
     def _initialize_sdk(self) -> None:
         """Initialize the Bruker SDK with error handling."""
         try:

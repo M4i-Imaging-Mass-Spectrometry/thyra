@@ -1017,7 +1017,7 @@ Beside it, when the source format provides them:
 
 | Key | Contents |
 |-----|----------|
-| `format_specific` | Vendor metadata (imzML file mode and UUID; FlexImaging areas and teaching points for solariX and rapiflex, whose `.mis` the extractor reads -- the tsf/tdf extractor does not carry them; `instrument_source_type` for Bruker tsf/tdf, Bruker's own code for what ionised the sample, recorded raw because its labels are not documented in the file) |
+| `format_specific` | Vendor metadata (imzML file mode and UUID; FlexImaging areas and teaching points for solariX and rapiflex, whose `.mis` the extractor reads -- the tsf/tdf extractor does not carry them; `instrument_source_type` for Bruker tsf/tdf, Bruker's own code for what ionised the sample, recorded raw because its labels are not documented in the file; for Bruker tsf/tdf also `instrument_calibration`, the m/z calibration the run started with as the analysis database's `CalibrationInfo` states it, and `calibration`, the states of `calibration.sqlite` when the acquisition has one) |
 | `acquisition_params` | Polarity, scan range, laser settings, timestamp and method name, in the vendor's spelling and unit |
 | `instrument_info` | Instrument model, serial, software version |
 | `raw_metadata` | Source metadata as read, for round-trip fidelity |
@@ -1086,10 +1086,11 @@ terms, and a schema a validator can hold it to.
 ```python
 block = msi_table.uns["msi_metadata"]
 
-print(block["schema_version"])                    # "0.7.0"
+print(block["schema_version"])                    # "0.8.0"
 print(block["ms_analysis"]["pixel_size_um"])      # {"x": 20.0, "y": 20.0}
 print(block["provenance"]["source_format"])       # "imzml"
 print(block.get("acquisition"))                   # see below; absent for imzML
+print(block.get("calibration"))                   # see below; absent for imzML
 ```
 
 `block["acquisition"]` is the normalised view of the run itself, filled
@@ -1109,6 +1110,28 @@ The raw vendor values stay in `acquisition_params` under their own
 spellings (`laser_frequency` on Bruker tsf/tdf, `laser_rep_rate` on
 solariX, `acquisition_date` on PHI and Waters, and so on), so nothing is
 lost by the normalisation.
+
+`block["calibration"]` is the same kind of view of how the source's m/z
+values were calibrated, filled by Bruker tsf/tdf, PHI and Waters and absent
+for the other formats. "The calibration" is the one the values rest on: the
+most recent recalibration when there is one, otherwise the calibration the
+acquisition ran under.
+
+| Field | Meaning and unit |
+|-------|------------------|
+| `calibration_datetime` | When the calibration was made, ISO 8601 at the precision the source records (Waters to the minute), with a UTC offset only when the source recorded one (Bruker does) |
+| `recalibrated` | Whether a calibration made after the acquisition replaced the one it ran under; Bruker tsf/tdf with a `calibration.sqlite`, and PHI |
+| `original_calibration_datetime` | For recalibrated data, when the calibration the recalibration replaced was made |
+| `software`, `software_version` | What made the calibration, in the source's words; Bruker tsf/tdf |
+| `n_reference_peaks` | How many reference peaks the calibration was fitted to; Bruker tsf/tdf and PHI |
+| `mz_standard_deviation_ppm` | The reference peaks' residual after the calibration: the square root of their summed squared m/z errors in ppm over one less than their number. Never zero and never over fewer than two peaks: neither is a measurement, and vendors write both where they have nothing to state |
+| `lock_mass_corrected` | Whether the m/z values were corrected against a lock mass; Waters, as MassLynx reports it |
+
+Which calibration a conversion applied is not in the section, because a
+conversion can be told to apply one the source does not consider current;
+it is the `m/z calibration` step of `processing` (PSI-MS `MS:1001485`). See
+[Metadata Schema](metadata-schema.md#what-is-auto-populated) for where each
+vendor states each field and what is deliberately left out.
 
 It is written by every converter path identically, validated by
 `thyra validate`, and exported to a METASPACE submission by

@@ -7,11 +7,12 @@ index, so no additional file passes are needed.
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any, Dict, List
 
 import numpy as np
 
 from ...core.base_extractor import MetadataExtractor
+from ...readers.phi.phi_header import Calibrant, parse_calibrants
 from ..personal_data import strip_personal_data
 from ..types import ComprehensiveMetadata, EssentialMetadata
 
@@ -176,17 +177,7 @@ class PhiMetadataExtractor(MetadataExtractor):
             "header_mass_slope": header.mass_slope,
             "header_mass_offset": header.mass_offset,
             "header_calibrated_flag": header.entries.get("Calibrated"),
-            # JSON strings: AnnData/zarr cannot round-trip a list of dicts.
-            "acquisition_calibrants": json.dumps(
-                [
-                    {
-                        "measured_mz": c.measured_mz,
-                        "species": c.species,
-                        "theoretical_mz": c.theoretical_mz,
-                    }
-                    for c in header.calibrants
-                ]
-            ),
+            "acquisition_calibrants": _calibrants_json(header.calibrants),
         }
         appended = reader.block_index.appended
         if appended:
@@ -196,6 +187,7 @@ class PhiMetadataExtractor(MetadataExtractor):
             calibration["appended_blocks"] = json.dumps(
                 [strip_personal_data(block) for block in appended]
             )
+        calibration.update(self._recalibration())
         # The vendor's own key names are not valid Zarr group members --
         # 'Mass/Time' contains a forward slash -- so the header is preserved
         # as JSON rather than being mangled into a group hierarchy. The
@@ -211,3 +203,45 @@ class PhiMetadataExtractor(MetadataExtractor):
             ),
             "calibration": calibration,
         }
+
+    def _recalibration(self) -> Dict[str, Any]:
+        """Whether the file carries a recalibration, and what it states.
+
+        Keyed by what the file holds, not by what the reader applied:
+        ``source`` above is the reader's choice, and a reader told to ignore
+        an appended recalibration does not make the file any less
+        recalibrated. The block is the one whose coefficients the reader
+        adopts when it does (the newest with both), and SmartSoft writes
+        into it the date it was appended and, as the header does for the
+        acquisition, the calibrants the coefficients were fitted to.
+
+        ``recalibrated`` is False only when the block chain was walked to
+        its end: a chain that stopped early may have lost the very block
+        that says so, and then the key is left out.
+        """
+        index = self._reader.block_index
+        block = index.appended_calibration_block()
+        if block is None:
+            return {"recalibrated": False} if index.clean else {}
+        found: Dict[str, Any] = {"recalibrated": True}
+        date = block.get("BlockAppendedDate")
+        if date:
+            found["recalibration_date"] = date
+        calibrants = parse_calibrants(block.get("Calibration", ""))
+        if calibrants:
+            found["recalibration_calibrants"] = _calibrants_json(calibrants)
+        return found
+
+
+def _calibrants_json(calibrants: List[Calibrant]) -> str:
+    """Calibrants as a JSON string: AnnData/zarr cannot round-trip a list of dicts."""
+    return json.dumps(
+        [
+            {
+                "measured_mz": c.measured_mz,
+                "species": c.species,
+                "theoretical_mz": c.theoretical_mz,
+            }
+            for c in calibrants
+        ]
+    )

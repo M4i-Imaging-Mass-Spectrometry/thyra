@@ -18,6 +18,21 @@ verified against the SDK on real files:
     coefficients so the SDK's conversions have something to evaluate; they
     describe an instrument model, not a measurement.
 
+    ``CalibrationInfo`` holds the external m/z calibration the instrument
+    had when the run started, keyed the way timsControl keys it; its fit is
+    invented but consistent (see ``CALIBRATION_FIT``).
+
+``calibration.sqlite``
+    The table layout timsControl writes beside a MALDI acquisition, with
+    the one state it writes as the run starts: an online lock-mass
+    calibration. Its ``CalibrationInfo`` rows carry the values a real one
+    does where it has nothing to state -- ``MzStandardDeviationPPM``
+    0.000000 against a single reference peak, a mobility calibration dated
+    1999-02-02 with a 3578 % standard deviation -- so the metadata tests
+    can pin that none of them is taken for a fact. Its per-frame
+    calibrators repeat the analysis database's coefficients, so whether a
+    library applies the state or not, every m/z stays where it was.
+
 ``analysis.tdf_bin``
     A 64-byte zero header, then one block per frame: ``uint32 block size``
     (including these 8 bytes), ``uint32 scan count``, zstd payload. The
@@ -220,6 +235,212 @@ TIMS_CALIBRATION = (
     6917.454037200332,
 )
 
+# The external calibration's fit: four reference masses and the ppm error
+# each has after the calibration. MzStandardDeviationPPM below is what these
+# give by the rule the real files follow -- the square root of the summed
+# squared errors over n - 1 -- so a reader can check one against the other.
+CALIBRATION_FIT = (
+    (118.086255, 0.3),
+    (322.048121, -0.5),
+    (622.028960, 0.2),
+    (922.009798, 0.0),
+)
+CALIBRATION_SD_PPM = "0.355903"
+
+
+def _f64(values) -> bytes:
+    """``values`` as the little-endian float64 blob CalibrationInfo stores."""
+    return struct.pack(f"<{len(values)}d", *values)
+
+
+def _analysis_calibration_info() -> List[Tuple[str, str, object]]:
+    """``CalibrationInfo`` rows for the analysis database, in timsControl's keys.
+
+    The person keys and the lab-chosen list name hold stand-ins: the
+    metadata extractor must never read them, and a test says so.
+    """
+    reference = [mz for mz, _ in CALIBRATION_FIT]
+    corrected = [mz * (1.0 + err * 1e-6) for mz, err in CALIBRATION_FIT]
+    return [
+        ("+", key, value)
+        for key, value in (
+            ("CalibrationDateTime", "2025-12-31T23:30:00+00:00"),
+            ("CalibrationUser", "thyra"),
+            ("CalibrationSoftware", "synthetic"),
+            ("CalibrationSoftwareVersion", "0"),
+            ("MzCalibrationMode", "1"),
+            ("MzStandardDeviationPPM", CALIBRATION_SD_PPM),
+            ("ReferenceMassList", "synthetic reference list"),
+            ("MzCalibrationSpectrumDescription", "<unknown>"),
+            ("ReferenceMassPeakNames", b"a\x00b\x00c\x00d\x00"),
+            ("ReferencePeakMasses", _f64(reference)),
+            ("MeasuredTimesOfFlight", _f64([60000.0, 110000.0, 160000.0, 200000.0])),
+            ("MeasuredMassPeakIntensities", _f64([5000.0, 12000.0, 9000.0, 3000.0])),
+            (
+                "MassesPreviousCalibration",
+                _f64([mz * (1.0 + 2e-6) for mz in reference]),
+            ),
+            ("MassesCorrectedCalibration", _f64(corrected)),
+            ("MobilityCalibrationDateTime", "2025-12-31T23:20:00+00:00"),
+            ("MobilityCalibrationUser", "thyra"),
+            ("MobilityStandardDeviationPercent", "3578.047355"),
+            ("ReferenceMobilityList", "synthetic mobility list"),
+            ("CalibrationMobilogramDescription", "<unknown>"),
+            ("ReferenceMobilityPeakNames", b"a\x00b\x00c\x00"),
+            ("ReferencePeakMobilities", _f64([0.7363, 0.9915, 1.1986])),
+            ("MeasuredTimsVoltages", _f64([0.0, 0.0, 0.0])),
+            ("MeasuredMobilityPeakIntensities", _f64([2.5e6, 1.5e7, 1.8e7])),
+            ("MobilitiesPreviousCalibration", _f64([0.7332, 0.9938, 1.1994])),
+            ("MobilitiesCorrectedCalibration", _f64([0.7359, 0.9938, 1.1962])),
+            # The vendor's spelling, "Mobilitiy", on every file read.
+            ("MobilitiyReferencePressure", "2.713167"),
+            ("MobilitiyPressureCompensationFactor", "50.000000"),
+        )
+    ]
+
+
+# calibration.sqlite, as timsControl lays it out.
+CALIBRATION_DDL_SQL = """
+CREATE TABLE CalibrationInfo (
+    CalibrationState INTEGER NOT NULL,
+    KeyPolarity CHAR(1) NOT NULL CHECK (KeyPolarity IN ('+', '-')),
+    KeyName TEXT, Value TEXT,
+    PRIMARY KEY (CalibrationState, KeyPolarity, KeyName),
+    FOREIGN KEY(CalibrationState) REFERENCES CalibrationState(Id)) WITHOUT ROWID;
+CREATE TABLE CalibrationState (
+    Id INTEGER PRIMARY KEY AUTOINCREMENT, Key TEXT NOT NULL,
+    DateTime DATETIME NOT NULL, Source TEXT NOT NULL,
+    PositiveReferenceCalibratorId INTEGER, NegativeReferenceCalibratorId INTEGER,
+    HasFrameCalibrators INTEGER NOT NULL CHECK (HasFrameCalibrators IN (0, 1)));
+CREATE TABLE DigitizerConstants (
+    CalibrationState INTEGER PRIMARY KEY, DigitizerTimebase REAL NOT NULL,
+    DigitizerDelay REAL NOT NULL,
+    FOREIGN KEY(CalibrationState) REFERENCES CalibrationState(Id));
+CREATE TABLE FrameMzCalibration (
+    CalibrationState INTEGER NOT NULL, Id INTEGER NOT NULL, ModelType INTEGER NOT NULL,
+    C0, C1, C2, C3, C4, PRIMARY KEY(CalibrationState, Id),
+    FOREIGN KEY(CalibrationState) REFERENCES CalibrationState(Id),
+    FOREIGN KEY(CalibrationState) REFERENCES DigitizerConstants(CalibrationState))
+    WITHOUT ROWID;
+CREATE TABLE FrameMzCalibrationMapping (
+    CalibrationState INTEGER NOT NULL, FrameId INTEGER NOT NULL,
+    FrameMzCalibrationId INTEGER NOT NULL, PRIMARY KEY(CalibrationState, FrameId),
+    FOREIGN KEY(CalibrationState, FrameMzCalibrationId)
+    REFERENCES FrameMzCalibration(CalibrationState, Id)) WITHOUT ROWID;
+CREATE TABLE GlobalMetadata (Key TEXT PRIMARY KEY, Value TEXT);
+CREATE TABLE LcMsLockMassCalibrationDiagnostic (
+    CalibrationState INTEGER NOT NULL, Id INTEGER NOT NULL, LockMass REAL NOT NULL,
+    PercentFound REAL NOT NULL, RetentionTimesInSeconds BLOB, MassDeviationInDa BLOB,
+    PRIMARY KEY (CalibrationState, Id),
+    FOREIGN KEY(CalibrationState) REFERENCES CalibrationState(Id)) WITHOUT ROWID;
+CREATE TABLE RefMzCalibration (
+    CalibrationState INTEGER NOT NULL, Id INTEGER NOT NULL, ModelType INTEGER NOT NULL,
+    T1 REAL NOT NULL, T2 REAL NOT NULL, dC1 REAL NOT NULL, dC2 REAL NOT NULL, C0,
+    PRIMARY KEY(CalibrationState, Id),
+    FOREIGN KEY(CalibrationState) REFERENCES CalibrationState(Id),
+    FOREIGN KEY(CalibrationState) REFERENCES DigitizerConstants(CalibrationState))
+    WITHOUT ROWID;
+CREATE TABLE TimsCalibration (
+    CalibrationState INTEGER NOT NULL, Id INTEGER NOT NULL, ModelType INTEGER NOT NULL,
+    C0, C1, C2, C3, C4, C5, C6, C7, C8, C9, PRIMARY KEY(CalibrationState, Id),
+    FOREIGN KEY(CalibrationState) REFERENCES CalibrationState(Id)) WITHOUT ROWID;
+CREATE TABLE TimsCalibrationMapping (
+    CalibrationState INTEGER NOT NULL, FrameId INTEGER NOT NULL,
+    TimsCalibrationId INTEGER NOT NULL, PRIMARY KEY(CalibrationState, FrameId),
+    FOREIGN KEY(CalibrationState, TimsCalibrationId)
+    REFERENCES TimsCalibration(CalibrationState, Id)) WITHOUT ROWID;
+CREATE UNIQUE INDEX calibrationstate_key ON CalibrationState(Key);
+"""
+CALIBRATION_DDL = [s.strip() for s in CALIBRATION_DDL_SQL.split(";") if s.strip()]
+
+# The one state, written a quarter of a second after the acquisition started,
+# as the real ones are.
+LOCK_MASS_STATE_DATETIME = "2026-01-01T00:00:00.250+00:00"
+
+
+def _lock_mass_calibration_info() -> List[Tuple[int, str, str, object]]:
+    """The online lock-mass state's ``CalibrationInfo`` rows, placeholders and all."""
+    return [
+        (1, "+", key, value)
+        for key, value in (
+            ("CalibrationDateTime", LOCK_MASS_STATE_DATETIME),
+            ("CalibrationMobilogramDescription", "<unknown>"),
+            ("CalibrationSoftware", "synthetic"),
+            ("CalibrationSoftwareVersion", "0"),
+            ("CalibrationUser", "thyra"),
+            ("MassesCorrectedCalibration", b""),
+            ("MassesPreviousCalibration", b""),
+            ("MeasuredMassPeakIntensities", b""),
+            ("MeasuredMobilityPeakIntensities", _f64([2.5e6, 1.5e7, 1.8e7])),
+            ("MeasuredTimesOfFlight", b""),
+            ("MeasuredTimsVoltages", _f64([0.0, 0.0, 0.0])),
+            ("MobilitiesCorrectedCalibration", _f64([0.7359, 0.9938, 1.1962])),
+            ("MobilitiesPreviousCalibration", _f64([0.7332, 0.9938, 1.1994])),
+            ("MobilityCalibrationDateTime", "1999-02-02T00:00:00.000+02:00"),
+            ("MobilityCalibrationUser", "thyra"),
+            ("MobilityStandardDeviationPercent", "3578.047355"),
+            ("MzCalibrationMode", "2"),
+            ("MzCalibrationSpectrumDescription", "Online lockmass calibration"),
+            ("MzStandardDeviationPPM", "0.000000"),
+            ("ReferenceMassList", "synthetic lock mass"),
+            ("ReferenceMassPeakNames", b"lock mass\x00"),
+            ("ReferenceMobilityList", "synthetic mobility list"),
+            ("ReferenceMobilityPeakNames", b"a\x00b\x00c\x00"),
+            ("ReferencePeakMasses", _f64([622.028960])),
+            ("ReferencePeakMobilities", _f64([0.7363, 0.9915, 1.1986])),
+        )
+    ]
+
+
+def _write_calibration_sqlite(path: Path, n_frames: int) -> None:
+    """The ``calibration.sqlite`` a MALDI run leaves beside its database."""
+    with contextlib.closing(sqlite3.connect(path)) as con:
+        con.execute("PRAGMA page_size = 512")
+        for statement in CALIBRATION_DDL:
+            con.execute(statement)
+        con.executemany(
+            "INSERT INTO GlobalMetadata VALUES (?, ?)",
+            [
+                ("SchemaType", "CALIBRATION_SQLITE"),
+                ("SchemaVersionMajor", "1"),
+                ("SchemaVersionMinor", "0"),
+            ],
+        )
+        con.execute(
+            "INSERT INTO CalibrationState VALUES (1, ?, ?, 'synthetic', NULL, NULL, 1)",
+            ("00000000-0000-0000-0000-000000000001", LOCK_MASS_STATE_DATETIME),
+        )
+        con.executemany(
+            "INSERT INTO CalibrationInfo VALUES (?, ?, ?, ?)",
+            _lock_mass_calibration_info(),
+        )
+        con.execute(
+            "INSERT INTO DigitizerConstants VALUES (1, ?, ?)",
+            (MZ_CALIBRATION[2], MZ_CALIBRATION[3]),
+        )
+        frames = range(1, n_frames + 1)
+        con.executemany(
+            "INSERT INTO FrameMzCalibration VALUES (1, ?, ?, ?, ?, ?, ?, ?)",
+            [(f, MZ_CALIBRATION[1], *MZ_CALIBRATION[8:13]) for f in frames],
+        )
+        con.executemany(
+            "INSERT INTO FrameMzCalibrationMapping VALUES (1, ?, ?)",
+            [(f, f) for f in frames],
+        )
+        con.execute(
+            "INSERT INTO TimsCalibration VALUES (1, "
+            + ",".join("?" * len(TIMS_CALIBRATION))
+            + ")",
+            TIMS_CALIBRATION,
+        )
+        con.executemany(
+            "INSERT INTO TimsCalibrationMapping VALUES (1, ?, 1)",
+            [(f,) for f in frames],
+        )
+        con.commit()
+        con.execute("VACUUM")
+
+
 GLOBAL_METADATA = {
     "SchemaType": "TDF",
     "SchemaVersionMajor": "3",
@@ -342,6 +563,10 @@ def _write_fixture(out_dir: Path, frames: List[List[Scan]]) -> Dict[str, object]
             + ")",
             TIMS_CALIBRATION,
         )
+        con.executemany(
+            "INSERT INTO CalibrationInfo VALUES (?, ?, ?)",
+            _analysis_calibration_info(),
+        )
         con.execute("INSERT INTO PropertyGroups VALUES (1)")
         con.execute("INSERT INTO Segments VALUES (1, 1, ?, 0)", (len(GRID),))
         con.execute(
@@ -425,6 +650,7 @@ def _write_fixture(out_dir: Path, frames: List[List[Scan]]) -> Dict[str, object]
         con.commit()
         con.execute("VACUUM")
 
+    _write_calibration_sqlite(out_dir / "calibration.sqlite", len(frames))
     return expected
 
 

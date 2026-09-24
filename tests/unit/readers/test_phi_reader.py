@@ -396,6 +396,63 @@ class TestPhiReader:
             assert reader.calibration_source == "header"
             assert reader.mass_axis.slope == 1.0
 
+    #: A recalibration block as SmartSoft appends it: the date, and the
+    #: calibrants the new coefficients were fitted to.
+    _RECALIBRATION = (
+        b"AppendedBlockType: AsciiInfoBlock01\r\n"
+        b"BlockAppendedDate: 07/27/2026 17:29:40\r\n"
+        b"Calibration: 2  (26.003016, C+N, 26.003099)  "
+        b"(41.998143, C+N+O, 41.998001)\r\n"
+        b"Mass/Time: 2.0\r\nMassOffset: 0.0\r\n"
+    )
+
+    def test_the_raw_calibration_says_whether_the_file_was_recalibrated(
+        self, simple_raw, tmp_path
+    ):
+        with PhiReader(simple_raw) as reader:
+            cal = reader.get_comprehensive_metadata().raw_metadata["calibration"]
+        assert cal["recalibrated"] is False
+        assert "recalibration_date" not in cal
+
+        blocks = events_block([event(0, 0, 1_000_000)]) + block(14, self._RECALIBRATION)
+        with PhiReader(write_raw(tmp_path / "recal.raw", blocks)) as reader:
+            cal = reader.get_comprehensive_metadata().raw_metadata["calibration"]
+        assert cal["recalibrated"] is True
+        assert cal["recalibration_date"] == "07/27/2026 17:29:40"
+        assert json.loads(cal["recalibration_calibrants"]) == [
+            {"measured_mz": 26.003016, "species": "C+N", "theoretical_mz": 26.003099},
+            {"measured_mz": 41.998143, "species": "C+N+O", "theoretical_mz": 41.998001},
+        ]
+
+    def test_a_file_the_reader_was_told_to_ignore_is_still_recalibrated(self, tmp_path):
+        blocks = events_block([event(0, 0, 1_000_000)]) + block(14, self._RECALIBRATION)
+        path = write_raw(tmp_path / "recal.raw", blocks)
+        with PhiReader(path, use_appended_calibration=False) as reader:
+            cal = reader.get_comprehensive_metadata().raw_metadata["calibration"]
+            applied = reader.get_applied_mz_calibration()
+        assert cal["source"] == "header"
+        assert cal["recalibrated"] is True
+        assert applied == {"calibration": "header"}
+
+    def test_the_reader_says_which_coefficients_it_applied(self, simple_raw, tmp_path):
+        with PhiReader(simple_raw) as reader:
+            assert reader.get_applied_mz_calibration() == {"calibration": "header"}
+        blocks = events_block([event(0, 0, 1_000_000)]) + block(14, self._RECALIBRATION)
+        with PhiReader(write_raw(tmp_path / "recal.raw", blocks)) as reader:
+            assert reader.get_applied_mz_calibration() == {"calibration": "appended"}
+
+    def test_a_chain_that_stopped_early_does_not_claim_no_recalibration(
+        self, simple_raw
+    ):
+        # Trailing bytes the walk cannot account for: an appended block may
+        # be among them, so the file is neither said to be recalibrated nor
+        # said not to be.
+        simple_raw.write_bytes(simple_raw.read_bytes() + b"\x00" * 7)
+        with PhiReader(simple_raw) as reader:
+            meta = reader.get_comprehensive_metadata()
+        assert meta.format_specific["block_chain_complete"] is False
+        assert "recalibrated" not in meta.raw_metadata["calibration"]
+
     def test_mosaic_tiles_offset_coordinates(self, tmp_path):
         blocks = (
             events_block([event(1, 1, 3_000_000)])

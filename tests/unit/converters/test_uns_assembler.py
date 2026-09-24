@@ -57,15 +57,20 @@ class _StubReader:
         *,
         comprehensive: Optional[ComprehensiveMetadata] = None,
         fragmentation: Any = None,
+        applied_calibration: Optional[Dict[str, Any]] = None,
     ) -> None:
         self._comprehensive = (
             _comprehensive() if comprehensive is None else comprehensive
         )
         self._fragmentation = fragmentation
+        self._applied_calibration = applied_calibration
         self.fragmentation_reads = 0
 
     def get_comprehensive_metadata(self) -> ComprehensiveMetadata:
         return self._comprehensive
+
+    def get_applied_mz_calibration(self) -> Optional[Dict[str, Any]]:
+        return self._applied_calibration
 
     @property
     def has_ion_mobility(self) -> bool:
@@ -225,6 +230,57 @@ class TestTheProcessingStep:
         assert parameters["target_bins"] == 4096
         # Unset on both sides: dropped, not serialised as a null.
         assert "min_mz" not in parameters
+
+
+class TestTheCalibrationStep:
+    """What the reader applied is a step, bound to MS:1001485."""
+
+    def test_a_reader_that_applies_none_records_no_step(self):
+        steps = _assembler()._processing_provenance(_context())
+
+        assert [s.name for s in steps] == ["conversion"]
+
+    def test_the_readers_parameters_become_the_step(self):
+        reader = _StubReader(applied_calibration={"use_recalibrated_state": True})
+
+        steps = _assembler(reader)._processing_provenance(_context())
+
+        assert [s.name for s in steps] == ["conversion", "m/z calibration"]
+        step = steps[1]
+        assert step.action_term is not None
+        assert step.action_term.accession == "MS:1001485"
+        assert step.action_term.name == "m/z calibration"
+        assert step.parameters == {"use_recalibrated_state": True}
+        assert step.software.name == "thyra"
+
+    def test_it_comes_before_resampling_because_it_happens_first(self):
+        assembler = UnsAssembler(
+            _StubReader(applied_calibration={"calibration": "appended"}),
+            pixel_size_xy=lambda: (10.0, 10.0),
+            pixel_size_detection_info=None,
+            resampling_config=SimpleNamespace(method="nearest_neighbor"),
+        )
+
+        steps = assembler._processing_provenance(_context())
+
+        assert [s.name for s in steps] == [
+            "conversion",
+            "m/z calibration",
+            "mass axis resampling",
+        ]
+
+    def test_the_step_reaches_the_block(self):
+        reader = _StubReader(applied_calibration={"calibration": "header"})
+
+        block = _assembler(reader).build(_context())[MSI_METADATA_UNS_KEY]
+
+        steps = json.loads(block["processing"])
+        assert steps[1] == {
+            "name": "m/z calibration",
+            "action_term": {"accession": "MS:1001485", "name": "m/z calibration"},
+            "software": steps[0]["software"],
+            "parameters": {"calibration": "header"},
+        }
 
 
 class TestTheMobilityHeatmap:

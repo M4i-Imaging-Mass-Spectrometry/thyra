@@ -34,6 +34,7 @@ _MODEL_CLASSES = {
     "Fragmentation": models.Fragmentation,
     "IsolationWindow": models.IsolationWindow,
     "Acquisition": models.Acquisition,
+    "Calibration": models.Calibration,
     "SoftwareRef": models.SoftwareRef,
     "ProcessingStep": models.ProcessingStep,
     "Provenance": models.Provenance,

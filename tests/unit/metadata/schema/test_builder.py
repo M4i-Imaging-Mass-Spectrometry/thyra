@@ -1,5 +1,8 @@
 """Auto-population: the builder reports what the source knows, nothing more."""
 
+import json
+from dataclasses import replace
+
 from thyra.metadata.schema import build_metadata_document, build_msi_metadata
 from thyra.metadata.types import ComprehensiveMetadata, EssentialMetadata
 
@@ -629,3 +632,366 @@ class TestInstrumentIdentity:
         )
         assert analysis.manufacturer == "Bruker"
         assert analysis.serial_number is None
+
+
+#: The calibrants of the PHI acquisition the section was verified on: the
+#: header's, and those of the recalibration appended to the file. Refitting
+#: sqrt(theoretical m/z) against the flight times each block's coefficients
+#: imply reproduces the coefficients exactly, so the measured values are the
+#: fit's positions and the differences its residuals.
+_PHI_HEADER_CALIBRANTS = json.dumps(
+    [
+        {"measured_mz": 13.008071, "species": "C+H", "theoretical_mz": 13.0078},
+        {"measured_mz": 23.999574, "species": "C2", "theoretical_mz": 24.0},
+        {"measured_mz": 35.999528, "species": "C3", "theoretical_mz": 36.0},
+        {"measured_mz": 48.000627, "species": "C4", "theoretical_mz": 48.0},
+    ]
+)
+_PHI_RECALIBRATION_CALIBRANTS = json.dumps(
+    [
+        {"measured_mz": 26.003016, "species": "C+N", "theoretical_mz": 26.003099},
+        {"measured_mz": 41.998143, "species": "C+N+O", "theoretical_mz": 41.998001},
+        {"measured_mz": 57.975196, "species": "C+N+S", "theoretical_mz": 57.975201},
+        {
+            "measured_mz": 117.971046,
+            "species": "C+N3+O2+S",
+            "theoretical_mz": 117.9711,
+        },
+    ]
+)
+
+#: What the Bruker tsf/tdf extractor reports from the analysis database's
+#: CalibrationInfo, with the values of the imaging TDF it was verified on.
+_BRUKER_INSTRUMENT_CALIBRATION = {
+    "calibration_datetime": "2025-04-22T08:43:30+02:00",
+    "calibration_software": "timsTOF",
+    "calibration_software_version": "4.1.12",
+    "mz_standard_deviation_ppm": 0.411709,
+    "n_reference_peaks": 14,
+}
+
+#: What the reader reports from a calibration.sqlite with one state: the
+#: online lock-mass calibration a MALDI run writes as it starts.
+_BRUKER_ONE_STATE = {
+    "calibration_id": 1,
+    "calibration_uuid": "00000000-0000-0000-0000-000000000001",
+    "calibration_datetime": "2025-04-22T08:59:34.666+02:00",
+    "calibration_source": "timsTOF",
+    "calibration_software_version": "4.1.12",
+    "num_calibration_versions": 1,
+    "recalibrated": False,
+    "original_calibration_datetime": None,
+    "calibration_file_size": 110592,
+}
+
+
+class TestCalibrationSection:
+    """One case per reader that states calibration facts, and the rules.
+
+    The section describes the source, whatever a conversion then applied
+    (that is a processing step), and unset beats a placeholder (see
+    ``TestCalibrationPlaceholders``).
+    """
+
+    def _calibration(
+        self, acquisition_params=None, format_specific=None, raw_metadata=None
+    ):
+        meta = build_msi_metadata(
+            _comprehensive(
+                acquisition_params=acquisition_params,
+                format_specific=format_specific,
+                raw_metadata=raw_metadata,
+            ),
+            pixel_size_um=(20.0, 20.0),
+        )
+        return meta.calibration
+
+    def test_timstof_states_the_calibration_the_run_started_with(self):
+        calibration = self._calibration(
+            format_specific={
+                "instrument_calibration": _BRUKER_INSTRUMENT_CALIBRATION,
+                "calibration": _BRUKER_ONE_STATE,
+            }
+        )
+        assert calibration is not None
+        # The single calibration.sqlite state is the lock-mass calibration
+        # written at acquisition, not a recalibration, so its own time and
+        # (placeholder) fit do not replace the external calibration's.
+        assert calibration.model_dump(exclude_none=True) == {
+            "calibration_datetime": "2025-04-22T08:43:30+02:00",
+            "recalibrated": False,
+            "software": "timsTOF",
+            "software_version": "4.1.12",
+            "n_reference_peaks": 14,
+            "mz_standard_deviation_ppm": 0.411709,
+        }
+
+    def test_timstof_without_calibration_sqlite_does_not_say_recalibrated(self):
+        # An electrospray timsTOF writes no calibration.sqlite: whether the
+        # data were ever recalibrated is then stated nowhere.
+        calibration = self._calibration(
+            format_specific={
+                "instrument_calibration": {
+                    "calibration_datetime": "2026-03-13T09:19:59+01:00",
+                    "calibration_software": "timsTOF",
+                    "calibration_software_version": "6.1.5",
+                    "mz_standard_deviation_ppm": 0.057106,
+                    "n_reference_peaks": 5,
+                }
+            }
+        )
+        assert calibration is not None
+        assert calibration.recalibrated is None
+        assert calibration.mz_standard_deviation_ppm == 0.057106
+        assert calibration.n_reference_peaks == 5
+
+    def test_a_recalibrated_timstof_states_the_recalibration_and_the_original(self):
+        calibration = self._calibration(
+            format_specific={
+                "instrument_calibration": _BRUKER_INSTRUMENT_CALIBRATION,
+                "calibration": {
+                    "calibration_id": 3,
+                    "calibration_datetime": "2025-03-01T16:00:00.000+00:00",
+                    "calibration_source": "DataAnalysis",
+                    "calibration_software_version": "6.1",
+                    "num_calibration_versions": 3,
+                    "recalibrated": True,
+                    "original_calibration_datetime": "2025-01-01T10:00:00.000+00:00",
+                },
+            }
+        )
+        assert calibration is not None
+        # The fit on record belongs to the calibration the recalibration
+        # replaced, and what a recalibration state says about its own fit
+        # was never read off a real file, so no fit is given.
+        assert calibration.model_dump(exclude_none=True) == {
+            "calibration_datetime": "2025-03-01T16:00:00+00:00",
+            "recalibrated": True,
+            "original_calibration_datetime": "2025-04-22T08:43:30+02:00",
+            "software": "DataAnalysis",
+            "software_version": "6.1",
+        }
+
+    def test_phi_from_the_header_when_nothing_was_appended(self):
+        calibration = self._calibration(
+            raw_metadata={
+                "calibration": {
+                    "source": "header",
+                    "acquisition_calibrants": _PHI_HEADER_CALIBRANTS,
+                    "recalibrated": False,
+                }
+            }
+        )
+        assert calibration is not None
+        assert calibration.model_dump(exclude_none=True) == {
+            "recalibrated": False,
+            "n_reference_peaks": 4,
+            "mz_standard_deviation_ppm": 19.075584,
+        }
+
+    def test_phi_from_the_appended_recalibration(self):
+        calibration = self._calibration(
+            raw_metadata={
+                "calibration": {
+                    "source": "appended",
+                    "acquisition_calibrants": _PHI_HEADER_CALIBRANTS,
+                    "recalibrated": True,
+                    "recalibration_date": "07/27/2026 17:29:40",
+                    "recalibration_calibrants": _PHI_RECALIBRATION_CALIBRANTS,
+                }
+            }
+        )
+        assert calibration is not None
+        # SmartSoft writes month first and no zone, as it does AcqFileDate.
+        assert calibration.model_dump(exclude_none=True) == {
+            "calibration_datetime": "2026-07-27T17:29:40",
+            "recalibrated": True,
+            "n_reference_peaks": 4,
+            "mz_standard_deviation_ppm": 2.69798,
+        }
+
+    def test_phi_states_the_file_not_the_readers_choice(self):
+        # A reader told to ignore the appended block used the header's
+        # coefficients ("source": "header"), and the file is still
+        # recalibrated: which one was applied is the processing step's to say.
+        calibration = self._calibration(
+            raw_metadata={
+                "calibration": {
+                    "source": "header",
+                    "acquisition_calibrants": _PHI_HEADER_CALIBRANTS,
+                    "recalibrated": True,
+                    "recalibration_calibrants": _PHI_RECALIBRATION_CALIBRANTS,
+                }
+            }
+        )
+        assert calibration is not None
+        assert calibration.recalibrated is True
+        assert calibration.mz_standard_deviation_ppm == 2.69798
+
+    def test_phi_says_nothing_when_it_cannot_tell_which_calibration_is_current(
+        self,
+    ):
+        # No "recalibrated": the block chain stopped early and may have
+        # lost the appended block, so the header's fit is not claimed.
+        assert (
+            self._calibration(
+                raw_metadata={
+                    "calibration": {"acquisition_calibrants": _PHI_HEADER_CALIBRANTS}
+                }
+            )
+            is None
+        )
+
+    def test_waters_states_lock_mass_and_the_calibration_time(self):
+        for corrected in (False, True):
+            calibration = self._calibration(
+                acquisition_params={
+                    "acquisition_date": "07-Nov-2019 14:09:44",
+                    "is_lockmass_corrected": corrected,
+                    "lockmass_function": None,
+                    "calibration_date": "08/15/19",
+                    "calibration_time": "11:50",
+                }
+            )
+            assert calibration is not None
+            assert calibration.model_dump(exclude_none=True) == {
+                "calibration_datetime": "2019-08-15T11:50",
+                "lock_mass_corrected": corrected,
+            }
+
+    def test_the_lockmass_function_is_not_a_lock_mass(self):
+        # On a raster MassLynx split across functions, getLockmassFunction
+        # names the image's last chunk; it says nothing about correction.
+        calibration = self._calibration(
+            acquisition_params={"is_lockmass_corrected": False, "lockmass_function": 2}
+        )
+        assert calibration is not None
+        assert calibration.model_dump(exclude_none=True) == {
+            "lock_mass_corrected": False
+        }
+
+    def test_the_masslynx_calibration_time_is_read_month_first_and_no_further(self):
+        for date, time, expected in (
+            ("08/07/14", "17:17", "2014-08-07T17:17"),
+            ("12/31/98", "09:05", "1998-12-31T09:05"),
+            ("15/08/19", "11:50", None),  # 15 is no month: nothing is swapped
+            ("2019-08-15", "11:50", None),
+            ("08/15/19", "11:50:30", None),
+            ("08/15/19", "", None),
+        ):
+            calibration = self._calibration(
+                acquisition_params={
+                    "is_lockmass_corrected": False,
+                    "calibration_date": date,
+                    "calibration_time": time,
+                }
+            )
+            assert calibration is not None
+            assert calibration.calibration_datetime == expected, (date, time)
+
+    def test_imzml_has_no_section(self):
+        assert (
+            self._calibration(
+                acquisition_params={"scan_direction": "left to right"},
+                raw_metadata={"cvParams": [{"accession": "MS:1000130"}]},
+            )
+            is None
+        )
+        assert build_msi_metadata(None, pixel_size_um=(5.0, 5.0)).calibration is None
+
+    def test_built_section_passes_validation(self):
+        from thyra.metadata.schema import validate_document
+
+        meta = build_msi_metadata(
+            _comprehensive(
+                format_specific={
+                    "instrument_calibration": _BRUKER_INSTRUMENT_CALIBRATION,
+                    "calibration": _BRUKER_ONE_STATE,
+                }
+            ),
+            pixel_size_um=(20.0, 20.0),
+        )
+        model, issues = validate_document(meta.to_uns_dict())
+        assert model is not None and model.calibration is not None
+        assert issues == []
+
+
+class TestCalibrationPlaceholders:
+    """Values a vendor writes where it has nothing to state stay unset.
+
+    Each is a pattern read off a real acquisition.
+    """
+
+    def _fit(self, **instrument_calibration):
+        meta = build_msi_metadata(
+            _comprehensive(
+                format_specific={"instrument_calibration": instrument_calibration}
+            ),
+            pixel_size_um=(20.0, 20.0),
+        )
+        if meta.calibration is None:
+            return {}
+        return meta.calibration.model_dump(
+            include={"n_reference_peaks", "mz_standard_deviation_ppm"},
+            exclude_none=True,
+        )
+
+    def test_zero_against_a_single_reference_peak(self):
+        # The online lock-mass state of the imaging TDF: one lock mass, no
+        # measured masses at all, and 0.000000 in the standard deviation.
+        assert self._fit(mz_standard_deviation_ppm=0.0, n_reference_peaks=1) == {
+            "n_reference_peaks": 1
+        }
+
+    def test_zero_against_two_reference_peaks(self):
+        # A timsTOF calibrated on two peaks: the fit passes through both, so
+        # its residuals are zero by construction and say nothing.
+        assert self._fit(mz_standard_deviation_ppm=0.0, n_reference_peaks=2) == {
+            "n_reference_peaks": 2
+        }
+
+    def test_any_value_against_a_single_peak(self):
+        assert self._fit(mz_standard_deviation_ppm=0.4, n_reference_peaks=1) == {
+            "n_reference_peaks": 1
+        }
+
+    def test_a_value_without_its_peaks(self):
+        assert self._fit(mz_standard_deviation_ppm=0.4) == {}
+
+    def test_values_that_are_not_numbers(self):
+        for value in (float("nan"), float("inf"), -0.4, "n/a", True):
+            assert self._fit(mz_standard_deviation_ppm=value, n_reference_peaks=4) == {
+                "n_reference_peaks": 4
+            }, value
+
+    def test_the_lock_mass_state_never_stands_in_for_the_calibration(self):
+        # With no CalibrationInfo in the analysis database, a single
+        # calibration.sqlite state is still the lock-mass state: its time,
+        # software and zero fit are not taken for the calibration's.
+        meta = build_msi_metadata(
+            _comprehensive(format_specific={"calibration": _BRUKER_ONE_STATE}),
+            pixel_size_um=(20.0, 20.0),
+        )
+        assert meta.calibration is not None
+        assert meta.calibration.model_dump(exclude_none=True) == {"recalibrated": False}
+
+
+class TestSpectrumCount:
+    def _n_spectra(self, **essential):
+        comprehensive = _comprehensive()
+        comprehensive = replace(
+            comprehensive, essential=replace(comprehensive.essential, **essential)
+        )
+        meta = build_msi_metadata(comprehensive, pixel_size_um=(20.0, 20.0))
+        return meta.ms_analysis.n_spectra
+
+    def test_a_counted_source_states_its_count(self):
+        assert self._n_spectra(n_spectra=713) == 713
+
+    def test_a_source_that_was_not_counted_states_none(self):
+        # A PHI preview decodes no events and reports 0 "not counted".
+        assert self._n_spectra(n_spectra=0, n_spectra_counted=False) is None
+        assert self._n_spectra(n_spectra=100, n_spectra_counted=False) is None
+
+    def test_a_zero_is_not_a_count(self):
+        assert self._n_spectra(n_spectra=0) is None

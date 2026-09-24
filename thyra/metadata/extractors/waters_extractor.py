@@ -431,22 +431,19 @@ class WatersMetadataExtractor(MetadataExtractor):
         lm_func = self._ml.get_lockmass_function(self._handle)
         params["lockmass_function"] = lm_func if lm_func >= 0 else None
 
-        ms_method = self._ms_method_name()
+        header = self._header_fields()
+        ms_method = self._ms_method_name(header)
         if ms_method is not None:
             params["ms_method"] = ms_method
+        params.update(self._calibration_time(header))
 
         return params
 
-    def _ms_method_name(self) -> Optional[str]:
-        """File name of the MS method from ``_header.txt``, without its directory.
+    def _header_fields(self) -> Dict[str, str]:
+        """The ``$$ Key: value`` lines of ``_header.txt``, or an empty dict.
 
-        MassLynx records ``$$ MS Method`` as the full path of the ``.EXP``
-        file on the acquisition PC; the name is what identifies the method
-        and the path names a machine the store will not be opened on, so
-        only the name is kept. ``None`` when the header is absent or has
-        no such line. Both spellings of the file name are tried because
-        MassLynx writes it in capitals and a case-sensitive filesystem
-        keeps them apart.
+        Both spellings of the file name are tried because MassLynx writes
+        it in capitals and a case-sensitive filesystem keeps them apart.
         """
         from ...readers.waters.instrument import parse_header_txt
 
@@ -456,10 +453,42 @@ class WatersMetadataExtractor(MetadataExtractor):
                 text = path.read_text(encoding="latin-1", errors="replace")
             except OSError:
                 continue
-            value = parse_header_txt(text).get("MS Method", "")
-            name = value.replace("\\", "/").rsplit("/", 1)[-1].strip()
-            return name or None
-        return None
+            return parse_header_txt(text)
+        return {}
+
+    @staticmethod
+    def _ms_method_name(header: Dict[str, str]) -> Optional[str]:
+        """File name of the MS method from ``_header.txt``, without its directory.
+
+        MassLynx records ``$$ MS Method`` as the full path of the ``.EXP``
+        file on the acquisition PC; the name is what identifies the method
+        and the path names a machine the store will not be opened on, so
+        only the name is kept. ``None`` when the header is absent or has
+        no such line.
+        """
+        value = header.get("MS Method", "")
+        name = value.replace("\\", "/").rsplit("/", 1)[-1].strip()
+        return name or None
+
+    @staticmethod
+    def _calibration_time(header: Dict[str, str]) -> Dict[str, str]:
+        """When the calibration the acquisition ran under was made, as written.
+
+        ``$$ Cal Date`` and ``$$ Cal Time`` in ``_header.txt`` (``08/15/19``
+        and ``11:50`` on the acquisitions read), kept as the vendor wrote
+        them; the schema builder parses them. The lines beside them that
+        name the calibration and reference files are not taken: those are
+        names the lab chose.
+        """
+        found: Dict[str, str] = {}
+        for line, key in (
+            ("Cal Date", "calibration_date"),
+            ("Cal Time", "calibration_time"),
+        ):
+            value = header.get(line, "").strip()
+            if value:
+                found[key] = value
+        return found
 
     def _extract_instrument_info(self) -> Dict[str, Any]:
         """Extract instrument information.

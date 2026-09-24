@@ -11,7 +11,7 @@ parsed directly, so it works identically on every platform.
 
 import logging
 from pathlib import Path
-from typing import Generator, Optional, Tuple
+from typing import Any, Dict, Generator, Optional, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -186,6 +186,16 @@ class PhiReader(BaseMSIReader):
         """``"appended"`` if a post-hoc recalibration was used, else ``"header"``."""
         self._ensure_initialized()
         return self._calibration_source
+
+    def get_applied_mz_calibration(self) -> Optional[Dict[str, Any]]:
+        """Which coefficients this reader computed m/z from.
+
+        ``"header"`` or ``"appended"``, as :attr:`calibration_source` says:
+        the reader applies the calibration itself, so what it applied is
+        known exactly. It is the appended recalibration whenever one exists,
+        unless ``use_appended_calibration`` was turned off.
+        """
+        return {"calibration": self.calibration_source}
 
     @property
     def pixel_size_um(self) -> Optional[float]:

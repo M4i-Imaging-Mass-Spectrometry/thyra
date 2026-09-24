@@ -52,7 +52,7 @@ for all seven readers at once, so the next change to it is a visible one.
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Generator, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, Generator, List, Optional, Tuple, Union
 
 import numpy as np
 from numpy.typing import NDArray
@@ -296,6 +296,26 @@ class BaseMSIReader(ABC):
 
         Returns:
             Mapping of column name to per-channel values, or None.
+        """
+        return None
+
+    def get_applied_mz_calibration(
+        self,
+    ) -> Optional[Dict[str, Union[str, int, float, bool]]]:
+        """Which m/z calibration this reader applies, or ``None``.
+
+        A reader whose source stores m/z values hands them on as stored and
+        applies nothing; that is the default, and ``None`` means it. A
+        reader that turns a flight time or a digitiser index into m/z
+        applies a calibration, and where the source holds more than one --
+        the one the acquisition ran under and a recalibration made
+        afterwards -- which one is the converter's choice rather than a
+        fact about the source.
+
+        The mapping is recorded as the parameters of the ``m/z
+        calibration`` processing step (PSI-MS ``MS:1001485``), so its values
+        are scalars and its keys say what they are in the reader's own
+        terms.
         """
         return None
 
