@@ -342,7 +342,11 @@ def _display_calibration_info(input: Path, use_recalibrated: bool) -> None:
     else:
         click.echo("\nUsing original calibration (--no-recalibrated flag set)")
 
-    click.echo("\nNote: Interactive selection not yet available. See GitHub issue #54.")
+    click.echo(
+        "\nNote: this lists the states only; one cannot be chosen here. "
+        "Thyra uses the active state, or the original calibration with "
+        "--no-recalibrated."
+    )
     click.echo("=" * 60 + "\n")
 
 
