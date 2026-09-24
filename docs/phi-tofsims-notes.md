@@ -259,19 +259,19 @@ sitting at 44% of the base peak. Use `nearest_neighbor`, or if the method is
 forced, set `ResamplingConfig.gap_tolerance_da` (see
 [Resampling](resampling.md) and `thyra.resampling.gaps`).
 
-Forcing it no longer happens silently: since v3.24.0 an explicit
-`--resample-method` that contradicts the detector is warned about, and the
-warning names `--resample-gap-tolerance`. The detector alone was never enough,
+Forcing it does not happen silently: an explicit `--resample-method` that
+contradicts the detector is warned about, and the warning names
+`--resample-gap-tolerance`. The detector alone was never enough,
 because a detector only steers `auto`.
 
 **The first and last channel.** `mass_range` here is literally
 `(axis.mz[0], axis.mz[-1])` -- the first and last detector channel, not an
 acquisition setting. A physics axis stores bin centres, which stop half a bin
 short of the range they were built across, so testing membership against the
-axis points discarded both channels in every pixel: the mock fixture stored 12
-counts against the source's 14, on all six resampled variants, where
-`--no-resample` stored all 14. Since v3.24.0 the test is the declared range, so
-a peak on either bound lands in the edge bin. See
+axis points would discard both channels in every pixel: measured on the mock
+fixture, that stored 12 counts against the source's 14 on all six resampled
+variants, where `--no-resample` stored all 14. The test is therefore the
+declared range, so a peak on either bound lands in the edge bin. See
 [What "in range" means](resampling.md#what-in-range-means).
 
 ### Choosing a bin width

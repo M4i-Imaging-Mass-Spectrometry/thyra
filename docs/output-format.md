@@ -34,8 +34,8 @@ A converted dataset contains the following elements:
 !!! note "3D mode"
     When converted with `--handle-3d`, the `_z{z}` suffix is dropped and all
     slices are merged into a single table with `x`, `y`, `z` coordinates in
-    `.obs`. The TIC image becomes a single **volume** of shape `(c, z, y, x)`
-    rather than one 2D image per slice — see
+    `.obs`. With more than one slice, the TIC image becomes a single
+    **volume** of shape `(c, z, y, x)` rather than one 2D image per slice — see
     [3D Data / Z-Slices](#3d-data-z-slices).
 
     The pixel shapes stay two-dimensional: one flat square per pixel per slice,
@@ -49,8 +49,9 @@ A converted dataset contains the following elements:
     `msi_dataset_z0`, `msi_dataset_z0_tic`, etc. Change it with `--dataset-id`.
 
 !!! info "Coordinate systems"
-    Every element above carries a transform to a single ``"global"``
-    coordinate system, and Thyra writes a self-describing
+    Every element above carries a transform to the ``"global"``
+    coordinate system (and the same transform to a second one named after
+    the dataset id), and Thyra writes a self-describing
     ``coordinate_systems`` metadata attr at the zarr top level so
     consumers know what ``"global"`` is in (micrometers or pixels).
     See [Coordinate Systems](coordinate-systems.md) for the contract
@@ -79,8 +80,8 @@ plt.show()
 
 ## Optical Images
 
-When converted with `--include-optical` (the default for Bruker data),
-microscopy images are stored alongside the MSI data.
+Bruker acquisitions can carry microscopy images. With `--include-optical`, the
+default, they are stored alongside the MSI data.
 
 ```python
 optical_keys = [k for k in sdata.images if "optical" in k]
@@ -117,8 +118,11 @@ print(f"Offset: ({matrix[0,2]:.0f}, {matrix[1,2]:.0f})")
 ```
 
 !!! info "How alignment works"
-    The optical image has an Identity transform and defines the reference
-    coordinate system. The TIC image has an Affine transform (scale + offset)
+    The alignment image defines the reference coordinate system. It has an
+    Identity transform, or a translation by the crop's origin when the
+    conversion covers one region and the image was cropped to it (see
+    [Supported Formats](supported-formats.md#bruker-rapiflex)). The TIC image
+    has an Affine transform (scale + offset)
     that positions it in the optical coordinate space. This comes from the
     acquisition Areas in the `.mis` file (Bruker data): each region's raster
     is stretched onto the box its Area occupies in the optical image.
@@ -127,8 +131,8 @@ print(f"Offset: ({matrix[0,2]:.0f}, {matrix[1,2]:.0f})")
 
 An element name is derived, not the filename -- `sample_0000.tif` and
 `sample_0000.jpg` both become `{dataset_id}_optical_highres` -- and the
-alignment image is otherwise only implied, by its Identity transform, and
-only when the alignment was applied. The store says both outright:
+alignment image is otherwise only implied, by its transform, and only when
+the alignment was applied. The store says both outright:
 
 ```python
 optical = sdata.attrs.get("optical_images")
@@ -140,7 +144,7 @@ if optical:
 
 | Field | Meaning |
 |-------|---------|
-| `elements` | One entry per optical element in the store, keyed by element name. `source_file` is the name of the file it was read from (no directory: the acquiring machine's path does not travel with the store). |
+| `elements` | One entry per optical element in the store, keyed by element name. `source_file` is the name of the file it was read from (no directory: the acquiring machine's path does not travel with the store). An element cropped to one region also has `crop`: the crop's `origin` and `size` and the whole scan's `full_size`, in image pixels. |
 | `alignment_element` | The element the `.mis` `<ImageFile>` designates -- the one the teaching points are stated in, so the one the other images are scaled into. `None` when the source designates none, or when the designated file is not in this store. |
 
 The whole section is **absent** when the conversion put no optical image in
@@ -220,8 +224,10 @@ Each region's vector is the mean of the rows in that region, on the same
 "rows, not spectra" rule as `average_spectrum`.
 
 !!! note
-    This key is only present when the dataset contains multiple acquisition
-    regions. Single-region datasets only have the global `average_spectrum`.
+    This key is present whenever the reader records regions: on every
+    multi-region dataset, and on every solariX dataset, whose reader records
+    a region for each spectrum even when there is only one. Other datasets
+    only have the global `average_spectrum`.
 
 !!! note "Regions span the slices"
     A region is an in-plane footprint: `get_region_map()` is keyed on `(x, y)`
@@ -296,14 +302,16 @@ print(f"Non-zero: {X.nnz:,} ({X.nnz / (X.shape[0] * X.shape[1]) * 100:.2f}%)")
 
 ### Ion Images
 
-To visualise the spatial distribution of a specific m/z value:
+To visualise the spatial distribution of a specific m/z value, sum the columns
+inside a window around it. On a resampled axis most bins are empty, so the
+single bin nearest the target usually gives an all-zero image:
 
 ```python
-target_mz = 760.5
-mz_idx = np.abs(mz_values - target_mz).argmin()
+target_mz, tol = 760.5, 0.25
+lo, hi = np.searchsorted(mz_values, [target_mz - tol, target_mz + tol])
 
-# Extract column from sparse matrix
-ion_values = np.asarray(X[:, mz_idx].toarray()).flatten()
+# Sum the window's columns of the sparse matrix, one value per pixel
+ion_values = np.asarray(X[:, lo:hi].sum(axis=1)).ravel()
 
 # Reconstruct image from pixel coordinates
 x_coords = msi_table.obs["x"].values.astype(int)
@@ -314,7 +322,7 @@ ion_image[y_coords, x_coords] = ion_values
 
 plt.imshow(ion_image, cmap="hot")
 plt.colorbar(label="Intensity")
-plt.title(f"m/z {mz_values[mz_idx]:.4f}")
+plt.title(f"m/z {target_mz} +/- {tol}")
 plt.show()
 ```
 
@@ -382,7 +390,7 @@ panel draws.
 | `mz_edges` | `float64[m + 1]`: bin edges on the common m/z axis, which is coarsened by an integer factor to about 4,000 bins (`m` is the axis length itself when it is shorter) |
 | `mobility_edges` | `float64[k + 1]`, **`k = 256`**: equal-width bins in the axis unit, ascending, spanning the axis `values` |
 | `counts` | `float32[m, k]`: mean intensity per bin over pixels |
-| `current_ratio` | `float`: what fraction of `uns["average_spectrum"]`'s ion current the heatmap holds -- 1.0 under `scan_sum`, about 0.85 under `vendor_centroid` |
+| `current_ratio` | `float`: the heatmap's ion current over `uns["average_spectrum"]`'s -- 1.0 under `scan_sum`; above 1 under `vendor_centroid` (about 1.04 to 1.15), whose picked peaks keep only part of the raw current the heatmap holds |
 
 `k = 256` is fixed on purpose: the mobility grid table below defaults to the
 same 256 channels over the same edges -- literally the same constant and the
@@ -399,7 +407,7 @@ library call per frame (about a millisecond); `--no-mobility-heatmap` skips
 it.
 
 ```python
-heat = table.uns["mobility_heatmap"]
+heat = msi_table.uns["mobility_heatmap"]
 counts = np.asarray(heat["counts"])              # (m, 256)
 mz_centres = np.asarray(heat["mz_edges"])
 mz_centres = (mz_centres[:-1] + mz_centres[1:]) / 2
@@ -591,8 +599,8 @@ AnnData/zarr); `read_msi_metadata_blocks` and `thyra validate` decode it.
     off); the MSI table itself is unchanged either way.
 
 ```python
-if "msms_schedule" in table.uns:
-    sched = table.uns["msms_schedule"]
+if "msms_schedule" in msi_table.uns:
+    sched = msi_table.uns["msms_schedule"]
     print("MS level:", sched["ms_level"])
     for mz, ce in zip(sched["isolation_window_target"], sched["collision_energy"]):
         print(f"  precursor {mz:.3f} at {ce:.1f} eV")
@@ -633,7 +641,7 @@ so the two tables of one store would genuinely not agree; that is said at
 `WARNING` and recorded in `uns["demultiplexed_current"]`.
 
 ```python
-msms = sdata.tables["msi_z0_msms"]
+msms = sdata.tables["msi_dataset_z0_msms"]
 # Look the precursor up once, then slice on its block index: never
 # compare precursor_mz with == , and never assume an m/z is unique.
 var = msms.var
@@ -800,6 +808,7 @@ print("Columns:", list(msi_table.obs.columns))
 | `spatial_x`, `spatial_y` | float | Physical coordinates in micrometers |
 | `region` | categorical | SpatialData region key |
 | `region_number` | int | Acquisition region number |
+| `instance_key` | str | A copy of the index, which SpatialData uses to link each row to its pixel shape |
 
 The DataFrame index is `instance_id` (a string pixel identifier).
 
@@ -875,6 +884,7 @@ replaced by one **volume**:
 | **Pixel Shapes** | `{dataset_id}_pixels` | GeoDataFrame of 2D pixel boxes — one per pixel per slice, no z |
 
 ```python
+dataset_id = "msi_dataset"  # the default; see --dataset-id
 volume = sdata.images[f"{dataset_id}_tic"]
 print(volume.dims)                      # ('c', 'z', 'y', 'x')
 
@@ -930,6 +940,7 @@ A slice's depth is not on the geometry; read it from the table's `spatial_z`,
 or from the volume's own `Scale`:
 
 ```python
+dataset_id = "msi_dataset"  # the default; see --dataset-id
 shapes = sdata.shapes[f"{dataset_id}_pixels"]
 print(shapes.geometry.iloc[0].has_z)    # False, on 2D and 3D alike
 
@@ -1165,9 +1176,9 @@ fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 ax1.imshow(tic_array, cmap="viridis")
 ax1.set_title("TIC")
 
-target_mz = 760.5
-mz_idx = np.abs(mz_values - target_mz).argmin()
-ion_values = np.asarray(X[:, mz_idx].toarray()).flatten()
+target_mz, tol = 760.5, 0.25
+lo, hi = np.searchsorted(mz_values, [target_mz - tol, target_mz + tol])
+ion_values = np.asarray(X[:, lo:hi].sum(axis=1)).ravel()
 
 x_coords = msi_table.obs["x"].values.astype(int)
 y_coords = msi_table.obs["y"].values.astype(int)
@@ -1175,7 +1186,7 @@ ion_image = np.zeros((y_coords.max() + 1, x_coords.max() + 1))
 ion_image[y_coords, x_coords] = ion_values
 
 ax2.imshow(ion_image, cmap="hot")
-ax2.set_title(f"m/z {mz_values[mz_idx]:.2f}")
+ax2.set_title(f"m/z {target_mz} +/- {tol}")
 
 plt.tight_layout()
 plt.show()

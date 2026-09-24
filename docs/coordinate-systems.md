@@ -187,7 +187,10 @@ pixel grid*, because the photo can be drawn with no transform.
   grid.
 - Pixel-polygon shapes: stored directly in optical pixels, with
   ``Identity`` to ``"global"``.
-- Primary optical image: ``Identity`` to ``"global"``.
+- Primary optical image: ``Identity`` to ``"global"``, or a
+  ``Translation`` by the crop's origin when the conversion covers one
+  region and the image was cropped to it. The frame is still the whole
+  scan's pixel grid.
 - Other optical images (overview, etc.): a ``Scale`` to align with
   the primary image's pixel grid.
 - ``zarr.attrs["coordinate_systems"]["global"]`` declares
@@ -265,7 +268,8 @@ also wrong:
   photo). Putting ``"global"`` in micrometers would force that
   image to carry a transform, since its data is intrinsically in
   pixels. With ``unit="pixel"``, the canonical image carries
-  ``Identity`` and downstream tools can blit it without thinking.
+  ``Identity`` (or a plain translation, when cropped to one region) and
+  downstream tools can blit it without thinking.
 - In **Mode A** there is no canonical raster image - the MSI
   itself is the data. There's no privileged pixel grid to use as
   ``"global"``, so ``unit="micrometer"`` is the natural and
