@@ -60,6 +60,7 @@ from ...metadata.schema import (
     build_msi_metadata,
     forget_resolved_table,
 )
+from ...metadata.schema.vocab import term_from_accession
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ...core.base_converter import PixelSizeSource
@@ -79,6 +80,10 @@ logger = logging.getLogger(__name__)
 #: centroid, so the gap either side of this is four orders of magnitude
 #: wide.
 _HEATMAP_TOLERANCE = 1e-4
+
+#: PSI-MS ``m/z calibration``, the data processing action the step that
+#: records a reader's applied calibration is.
+_MZ_CALIBRATION_ACCESSION = "MS:1001485"
 
 
 def _numeric_only(value: Any) -> bool:
@@ -270,7 +275,8 @@ class UnsAssembler:
         Args:
             reader: The MSI reader. Only ``get_comprehensive_metadata``,
                 ``has_ion_mobility``, ``get_mobility_axis``,
-                ``has_fragmentation``, ``get_fragmentation`` and -- through
+                ``has_fragmentation``, ``get_fragmentation``,
+                ``get_applied_mz_calibration`` and -- through
                 ``getattr`` -- ``tdf_spectrum`` and ``file_type`` are read,
                 so a reader here is whatever satisfies that interface, not
                 necessarily a
@@ -523,7 +529,10 @@ class UnsAssembler:
 
         Modeled on mzQC provenance.  The list describes what was done to
         the data, so nothing about how the store was written -- the sparse
-        layout, the number of passes -- belongs here.
+        layout, the number of passes -- belongs here.  ``m/z calibration``
+        comes before ``mass axis resampling`` because it happens first:
+        the reader calibrates each spectrum as it yields it, and only then
+        is it placed on the axis.
         """
         from thyra import __version__
 
@@ -546,6 +555,21 @@ class UnsAssembler:
                 parameters=conversion_parameters,
             )
         ]
+
+        # Which calibration turned the source's flight times or digitiser
+        # indices into m/z, where the reader chose one. A fact about this
+        # conversion rather than the source -- the source's own calibration
+        # facts are the ``calibration`` section -- so it is a step here.
+        applied = self.reader.get_applied_mz_calibration()
+        if applied is not None:
+            steps.append(
+                ProcessingStep(
+                    name="m/z calibration",
+                    action_term=term_from_accession(_MZ_CALIBRATION_ACCESSION),
+                    software=thyra_ref,
+                    parameters=dict(applied),
+                )
+            )
 
         config = self._resampling_config
         if config is not None:

@@ -270,6 +270,39 @@ class TestCapabilityConventions:
         assert isinstance(getattr(reader, predicate), bool)
 
 
+class TestTheAppliedCalibration:
+    """A reader that calibrates says how, in a shape a processing step takes.
+
+    The readers that turn a flight time or a digitiser index into m/z --
+    PHI and the Bruker timsTOF -- report what they applied; the ones that
+    read m/z values as stored report nothing, which is the default.
+    """
+
+    CALIBRATING = {"phi", "bruker"}
+
+    def test_it_is_none_or_a_mapping_a_processing_step_accepts(self, reader):
+        from thyra.metadata.schema import ProcessingStep, SoftwareRef
+
+        applied = reader.get_applied_mz_calibration()
+        if applied is None:
+            return
+        assert applied
+        ProcessingStep(
+            name="m/z calibration",
+            software=SoftwareRef(name="thyra", version="0"),
+            parameters=applied,
+        )
+
+    @pytest.mark.parametrize("format_name", sorted(CASES))
+    def test_exactly_the_calibrating_readers_report_one(self, format_name, tmp_path):
+        instance = CASES[format_name](tmp_path)
+        try:
+            applied = instance.get_applied_mz_calibration()
+        finally:
+            instance.close()
+        assert (applied is not None) is (format_name in self.CALIBRATING)
+
+
 class TestLifetime:
     """``reset`` rewinds, ``close`` is idempotent, ``with`` closes."""
 

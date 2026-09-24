@@ -240,3 +240,108 @@ class TestAcquisitionSectionRoundTrip:
         zarr.open_group(str(tmp_path / "plain.zarr"), mode="a")
         with pytest.raises(ValueError, match="tables"):
             read_msi_metadata_blocks(tmp_path / "plain.zarr")
+
+
+class _ReaderWithCalibrationFacts(MockMSIReader):
+    """The mock reader with the calibration keys a PHI extractor writes.
+
+    PHI because it exercises everything the section can hold that a store
+    must round-trip: a boolean, a timestamp, an integer and a float. The
+    reader also reports the calibration it applied, which becomes the
+    ``m/z calibration`` processing step.
+    """
+
+    def get_applied_mz_calibration(self):
+        return {"calibration": "appended"}
+
+    def _create_metadata_extractor(self):
+        from dataclasses import replace
+
+        extractor = super()._create_metadata_extractor()
+        implementation = extractor._extract_comprehensive_impl
+
+        def with_calibration():
+            return replace(
+                implementation(),
+                raw_metadata={
+                    "calibration": {
+                        "source": "appended",
+                        "recalibrated": True,
+                        "recalibration_date": "07/27/2026 17:29:40",
+                        "recalibration_calibrants": json.dumps(
+                            [
+                                {"measured_mz": 26.003016, "theoretical_mz": 26.003099},
+                                {"measured_mz": 41.998143, "theoretical_mz": 41.998001},
+                                {"measured_mz": 57.975196, "theoretical_mz": 57.975201},
+                                {"measured_mz": 117.971046, "theoretical_mz": 117.9711},
+                            ]
+                        ),
+                    }
+                },
+            )
+
+        extractor._extract_comprehensive_impl = with_calibration
+        return extractor
+
+
+@pytest.fixture(scope="module")
+def store_with_calibration(tmp_path_factory):
+    from thyra.converters.spatialdata import SpatialDataConverter
+
+    output = tmp_path_factory.mktemp("schema_store_cal") / "out.zarr"
+    converter = SpatialDataConverter(
+        reader=_ReaderWithCalibrationFacts(
+            MockMSIConfig(n_x=4, n_y=4, n_mz_bins=200, peaks_per_spectrum=(10, 20))
+        ),
+        output_path=output,
+        dataset_id="mock",
+        pixel_size_um=10.0,
+    )
+    assert converter.convert() is True
+    return output
+
+
+class TestCalibrationSectionRoundTrip:
+    """The section and the step survive the store and validate back."""
+
+    def test_the_section_reads_back_as_written(self, store_with_calibration):
+        blocks = read_msi_metadata_blocks(store_with_calibration)
+        assert blocks
+        for block in blocks.values():
+            assert block["calibration"] == {
+                "calibration_datetime": "2026-07-27T17:29:40",
+                "recalibrated": True,
+                "n_reference_peaks": 4,
+                "mz_standard_deviation_ppm": 2.69798,
+            }
+            meta, issues = validate_document(block)
+            assert meta is not None and meta.calibration is not None
+            assert meta.calibration.recalibrated is True
+            assert not [i for i in issues if i.severity == "error"]
+
+    def test_the_applied_calibration_is_a_step_bound_to_its_term(
+        self, store_with_calibration
+    ):
+        for block in read_msi_metadata_blocks(store_with_calibration).values():
+            steps = block["processing"]
+            assert [s["name"] for s in steps] == ["conversion", "m/z calibration"]
+            assert steps[1]["action_term"] == {
+                "accession": "MS:1001485",
+                "name": "m/z calibration",
+            }
+            assert steps[1]["parameters"] == {"calibration": "appended"}
+
+    def test_the_mock_reader_counts_its_spectra(self, store_with_calibration):
+        for block in read_msi_metadata_blocks(store_with_calibration).values():
+            assert block["ms_analysis"]["n_spectra"] == 16
+
+    def test_validate_cli_passes_with_the_section_present(self, store_with_calibration):
+        from thyra.metadata.schema.cli import validate_command
+
+        result = CliRunner().invoke(validate_command, [str(store_with_calibration)])
+        assert result.exit_code == 0, result.output
+
+    def test_a_store_without_the_facts_has_no_section_and_no_step(self, store):
+        for block in read_msi_metadata_blocks(store).values():
+            assert "calibration" not in block
+            assert "m/z calibration" not in [s["name"] for s in block["processing"]]

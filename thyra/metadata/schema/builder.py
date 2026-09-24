@@ -11,6 +11,7 @@ acquisition) or from vendor metadata that directly encodes the fact
 import json
 import logging
 import math
+import numbers
 import re
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
@@ -21,6 +22,7 @@ from ..types import ComprehensiveMetadata
 from .models import (
     MSI_METADATA_UNS_KEY,
     Acquisition,
+    Calibration,
     Fragmentation,
     IonMobility,
     IsolationWindow,
@@ -97,16 +99,23 @@ def _first_number(mapping: Dict[str, Any], keys: Tuple[str, ...]) -> Optional[fl
     text.
     """
     for key in keys:
-        value = mapping.get(key)
-        if isinstance(value, bool):
-            continue
-        if isinstance(value, str):
-            try:
-                value = float(value.strip())
-            except ValueError:
-                continue
-        if isinstance(value, (int, float)) and math.isfinite(value):
-            return float(value)
+        number = _as_number(mapping.get(key))
+        if number is not None:
+            return number
+    return None
+
+
+def _as_number(value: Any) -> Optional[float]:
+    """``value`` as a finite float, or ``None``; see :func:`_first_number`."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        try:
+            value = float(value.strip())
+        except ValueError:
+            return None
+    if isinstance(value, (int, float)) and math.isfinite(value):
+        return float(value)
     return None
 
 
@@ -290,6 +299,270 @@ def _build_acquisition(
     return Acquisition(**fields)
 
 
+# --- the ``calibration`` section --------------------------------------------
+#
+# Three vendors state calibration facts, each in its own place and its own
+# words; one function per vendor reads them, and whichever finds its keys
+# fills the section.  The keys are the ones the extractors write, and the
+# evidence behind each unit and meaning is in the extractor that writes it.
+#
+# Bruker tsf/tdf, ``format_specific``:
+#   ``instrument_calibration`` -- the m/z calibration the acquisition ran
+#       under, from the ``CalibrationInfo`` table of the analysis database.
+#   ``calibration`` -- the states of ``calibration.sqlite``: the one written
+#       at acquisition (on a MALDI run, the online lock-mass calibration)
+#       and any recalibration made afterwards.
+# PHI, ``raw_metadata["calibration"]``: the header's calibrants, and the
+#   recalibration SmartSoft appended to the file when there is one.
+# Waters, ``acquisition_params``: MassLynx's lock-mass answer and the
+#   ``$$ Cal Date`` / ``$$ Cal Time`` lines of ``_header.txt``.
+
+# MassLynx ``_header.txt``: ``$$ Cal Date: 08/15/19`` and ``$$ Cal Time:
+# 11:50``.  Month first: ``08/15/19`` on four acquisitions from two
+# instruments, where 15 cannot be a month, and each date matches the date in
+# the name of the calibration file the same header names.
+_MASSLYNX_CALIBRATION_DATE = re.compile(
+    r"(?P<month>\d{1,2})/(?P<day>\d{1,2})/(?P<year>\d{2})"
+)
+_MASSLYNX_CALIBRATION_TIME = re.compile(r"(?P<hour>\d{1,2}):(?P<minute>\d{2})")
+
+
+def _mapping(value: Any) -> Dict[str, Any]:
+    """``value`` when it is a dict, else an empty one."""
+    return value if isinstance(value, dict) else {}
+
+
+def _calibration_time(raw: Any) -> Optional[str]:
+    """A vendor timestamp in the section's format, or ``None``."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    moment = _parse_vendor_datetime(raw)
+    if moment is None:
+        logger.debug(
+            "Calibration timestamp %r is in no format the builder parses; left "
+            "unset",
+            raw,
+        )
+        return None
+    return _format_iso_8601(moment)
+
+
+def _masslynx_calibration_time(date: Any, time: Any) -> Optional[str]:
+    """``$$ Cal Date`` and ``$$ Cal Time`` as one ISO 8601 value, or ``None``.
+
+    MassLynx writes a two-digit year; it is read the way POSIX ``%y``
+    reads one (69-99 in the 1900s, 00-68 in the 2000s). The time has
+    minutes and no seconds, and the value keeps that precision rather than
+    gaining seconds nobody recorded.
+    """
+    if not isinstance(date, str) or not isinstance(time, str):
+        return None
+    day = _MASSLYNX_CALIBRATION_DATE.fullmatch(date.strip())
+    clock = _MASSLYNX_CALIBRATION_TIME.fullmatch(time.strip())
+    if day is None or clock is None:
+        logger.debug(
+            "MassLynx calibration date %r and time %r are in no format the "
+            "builder parses; left unset",
+            date,
+            time,
+        )
+        return None
+    year = int(day["year"])
+    year += 1900 if year >= 69 else 2000
+    try:
+        moment = datetime(
+            year,
+            int(day["month"]),
+            int(day["day"]),
+            int(clock["hour"]),
+            int(clock["minute"]),
+        )
+    except ValueError:
+        return None
+    return moment.isoformat(timespec="minutes")
+
+
+def _reference_fit(n_peaks: Any, sd_ppm: Any) -> Dict[str, Any]:
+    """How many reference peaks, and how closely they fit, as far as stated.
+
+    The standard deviation is a placeholder, not a statement, when it is
+    zero or rests on fewer than two peaks: a fit through as many peaks as
+    it has terms leaves no residual, and Bruker writes ``0.000000`` for
+    its online lock-mass state, which records reference masses and no
+    measurement of them at all. Both are left unset. The peak count
+    stands on its own.
+    """
+    fields: Dict[str, Any] = {}
+    if isinstance(n_peaks, bool) or not isinstance(n_peaks, int) or n_peaks < 1:
+        return fields
+    fields["n_reference_peaks"] = n_peaks
+    sd = _as_number(sd_ppm)
+    if sd is not None and sd > 0.0 and n_peaks >= 2:
+        fields["mz_standard_deviation_ppm"] = sd
+    return fields
+
+
+def _calibrant_fit(calibrants: Any) -> Dict[str, Any]:
+    """The fit of a PHI calibration from the calibrants it was fitted to.
+
+    SmartSoft states each calibrant's measured and theoretical m/z, and
+    the measured value is the calibrant's position under the fitted
+    coefficients: refitting ``sqrt(m/z)`` against the flight times those
+    coefficients imply reproduces them exactly. So each difference is the
+    fit's residual, and the standard deviation is the one Bruker reports
+    -- the square root of the summed squared ppm errors over ``n - 1``,
+    which reproduces its ``MzStandardDeviationPPM`` to six decimals -- at
+    the six decimals Bruker states it to: the calibrants carry six
+    themselves, so a seventh would be noise.
+    """
+    entries = calibrants
+    if isinstance(calibrants, str):
+        try:
+            entries = json.loads(calibrants)
+        except ValueError:
+            return {}
+    if not isinstance(entries, list):
+        return {}
+    errors_ppm = []
+    for entry in entries:
+        measured = _as_number(_mapping(entry).get("measured_mz"))
+        theoretical = _as_number(_mapping(entry).get("theoretical_mz"))
+        if measured is not None and theoretical is not None and theoretical > 0.0:
+            errors_ppm.append((measured - theoretical) / theoretical * 1e6)
+    n = len(errors_ppm)
+    sd = (
+        round(math.sqrt(sum(e * e for e in errors_ppm) / (n - 1)), 6)
+        if n >= 2
+        else None
+    )
+    return _reference_fit(n, sd)
+
+
+def _bruker_calibration(format_specific: Dict[str, Any]) -> Dict[str, Any]:
+    """The section from a Bruker tsf/tdf source, or nothing.
+
+    The calibration the acquisition ran under is the analysis database's
+    ``CalibrationInfo``; ``calibration.sqlite`` says whether one was made
+    afterwards. Its first state is written at acquisition time -- on a
+    MALDI run it is the online lock-mass calibration -- so only a second
+    state is a recalibration, and then the latest is the calibration the
+    data rest on. What that state says about its own fit has not been read
+    off a recalibrated acquisition, so it is not taken.
+    """
+    at_acquisition = _mapping(format_specific.get("instrument_calibration"))
+    states = _mapping(format_specific.get("calibration"))
+    fields: Dict[str, Any] = {}
+    recalibrated = states.get("recalibrated")
+    if isinstance(recalibrated, bool):
+        fields["recalibrated"] = recalibrated
+    if recalibrated is True:
+        active = {
+            "calibration_datetime": states.get("calibration_datetime"),
+            "calibration_software": states.get("calibration_source"),
+            "calibration_software_version": states.get("calibration_software_version"),
+        }
+        original = _calibration_time(at_acquisition.get("calibration_datetime"))
+        if original is not None:
+            fields["original_calibration_datetime"] = original
+    else:
+        active = at_acquisition
+        fields.update(
+            _reference_fit(
+                active.get("n_reference_peaks"),
+                active.get("mz_standard_deviation_ppm"),
+            )
+        )
+    moment = _calibration_time(active.get("calibration_datetime"))
+    if moment is not None:
+        fields["calibration_datetime"] = moment
+    software = _first_string(active, ("calibration_software",))
+    if software is not None:
+        fields["software"] = software
+    version = _first_string(active, ("calibration_software_version",))
+    if version is not None:
+        fields["software_version"] = version
+    return fields
+
+
+def _phi_calibration(raw_metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """The section from a PHI source, or nothing.
+
+    Whether an appended recalibration exists decides which calibration is
+    current, so the section is left out when the extractor could not tell
+    (a block chain that did not end cleanly may have lost one).
+    """
+    block = _mapping(raw_metadata.get("calibration"))
+    recalibrated = block.get("recalibrated")
+    if not isinstance(recalibrated, bool):
+        return {}
+    fields: Dict[str, Any] = {"recalibrated": recalibrated}
+    if recalibrated:
+        moment = _calibration_time(block.get("recalibration_date"))
+        if moment is not None:
+            fields["calibration_datetime"] = moment
+        fields.update(_calibrant_fit(block.get("recalibration_calibrants")))
+    else:
+        fields.update(_calibrant_fit(block.get("acquisition_calibrants")))
+    return fields
+
+
+def _waters_calibration(acquisition: Dict[str, Any]) -> Dict[str, Any]:
+    """The section from a Waters source, or nothing.
+
+    MassLynx answers ``isLockmassCorrected`` for the whole file, so False
+    is a statement and not a default. ``lockmass_function`` is not used:
+    on a raster MassLynx split across functions it names the last chunk
+    of the image, not a reference channel.
+    """
+    fields: Dict[str, Any] = {}
+    corrected = acquisition.get("is_lockmass_corrected")
+    if isinstance(corrected, bool):
+        fields["lock_mass_corrected"] = corrected
+    moment = _masslynx_calibration_time(
+        acquisition.get("calibration_date"), acquisition.get("calibration_time")
+    )
+    if moment is not None:
+        fields["calibration_datetime"] = moment
+    return fields
+
+
+def _build_calibration(
+    acquisition: Dict[str, Any],
+    format_specific: Dict[str, Any],
+    raw_metadata: Dict[str, Any],
+) -> Optional[Calibration]:
+    """The ``calibration`` section from what the extractor reported.
+
+    Returns ``None`` when nothing was reported, so the section is absent
+    from the block rather than written empty.
+    """
+    fields = (
+        _bruker_calibration(format_specific)
+        or _phi_calibration(raw_metadata)
+        or _waters_calibration(acquisition)
+    )
+    if not fields:
+        return None
+    return Calibration(**fields)
+
+
+def _counted_spectra(essential: Any) -> Optional[int]:
+    """The reader's spectrum count, when it counted one and found any.
+
+    A zero is not written. A reader that did not count reports one
+    (``n_spectra_counted`` False: a PHI preview decodes no events), and so
+    does the Bruker extractor when its frames could not be counted; neither
+    can be told from a real zero, and a conversion refuses a source with no
+    spectra anyway.
+    """
+    if not getattr(essential, "n_spectra_counted", True):
+        return None
+    count = getattr(essential, "n_spectra", None)
+    if isinstance(count, bool) or not isinstance(count, numbers.Integral):
+        return None
+    return int(count) if count >= 1 else None
+
+
 def _polarity_from_cv_params(raw_metadata: Dict[str, Any]) -> Optional[str]:
     """Polarity declared by the raw file's own cvParams, if unambiguous.
 
@@ -441,9 +714,12 @@ def _build_ms_analysis(
     mobility_grid: Optional[Dict[str, Any]] = None,
     fragmentation: Any = None,
     msms_resolved_table: Optional[str] = None,
+    n_spectra: Optional[int] = None,
 ) -> MSAnalysis:
     """Assemble the acquisition section from what the extractors report."""
     fields: Dict[str, Any] = {}
+    if n_spectra is not None:
+        fields["n_spectra"] = n_spectra
 
     polarity = normalize_polarity(
         acquisition.get("polarity") or _polarity_from_cv_params(raw_metadata)
@@ -695,8 +971,8 @@ def build_msi_metadata(
 
     Returns:
         The populated document.  Fields the source does not report are
-        left unset, and the ``acquisition`` section is absent when the
-        reader reported none of its facts.
+        left unset, and the ``acquisition`` and ``calibration`` sections
+        are each absent when the reader reported none of their facts.
     """
     from thyra import __version__
 
@@ -705,6 +981,7 @@ def build_msi_metadata(
     format_specific: Dict[str, Any] = {}
     raw_metadata: Dict[str, Any] = {}
     source_path: Optional[str] = None
+    n_spectra: Optional[int] = None
     if comprehensive is not None:
         acquisition = dict(comprehensive.acquisition_params or {})
         instrument = dict(comprehensive.instrument_info or {})
@@ -713,6 +990,7 @@ def build_msi_metadata(
         essential = comprehensive.essential
         if essential is not None:
             source_path = str(essential.source_path)
+            n_spectra = _counted_spectra(essential)
 
     return MSIMetadata(
         ms_analysis=_build_ms_analysis(
@@ -726,8 +1004,10 @@ def build_msi_metadata(
             mobility_grid,
             fragmentation,
             msms_resolved_table,
+            n_spectra,
         ),
         acquisition=_build_acquisition(acquisition, source_format),
+        calibration=_build_calibration(acquisition, format_specific, raw_metadata),
         processing=list(processing or []),
         provenance=Provenance(
             thyra_version=__version__,

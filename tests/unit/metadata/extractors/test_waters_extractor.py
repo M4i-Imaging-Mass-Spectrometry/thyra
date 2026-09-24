@@ -608,3 +608,59 @@ class TestTheMsMethodName:
             "$$ Acquired Name: run\n$$ MS Method: \n", encoding="latin-1"
         )
         assert "ms_method" not in self._params(raw)
+
+
+class TestTheCalibrationTime:
+    """``$$ Cal Date`` and ``$$ Cal Time`` reach the raw dict as MassLynx wrote them.
+
+    The lines naming the calibration and reference files beside them are not
+    taken: those are names the lab chose.
+    """
+
+    _HEADER = (
+        "$$ Acquired Name: run\n"
+        "$$ Cal MS1 Dynamic Params: 300,1000,0.0000,0.00,0.0,0.0,0.0,"
+        "ESI_NaFormate_Neg,20190815_CAL_A_NEG_01\n"
+        "$$ Cal Time: 11:50\n"
+        "$$ Cal Date: 08/15/19\n"
+        "$$ Cal StdDev Function 1: 0.000000000000000e0\n"
+    )
+
+    def _params(self, data_path):
+        mock_ml, handle, grid, ft, ms = _make_grid_and_ml()
+        extractor = WatersMetadataExtractor(mock_ml, handle, data_path, grid, ft, ms)
+        return extractor.get_comprehensive().acquisition_params
+
+    def test_both_lines_are_kept_verbatim(self, tmp_path):
+        raw = tmp_path / "run.raw"
+        raw.mkdir()
+        (raw / "_HEADER.TXT").write_text(self._HEADER, encoding="latin-1")
+        params = self._params(raw)
+        assert params["calibration_date"] == "08/15/19"
+        assert params["calibration_time"] == "11:50"
+        held = repr(params)
+        assert "NaFormate" not in held and "20190815_CAL" not in held
+
+    def test_no_header_means_no_keys(self, tmp_path):
+        raw = tmp_path / "run.raw"
+        raw.mkdir()
+        params = self._params(raw)
+        assert "calibration_date" not in params
+        assert "calibration_time" not in params
+
+    def test_the_section_follows_from_the_raw_keys(self, tmp_path):
+        from thyra.metadata.schema import build_msi_metadata
+
+        raw = tmp_path / "run.raw"
+        raw.mkdir()
+        (raw / "_HEADER.TXT").write_text(self._HEADER, encoding="latin-1")
+        mock_ml, handle, grid, ft, ms = _make_grid_and_ml()
+        extractor = WatersMetadataExtractor(mock_ml, handle, raw, grid, ft, ms)
+        meta = build_msi_metadata(
+            extractor.get_comprehensive(), pixel_size_um=(100.0, 100.0)
+        )
+        assert meta.calibration is not None
+        assert meta.calibration.model_dump(exclude_none=True) == {
+            "calibration_datetime": "2019-08-15T11:50",
+            "lock_mass_corrected": False,
+        }

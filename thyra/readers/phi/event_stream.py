@@ -139,12 +139,27 @@ class BlockIndex:
         back into the acquisition header, so when one is present it, not the
         header, describes the flight times actually stored in the file.
         """
+        info = self.appended_calibration_block()
+        if info is None:
+            return None
+        return (float(info["Mass/Time"]), float(info["MassOffset"]))
+
+    def appended_calibration_block(self) -> Optional[Dict[str, str]]:
+        """The newest appended block that carries a usable recalibration.
+
+        The whole block, not only its coefficients: SmartSoft writes the
+        date it was appended and the calibrants the new coefficients were
+        fitted to beside them. The block whose coefficients
+        :meth:`appended_calibration` returns.
+        """
         for info in reversed(self.appended):
             if "Mass/Time" in info and "MassOffset" in info:
                 try:
-                    return (float(info["Mass/Time"]), float(info["MassOffset"]))
+                    float(info["Mass/Time"])
+                    float(info["MassOffset"])
                 except ValueError:  # pragma: no cover - malformed vendor block
                     continue
+                return info
         return None
 
 

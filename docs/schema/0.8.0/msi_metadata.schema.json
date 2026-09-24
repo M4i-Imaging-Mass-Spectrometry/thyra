@@ -86,6 +86,122 @@
       "title": "Acquisition",
       "type": "object"
     },
+    "Calibration": {
+      "additionalProperties": false,
+      "description": "How the source's m/z values were calibrated.\n\nFacts about the source, never about what Thyra did with it: which\ncalibration a conversion applied is a ``processing`` step bound to\nMS:1001485 (m/z calibration), because a converter can be told to\napply one the source does not consider current.\n\n\"The calibration\" is the one the source's m/z values rest on: the\nmost recent recalibration when the data were recalibrated after\nacquisition, otherwise the calibration the acquisition ran under.\nEvery field is optional and left unset when the source does not state\nit, and a value the vendor writes where it has nothing to state -- a\nstandard deviation of zero, over a fit with no residual to measure --\nis left unset too.",
+      "properties": {
+        "calibration_datetime": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "When the calibration was made, as an ISO 8601 date and time (YYYY-MM-DDThh:mm, optionally with seconds and fractional seconds, at the precision the source records). Carries a UTC offset when the source records one and none when it does not.",
+          "title": "Calibration Datetime"
+        },
+        "lock_mass_corrected": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Whether the source's m/z values were corrected against a lock mass, a reference ion measured alongside the sample.",
+          "title": "Lock Mass Corrected"
+        },
+        "mz_standard_deviation_ppm": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How closely the reference peaks fit after the calibration: the square root of the summed squares of their m/z errors, in parts per million, over one less than the number of peaks. Never zero -- a fit with no residual has nothing to report -- and never without n_reference_peaks.",
+          "title": "Mz Standard Deviation Ppm"
+        },
+        "n_reference_peaks": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How many reference peaks the calibration was fitted to.",
+          "title": "N Reference Peaks"
+        },
+        "original_calibration_datetime": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "When the calibration the acquisition ran under was made. Set only for recalibrated data, where calibration_datetime is the recalibration's; same format.",
+          "title": "Original Calibration Datetime"
+        },
+        "recalibrated": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Whether a calibration made after the acquisition is stored with the data, replacing the one the acquisition ran under.",
+          "title": "Recalibrated"
+        },
+        "software": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The software that made the calibration, in the source's own words, e.g. 'timsTOF'.",
+          "title": "Software"
+        },
+        "software_version": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Version of the software that made the calibration.",
+          "title": "Software Version"
+        }
+      },
+      "title": "Calibration",
+      "type": "object"
+    },
     "Fragmentation": {
       "additionalProperties": false,
       "description": "Whether, and how, the acquisition fragmented its ions.\n\nAn MS/MS imaging run measures fragments, so the m/z axis of the table\nmeans fragment m/z. Nothing about the axis says so, which is why this\nblock exists: without it an MS/MS store is indistinguishable from an\nMS1 one.\n\nThe MSI table sums a frame that isolated several precursors into one\nspectrum. ``merges_precursors`` says when that has happened, so a\nconsumer knows the spectrum is a chimera rather than discovering it\nfrom the peaks, and ``resolved_table`` names the sibling table that\nholds those precursors split apart when one was written.",
@@ -521,6 +637,20 @@
           "description": "Who built the instrument, in the source's own words, e.g. 'Bruker' or 'Waters'. Not normalised to a canonical list: vendors rename and merge, and the source's spelling is the fact it stated.",
           "title": "Manufacturer"
         },
+        "n_spectra": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How many spectra the source holds, as its reader counted them: the spectra actually present, not the positions the raster covers, and those of one region when only one was read. The table can have fewer rows, because a spectrum with nothing in it is not stored.",
+          "title": "N Spectra"
+        },
         "pixel_size_um": {
           "$ref": "#/$defs/PixelSizeUm"
         },
@@ -678,8 +808,20 @@
       "additionalProperties": false,
       "description": "One processing action between the raw data and this store.\n\nModeled on mzQC provenance: an ordered list of steps, each naming\nthe software that performed it and the parameters it ran with.  The\nconverter records its own steps (conversion, mass axis resampling);\ndownstream tools append theirs (normalisation, peak picking,\nannotation) when they modify the store.",
       "properties": {
+        "action_term": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OntologyTerm"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The PSI-MS data processing action the step is, when one exists, e.g. MS:1001485 (m/z calibration)."
+        },
         "name": {
-          "description": "What was done, e.g. 'conversion', 'mass axis resampling', 'normalisation', 'peak picking', 'annotation'.",
+          "description": "What was done, e.g. 'conversion', 'm/z calibration', 'mass axis resampling', 'normalisation', 'peak picking', 'annotation'.",
           "minLength": 1,
           "title": "Name",
           "type": "string"
@@ -1009,10 +1151,10 @@
       "type": "object"
     }
   },
-  "$id": "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.7.0/msi_metadata.schema.json",
+  "$id": "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.8.0/msi_metadata.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "The versioned MSI metadata document.\n\n``sample`` and ``preparation`` cannot be auto-populated from raw\nfiles and default to empty; ``ms_analysis`` and ``provenance`` are\nwritten by the converter for every store; ``acquisition`` is written\nwhen the reader reports at least one of its facts and is absent --\nnot empty -- otherwise.\n\nThe emitted JSON Schema carries ``$id`` and ``$schema`` so that the\ncommitted artifact names its own published address; they are added\nhere, on the root model, rather than pasted into the file, so the\nsync test that compares the file with ``model_json_schema()`` keeps\nholding.",
+  "description": "The versioned MSI metadata document.\n\n``sample`` and ``preparation`` cannot be auto-populated from raw\nfiles and default to empty; ``ms_analysis`` and ``provenance`` are\nwritten by the converter for every store; ``acquisition`` and\n``calibration`` are each written when the reader reports at least one\nof their facts and are absent -- not empty -- otherwise.\n\nThe emitted JSON Schema carries ``$id`` and ``$schema`` so that the\ncommitted artifact names its own published address; they are added\nhere, on the root model, rather than pasted into the file, so the\nsync test that compares the file with ``model_json_schema()`` keeps\nholding.",
   "properties": {
     "acquisition": {
       "anyOf": [
@@ -1025,6 +1167,18 @@
       ],
       "default": null,
       "description": "When the acquisition was run and with what laser settings; auto-populated from the vendor metadata where a reader has the facts, absent when it has none of them."
+    },
+    "calibration": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Calibration"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "How the source's m/z values were calibrated; auto-populated from the vendor metadata where a reader has the facts, absent when it has none of them."
     },
     "ms_analysis": {
       "$ref": "#/$defs/MSAnalysis",
@@ -1051,7 +1205,7 @@
       "description": "What the sample is; user-supplied."
     },
     "schema_version": {
-      "default": "0.7.0",
+      "default": "0.8.0",
       "description": "Semantic version of the schema this document conforms to.",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
       "title": "Schema Version",

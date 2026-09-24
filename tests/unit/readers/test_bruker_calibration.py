@@ -303,6 +303,30 @@ class TestCalibrationMetadataIntegration:
             assert format_specific["calibration"] == cal_metadata
 
 
+class TestTheAppliedCalibration:
+    """What the conversion's ``m/z calibration`` step records for a timsTOF."""
+
+    def _reader(self, use_recalibrated_state, metadata_only=False):
+        reader = BrukerReader.__new__(BrukerReader)
+        reader.use_recalibrated_state = use_recalibrated_state
+        reader._metadata_only = metadata_only
+        return reader
+
+    def test_the_option_the_library_was_opened_with_is_recorded(self):
+        # Bruker's library applies the calibration; what Thyra decides is
+        # this option, and what the library does with it differs by file
+        # type, so the option is what is recorded.
+        for option in (True, False):
+            assert self._reader(option).get_applied_mz_calibration() == {
+                "use_recalibrated_state": option
+            }
+
+    def test_a_metadata_only_reader_converts_nothing_and_applies_nothing(self):
+        assert (
+            self._reader(True, metadata_only=True).get_applied_mz_calibration() is None
+        )
+
+
 class TestDefaultCalibrationBehavior:
     """Test default calibration state behavior."""
 

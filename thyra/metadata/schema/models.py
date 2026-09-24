@@ -31,7 +31,14 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 # The schema version this code implements and writes.
 # 0.2.0: added the optional ``ms_analysis.ion_mobility`` block (additive).
@@ -53,7 +60,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 #        name where a store block carries its path, and 0.6.0 described
 #        only the store.  No document's validity changes -- the value is
 #        a string either way -- and a published version is not edited.
-MSI_METADATA_SCHEMA_VERSION = "0.7.0"
+# 0.8.0: added the optional top-level ``calibration`` section (additive):
+#        when the calibration the source's m/z values rest on was made, by
+#        what software, how closely its reference peaks fit, whether a
+#        recalibration replaced it and whether a lock mass corrected it
+#        (issue #67).  ``ms_analysis`` gained ``n_spectra``, and
+#        ``ProcessingStep`` gained ``action_term`` so the step that records
+#        which calibration a conversion applied is bound to MS:1001485
+#        (m/z calibration).
+MSI_METADATA_SCHEMA_VERSION = "0.8.0"
 
 # Where the block lives inside a converted store:
 # ``table.uns["msi_metadata"]``.  This location is a stable contract
@@ -62,7 +77,7 @@ MSI_METADATA_SCHEMA_VERSION = "0.7.0"
 MSI_METADATA_UNS_KEY = "msi_metadata"
 
 # The committed JSON Schema artifact for this schema version.
-SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_7.json"
+SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_8.json"
 
 # Where every published version of the schema is served (issue #385).
 # ``docs/schema/<version>/`` is copied verbatim onto the documentation
@@ -179,6 +194,36 @@ CANDIDATE_CV_CONCEPTS = (
         "format, not the method itself)",
         "acquisition.method_file",
     ),
+    (
+        "number of spectra of any MS level (MS:4000059 and MS:4000060 "
+        "count MS1 and MS2 spectra separately)",
+        "ms_analysis.n_spectra",
+    ),
+    (
+        "when an m/z calibration was made (MS:1001485 m/z calibration is "
+        "a processing action with no attribute for its time)",
+        "calibration.calibration_datetime",
+    ),
+    (
+        "recalibration after acquisition, replacing the calibration the "
+        "acquisition ran under",
+        "calibration.recalibrated",
+    ),
+    (
+        "the software that made an m/z calibration (MS:1003200 software "
+        "version is scoped to spectral libraries)",
+        "calibration.software",
+    ),
+    (
+        "m/z calibration fit: the reference peaks' residual in ppm and how "
+        "many peaks it rests on (MS:1000014 accuracy is an analyzer "
+        "attribute, MS:4000072 the error of one identified ion)",
+        "calibration.mz_standard_deviation_ppm",
+    ),
+    (
+        "lock-mass correction of the m/z values",
+        "calibration.lock_mass_corrected",
+    ),
 )
 
 
@@ -196,6 +241,26 @@ def _cv(accession: str, name: str) -> Dict[str, Any]:
 
 _CURIE_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*:\S+$"
 _SEMVER_PATTERN = r"^\d+\.\d+\.\d+$"
+
+
+def _iso_8601_datetime(field: str, value: Optional[str]) -> Optional[str]:
+    """``value`` when it is an ISO 8601 date and time, else a ``ValueError``.
+
+    A date alone is refused: every timestamp field in the schema names a
+    moment, and a consumer must be able to parse it without guessing
+    whether a bare date meant midnight or "some time that day".
+    """
+    if value is None:
+        return value
+    if "T" not in value:
+        raise ValueError(
+            f"{field} {value!r} must be an ISO 8601 date and time separated by 'T'"
+        )
+    try:
+        datetime.fromisoformat(value)
+    except ValueError as e:
+        raise ValueError(f"{field} {value!r} is not an ISO 8601 datetime") from e
+    return value
 
 
 class _SchemaModel(BaseModel):
@@ -609,6 +674,17 @@ class MSAnalysis(_SchemaModel):
     pixel_size_um: PixelSizeUm = Field(
         description="In-plane raster pitch in micrometres."
     )
+    n_spectra: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "How many spectra the source holds, as its reader counted them: "
+            "the spectra actually present, not the positions the raster "
+            "covers, and those of one region when only one was read. The "
+            "table can have fewer rows, because a spectrum with nothing in "
+            "it is not stored."
+        ),
+    )
     ion_mobility: Optional[IonMobility] = Field(
         default=None,
         description=(
@@ -700,20 +776,7 @@ class Acquisition(_SchemaModel):
         written by it, and a consumer must be able to parse the field
         without guessing.
         """
-        if value is None:
-            return value
-        if "T" not in value:
-            raise ValueError(
-                f"acquisition_datetime {value!r} must be an ISO 8601 date and "
-                "time separated by 'T'"
-            )
-        try:
-            datetime.fromisoformat(value)
-        except ValueError as e:
-            raise ValueError(
-                f"acquisition_datetime {value!r} is not an ISO 8601 datetime"
-            ) from e
-        return value
+        return _iso_8601_datetime("acquisition_datetime", value)
 
     @field_validator("method_file")
     @classmethod
@@ -722,6 +785,113 @@ class Acquisition(_SchemaModel):
         if value is not None and ("/" in value or "\\" in value):
             raise ValueError(f"method_file {value!r} must be a file name, not a path")
         return value
+
+
+class Calibration(_SchemaModel):
+    """How the source's m/z values were calibrated.
+
+    Facts about the source, never about what Thyra did with it: which
+    calibration a conversion applied is a ``processing`` step bound to
+    MS:1001485 (m/z calibration), because a converter can be told to
+    apply one the source does not consider current.
+
+    "The calibration" is the one the source's m/z values rest on: the
+    most recent recalibration when the data were recalibrated after
+    acquisition, otherwise the calibration the acquisition ran under.
+    Every field is optional and left unset when the source does not state
+    it, and a value the vendor writes where it has nothing to state -- a
+    standard deviation of zero, over a fit with no residual to measure --
+    is left unset too.
+    """
+
+    calibration_datetime: Optional[str] = Field(
+        default=None,
+        description=(
+            "When the calibration was made, as an ISO 8601 date and time "
+            "(YYYY-MM-DDThh:mm, optionally with seconds and fractional "
+            "seconds, at the precision the source records). Carries a UTC "
+            "offset when the source records one and none when it does not."
+        ),
+    )
+    recalibrated: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Whether a calibration made after the acquisition is stored with "
+            "the data, replacing the one the acquisition ran under."
+        ),
+    )
+    original_calibration_datetime: Optional[str] = Field(
+        default=None,
+        description=(
+            "When the calibration the acquisition ran under was made. Set "
+            "only for recalibrated data, where calibration_datetime is the "
+            "recalibration's; same format."
+        ),
+    )
+    software: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "The software that made the calibration, in the source's own "
+            "words, e.g. 'timsTOF'."
+        ),
+    )
+    software_version: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        description="Version of the software that made the calibration.",
+    )
+    n_reference_peaks: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="How many reference peaks the calibration was fitted to.",
+    )
+    mz_standard_deviation_ppm: Optional[float] = Field(
+        default=None,
+        gt=0,
+        description=(
+            "How closely the reference peaks fit after the calibration: the "
+            "square root of the summed squares of their m/z errors, in parts "
+            "per million, over one less than the number of peaks. Never "
+            "zero -- a fit with no residual has nothing to report -- and "
+            "never without n_reference_peaks."
+        ),
+    )
+    lock_mass_corrected: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Whether the source's m/z values were corrected against a lock "
+            "mass, a reference ion measured alongside the sample."
+        ),
+    )
+
+    @field_validator("calibration_datetime", "original_calibration_datetime")
+    @classmethod
+    def _is_an_iso_8601_datetime(
+        cls, value: Optional[str], info: ValidationInfo
+    ) -> Optional[str]:
+        """The same rule as the acquisition's timestamp, for the same reason."""
+        return _iso_8601_datetime(str(info.field_name), value)
+
+    @model_validator(mode="after")
+    def _statements_that_need_another(self) -> "Calibration":
+        """Two fields mean nothing without a third, so neither stands alone.
+
+        An original calibration time describes the calibration a
+        recalibration replaced, and a standard deviation is a statement
+        about a number of peaks: over one it is not a statistic at all.
+        """
+        if self.original_calibration_datetime is not None and not self.recalibrated:
+            raise ValueError(
+                "original_calibration_datetime is set but recalibrated is not true"
+            )
+        if self.mz_standard_deviation_ppm is not None and (
+            self.n_reference_peaks is None or self.n_reference_peaks < 2
+        ):
+            raise ValueError(
+                "mz_standard_deviation_ppm needs n_reference_peaks of at least 2"
+            )
+        return self
 
 
 class SoftwareRef(_SchemaModel):
@@ -745,8 +915,15 @@ class ProcessingStep(_SchemaModel):
     name: str = Field(
         min_length=1,
         description=(
-            "What was done, e.g. 'conversion', 'mass axis resampling', "
-            "'normalisation', 'peak picking', 'annotation'."
+            "What was done, e.g. 'conversion', 'm/z calibration', 'mass axis "
+            "resampling', 'normalisation', 'peak picking', 'annotation'."
+        ),
+    )
+    action_term: Optional[OntologyTerm] = Field(
+        default=None,
+        description=(
+            "The PSI-MS data processing action the step is, when one "
+            "exists, e.g. MS:1001485 (m/z calibration)."
         ),
     )
     software: SoftwareRef = Field(description="The software that did it.")
@@ -798,9 +975,9 @@ class MSIMetadata(_SchemaModel):
 
     ``sample`` and ``preparation`` cannot be auto-populated from raw
     files and default to empty; ``ms_analysis`` and ``provenance`` are
-    written by the converter for every store; ``acquisition`` is written
-    when the reader reports at least one of its facts and is absent --
-    not empty -- otherwise.
+    written by the converter for every store; ``acquisition`` and
+    ``calibration`` are each written when the reader reports at least one
+    of their facts and are absent -- not empty -- otherwise.
 
     The emitted JSON Schema carries ``$id`` and ``$schema`` so that the
     committed artifact names its own published address; they are added
@@ -841,6 +1018,14 @@ class MSIMetadata(_SchemaModel):
             "facts, absent when it has none of them."
         ),
     )
+    calibration: Optional[Calibration] = Field(
+        default=None,
+        description=(
+            "How the source's m/z values were calibrated; auto-populated "
+            "from the vendor metadata where a reader has the facts, absent "
+            "when it has none of them."
+        ),
+    )
     processing: List[ProcessingStep] = Field(
         default_factory=list,
         description="Ordered processing history, oldest first (mzQC-style).",
@@ -853,8 +1038,9 @@ class MSIMetadata(_SchemaModel):
         """Serialise for storage in ``table.uns``.
 
         ``None`` fields are dropped (which is what leaves an unset
-        ``acquisition`` section out), and the ``sample`` / ``preparation``
-        / ``processing`` sections are omitted entirely when empty --
+        ``acquisition`` or ``calibration`` section out), and the
+        ``sample`` / ``preparation`` / ``processing`` sections are omitted
+        entirely when empty --
         following the store convention that a section the source has
         nothing for is omitted rather than written empty, so consumers
         can tell "not available" from "available and empty".

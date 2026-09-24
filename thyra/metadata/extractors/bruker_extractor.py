@@ -1,14 +1,61 @@
 # thyra/metadata/extractors/bruker_extractor.py
 import logging
+import math
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ...core.base_extractor import MetadataExtractor
 from ...errors import ConversionRefused
 from ..types import ComprehensiveMetadata, EssentialMetadata
 
 logger = logging.getLogger(__name__)
+
+#: The ``CalibrationInfo`` keys read, and the only ones: see
+#: :meth:`BrukerMetadataExtractor._extract_instrument_calibration`.
+_CALIBRATION_INFO_KEYS = (
+    "CalibrationDateTime",
+    "CalibrationSoftware",
+    "CalibrationSoftwareVersion",
+    "MzStandardDeviationPPM",
+    "ReferencePeakMasses",
+    "MassesCorrectedCalibration",
+)
+
+#: The text keys among them, under the names Thyra writes them.
+_CALIBRATION_INFO_TEXT = (
+    ("CalibrationDateTime", "calibration_datetime"),
+    ("CalibrationSoftware", "calibration_software"),
+    ("CalibrationSoftwareVersion", "calibration_software_version"),
+)
+
+
+def _float64_count(blob: Any) -> Optional[int]:
+    """How many little-endian float64 values a ``CalibrationInfo`` blob holds."""
+    if not isinstance(blob, (bytes, bytearray)) or len(blob) % 8:
+        return None
+    return len(blob) // 8
+
+
+def _instrument_calibration(stated: Dict[str, Any]) -> Dict[str, Any]:
+    """The ``CalibrationInfo`` values Thyra keeps, under Thyra's key names."""
+    info: Dict[str, Any] = {}
+    for key, name in _CALIBRATION_INFO_TEXT:
+        value = stated.get(key)
+        if isinstance(value, str) and value.strip():
+            info[name] = value.strip()
+    try:
+        sd = float(stated.get("MzStandardDeviationPPM"))
+    except (TypeError, ValueError):
+        sd = math.nan
+    if math.isfinite(sd):
+        info["mz_standard_deviation_ppm"] = sd
+    n_reference = _float64_count(stated.get("ReferencePeakMasses"))
+    if n_reference and n_reference == _float64_count(
+        stated.get("MassesCorrectedCalibration")
+    ):
+        info["n_reference_peaks"] = n_reference
+    return info
 
 
 class BrukerMetadataExtractor(MetadataExtractor):
@@ -452,7 +499,83 @@ class BrukerMetadataExtractor(MetadataExtractor):
         if self.calibration_metadata:
             format_specific["calibration"] = self.calibration_metadata
 
+        instrument_calibration = self._extract_instrument_calibration()
+        if instrument_calibration:
+            format_specific["instrument_calibration"] = instrument_calibration
+
         return format_specific
+
+    def _extract_instrument_calibration(self) -> Dict[str, Any]:
+        """The m/z calibration the acquisition ran under, as the database states it.
+
+        Every tsf and tdf acquisition read so far -- five, from timsControl
+        4.1 to 7.2, MALDI and electrospray -- carries a ``CalibrationInfo``
+        table in its own analysis database: the external calibration the
+        instrument had when the run started, with its time, the software
+        and version that made it, and its fit. ``calibration.sqlite`` is a
+        different thing; on a MALDI run its first state is the online
+        lock-mass calibration, written as the acquisition starts, and an
+        electrospray run has no such file at all.
+
+        Only the keys the calibration section needs are asked for. The
+        table also names who calibrated (``CalibrationUser``,
+        ``MobilityCalibrationUser``) and the reference list the lab chose,
+        whose name can be a person's; none of those is read (see
+        :mod:`thyra.metadata.personal_data`). Neither are the mobility
+        calibration's keys: on the one imaging TDF read,
+        ``MeasuredTimsVoltages`` is all zeros and
+        ``MobilityStandardDeviationPercent`` is 3578, so there they do not
+        describe a mobility calibration, and no second imaging TDF was at
+        hand to say what they describe elsewhere.
+
+        ``n_reference_peaks`` counts the reference masses that carry a
+        corrected mass, i.e. the peaks the calibration was fitted to.
+        ``MzStandardDeviationPPM`` is the square root of their summed squared
+        ppm errors over ``n - 1``, recomputed from those arrays to six
+        decimals on four acquisitions; it is handed on as stated, zero
+        included, and the schema builder decides what a zero means.
+
+        Returns:
+            The stated facts under Thyra's key names, or an empty dict when
+            the table is absent, unreadable, or holds rows for a polarity
+            this acquisition did not run in.
+        """
+        cursor = self.conn.cursor()
+        try:
+            if not self._has_table(cursor, "CalibrationInfo"):
+                return {}
+            polarity = self._calibration_polarity(cursor)
+            if polarity is None:
+                return {}
+            cursor.execute(
+                "SELECT KeyName, Value FROM CalibrationInfo WHERE KeyPolarity = ? "
+                "AND KeyName IN (?, ?, ?, ?, ?, ?)",
+                (polarity, *_CALIBRATION_INFO_KEYS),
+            )
+            stated = dict(cursor.fetchall())
+        except sqlite3.OperationalError as e:
+            logger.debug("Could not read CalibrationInfo: %s", e)
+            return {}
+        return _instrument_calibration(stated)
+
+    def _calibration_polarity(self, cursor) -> Optional[str]:
+        """Which polarity's ``CalibrationInfo`` rows describe this acquisition.
+
+        The table keys every row by polarity. When the frames all ran in one
+        polarity, that polarity's rows are the calibration, and a table with
+        none for it says nothing about this acquisition. When the frames
+        alternate, no one calibration describes them all, so none is taken.
+        When they do not say at all -- no column, or no rows -- a table that
+        holds one polarity is taken, and one that holds two is not guessed
+        between.
+        """
+        cursor.execute("SELECT DISTINCT KeyPolarity FROM CalibrationInfo")
+        stated = {str(row[0]) for row in cursor.fetchall() if row[0] is not None}
+        frames = self._distinct_frame_polarities(cursor)
+        if frames:
+            polarity = str(frames[0])
+            return polarity if len(frames) == 1 and polarity in stated else None
+        return next(iter(stated)) if len(stated) == 1 else None
 
     def _instrument_source_type(self) -> Optional[int]:
         """``GlobalMetadata.InstrumentSourceType``, as the file states it.
@@ -555,6 +678,29 @@ class BrukerMetadataExtractor(MetadataExtractor):
         applies to an imzML that declares both.  Only the selected
         region's frames are asked about when a region is selected.
         """
+        polarities = self._distinct_frame_polarities(cursor)
+        if polarities is None:
+            logger.debug("Frames has no Polarity column")
+            return
+        if len(polarities) != 1:
+            if len(polarities) > 1:
+                logger.info(
+                    "Frames record more than one polarity; the acquisition "
+                    "alternated and no single value is recorded."
+                )
+            return
+        value = polarities[0]
+        if isinstance(value, str) and value.strip():
+            params["polarity"] = value.strip()
+
+    def _distinct_frame_polarities(self, cursor) -> Optional[List[Any]]:
+        """Up to two distinct ``Frames.Polarity`` values, or ``None``.
+
+        Two are enough to know the acquisition alternated. ``None`` means
+        the question could not be asked -- no such column -- which is not
+        the same answer as an empty list. Only the selected region's frames
+        are asked about when a region is selected.
+        """
         try:
             if self._region is not None:
                 cursor.execute(
@@ -569,20 +715,9 @@ class BrukerMetadataExtractor(MetadataExtractor):
                     "SELECT DISTINCT Polarity FROM Frames "
                     "WHERE Polarity IS NOT NULL LIMIT 2"
                 )
-            rows = cursor.fetchall()
+            return [row[0] for row in cursor.fetchall()]
         except sqlite3.OperationalError:
-            logger.debug("Frames has no Polarity column")
-            return
-        if len(rows) != 1:
-            if len(rows) > 1:
-                logger.info(
-                    "Frames record more than one polarity; the acquisition "
-                    "alternated and no single value is recorded."
-                )
-            return
-        value = rows[0][0]
-        if isinstance(value, str) and value.strip():
-            params["polarity"] = value.strip()
+            return None
 
     def _extract_laser_params(self, cursor, params: Dict[str, Any]) -> None:
         """Extract laser parameters: per-frame settings, then beam geometry.
@@ -699,13 +834,18 @@ class BrukerMetadataExtractor(MetadataExtractor):
         # no store while solariX -- reading the same key out of its own
         # Properties table -- recorded it. Mapped to ``manufacturer``,
         # the spelling the other extractors already use.
+        #
+        # ``MzCalibrationMode`` used to be asked for here and never found:
+        # it is not a GlobalMetadata key on any acquisition read (five,
+        # tsf and tdf) but a ``CalibrationInfo`` one, and there an
+        # undocumented code (1 to 4 across those five). No store ever
+        # carried it, and it is not read anywhere now.
         instrument_keys = [
             ("InstrumentName", "instrument_name"),
             ("InstrumentSerialNumber", "instrument_serial_number"),
             ("InstrumentModel", "instrument_model"),
             ("InstrumentVendor", "manufacturer"),
             ("SoftwareVersion", "software_version"),
-            ("MzCalibrationMode", "mz_calibration_mode"),
         ]
 
         try:
