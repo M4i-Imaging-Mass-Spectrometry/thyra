@@ -35,7 +35,7 @@ def _identity(path: Path) -> str:
     work that cannot fail, where ``resolve()`` opens the file to read its
     real name back, which on this platform is exactly the call that trips
     over a path past the 259-character ceiling (see
-    ``docs/getting-started.md``). Discovery must not be able to abort a
+    ``docs/troubleshooting.md``). Discovery must not be able to abort a
     conversion over a bystander image. The cost is that two paths reaching
     one file through different links stay distinct; the store then carries
     the image twice, which is a great deal better than not converting.

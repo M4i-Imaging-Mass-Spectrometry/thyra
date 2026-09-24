@@ -8,34 +8,34 @@ It comes in two parts, and they are independent:
 
 | | What you need | Time | Runs on |
 |---|---|---|---|
-| **[Part 1](#part-1-a-five-minute-check-with-synthetic-data)** -- synthetic data | Nothing beyond `pip install thyra` | ~1 minute | Windows, macOS, Linux |
-| **[Part 2](#part-2-the-published-example-dataset)** -- published example dataset | 19 GB download, Bruker SDK | Hours | Windows (see [caveat](#platform-requirements)) |
+| **[Part 1](#part-1-a-five-minute-check-with-synthetic-data)**: example data | Thyra installed | About 5 minutes | Windows, macOS, Linux |
+| **[Part 2](#part-2-the-published-example-dataset)**: published dataset | A 19 GB download | Hours | Windows, Linux (see [requirements](#platform-requirements)) |
 
 Start with Part 1 to confirm your installation works and to see the shape of the
 output. Move to Part 2 when you want to run the real acquisition from the
 paper.
 
+Steps 3 to 7 of Part 1 use a few lines of Python to look inside the result.
+You can copy them as they are.
+
 ---
 
 ## Before you start
 
-```bash
-pip install thyra
-```
-
-Thyra requires Python 3.12 or 3.13. Check what you have:
+Install Thyra (see [Install](install.md)), then check that it runs:
 
 ```bash
 thyra --version
 ```
 
-Every figure below was last re-verified against `thyra` 3.0.0 with
-`spatialdata` 0.8.0, `anndata` 0.13.2, `zarr` 3.1.6 and `pandas` 2.3.2 --
-the set `pyproject.toml` pins. To check the `spatialdata` version too:
+??? advanced "Advanced: Which versions these numbers come from"
+    Every number printed in Part 1 was last checked with Thyra 4.0.0,
+    spatialdata 0.8.0, anndata 0.13.4, zarr 3.4.0 and pandas 3.0.6. To see
+    your `spatialdata` version:
 
-```bash
-python -c "import spatialdata; print(spatialdata.__version__)"
-```
+    ```bash
+    python -c "import spatialdata; print(spatialdata.__version__)"
+    ```
 
 ---
 
@@ -68,11 +68,10 @@ The same `--seed` always produces the same spectra: identical m/z axis,
 identical intensities, every pixel. So your numbers should match the ones
 printed in this tutorial exactly.
 
-The *files* are not byte-identical between runs, and should not be. Every
-imzML carries a fresh UUID and the SHA-1 of its own `.ibd`, exactly as a real
-acquisition does -- two runs of the same command describe two datasets, and
-saying otherwise would make every `--seed 0` file claim to be the same
-acquisition as every other.
+??? advanced "Advanced: Why the files still differ between runs"
+    Every imzML file carries its own unique identifier and a checksum of its
+    `.ibd`, as a real acquisition does. Two runs of the command describe two
+    datasets, so their files differ even though the spectra are identical.
 
 !!! note "This is synthetic data"
     The phantom is for verifying the software and learning the output layout.
@@ -282,15 +281,13 @@ cross-modal work and not used by Thyra.
 
 ### Platform requirements
 
-!!! warning "Bruker data needs the vendor SDK"
-    This is a Bruker `.d` dataset, so reading it requires the Bruker SDK. The
-    DLLs are bundled for **Windows**. On Linux and macOS the vendor's
-    `libtimsdata.so` / `libtimsdata.dylib` must be installed separately -- see
-    [Troubleshooting](getting-started.md#no-module-named-timsdata-or-bruker-sdk-errors).
-    Hosted notebook services such as Colab and Binder cannot run this part.
+!!! warning "Bruker timsTOF data needs Windows or Linux"
+    This is a Bruker timsTOF dataset. Thyra reads it with Bruker's own
+    library, which comes with Thyra for Windows and Linux. A Mac cannot read
+    it: see [Troubleshooting](troubleshooting.md#bruker-sdk-is-not-supported-on-macos).
 
     If you only need to verify that Thyra works, [Part 1](#part-1-a-five-minute-check-with-synthetic-data)
-    is platform-independent and requires no SDK.
+    runs on any computer.
 
 You will also need roughly 40 GB of free disk: 19 GB for the archive, 19 GB
 extracted, plus the output store.
@@ -347,10 +344,9 @@ Same command as Part 1 -- only the input path changes. Thyra detects the Bruker
 format, reads the 5 um pixel size from the acquisition metadata, and finds the
 optical images next to the `.d` folder.
 
-Size is not a concern: every conversion makes two passes over the source and
-writes from memory-mapped arrays, so peak memory stays roughly flat instead of
-scaling with the dataset. Expect a long run; add logging so you can watch
-progress and keep a record:
+Thyra never loads the whole dataset into memory, so a large acquisition
+converts on an ordinary computer. It does take a while. Add logging to watch
+the progress and keep a record:
 
 ```bash
 thyra "MALDI-MSI Sagittal Mouse Brain/20240826_Xenium_0041899.d" mouse_brain.zarr \
@@ -418,10 +414,10 @@ squidpy, and scanpy work on it directly.
 
 ## Where to go next
 
-- **[Explore the output notebook](explore-the-output.ipynb)** -- optical
-  overlays, per-pixel spectra, z-slices, metadata
-- **[Output Format](output-format.md)** -- the full element and metadata layout
-- **[CLI Reference](cli.md)** -- every option
-- **[Coordinate Systems](coordinate-systems.md)** -- how MSI, optical, and
-  global coordinate spaces relate
-- **[Getting Started](getting-started.md#troubleshooting)** -- troubleshooting
+- **[Look at the result](explore-the-output.ipynb)**: optical overlays,
+  per-pixel spectra, z-slices and metadata
+- **[Troubleshooting](troubleshooting.md)**: common errors and their fixes
+- **[Output format](output-format.md)**: the full element and metadata layout
+- **[Command-line options](cli.md)**: every option
+- **[Coordinate systems](coordinate-systems.md)**: how MSI, optical and global
+  coordinate spaces relate

@@ -569,7 +569,7 @@ On Windows, a store whose files sit past the 260-character path limit is
 read through an extended-length path automatically; without that, Zarr
 would return empty terms for the keys it cannot open and the document
 would fail validation for the wrong reason (see
-[long paths](getting-started.md#windows-long-paths)).
+[long paths](troubleshooting.md#windows-long-paths)).
 
 Errors mean the document does not conform: structural violations, unknown
 PSI-MS/IMS/UO accessions, version incompatibility. Warnings mean it

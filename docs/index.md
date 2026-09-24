@@ -1,141 +1,77 @@
 <p align="center">
-  <img src="assets/thyra-logotype.svg" alt="Thyra" width="420">
+  <img src="assets/thyra-logotype.svg" alt="Thyra" width="300">
 </p>
 
-[![PyPI](https://img.shields.io/pypi/v/thyra?logo=pypi&logoColor=white)](https://pypi.org/project/thyra/)
-[![Tests](https://img.shields.io/github/actions/workflow/status/M4i-Imaging-Mass-Spectrometry/thyra/tests.yml?branch=main&logo=github)](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/actions/workflows/tests.yml)
-[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/M4i-Imaging-Mass-Spectrometry/thyra/blob/main/notebooks/Thyra_Validation_Workflow.ipynb)
+# Convert imaging mass spectrometry data into one open format
 
-**Thyra** (from Greek *thyra*, meaning "door" or "portal") converts Mass Spectrometry Imaging (MSI) data into the standardized [SpatialData](https://spatialdata.scverse.org/)/Zarr format -- your portal to spatial omics analysis workflows.
+Thyra reads the files your instrument writes and saves them in
+[SpatialData](https://spatialdata.scverse.org/), an open format that analysis
+and viewing tools can read. Bruker, Waters and PHI data work, and so does
+imzML from any vendor.
 
----
+**You do not need to know how to program.** You install Thyra once. After
+that, converting a dataset is one command.
 
-## Why Thyra?
+[Install Thyra](install.md){ .md-button .md-button--primary }
+[Try it in your browser](https://colab.research.google.com/github/M4i-Imaging-Mass-Spectrometry/thyra/blob/main/notebooks/Thyra_Validation_Workflow.ipynb){ .md-button }
 
-Mass spectrometry imaging produces rich spatial-molecular data, but every vendor stores it differently. Downstream tools -- napari, squidpy, scanpy -- expect a common format. Thyra bridges that gap:
+The browser version runs in Google Colab, so it needs a Google account but
+nothing on your computer. It converts example data, or an imzML file you
+upload.
 
-```
- .imzML  ──┐                        ┌── napari visualisation
- .d      ──┼──  thyra  ──> .zarr  ──┼── squidpy / scanpy analysis
- .raw    ──┘   (SpatialData)        └── custom Python workflows
-```
+## How it works
 
-The output is a single SpatialData/Zarr directory containing intensity matrices, TIC images, optical images, pixel geometries, and full metadata -- ready for any tool in the scverse ecosystem.
-
----
-
-## Features
-
-| | Feature | Description |
-|---|---------|-------------|
-| **Formats** | Multiple inputs | ImzML, Bruker (.d timsTOF + solariX, Rapiflex), Waters (.raw directory), PHI SmartSoft-TOF (.raw file) |
-| **Output** | SpatialData/Zarr | Cloud-ready, chunked, standardised |
-| **Scale** | Memory efficient | Streaming mode for 100+ GB datasets |
-| **Optics** | Optical alignment | Automatic MSI-to-microscopy registration (Bruker) |
-| **Regions** | Multi-region | Handles slides with multiple tissue sections |
-| **Resampling** | Physics-aware | Instrument-specific mass axis resampling (on by default in the CLI, opt-in from the Python API) |
-| **Ion mobility** | TIMS-aware | The summed spectrum is the instrument's own scan sum; the mass-mobility heatmap is stored by default and a mobility-resolved sibling table on request, fed from the same frame reads |
-| **MS/MS** | Demultiplexed | A scheduled PASEF acquisition is written split apart by precursor by default, next to the summed table; the schedule is recorded either way |
-| **Defaults** | Decided in the open | Every default a reasonable person could argue with is recorded with its reason and measurements in [Design Decisions](design-decisions.md) |
-| **3D** | Volume support | Process as 3D volume or separate 2D slices |
-| **Platform** | Cross-platform | Windows, macOS, Linux |
-
----
-
-## Quick Start
-
-### Install
-
-```bash
-pip install thyra
-```
-
-### Convert
-
-=== "CLI"
+1. **Install** Thyra. The [Install](install.md) page walks you through it.
+2. **Convert** a dataset. Give Thyra your data and a name for the result:
 
     ```bash
-    thyra input.imzML output.zarr
+    thyra my_slide.d my_slide.zarr
     ```
 
-=== "Python"
+3. **Open** the result in Python, in napari, or in any tool that reads
+   SpatialData.
 
-    ```python
-    from thyra import convert_msi
+Thyra works out the file type, the pixel size and the m/z axis for you.
 
-    success = convert_msi("input.imzML", "output.zarr")
-    ```
+## What you can convert
 
-### Explore the output
+| Your instrument | Point Thyra at |
+|---|---|
+| Bruker timsTOF or solariX | the folder ending in `.d` |
+| Bruker rapifleX | the acquisition folder |
+| Waters (MassLynx) | the folder ending in `.raw` |
+| PHI nanoTOF (ToF-SIMS) | the file ending in `.raw` |
+| Any instrument that exports imzML | the `.imzML` file, with its `.ibd` file next to it |
 
-```python
-import spatialdata as sd
+Thyra can also read mzPeak files. That support is experimental.
 
-sdata = sd.read_zarr("output.zarr")
+## What you get
 
-# Intensity matrix (pixels x m/z bins)
-table = sdata.tables["msi_dataset_z0"]
-print(f"Shape: {table.shape}")
-print(f"m/z range: {table.var['mz'].min():.1f} -- {table.var['mz'].max():.1f}")
+One folder ending in `.zarr`. It holds:
 
-# TIC image
-import numpy as np
-tic = np.asarray(sdata.images["msi_dataset_z0_tic"])[0]
-```
+- the spectrum of every pixel, on one shared m/z axis
+- an image of the total ion current (TIC)
+- the optical image of the slide, when the acquisition has one
+- the details of the acquisition: instrument, settings and pixel size
 
-!!! tip "What is in the output?"
-    See [Output Format](output-format.md) for the full structure: tables, TIC images, optical images, pixel shapes, regions, and metadata.
+## Where to go next
 
----
-
-## Supported Formats
-
-### Input
-
-| Format | Path | Instruments |
-|--------|------|-------------|
-| ImzML  | `.imzML` file | Any vendor exporting to the open standard |
-| Bruker | `.d` directory | timsTOF fleX, solariX/MRMS FT-ICR, Rapiflex MALDI-TOF |
-| Waters | `.raw` directory | MassLynx imaging (DESI, MALDI) |
-| PHI    | `.raw` file | SmartSoft-TOF nanoTOF (ToF-SIMS) |
-
-`.raw` is claimed by two vendors and resolved by shape: Waters writes a
-directory, PHI writes a single file. See
-[Supported Formats](supported-formats.md).
-
-### Output
-
-| Format | Description |
-|--------|-------------|
-| **SpatialData/Zarr** | The [scverse](https://scverse.org/) standard for spatial omics -- cloud-ready, chunked, with coordinate transforms |
-
----
-
-## Next Steps
-
-- **[Getting Started](getting-started.md)** -- installation, first conversion, common workflows
-- **[Tutorial](tutorial.md)** -- step-by-step walkthrough, from an example dataset to ion images
-- **[Supported Formats](supported-formats.md)** -- every input format, how it is detected, what metadata it supplies
-- **[CLI Reference](cli.md)** -- every command-line option explained
-- **[Resampling](resampling.md)** -- how the common mass axis is chosen, and how to control it
-- **[Output Format](output-format.md)** -- what the .zarr contains and how to use it
-- **[API Reference](api.md)** -- Python API documentation
+- **New to Thyra?** Start with [Install](install.md), then
+  [Your first conversion](getting-started.md).
+- **Want to see it work first?** Part 1 of the [Tutorial](tutorial.md) uses
+  example data and takes about a minute once Thyra is installed.
+- **Want every detail?** The [Technical reference](technical-reference.md)
+  covers every option and every format.
 
 ---
 
 ## Acknowledgments
-
-### Visual identity
 
 The Thyra logomark and logotype were designed by **Nepsis Scriptorium**.
 
 [![Instagram @nepsis.scriptorium](https://img.shields.io/badge/Instagram-%40nepsis.scriptorium-E4405F?logo=instagram&logoColor=white)](https://www.instagram.com/nepsis.scriptorium/)
 [![Email nepsisscriptorium@gmail.com](https://img.shields.io/badge/Email-nepsisscriptorium%40gmail.com-EA4335?logo=gmail&logoColor=white)](mailto:nepsisscriptorium@gmail.com)
 
-### Built on
-
-- [SpatialData](https://spatialdata.scverse.org/) ecosystem
-- [Zarr](https://zarr.readthedocs.io/) for efficient storage
-- [pyimzML](https://github.com/alexandrovteam/pyimzML) for ImzML parsing
+Thyra is built on [SpatialData](https://spatialdata.scverse.org/),
+[Zarr](https://zarr.readthedocs.io/) and
+[pyimzML](https://github.com/alexandrovteam/pyimzML).

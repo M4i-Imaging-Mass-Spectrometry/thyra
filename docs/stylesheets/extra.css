@@ -119,19 +119,9 @@ body {
   color: #c8a0c5 !important;
 }
 
-/* ---- Hide left sidebar (tabs handle page navigation) ---- */
-/* Only hide on wide screens where tabs are visible; on mobile the
-   sidebar hamburger menu is the only navigation so we keep it. */
-@media screen and (min-width: 76.25em) {
-  .md-sidebar--primary {
-    display: none;
-  }
-
-  /* Let content area use the extra width */
-  .md-content {
-    margin-left: 0;
-  }
-}
+/* The left sidebar stays: each tab holds a section of several pages, and
+   the sidebar is where those pages are listed. It also keeps the text
+   column near 75 characters a line; without it lines ran to about 100. */
 
 /* ---- Navigation active indicator ---- */
 .md-nav__link--active,
@@ -217,7 +207,46 @@ body {
   background-color: #c67a30;
 }
 
+/* Advanced -> slate, with a graduation-cap icon. The beginner pages fold
+   optional depth into these, always collapsed: `??? advanced "Title"`.
+   Neutral on purpose, so it never competes with a warning. */
+:root {
+  --md-admonition-icon--advanced: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 3 1 9l4 2.18v6L12 21l7-3.82v-6l2-1.09V17h2V9zm6.82 6L12 12.72 5.18 9 12 5.28zM17 16l-5 2.72L7 16v-3.73L12 15l5-2.73z"/></svg>');
+}
+
+.md-typeset .admonition.advanced,
+.md-typeset details.advanced {
+  border-color: #546e7a;
+}
+
+.md-typeset .advanced > .admonition-title,
+.md-typeset .advanced > summary {
+  background-color: rgba(84, 110, 122, 0.1);
+}
+
+.md-typeset .advanced > .admonition-title::before,
+.md-typeset .advanced > summary::before {
+  background-color: #546e7a;
+  -webkit-mask-image: var(--md-admonition-icon--advanced);
+  mask-image: var(--md-admonition-icon--advanced);
+}
+
 /* ---- Dark mode admonition overrides ---- */
+
+[data-md-color-scheme="slate"] .md-typeset .admonition.advanced,
+[data-md-color-scheme="slate"] .md-typeset details.advanced {
+  border-color: #90a4ae;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .advanced > .admonition-title,
+[data-md-color-scheme="slate"] .md-typeset .advanced > summary {
+  background-color: rgba(144, 164, 174, 0.15);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .advanced > .admonition-title::before,
+[data-md-color-scheme="slate"] .md-typeset .advanced > summary::before {
+  background-color: #90a4ae;
+}
 
 /* Note + Info (dark) -> lighter purple tint */
 [data-md-color-scheme="slate"] .md-typeset .admonition.note,
