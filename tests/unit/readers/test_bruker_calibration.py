@@ -132,6 +132,11 @@ class TestCalibrationMetadataReading:
                 VALUES (3, 'CalibrationUser', 'demo_user')
             """)
 
+            cursor.execute("""
+                INSERT INTO CalibrationInfo (CalibrationState, KeyName, Value)
+                VALUES (3, 'MobilityCalibrationUser', 'demo_mobility_user')
+            """)
+
             conn.commit()
             conn.close()
 
@@ -161,7 +166,13 @@ class TestCalibrationMetadataReading:
                     == "2025-01-01T10:00:00.000+00:00"
                 )
                 assert metadata["calibration_software_version"] == "6.1"
-                assert metadata["calibration_user"] == "demo_user"
+                # The file also names who calibrated, twice over. Neither is
+                # read: a person does nothing in a store. (CalibrationUser
+                # was read until #398; MobilityCalibrationUser never was,
+                # and the last line keeps a widened query from starting.)
+                assert "calibration_user" not in metadata
+                assert "demo_user" not in repr(metadata)
+                assert "demo_mobility_user" not in repr(metadata)
 
     def test_read_calibration_metadata_missing_file(self):
         """Test handling of missing calibration.sqlite file."""

@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 from ...core.msms import distinct_precursors
+from ..personal_data import file_name as _file_name
 from ..types import ComprehensiveMetadata
 from .models import (
     MSI_METADATA_UNS_KEY,
@@ -234,17 +235,6 @@ def _format_iso_8601(moment: datetime) -> str:
     if moment.microsecond % 1000 == 0:
         return moment.isoformat(timespec="milliseconds")
     return moment.isoformat()
-
-
-def _file_name(value: str) -> Optional[str]:
-    """The last component of ``value`` on either path separator, or ``None``.
-
-    Vendor software records the method as it was opened, which on a
-    Bruker or Waters PC is an absolute path; the store keeps the name
-    and drops the machine it came from.
-    """
-    name = re.split(r"[\\/]", value)[-1].strip()
-    return name or None
 
 
 def _build_acquisition(

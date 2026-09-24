@@ -145,7 +145,8 @@ class SolarixMetadataExtractor(MetadataExtractor):
             "polarity": self._polarity(),
             "mz_acq_range": list(reader.mass_range),
             "acquisition_datetime": props.get("AcquisitionDateTime"),
-            "operator_name": props.get("OperatorName"),
+            # OperatorName is left out: it names a person, which does
+            # nothing in a store (see thyra.metadata.personal_data).
             # LaserPower is a percentage of the laser's range (it equals
             # the method's LaserAttn, whose LaserPowerRange is 100) and
             # LaserRepRate is in Hz (it equals the method's LaserFrequency).

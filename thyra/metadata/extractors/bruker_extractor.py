@@ -664,8 +664,9 @@ class BrukerMetadataExtractor(MetadataExtractor):
         ``MethodName`` is recorded as timsControl opened it, which may be
         an absolute path on the acquisition PC; only the file name (the
         ``*.m`` directory's name) is kept, since a path names a machine
-        the store will not be opened on. The full value is still in
-        ``raw_metadata["global_metadata"]``.
+        the store will not be opened on. ``raw_metadata["global_metadata"]``
+        keeps the same name and not the path: every vendor dictionary is
+        reduced the same way (see :mod:`thyra.metadata.personal_data`).
         """
         try:
             cursor.execute(

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Dict
 import numpy as np
 
 from ...core.base_extractor import MetadataExtractor
+from ..personal_data import strip_personal_data
 from ..types import ComprehensiveMetadata, EssentialMetadata
 
 if TYPE_CHECKING:
@@ -189,14 +190,24 @@ class PhiMetadataExtractor(MetadataExtractor):
         }
         appended = reader.block_index.appended
         if appended:
-            calibration["appended_blocks"] = json.dumps(appended)
+            # Same reason as the header below: a block appended after
+            # acquisition is written by the same software, can carry the
+            # same fields, and is opaque once it is a JSON string.
+            calibration["appended_blocks"] = json.dumps(
+                [strip_personal_data(block) for block in appended]
+            )
         # The vendor's own key names are not valid Zarr group members --
         # 'Mass/Time' contains a forward slash -- so the header is preserved
-        # verbatim as JSON rather than being mangled into a group hierarchy.
+        # as JSON rather than being mangled into a group hierarchy. The
+        # people are taken out first, because once it is a string the
+        # step every other vendor dictionary passes through can no longer
+        # see into it: SmartSoft records the acquisition-PC path of the
+        # file (``AcqFilename``, and again in ``[Data Manager]``) and has
+        # fields for the operator and the user.
         return {
-            "header_entries": json.dumps(dict(header.entries)),
+            "header_entries": json.dumps(strip_personal_data(header.entries)),
             "header_sections": json.dumps(
-                {k: dict(v) for k, v in header.sections.items()}
+                {k: strip_personal_data(v) for k, v in header.sections.items()}
             ),
             "calibration": calibration,
         }

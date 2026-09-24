@@ -27,6 +27,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
+from ..metadata.personal_data import without_personal_data
 from ..metadata.types import ComprehensiveMetadata, EssentialMetadata
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,11 @@ class MetadataExtractor(ABC):
     def get_comprehensive(self) -> ComprehensiveMetadata:
         """Get comprehensive metadata (cached after first call).
 
+        The vendor dictionaries come back without the fields that name a
+        person, and with a path the vendor recorded reduced to its file
+        name (see :mod:`thyra.metadata.personal_data`). That happens here,
+        for every format at once, so that no extractor has to remember it.
+
         Returns:
             ComprehensiveMetadata: Complete metadata including
             format-specific details
@@ -97,7 +103,9 @@ class MetadataExtractor(ABC):
             logger.info("Extracting comprehensive metadata...")
             # Ensure essential metadata is loaded first
             self.get_essential()
-            self._comprehensive_cache = self._extract_comprehensive_impl()
+            self._comprehensive_cache = without_personal_data(
+                self._extract_comprehensive_impl()
+            )
             logger.debug(
                 f"Comprehensive metadata extracted with "
                 f"{len(self._comprehensive_cache.raw_metadata)} raw entries"

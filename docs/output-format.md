@@ -1027,6 +1027,20 @@ A section the source format has nothing for is omitted rather than written
 empty, so `"instrument_info" not in uns` means "this format does not carry
 it" rather than "it was carried and lost".
 
+These sections hold what the source states, with two exceptions that apply
+to every format alike. A field that names a person -- who calibrated the
+instrument, who operated it, a contact's name or the details that reach
+them (address, e-mail, phone) -- is not copied. A path the vendor recorded
+on the acquisition PC keeps only its last component, the file name. Neither
+does anything in a store, and the source still holds both. The paths Thyra
+records about where it read the source stay whole: `provenance.source_path`
+above, and in `format_specific` the `data_path` of a Bruker tsf/tdf or
+Waters source (for Bruker also `database_path` and `binary_file`), the
+`ibd_file` of an imzML and the `mis_file` of a solariX acquisition. The
+store's root attributes repeat three of these sections, as
+`format_specific_metadata`, `acquisition_parameters` and
+`instrument_information`, and follow the same rule.
+
 Within these sections, a list that holds anything besides numbers -- imzML
 `cvParams` (a list of objects) is the main case -- is stored as a **JSON
 string**; decode it with `json.loads`:

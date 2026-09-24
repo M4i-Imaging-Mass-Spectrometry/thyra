@@ -121,8 +121,11 @@ class ComprehensiveMetadata:
             scan range, and laser settings.
         instrument_info: Instrument model, serial number, and software
             version.
-        raw_metadata: Unprocessed metadata exactly as read from the
-            source file, preserved for round-trip fidelity.
+        raw_metadata: Unprocessed metadata as read from the source file,
+            preserved for round-trip fidelity -- less the fields that name
+            a person, and with a path the vendor recorded reduced to its
+            file name, as in every vendor dictionary here (see
+            :mod:`thyra.metadata.personal_data`).
     """
 
     essential: EssentialMetadata

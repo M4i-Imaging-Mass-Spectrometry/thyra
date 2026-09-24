@@ -124,8 +124,10 @@ against the instrument's own peak-image exports:
 
 Pass `use_appended_calibration=False` to reproduce a legacy conversion that
 ignored it. Whichever is used, `uns["raw_metadata"]["calibration"]` records
-both sets of coefficients, which one was applied, and the appended block
-verbatim.
+both sets of coefficients, which one was applied, and the appended block as
+the file states it -- less any field that names a person, and with a path
+reduced to its file name, as for the header (see
+[Output Format](output-format.md)).
 
 ---
 
