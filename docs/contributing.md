@@ -10,6 +10,7 @@ Thank you for your interest in contributing to Thyra! This document provides gui
 - [Pull Request Process](#pull-request-process)
 - [Issue Reporting Guidelines](#issue-reporting-guidelines)
 - [Communication Channels](#communication-channels)
+- [Writing the documentation](#writing-the-documentation)
 
 ## Development Environment Setup
 
@@ -231,12 +232,57 @@ Use the appropriate issue template:
 - **GitHub Issues** - For bug reports and feature requests
 - **GitHub Discussions** - For general questions and community discussions
 
-### Contributing to Documentation
+## Writing the documentation
 
-- Documentation source is in the `docs/` folder
-- Use clear, concise language
-- Include code examples where appropriate
-- Test all code examples
+The documentation source is in the `docs/` folder. Many readers are
+scientists who have never used a terminal, so the site has layers, and every
+topic should have all of them:
+
+1. **Beginner pages**, under "Get started". They say what to do and what the
+   reader gets, in plain words.
+2. **Advanced boxes** inside those pages, for optional depth. They are always
+   collapsed and their title starts with "Advanced:", so a beginner sees one
+   line and knows it is optional:
+
+    ```markdown
+    ??? advanced "Advanced: How Thyra chooses the shared m/z axis"
+        The explanation, indented four spaces.
+    ```
+
+3. **Technical reference** pages, for readers who want every option, every
+   format and every detail.
+
+### Rules for beginner pages
+
+- Keep sentences to 15 to 20 words on average, and split any over 25.
+- Give each paragraph one idea, in three to five sentences at most.
+- Address the reader as "you", in the present tense and the active voice.
+- Put one action in each numbered step. Show the command, then what the
+  reader will see.
+- Define a term the first time it appears, or link it to the
+  [Glossary](glossary.md).
+- Leave out version history ("used to", "since 3.x"), issue numbers and
+  measurements. History belongs in the changelog. Reasons and measurements
+  belong in [Design decisions](design-decisions.md), linked in one line.
+- Cut before you add. A change that makes a beginner page longer needs a
+  reason.
+
+When a code change needs a documentation change, write the shortest
+sentence the beginner page needs. Put the detail on the technical page and
+the reasons in Design decisions.
+
+`docs/includes/abbreviations.md` lists terms that show their meaning on
+hover, on every page. Add a term there when pages use it without explaining
+it, but only if a mass spectrometrist might not know it: computing words, or
+terms from another part of the field. Every reader knows m/z and TIC, so
+underlining them would only add clutter.
+
+Test every code example, and preview the site before opening a pull request:
+
+```bash
+uv sync --group docs
+uv run mkdocs serve
+```
 
 ## Development Workflow
 

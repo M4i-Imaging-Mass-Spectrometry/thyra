@@ -40,8 +40,10 @@ repos:
   # A UNC branch was tried and dropped: it matched every escaped newline in
   # the notebooks and caught nothing real, and no leak here arrived by UNC.
   #
-  # docs/getting-started.md is exempt because documenting Windows path
-  # handling is that page's subject; its paths are generic placeholders.
+  # docs/getting-started.md and docs/troubleshooting.md are exempt because
+  # Windows paths are part of their subject: the first shows how to type
+  # one, the second how Windows limits them. Their paths are generic
+  # placeholders.
   - repo: local
     hooks:
       - id: no-lab-share-paths
@@ -49,7 +51,7 @@ repos:
         language: pygrep
         entry: '\b[A-Z]:\\(?!\\)[A-Za-z0-9_]'
         types: [text]
-        exclude: ^docs/getting-started\.md$
+        exclude: ^docs/(getting-started|troubleshooting)\.md$
 
       # The rule above only sees BACKSLASH paths, and that is deliberate: the
       # forward-slash form is how legitimate Windows paths are written in this

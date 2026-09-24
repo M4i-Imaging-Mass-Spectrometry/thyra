@@ -1,5 +1,5 @@
 site_name: Thyra
-site_description: A modern Python library for converting Mass Spectrometry Imaging data into SpatialData/Zarr format
+site_description: Convert imaging mass spectrometry data from Bruker, Waters, PHI and imzML into the open SpatialData format
 site_url: https://M4i-Imaging-Mass-Spectrometry.github.io/thyra
 repo_url: https://github.com/M4i-Imaging-Mass-Spectrometry/thyra
 repo_name: M4i-Imaging-Mass-Spectrometry/thyra
@@ -23,6 +23,11 @@ theme:
   features:
     - content.code.copy
     - content.code.annotate
+    - content.tabs.link
+    - content.tooltips
+    - navigation.footer
+    - navigation.indexes
+    - navigation.path
     - navigation.tabs
     - navigation.sections
     - navigation.top
@@ -33,6 +38,10 @@ theme:
 
 extra_css:
   - stylesheets/extra.css
+
+# Snippets that pages include rather than pages of their own.
+exclude_docs: |
+  includes/
 
 plugins:
   - search
@@ -54,7 +63,10 @@ plugins:
             show_signature_annotations: true
 
 markdown_extensions:
+  - abbr
   - admonition
+  - attr_list
+  - def_list
   - pymdownx.details
   - pymdownx.superfences
   - pymdownx.highlight:
@@ -65,33 +77,49 @@ markdown_extensions:
   # is invoked from, which is the repository root for both `mkdocs build` and
   # the gh-deploy step in .github/workflows/docs.yml. check_paths turns a
   # missing or moved target into a build error rather than an empty page.
+  # auto_append adds the shared abbreviations to every page, so a term such
+  # as "Zarr" shows its definition on hover wherever it appears.
   - pymdownx.snippets:
       base_path: ["."]
       check_paths: true
+      auto_append:
+        - docs/includes/abbreviations.md
   - pymdownx.tabbed:
       alternate_style: true
   - toc:
       permalink: true
   - tables
 
+# Two layers, on purpose. "Get started" is written for someone who has never
+# used a terminal: plain words, short pages, optional depth folded into
+# "Advanced" boxes. "Technical reference" holds every detail for readers who
+# want it. docs/contributing.md ("Writing the documentation") has the rules.
 nav:
   - Home: index.md
-  - Getting Started: getting-started.md
-  - Tutorial: tutorial.md
-  - Explore the Output: explore-the-output.ipynb
-  - Supported Formats: supported-formats.md
-  - CLI Reference: cli.md
-  - Resampling: resampling.md
-  - Output Format: output-format.md
-  - Metadata Schema: metadata-schema.md
-  - Writing the Metadata Document: writing-the-metadata-document.md
-  - Coordinate Systems: coordinate-systems.md
-  - imzML Parser Notes: imzml-parser-notes.md
-  - PHI ToF-SIMS Notes: phi-tofsims-notes.md
-  - solariX Notes: solarix-notes.md
-  - Design Decisions: design-decisions.md
-  - Migrating to 4.0: migration-4.0.md
-  - API Reference: api.md
-  - Contributing: contributing.md
-  - Code of Conduct: code-of-conduct.md
-  - Changelog: changelog.md
+  - Get started:
+      - Install: install.md
+      - Your first conversion: getting-started.md
+      - Tutorial: tutorial.md
+      - Look at the result: explore-the-output.ipynb
+      - Troubleshooting: troubleshooting.md
+      - Glossary: glossary.md
+  - Technical reference:
+      - technical-reference.md
+      - Supported formats: supported-formats.md
+      - Command-line options: cli.md
+      - Resampling: resampling.md
+      - Output format: output-format.md
+      - Coordinate systems: coordinate-systems.md
+      - Metadata schema: metadata-schema.md
+      - Writing the metadata document: writing-the-metadata-document.md
+      - Python API: api.md
+      - Design decisions: design-decisions.md
+      - Format notes:
+          - imzML: imzml-parser-notes.md
+          - PHI ToF-SIMS: phi-tofsims-notes.md
+          - Bruker solariX: solarix-notes.md
+  - Project:
+      - Migrating to 4.0: migration-4.0.md
+      - Changelog: changelog.md
+      - Contributing: contributing.md
+      - Code of conduct: code-of-conduct.md

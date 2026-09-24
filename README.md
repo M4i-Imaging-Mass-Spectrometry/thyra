@@ -10,126 +10,84 @@
 [![Docs](https://img.shields.io/badge/docs-mkdocs-blue)](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra)
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/M4i-Imaging-Mass-Spectrometry/thyra/blob/main/notebooks/Thyra_Validation_Workflow.ipynb)
 
-**Thyra** (from Greek thyra, meaning "door" or "portal") -- a modern Python library for converting Mass Spectrometry Imaging (MSI) data into the standardized **SpatialData/Zarr format**, serving as your portal to spatial omics analysis workflows.
+**Thyra converts imaging mass spectrometry data into one open format.** It
+reads the files your instrument writes (Bruker, Waters, PHI, or imzML from any
+vendor) and saves them in [SpatialData](https://spatialdata.scverse.org/),
+which analysis and viewing tools can read. You do not need to know how to
+program.
 
-**[Read the documentation](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra)** | [Getting Started](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/getting-started/) | [Tutorial](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/tutorial/) | [CLI Reference](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/cli/) | [API Reference](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/api/)
+**[Documentation](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra)** | [Install](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/install/) | [Your first conversion](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/getting-started/) | [Tutorial](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/tutorial/) | [Technical reference](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/technical-reference/)
 
-### Try it without any data
+## Quick start
 
 ```bash
-pip install thyra
-thyra-example-data example_data/synthetic_brain.imzML   # generates a small synthetic dataset
+uv tool install --python 3.13 thyra                     # or: pip install thyra (Python 3.12 or 3.13)
+thyra-example-data example_data/synthetic_brain.imzML   # makes a small example dataset
 thyra example_data/synthetic_brain.imzML example_data/synthetic_brain.zarr
 ```
 
-See the **[Tutorial](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/tutorial/)**
-for a full walkthrough, including the published example dataset
+New to the terminal or to uv? The
+[Install](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/install/) page
+walks you through every step. To try Thyra with nothing installed, open the
+[notebook in Google Colab](https://colab.research.google.com/github/M4i-Imaging-Mass-Spectrometry/thyra/blob/main/notebooks/Thyra_Validation_Workflow.ipynb).
+The [Tutorial](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/tutorial/)
+also converts the published example dataset
 ([10.5281/zenodo.18326569](https://doi.org/10.5281/zenodo.18326569)).
 
-## Features
+## What you can convert
 
-- **Multiple Input Formats**: ImzML, Bruker (.d directories), Waters (.raw directories), PHI SmartSoft-TOF ToF-SIMS (.raw files)
-- **SpatialData Output**: Modern, cloud-ready format with Zarr backend
-- **Memory Efficient**: Handles large datasets (100+ GB) through streaming processing
-- **Optical Alignment**: Automatic MSI-to-optical image registration for Bruker data
-- **Multi-Region Support**: Handles slides with multiple tissue sections
-- **Resampling**: Physics-aware mass axis resampling (on by default in the CLI; opt-in from the Python API)
-- **Ion Mobility and MS/MS**: TIMS acquisitions keep their mass-mobility heatmap and can carry a mobility-resolved sibling table; scheduled PASEF MS/MS acquisitions are written split apart by precursor by default. The defaults and the measurements behind them are recorded in the [design decisions](https://m4i-imaging-mass-spectrometry.github.io/thyra/design-decisions/)
-- **Validated Metadata**: Versioned, ontology-mapped metadata schema (PSI-MS, NCBITaxon, UBERON, CHEBI) with `thyra validate` and one-command METASPACE export
-- **3D Support**: Process volume data or treat as 2D slices
-- **Cross-Platform**: Windows, macOS, and Linux
+| Your instrument | Point Thyra at |
+|---|---|
+| Bruker timsTOF or solariX | the folder ending in `.d` |
+| Bruker rapifleX | the acquisition folder |
+| Waters (MassLynx) | the folder ending in `.raw` |
+| PHI nanoTOF (ToF-SIMS) | the file ending in `.raw` |
+| Any instrument that exports imzML | the `.imzML` file, with its `.ibd` file next to it |
+| mzPeak (experimental) | the `.mzpeak` file |
 
-## Installation
+Thyra reads timsTOF and Waters data on Windows and Linux; everything else
+also works on macOS. Shimadzu support is in development: until then, export
+imzML from IMAGEREVEAL MS.
 
-```bash
-pip install thyra
-```
+PHI mosaic, MS/MS and depth-profiling acquisitions have so far been tested
+only on synthetic files. If you have real data in those modes, please get in
+touch.
 
-## Quick Start
+## What you get
 
-### Command Line
+One folder ending in `.zarr`, holding:
 
-```bash
-# Basic conversion (resampling enabled by default)
-thyra input.imzML output.zarr
+- the spectrum of every pixel, on one shared m/z axis
+- an image of the total ion current (TIC)
+- the optical image of the slide, when the acquisition has one
+- ion mobility and MS/MS data from Bruker timsTOF, when the acquisition has them
+- a validated description of the acquisition, ready for METASPACE
 
-# Bruker data with verbose logging
-thyra data.d output.zarr -v DEBUG
+Thyra handles datasets larger than your computer's memory, slides with
+several regions, and 3D data.
 
-# PHI SmartSoft-TOF ToF-SIMS (a .raw file, not a directory)
-thyra tofsims_run.raw output.zarr
-
-# Disable resampling
-thyra input.imzML output.zarr --no-resample
-```
-
-Thyra auto-detects the input format. Note that `.raw` is claimed by two
-vendors and resolved by shape: Waters writes a directory, PHI writes a single
-file. See [Supported Formats](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/supported-formats/).
-
-### Python API
+## From Python
 
 ```python
 from thyra import convert_msi
-
-success = convert_msi("data/sample.imzML", "output/sample.zarr")
-```
-
-### Working with the Output
-
-```python
 import spatialdata as sd
 
-sdata = sd.read_zarr("output/sample.zarr")
-msi_table = sdata.tables["msi_dataset_z0"]
+convert_msi("data/sample.imzML", "output/sample.zarr")
 
-print(f"Shape: {msi_table.shape}")  # (pixels, m/z bins)
-print(f"m/z range: {msi_table.var['mz'].min():.1f} -- {msi_table.var['mz'].max():.1f}")
+sdata = sd.read_zarr("output/sample.zarr")
+table = sdata.tables["msi_dataset_z0"]  # one row per pixel, one column per m/z bin
 ```
 
-### Metadata
-
-Every converted store carries a versioned, ontology-mapped metadata block
-(`uns["msi_metadata"]`), auto-populated from the source file:
+The acquisition description has its own commands:
 
 ```bash
-thyra metadata raw_data.d                                # the block, without converting
-thyra validate output.zarr                               # schema + ontology checks
-thyra export-metaspace output.zarr --merge sample.json   # METASPACE submission JSON
+thyra metadata raw_data.d                                # describe a dataset without converting it
+thyra validate output.zarr                               # check a result against the schema
+thyra export-metaspace output.zarr --merge sample.json   # METASPACE submission file
 ```
 
-`thyra metadata` builds the same block straight from a vendor file: no
-spectra are decoded and nothing is written, so it answers "what is in
-this folder?" before a conversion is worth starting.
-
-See [Metadata Schema](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/metadata-schema/).
-
-## Documentation
-
-Full documentation: **[M4i-Imaging-Mass-Spectrometry.github.io/thyra](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra)**
-
-- [Getting Started](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/getting-started/) -- installation, first conversion, common workflows
-- [CLI Reference](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/cli/) -- all command-line options
-- [Output Format](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/output-format/) -- understanding the zarr structure
-- [Metadata Schema](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/metadata-schema/) -- the validated, ontology-mapped metadata block and METASPACE export
-- [Coordinate Systems](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/coordinate-systems/) -- the ``"global"`` contract Thyra writes for downstream consumers
-- [API Reference](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/api/) -- Python API documentation
-
-## Supported Formats
-
-| Input | Extension | Status |
-|-------|-----------|--------|
-| ImzML | `.imzML` | Full support |
-| Bruker | `.d` | Full support (timsTOF + solariX + Rapiflex) |
-| Waters | `.raw` directory | Full support |
-| PHI SmartSoft-TOF | `.raw` file | Full support (nanoTOF, ToF-SIMS) |
-| mzPeak | `.mzpeak` | Experimental (HUPO-PSI v0.9 draft, read-only) |
-| Shimadzu | `.imdx`, `.kbd` | In development (workaround: imzML export from IMAGEREVEAL MS) |
-
-PHI mosaic, MS/MS and depth-profiling acquisitions are implemented but so far
-tested only against synthetic files -- real data in those modes is very welcome.
-
-Output: **SpatialData/Zarr** -- cloud-ready, efficient, standardized
+Every option, format and output detail is in the
+[Technical reference](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/technical-reference/).
 
 ## Development
 
@@ -141,8 +99,8 @@ uv run pre-commit install
 uv run pytest
 ```
 
-The same hooks run in CI on every pull request, so the install above decides
-where a lint failure surfaces, not whether it does.
+CI runs the same hooks on every pull request. Installing them locally shows
+you a failure before you push.
 
 ## Contributing
 
