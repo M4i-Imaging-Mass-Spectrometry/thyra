@@ -2,9 +2,10 @@
 
 Every store Thyra writes carries a versioned, ontology-mapped metadata
 block: `table.uns["msi_metadata"]`. Its base fields mirror the
-[METASPACE](https://metaspace2020.org) submission form, so the metadata a
-converted dataset carries is, by construction, what a METASPACE submission
-needs -- filling it costs nothing extra.
+[METASPACE](https://metaspace2020.org) submission form, so a converted
+dataset already holds every answer its source reports; the rest, such as
+the organism and the matrix, is added when you export (see
+[Completing the metadata](#completing-the-metadata)).
 
 The schema exists because MSI has had no structured metadata convention
 the way other spatial omics modalities do. Vendor files spell the same
@@ -49,7 +50,7 @@ see [Completing the metadata](#completing-the-metadata).
 
 | Section | Field | Type | Ontology |
 |---------|-------|------|----------|
-| (root) | `schema_version` | `MAJOR.MINOR.PATCH` string, required | -- |
+| (root) | `schema_version` | `MAJOR.MINOR.PATCH` string; `thyra validate` requires it, the published JSON Schema does not | -- |
 | `sample` | `organism`, `organism_term` | text + term | NCBITaxon |
 | | `organism_part`, `organism_part_term` | text + term | UBERON |
 | | `condition` | text | -- |
@@ -63,7 +64,7 @@ see [Completing the metadata](#completing-the-metadata).
 | | `ionisation_source`, `ionisation_source_term` | text + term | PSI-MS |
 | | `analyzer`, `analyzer_term` | text + term | PSI-MS |
 | | `instrument_model` | text | -- |
-| | `manufacturer` | text, the source's own spelling | PSI-MS (`MS:1001269`) |
+| | `manufacturer` | text, the source's own spelling where it states one; set by Thyra for Waters, Rapiflex and PHI, and `"Bruker"` for a solariX file that does not say | PSI-MS (`MS:1001269`) |
 | | `serial_number` | text, identifies one physical machine | PSI-MS (`MS:1000529`) |
 | | `detector_resolving_power` | `{value, at_mz}` | -- |
 | | `pixel_size_um` | `{x, y}`, **required** | -- |
@@ -119,15 +120,19 @@ from the format itself.
 
 | Source | polarity | ionisation source | analyzer | instrument model |
 |--------|----------|-------------------|----------|------------------|
-| imzML | -- | -- | from the `<analyzer>` component cvParam | from the instrumentConfiguration (model term or `MS:1000031` value) |
-| Bruker `.d` | from `Frames.Polarity`, when every frame agrees | MALDI, when the laser tables are present | TOF (timsTOF-family formats) | from the DB |
+| imzML | from `MS:1000130` / `MS:1000129` | -- | from the `<analyzer>` component cvParam | from the instrumentConfiguration (model term or `MS:1000031` value) |
+| Bruker timsTOF `.d` | from `Frames.Polarity`, when every frame agrees | MALDI, when the laser tables are present | TOF | from the DB |
+| Bruker solariX `.d` | from the file | -- | -- | from the file |
+| Bruker Rapiflex | -- | -- | -- | -- |
 | PHI ToF-SIMS | from the header | SIMS | TOF | platform name |
-| Waters `.raw` | -- | -- | -- | from `_HEADER.TXT` |
+| Waters `.raw` | -- | -- | -- | `SELECT SERIES MRT` on an MRT, Thyra's own label; otherwise unset |
 
-Bruker `.d` also fills `ion_mobility`: `present: true` for a TDF acquisition
+A timsTOF `.d` also fills `ion_mobility`: `present: true` for a TDF acquisition
 (TIMS engaged), with the acquired 1/K0 range and the ramp length in scans,
-and `present: false` for TSF. Other formats leave the field unset, which
-means "not reported", not "no mobility". The MSI table is always summed over
+and `present: false` for TSF. An imzML states it as well: `present: true`
+with the array's terms when the file declares a mobility array, `present:
+false` otherwise. Other formats leave the field unset, which means "not
+reported", not "no mobility". The MSI table is always summed over
 the ramp; how it was summed is the `tdf_spectrum` parameter of the
 `conversion` processing step (see [Supported Formats](supported-formats.md#bruker-timstof)).
 `resolved_table` names the mobility-resolved sibling table when one was
@@ -331,6 +336,12 @@ artifact alone:
 | `ms_analysis.manufacturer` | `MS:1001269` instrument vendor |
 | `ms_analysis.serial_number` | `MS:1000529` instrument serial number |
 | `ms_analysis.detector_resolving_power` | `MS:1000800` mass resolving power |
+| `ms_analysis.ion_mobility.separation` | `MS:1002892` ion mobility attribute |
+| `ms_analysis.fragmentation.ms_level` | `MS:1000511` ms level |
+| `ms_analysis.fragmentation.windows[].target` | `MS:1000827` isolation window target m/z |
+| `ms_analysis.fragmentation.windows[].lower_offset` | `MS:1000828` isolation window lower offset |
+| `ms_analysis.fragmentation.windows[].upper_offset` | `MS:1000829` isolation window upper offset |
+| `ms_analysis.fragmentation.windows[].collision_energy` | `MS:1000045` collision energy |
 | `acquisition.laser_frequency_hz` | `IMS:1006000` repetition rate |
 | `acquisition.shots_per_pixel` | `IMS:1006001` laser shots per spectrum |
 | `alignment.optical_image_file` | `IMS:1006008` optical image location |
@@ -431,8 +442,9 @@ table of a store.
   and the `coordinate_systems` root attribute; consumers read it from
   here and nowhere else.
 - It is written identically by every converter write path (the uns
-  parity tests assert this), and contains no timestamps, so converting
-  the same input twice produces the same block.
+  parity tests assert this), and records no time of the conversion
+  itself -- the acquisition's start time comes from the source -- so
+  converting the same input twice produces the same block.
 - Sections with nothing in them are omitted rather than written empty,
   following the store-wide convention.
 
@@ -463,8 +475,8 @@ which is also its `$id`:
 https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.9.0/msi_metadata.schema.json
 ```
 
-Every version gets its own folder under that path and a published folder
-is never edited; there is deliberately no `latest`. The LinkML source of
+Every version from 0.6.0 on has its own folder under that path, and a
+published folder is never edited; there is deliberately no `latest`. The LinkML source of
 the same version is served beside it as `msi_metadata.linkml.yaml`. A
 program that writes the document without Thyra validates against that
 address; see [Writing the Metadata Document](writing-the-metadata-document.md).
@@ -505,13 +517,18 @@ thyra metadata INPUT [--merge USER.json] [-o OUT.json]
 ```
 
 Builds the same document from a **raw** source and writes it out, without
-converting anything. `INPUT` is a file or folder in any format Thyra reads;
-no spectra are decoded and no vendor SDK is loaded, so it is a header read
-whatever the dataset's size. The default output is stdout.
+converting anything. `INPUT` is a file or folder in any format Thyra reads.
+For every format but Waters, no spectra are decoded and no vendor SDK is
+loaded, so it is a header read whatever the dataset's size; a Waters run is
+described through the MassLynx library, which reads every scan. The default
+output is stdout.
 
 The document is the one a conversion would have stored, with three
-differences. Two follow from nothing having been converted: `processing`
-is absent, and no sibling table is named. The third follows from where
+differences, and a fourth for PHI data. Two follow from nothing having been
+converted: `processing` is absent, and no sibling table is named; for PHI,
+`ms_analysis.n_spectra` is absent too, because counting the pixels that
+carry a spectrum means decoding the whole event stream. The third follows
+from where
 the document goes: `provenance.source_path` is the source's **name**,
 where a store block carries the path it was converted from. A store sits
 on the machine that wrote it and the path is provenance a reader can act
@@ -574,10 +591,11 @@ thyra export-metaspace PATH [--merge USER.json] [--table NAME] [-o OUT.json]
 
 Writes the METASPACE submission metadata JSON (default:
 `<input>.metaspace.json` next to the input; `-o -` for stdout). Required
-fields the store cannot know are emitted empty and reported as warnings on
-stderr -- the output is a truthful starting point, never a fabricated
-record. The one inference: matrix-free sources (DESI, SIMS) truthfully get
-`MALDI_Matrix: "none"`.
+fields the store cannot know are written empty, or left out in the case of
+`Detector_Resolving_Power`, and reported as warnings on stderr -- the output
+is a truthful starting point, never a fabricated record. Two values are
+filled without being stated: matrix-free sources (DESI, SIMS) get
+`MALDI_Matrix: "none"`, and an unset solvent is written as `"none"`.
 
 ```bash
 thyra export-metaspace output.zarr
