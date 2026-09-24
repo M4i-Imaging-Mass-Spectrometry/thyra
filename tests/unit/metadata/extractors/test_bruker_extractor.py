@@ -398,6 +398,38 @@ class TestBrukerMetadataExtractor:
         # and no longer read anywhere.
         assert "mz_calibration_mode" not in comprehensive.instrument_info
 
+    def test_the_imaging_sequence_the_reader_parsed_is_handed_on(self):
+        """tsf/tdf used to drop the ``.mis`` on the floor; it is raw metadata now.
+
+        Under the key the rapiflex and solariX extractors already use, and
+        through the same rule as every vendor dictionary: the method path
+        flexImaging records keeps its file name only.
+        """
+        fixture = (
+            Path(__file__).resolve().parents[3]
+            / "data"
+            / "fixtures"
+            / "synthetic_tims.d"
+        )
+        sequence = {
+            "Method": "D:\\Methods\\imaging_pos.m",
+            "ImageFile": "slide_0000.tif",
+            "teaching_points": [{"image": [4780, 784], "stage": [-26352, 26386]}],
+            "raster": [20, 20],
+            "areas": [{"name": "01", "p1": [22695, 1593], "p2": [23108, 1858]}],
+        }
+        with closing(open_read_only(fixture / "analysis.tdf")) as conn:
+            handed = BrukerMetadataExtractor(
+                conn, fixture, mis_metadata=sequence
+            ).get_comprehensive()
+            without = BrukerMetadataExtractor(conn, fixture).get_comprehensive()
+
+        assert handed.raw_metadata["mis_metadata"] == dict(
+            sequence, Method="imaging_pos.m"
+        )
+        assert "global_metadata" in handed.raw_metadata
+        assert "mis_metadata" not in without.raw_metadata
+
     def test_the_standard_deviation_is_what_the_arrays_give(self):
         """The fixture's stated value follows from its own arrays, as a real
         file's does: sqrt(sum of squared ppm errors / (n - 1)) of the

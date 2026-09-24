@@ -68,6 +68,7 @@ class BrukerMetadataExtractor(MetadataExtractor):
         calibration_metadata: Optional[Dict[str, Any]] = None,
         region: Optional[int] = None,
         skip_total_peaks: bool = False,
+        mis_metadata: Optional[Dict[str, Any]] = None,
     ):
         """Initialize Bruker metadata extractor.
 
@@ -85,6 +86,11 @@ class BrukerMetadataExtractor(MetadataExtractor):
                 step against network-mounted .d folders.  The wizard
                 step 2 preview card does not display total_peaks, so
                 the missing value is safe.
+            mis_metadata: The flexImaging imaging sequence (``.mis``) the
+                reader found and parsed, or ``None`` when it found none.
+                Handed on as ``raw_metadata["mis_metadata"]``, where the
+                rapiflex and solariX extractors already put theirs, rather
+                than parsed a second time here.
         """
         super().__init__(conn)
         self.conn = conn
@@ -92,6 +98,7 @@ class BrukerMetadataExtractor(MetadataExtractor):
         self.calibration_metadata = calibration_metadata
         self._region = region
         self._skip_total_peaks = bool(skip_total_peaks)
+        self._mis_metadata = dict(mis_metadata or {})
 
     def _query_imaging_bounds(self, cursor):
         """Query imaging area bounds from GlobalMetadata."""
@@ -393,12 +400,20 @@ class BrukerMetadataExtractor(MetadataExtractor):
         """Extract comprehensive metadata with additional database queries."""
         essential = self.get_essential()
 
+        raw_metadata = self._extract_global_metadata()
+        if self._mis_metadata:
+            # The optical image, teaching points and areas of the imaging
+            # sequence: the only record of how the raster was registered
+            # onto the optical image, which the reader has always used and
+            # no tsf/tdf store has carried.
+            raw_metadata["mis_metadata"] = dict(self._mis_metadata)
+
         return ComprehensiveMetadata(
             essential=essential,
             format_specific=self._extract_bruker_specific(),
             acquisition_params=self._extract_acquisition_params(),
             instrument_info=self._extract_instrument_info(),
-            raw_metadata=self._extract_global_metadata(),
+            raw_metadata=raw_metadata,
         )
 
     def _resolve_pixel_size_um(

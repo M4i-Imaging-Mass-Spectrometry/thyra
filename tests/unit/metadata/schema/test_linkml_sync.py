@@ -35,6 +35,8 @@ _MODEL_CLASSES = {
     "IsolationWindow": models.IsolationWindow,
     "Acquisition": models.Acquisition,
     "Calibration": models.Calibration,
+    "TeachingPoint": models.TeachingPoint,
+    "Alignment": models.Alignment,
     "SoftwareRef": models.SoftwareRef,
     "ProcessingStep": models.ProcessingStep,
     "Provenance": models.Provenance,

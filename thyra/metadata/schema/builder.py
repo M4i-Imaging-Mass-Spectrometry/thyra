@@ -22,6 +22,7 @@ from ..types import ComprehensiveMetadata
 from .models import (
     MSI_METADATA_UNS_KEY,
     Acquisition,
+    Alignment,
     Calibration,
     Fragmentation,
     IonMobility,
@@ -33,6 +34,7 @@ from .models import (
     ProcessingStep,
     Provenance,
     ResolvingPower,
+    TeachingPoint,
 )
 from .vocab import (
     normalize_analyzer,
@@ -546,6 +548,82 @@ def _build_calibration(
     return Calibration(**fields)
 
 
+# --- the ``alignment`` section ----------------------------------------------
+#
+# flexImaging's imaging sequence file (``.mis``) is the one source that
+# states a registration, and the three Bruker readers that find one --
+# tsf/tdf, rapiflex and solariX -- hand on the same parse of it as
+# ``raw_metadata["mis_metadata"]``: ``ImageFile`` names the optical image,
+# and each teaching point pairs a pixel of it with the stage position of
+# the same feature. On 57 sequence files from flexImaging 4.1 to 7.2,
+# solariX and timsTOF, ``ImageFile`` is a bare name in every one, each
+# lists three teaching points, and the stage positions are micrometres:
+# carried through the affine the points fix, 82 of the 86 Areas whose
+# region the data hold match the raster it spans (positions times step) to
+# within two steps. The other four belong to the three acquisitions that
+# hold fewer regions than their sequence lists.
+
+#: What ``method`` says for a registration made with teaching points.
+_TEACHING_POINTS_METHOD = "teaching points"
+
+#: How many teaching points fix the affine map from the image to the
+#: stage. With fewer the image cannot have been registered by them, so
+#: the points are listed and no method is claimed.
+_POINTS_FOR_A_REGISTRATION = 3
+
+
+#: The fields of a point, in the order ``parse_mis_file`` lists its numbers:
+#: the image pair, then the stage pair.
+_TEACHING_POINT_FIELDS = ("image_x_px", "image_y_px", "stage_x_um", "stage_y_um")
+
+
+def _teaching_point(entry: Any) -> Optional[TeachingPoint]:
+    """One parsed ``TeachPoint``, or ``None`` when it is not two pairs of numbers."""
+    pairs = [_mapping(entry).get(key) for key in ("image", "stage")]
+    if not all(isinstance(pair, (list, tuple)) and len(pair) == 2 for pair in pairs):
+        return None
+    numbers = [_as_number(value) for pair in pairs for value in pair]
+    if any(number is None for number in numbers):
+        return None
+    return TeachingPoint(**dict(zip(_TEACHING_POINT_FIELDS, numbers)))
+
+
+def _build_alignment(raw_metadata: Dict[str, Any]) -> Optional[Alignment]:
+    """The ``alignment`` section from the imaging sequence a reader parsed.
+
+    The areas the sequence defines are not taken. They are the regions the
+    run was planned with, and an acquisition can hold fewer of them than
+    the sequence lists -- three of those read do, and there an area's place
+    in the list no longer says which region it is -- so they would describe
+    regions the acquisition does not hold. They stay in ``raw_metadata``.
+
+    Returns ``None`` when the source registers no image, so the section is
+    absent from the block rather than written empty.
+    """
+    sequence = _mapping(raw_metadata.get("mis_metadata"))
+    fields: Dict[str, Any] = {}
+
+    image = _first_string(sequence, ("ImageFile",))
+    name = _file_name(image) if image is not None else None
+    if name is not None:
+        fields["optical_image_file"] = name
+
+    entries = sequence.get("teaching_points")
+    points = [
+        point
+        for point in map(_teaching_point, entries if isinstance(entries, list) else [])
+        if point is not None
+    ]
+    if points:
+        fields["teaching_points"] = points
+    if len(points) >= _POINTS_FOR_A_REGISTRATION:
+        fields["method"] = _TEACHING_POINTS_METHOD
+
+    if not fields:
+        return None
+    return Alignment(**fields)
+
+
 def _counted_spectra(essential: Any) -> Optional[int]:
     """The reader's spectrum count, when it counted one and found any.
 
@@ -971,8 +1049,9 @@ def build_msi_metadata(
 
     Returns:
         The populated document.  Fields the source does not report are
-        left unset, and the ``acquisition`` and ``calibration`` sections
-        are each absent when the reader reported none of their facts.
+        left unset, and the ``acquisition``, ``calibration`` and
+        ``alignment`` sections are each absent when the reader reported
+        none of their facts.
     """
     from thyra import __version__
 
@@ -1008,6 +1087,7 @@ def build_msi_metadata(
         ),
         acquisition=_build_acquisition(acquisition, source_format),
         calibration=_build_calibration(acquisition, format_specific, raw_metadata),
+        alignment=_build_alignment(raw_metadata),
         processing=list(processing or []),
         provenance=Provenance(
             thyra_version=__version__,
@@ -1091,9 +1171,9 @@ def build_metadata_document(
     The same shape :func:`~thyra.metadata.schema.store_io.read_msi_metadata_blocks`
     hands back for a converted store, so one dataset's metadata reads
     the same whether it came from the raw file or from the store: real
-    lists for ``processing`` and for the isolation windows, where
-    :meth:`MSIMetadata.to_uns_dict` packs both into JSON strings because
-    AnnData/zarr cannot round-trip a list of objects.
+    lists for ``processing``, the isolation windows and the teaching
+    points, where :meth:`MSIMetadata.to_uns_dict` packs each into a JSON
+    string because AnnData/zarr cannot round-trip a list of objects.
 
     Args:
         comprehensive: The reader's comprehensive metadata, or ``None``.
@@ -1119,7 +1199,7 @@ def build_metadata_document(
         The document as a plain dict.  Sibling-table fields are absent:
         no sibling was written, because nothing was written.
     """
-    from .store_io import decode_isolation_windows
+    from .store_io import decode_packed_lists
 
     meta = build_msi_metadata(
         comprehensive,
@@ -1137,7 +1217,7 @@ def build_metadata_document(
     stored = document.get("processing")
     if isinstance(stored, str):
         document["processing"] = json.loads(stored)
-    decode_isolation_windows(document, MSI_METADATA_UNS_KEY)
+    decode_packed_lists(document, MSI_METADATA_UNS_KEY)
     return document
 
 

@@ -28,7 +28,7 @@ import spatialdata as sd
 sdata = sd.read_zarr("output.zarr")
 block = sdata.tables["msi_dataset_z0"].uns["msi_metadata"]
 
-print(block["schema_version"])                       # "0.8.0"
+print(block["schema_version"])                       # "0.9.0"
 print(block["ms_analysis"]["pixel_size_um"])         # {"x": 20.0, "y": 20.0}
 print(block["ms_analysis"]["ionisation_source"])     # "MALDI"
 print(block["ms_analysis"]["ionisation_source_term"])
@@ -40,10 +40,10 @@ print(block["ms_analysis"]["ionisation_source_term"])
 
 ## The document
 
-Six sections and a processing list. `ms_analysis` and `provenance` are
-written by the converter for every store; `acquisition` and `calibration`
-are each written when the reader reports at least one of their facts and are
-absent otherwise; `sample` and `preparation` describe things no raw file
+Seven sections and a processing list. `ms_analysis` and `provenance` are
+written by the converter for every store; `acquisition`, `calibration` and
+`alignment` are each written when the reader reports at least one of their
+facts and are absent otherwise; `sample` and `preparation` describe things no raw file
 records (what the tissue was, how it was prepared) and are supplied by you --
 see [Completing the metadata](#completing-the-metadata).
 
@@ -82,6 +82,9 @@ see [Completing the metadata](#completing-the-metadata).
 | | `n_reference_peaks` | integer, the reference peaks the calibration was fitted to | -- |
 | | `mz_standard_deviation_ppm` | number, their residual in ppm (see below); never zero | -- |
 | | `lock_mass_corrected` | boolean, the m/z values were corrected against a lock mass | -- |
+| `alignment` | `optical_image_file` | text, the file name of the optical image the raster is registered onto (never a path) | IMS (`IMS:1006008`) |
+| | `method` | text, how that image was aligned with the raster, e.g. `"teaching points"` | IMS (`IMS:1006017`) |
+| | `teaching_points` | list of `{image_x_px, image_y_px, stage_x_um, stage_y_um}`: a pixel of the image and the stage position of the same feature | -- |
 | `processing` | list of `{name, action_term, software {name, version, uri}, parameters}` | ordered steps, oldest first | PSI-MS data processing action (`MS:1001485` for `m/z calibration`) |
 | `provenance` | `thyra_version` | text, required | -- |
 | | `source_format` | `"imzml"`, `"bruker"`, ... | -- |
@@ -241,6 +244,23 @@ standard deviation is 3578 %. And no person reaches the section:
 `CalibrationUser` and `MobilityCalibrationUser` are not read, and neither is
 the reference list's name, which is text the lab chose.
 
+The `alignment` section says which optical image the source registers its
+raster onto, and how. Only flexImaging states one, in the `.mis` file beside
+a Bruker acquisition:
+
+| Source | `optical_image_file` | `method` | `teaching_points` |
+|--------|----------------------|----------|-------------------|
+| Bruker tsf/tdf, rapiflex, solariX, with a `.mis` | `<ImageFile>`, name only | `"teaching points"` when there are three or more | each `<TeachPoint>` |
+| Everything else | -- | -- | -- |
+
+The stage positions are in micrometres, in the frame the teaching was done
+in. The positions the acquisition records its spectra at are offset from that
+frame, so the points place the image on the target, not on those positions.
+The `.mis` Areas stay in `raw_metadata`: an acquisition can hold fewer of them
+than the file lists. Whether a conversion placed the raster in the image's
+pixels is for the store's `coordinate_systems` attribute to say (see
+[Coordinate Systems](coordinate-systems.md)).
+
 Everything else -- organism, tissue, condition, matrix -- cannot come from
 a raw file and stays empty until you provide it.
 
@@ -313,6 +333,8 @@ artifact alone:
 | `ms_analysis.detector_resolving_power` | `MS:1000800` mass resolving power |
 | `acquisition.laser_frequency_hz` | `IMS:1006000` repetition rate |
 | `acquisition.shots_per_pixel` | `IMS:1006001` laser shots per spectrum |
+| `alignment.optical_image_file` | `IMS:1006008` optical image location |
+| `alignment.method` | `IMS:1006017` method used to align optical image |
 
 On the input side, every imzML file-description cvParam is preserved in
 `uns["raw_metadata"]["cvParams"]` **with its accession** (and unit
@@ -353,6 +375,9 @@ standard converge:
   it rests on (`MS:1000014` accuracy is an analyzer attribute, `MS:4000072`
   the error of one identified ion)
 - lock-mass correction of the m/z values
+- a teaching point: a pixel of the optical image paired with the stage
+  position of the same feature (`IMS:1006017` names the alignment method,
+  with no term for the points it rests on)
 
 `MS:1001485` itself is used, as the `action_term` of the `m/z calibration`
 processing step -- the one place the schema names a calibration as
@@ -428,13 +453,14 @@ added), 0.3.0 (`ion_mobility.resolved_table` and `ion_mobility.grid` added),
 (`fragmentation.resolved_table` added), 0.6.0 (the `acquisition` section
 added), 0.7.0 (`ms_analysis.manufacturer` and `ms_analysis.serial_number`
 added), 0.8.0 (the `calibration` section, `ms_analysis.n_spectra` and
-the processing steps' `action_term` added).
+the processing steps' `action_term` added), 0.9.0 (the `alignment` section
+added).
 
 The JSON Schema rendering is published at a fixed, versioned address,
 which is also its `$id`:
 
 ```
-https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.8.0/msi_metadata.schema.json
+https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.9.0/msi_metadata.schema.json
 ```
 
 Every version gets its own folder under that path and a published folder
@@ -444,7 +470,7 @@ program that writes the document without Thyra validates against that
 address; see [Writing the Metadata Document](writing-the-metadata-document.md).
 
 The same file is committed at
-`thyra/metadata/schema/msi_metadata_schema_v0_8.json` and ships in the
+`thyra/metadata/schema/msi_metadata_schema_v0_9.json` and ships in the
 wheel, so a Python consumer can validate documents offline without
 importing Thyra:
 
@@ -454,7 +480,7 @@ import json
 
 schema = json.loads(
     resources.files("thyra.metadata.schema")
-    .joinpath("msi_metadata_schema_v0_8.json")
+    .joinpath("msi_metadata_schema_v0_9.json")
     .read_text()
 )
 ```

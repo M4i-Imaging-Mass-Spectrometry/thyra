@@ -86,6 +86,58 @@
       "title": "Acquisition",
       "type": "object"
     },
+    "Alignment": {
+      "additionalProperties": false,
+      "description": "How the source registers its raster onto an optical image.\n\nFacts about the source: which image the acquisition was planned on,\nand how that image was registered to the sample stage. Whether a\nconversion then placed the raster in that image's pixels is what the\nconversion did, and the store's ``coordinate_systems`` attribute says\nso.\n\nEvery field is optional and left unset when the source does not state\nit, and the section is absent when the source registers no image.",
+      "properties": {
+        "method": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "IMS:1006017",
+            "name": "method used to align optical image"
+          },
+          "default": null,
+          "description": "How the optical image was aligned with the raster, e.g. 'teaching points', the method flexImaging uses.",
+          "title": "Method"
+        },
+        "optical_image_file": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "IMS:1006008",
+            "name": "optical image location"
+          },
+          "default": null,
+          "description": "File name of the optical image the registration is stated in, e.g. 'slide_0000.tif': the image whose pixels the teaching points name. The name only, never a path.",
+          "title": "Optical Image File"
+        },
+        "teaching_points": {
+          "description": "The points the optical image was registered to the stage with, in the order the source lists them; empty when it lists none. Their stage coordinates are in the frame the teaching was done in, which the positions an acquisition records its spectra at can be offset from: the points place the image on the target, not on those positions.",
+          "items": {
+            "$ref": "#/$defs/TeachingPoint"
+          },
+          "title": "Teaching Points",
+          "type": "array"
+        }
+      },
+      "title": "Alignment",
+      "type": "object"
+    },
     "Calibration": {
       "additionalProperties": false,
       "description": "How the source's m/z values were calibrated.\n\nFacts about the source, never about what Thyra did with it: which\ncalibration a conversion applied is a ``processing`` step bound to\nMS:1001485 (m/z calibration), because a converter can be told to\napply one the source does not consider current.\n\n\"The calibration\" is the one the source's m/z values rest on: the\nmost recent recalibration when the data were recalibrated after\nacquisition, otherwise the calibration the acquisition ran under.\nEvery field is optional and left unset when the source does not state\nit, and a value the vendor writes where it has nothing to state -- a\nstandard deviation of zero, over a fit with no residual to measure --\nis left unset too.",
@@ -1149,12 +1201,46 @@
       ],
       "title": "SoftwareRef",
       "type": "object"
+    },
+    "TeachingPoint": {
+      "additionalProperties": false,
+      "description": "One point the optical image was registered to the sample stage with.\n\nThe operator marks a feature in the image and brings the stage to the\nsame feature; three such pairs fix the affine map from the image's\npixels to the stage.",
+      "properties": {
+        "image_x_px": {
+          "description": "Column of the point in the optical image, in pixels from its left edge.",
+          "title": "Image X Px",
+          "type": "number"
+        },
+        "image_y_px": {
+          "description": "Row of the point in the optical image, in pixels from its top edge.",
+          "title": "Image Y Px",
+          "type": "number"
+        },
+        "stage_x_um": {
+          "description": "Stage x of the same feature, in micrometres.",
+          "title": "Stage X Um",
+          "type": "number"
+        },
+        "stage_y_um": {
+          "description": "Stage y of the same feature, in micrometres.",
+          "title": "Stage Y Um",
+          "type": "number"
+        }
+      },
+      "required": [
+        "image_x_px",
+        "image_y_px",
+        "stage_x_um",
+        "stage_y_um"
+      ],
+      "title": "TeachingPoint",
+      "type": "object"
     }
   },
-  "$id": "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.8.0/msi_metadata.schema.json",
+  "$id": "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.9.0/msi_metadata.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "The versioned MSI metadata document.\n\n``sample`` and ``preparation`` cannot be auto-populated from raw\nfiles and default to empty; ``ms_analysis`` and ``provenance`` are\nwritten by the converter for every store; ``acquisition`` and\n``calibration`` are each written when the reader reports at least one\nof their facts and are absent -- not empty -- otherwise.\n\nThe emitted JSON Schema carries ``$id`` and ``$schema`` so that the\ncommitted artifact names its own published address; they are added\nhere, on the root model, rather than pasted into the file, so the\nsync test that compares the file with ``model_json_schema()`` keeps\nholding.",
+  "description": "The versioned MSI metadata document.\n\n``sample`` and ``preparation`` cannot be auto-populated from raw\nfiles and default to empty; ``ms_analysis`` and ``provenance`` are\nwritten by the converter for every store; ``acquisition``,\n``calibration`` and ``alignment`` are each written when the reader\nreports at least one of their facts and are absent -- not empty --\notherwise.\n\nThe emitted JSON Schema carries ``$id`` and ``$schema`` so that the\ncommitted artifact names its own published address; they are added\nhere, on the root model, rather than pasted into the file, so the\nsync test that compares the file with ``model_json_schema()`` keeps\nholding.",
   "properties": {
     "acquisition": {
       "anyOf": [
@@ -1167,6 +1253,18 @@
       ],
       "default": null,
       "description": "When the acquisition was run and with what laser settings; auto-populated from the vendor metadata where a reader has the facts, absent when it has none of them."
+    },
+    "alignment": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Alignment"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Which optical image the source registers its raster onto, and how; auto-populated from the vendor metadata where a reader has the facts, absent when it has none of them."
     },
     "calibration": {
       "anyOf": [
@@ -1205,7 +1303,7 @@
       "description": "What the sample is; user-supplied."
     },
     "schema_version": {
-      "default": "0.8.0",
+      "default": "0.9.0",
       "description": "Semantic version of the schema this document conforms to.",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
       "title": "Schema Version",

@@ -1010,6 +1010,7 @@ class BrukerReader(BrukerBaseMSIReader):
             self._calibration_metadata,
             region=region_for_extractor,
             skip_total_peaks=self._metadata_only,
+            mis_metadata=self._mis_metadata,
         )
 
     def _detect_regions(self) -> List[Tuple[int, int]]:

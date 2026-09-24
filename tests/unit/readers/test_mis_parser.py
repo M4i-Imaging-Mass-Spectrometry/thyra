@@ -438,3 +438,74 @@ class TestTheOtherBrukerPicksAreSorted:
         reader._find_data_files()
 
         assert reader._mis_path == mine
+
+
+class TestTheTimstofSequenceReachesTheDocument:
+    """The tsf/tdf reader has always parsed the .mis; its metadata now keeps it.
+
+    The rapiflex and solariX extractors hand the parse on as
+    ``raw_metadata["mis_metadata"]``; the tsf/tdf one dropped it, so the
+    registration of every timsTOF raster onto its optical image reached no
+    store and no document. Built on the synthetic TDF, whose tables have the
+    real layout, with a sequence file beside it the way flexImaging writes
+    one: the three teaching points and the image name of a real one.
+    """
+
+    _TEACH_POINTS = (
+        "<TeachPoint>4780,784;-26352,26386</TeachPoint>"
+        "<TeachPoint>13648,11296;-8793,5388</TeachPoint>"
+        "<TeachPoint>32156,724;28003,26505</TeachPoint>"
+    )
+
+    def _acquisition_with_a_sequence(self, tmp_path: Path) -> Path:
+        import shutil
+
+        fixture = (
+            Path(__file__).resolve().parents[2]
+            / "data"
+            / "fixtures"
+            / "synthetic_tims.d"
+        )
+        d_folder = tmp_path / "synthetic_tims.d"
+        shutil.copytree(fixture, d_folder)
+        (tmp_path / "synthetic_tims.mis").write_text(
+            '<?xml version="1.0"?>\n<ImagingSequence>'
+            "<ImageFile>slide_0000.tif</ImageFile>"
+            f"{self._TEACH_POINTS}</ImagingSequence>\n"
+        )
+        return d_folder
+
+    def test_the_document_states_the_image_and_its_teaching_points(
+        self, tmp_path: Path
+    ) -> None:
+        from thyra.metadata.document import read_metadata_document
+
+        document = read_metadata_document(self._acquisition_with_a_sequence(tmp_path))
+
+        alignment = document["alignment"]
+        assert alignment["optical_image_file"] == "slide_0000.tif"
+        assert alignment["method"] == "teaching points"
+        assert [
+            (p["image_x_px"], p["image_y_px"], p["stage_x_um"], p["stage_y_um"])
+            for p in alignment["teaching_points"]
+        ] == [
+            (4780.0, 784.0, -26352.0, 26386.0),
+            (13648.0, 11296.0, -8793.0, 5388.0),
+            (32156.0, 724.0, 28003.0, 26505.0),
+        ]
+
+    def test_the_raw_metadata_keeps_the_parse(self, tmp_path: Path) -> None:
+        d_folder = self._acquisition_with_a_sequence(tmp_path)
+        with BrukerReader(d_folder, metadata_only=True) as reader:
+            raw = reader.get_comprehensive_metadata().raw_metadata
+
+        assert raw["mis_metadata"]["ImageFile"] == "slide_0000.tif"
+        assert len(raw["mis_metadata"]["teaching_points"]) == 3
+
+    def test_without_a_sequence_there_is_no_section(self, tmp_path: Path) -> None:
+        from thyra.metadata.document import read_metadata_document
+
+        d_folder = self._acquisition_with_a_sequence(tmp_path)
+        (tmp_path / "synthetic_tims.mis").unlink()
+
+        assert "alignment" not in read_metadata_document(d_folder)

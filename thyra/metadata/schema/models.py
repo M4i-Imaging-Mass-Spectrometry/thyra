@@ -29,7 +29,7 @@ module and kept in sync by a unit test; regenerate it with
 
 import json
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from pydantic import (
     BaseModel,
@@ -68,7 +68,11 @@ from pydantic import (
 #        ``ProcessingStep`` gained ``action_term`` so the step that records
 #        which calibration a conversion applied is bound to MS:1001485
 #        (m/z calibration).
-MSI_METADATA_SCHEMA_VERSION = "0.8.0"
+# 0.9.0: added the optional top-level ``alignment`` section (additive):
+#        which optical image the source registers its raster onto, by what
+#        method, and the teaching points that registration rests on
+#        (issue #67).
+MSI_METADATA_SCHEMA_VERSION = "0.9.0"
 
 # Where the block lives inside a converted store:
 # ``table.uns["msi_metadata"]``.  This location is a stable contract
@@ -77,7 +81,7 @@ MSI_METADATA_SCHEMA_VERSION = "0.8.0"
 MSI_METADATA_UNS_KEY = "msi_metadata"
 
 # The committed JSON Schema artifact for this schema version.
-SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_8.json"
+SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_9.json"
 
 # Where every published version of the schema is served (issue #385).
 # ``docs/schema/<version>/`` is copied verbatim onto the documentation
@@ -224,6 +228,24 @@ CANDIDATE_CV_CONCEPTS = (
         "lock-mass correction of the m/z values",
         "calibration.lock_mass_corrected",
     ),
+    (
+        "teaching point: a pixel of the optical image paired with the stage "
+        "position of the same feature (IMS:1006017 names the alignment "
+        "method, with no term for the points it rests on)",
+        "alignment.teaching_points",
+    ),
+)
+
+#: The lists of objects a block stores as JSON strings, by their path in
+#: it. A list of objects does not round-trip through AnnData/zarr: it comes
+#: back as a numpy array of Python ``repr`` strings, which is neither
+#: parseable nor safe to deepcopy on numpy 2.1-2.2. So each is packed by
+#: :meth:`MSIMetadata.to_uns_dict` and unpacked wherever a block is read,
+#: all from this one table. ``processing`` is packed too, and handled on its
+#: own because it is the one such list at the top of the block.
+PACKED_OBJECT_LISTS: Tuple[Tuple[str, ...], ...] = (
+    ("ms_analysis", "fragmentation", "windows"),
+    ("alignment", "teaching_points"),
 )
 
 
@@ -260,6 +282,17 @@ def _iso_8601_datetime(field: str, value: Optional[str]) -> Optional[str]:
         datetime.fromisoformat(value)
     except ValueError as e:
         raise ValueError(f"{field} {value!r} is not an ISO 8601 datetime") from e
+    return value
+
+
+def _a_file_name(field: str, value: Optional[str]) -> Optional[str]:
+    """``value`` when it is a file name, else a ``ValueError``.
+
+    A path names the machine the data was acquired on, and a store is
+    shared; every field that names a file holds the name alone.
+    """
+    if value is not None and ("/" in value or "\\" in value):
+        raise ValueError(f"{field} {value!r} must be a file name, not a path")
     return value
 
 
@@ -782,9 +815,7 @@ class Acquisition(_SchemaModel):
     @classmethod
     def _is_a_name_not_a_path(cls, value: Optional[str]) -> Optional[str]:
         """A path names the machine the data was acquired on; a store is shared."""
-        if value is not None and ("/" in value or "\\" in value):
-            raise ValueError(f"method_file {value!r} must be a file name, not a path")
-        return value
+        return _a_file_name("method_file", value)
 
 
 class Calibration(_SchemaModel):
@@ -894,6 +925,83 @@ class Calibration(_SchemaModel):
         return self
 
 
+class TeachingPoint(_SchemaModel):
+    """One point the optical image was registered to the sample stage with.
+
+    The operator marks a feature in the image and brings the stage to the
+    same feature; three such pairs fix the affine map from the image's
+    pixels to the stage.
+    """
+
+    image_x_px: float = Field(
+        description=(
+            "Column of the point in the optical image, in pixels from its left edge."
+        ),
+    )
+    image_y_px: float = Field(
+        description=(
+            "Row of the point in the optical image, in pixels from its top edge."
+        ),
+    )
+    stage_x_um: float = Field(
+        description="Stage x of the same feature, in micrometres.",
+    )
+    stage_y_um: float = Field(
+        description="Stage y of the same feature, in micrometres.",
+    )
+
+
+class Alignment(_SchemaModel):
+    """How the source registers its raster onto an optical image.
+
+    Facts about the source: which image the acquisition was planned on,
+    and how that image was registered to the sample stage. Whether a
+    conversion then placed the raster in that image's pixels is what the
+    conversion did, and the store's ``coordinate_systems`` attribute says
+    so.
+
+    Every field is optional and left unset when the source does not state
+    it, and the section is absent when the source registers no image.
+    """
+
+    optical_image_file: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "File name of the optical image the registration is stated in, "
+            "e.g. 'slide_0000.tif': the image whose pixels the teaching "
+            "points name. The name only, never a path."
+        ),
+        json_schema_extra=_cv("IMS:1006008", "optical image location"),
+    )
+    method: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "How the optical image was aligned with the raster, e.g. "
+            "'teaching points', the method flexImaging uses."
+        ),
+        json_schema_extra=_cv("IMS:1006017", "method used to align optical image"),
+    )
+    teaching_points: List[TeachingPoint] = Field(
+        default_factory=list,
+        description=(
+            "The points the optical image was registered to the stage with, "
+            "in the order the source lists them; empty when it lists none. "
+            "Their stage coordinates are in the frame the teaching was done "
+            "in, which the positions an acquisition records its spectra at "
+            "can be offset from: the points place the image on the target, "
+            "not on those positions."
+        ),
+    )
+
+    @field_validator("optical_image_file")
+    @classmethod
+    def _is_a_name_not_a_path(cls, value: Optional[str]) -> Optional[str]:
+        """The method file's rule, for the same reason."""
+        return _a_file_name("optical_image_file", value)
+
+
 class SoftwareRef(_SchemaModel):
     """A software agent, the way mzQC records analysis software."""
 
@@ -975,9 +1083,10 @@ class MSIMetadata(_SchemaModel):
 
     ``sample`` and ``preparation`` cannot be auto-populated from raw
     files and default to empty; ``ms_analysis`` and ``provenance`` are
-    written by the converter for every store; ``acquisition`` and
-    ``calibration`` are each written when the reader reports at least one
-    of their facts and are absent -- not empty -- otherwise.
+    written by the converter for every store; ``acquisition``,
+    ``calibration`` and ``alignment`` are each written when the reader
+    reports at least one of their facts and are absent -- not empty --
+    otherwise.
 
     The emitted JSON Schema carries ``$id`` and ``$schema`` so that the
     committed artifact names its own published address; they are added
@@ -1026,6 +1135,14 @@ class MSIMetadata(_SchemaModel):
             "when it has none of them."
         ),
     )
+    alignment: Optional[Alignment] = Field(
+        default=None,
+        description=(
+            "Which optical image the source registers its raster onto, and "
+            "how; auto-populated from the vendor metadata where a reader has "
+            "the facts, absent when it has none of them."
+        ),
+    )
     processing: List[ProcessingStep] = Field(
         default_factory=list,
         description="Ordered processing history, oldest first (mzQC-style).",
@@ -1038,9 +1155,9 @@ class MSIMetadata(_SchemaModel):
         """Serialise for storage in ``table.uns``.
 
         ``None`` fields are dropped (which is what leaves an unset
-        ``acquisition`` or ``calibration`` section out), and the
-        ``sample`` / ``preparation`` / ``processing`` sections are omitted
-        entirely when empty --
+        ``acquisition``, ``calibration`` or ``alignment`` section out), and
+        the ``sample`` / ``preparation`` / ``processing`` sections are
+        omitted entirely when empty --
         following the store convention that a section the source has
         nothing for is omitted rather than written empty, so consumers
         can tell "not available" from "available and empty".
@@ -1048,11 +1165,10 @@ class MSIMetadata(_SchemaModel):
         ``processing`` is stored as a JSON string: it is a list of
         objects, which AnnData/zarr cannot round-trip (the same reason
         ``uns["regions"]`` is JSON).  ``read_msi_metadata_blocks`` and
-        ``validate_document`` both decode it transparently.
-        ``ms_analysis.fragmentation.windows`` is a list of objects too and
-        gets the same treatment: stored raw it comes back as a numpy array
-        of Python ``repr`` strings, which is neither parseable nor safe to
-        deepcopy on numpy 2.1-2.2.
+        ``validate_document`` both decode it transparently.  The lists in
+        :data:`PACKED_OBJECT_LISTS` -- the isolation windows and the
+        teaching points -- are lists of objects too and get the same
+        treatment.
         """
         data: Dict[str, Any] = self.model_dump(mode="json", exclude_none=True)
         for section in ("sample", "preparation", "processing"):
@@ -1060,10 +1176,25 @@ class MSIMetadata(_SchemaModel):
                 data.pop(section, None)
         if "processing" in data:
             data["processing"] = json.dumps(data["processing"])
-        fragmentation = data.get("ms_analysis", {}).get("fragmentation")
-        if isinstance(fragmentation, dict) and "windows" in fragmentation:
-            fragmentation["windows"] = json.dumps(fragmentation["windows"])
+        for path in PACKED_OBJECT_LISTS:
+            holder = holder_of(data, path)
+            if holder is not None and path[-1] in holder:
+                holder[path[-1]] = json.dumps(holder[path[-1]])
         return data
+
+
+def holder_of(block: Dict[str, Any], path: Tuple[str, ...]) -> Optional[Dict[str, Any]]:
+    """The mapping ``path``'s last key would be in, or ``None`` if there is none.
+
+    Every key above the last must lead to a mapping: a block without the
+    section, or with something else in its place, has nothing at that
+    path. Shared by everything that packs or unpacks
+    :data:`PACKED_OBJECT_LISTS`, so the three agree on where each list is.
+    """
+    node: Any = block
+    for key in path[:-1]:
+        node = node.get(key) if isinstance(node, dict) else None
+    return node if isinstance(node, dict) else None
 
 
 def field_cv_bindings() -> Dict[str, Dict[str, str]]:
