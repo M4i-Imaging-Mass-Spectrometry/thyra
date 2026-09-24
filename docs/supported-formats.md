@@ -12,7 +12,7 @@ accepted (see the [CLI Reference](cli.md#conversion)).
 | **imzML** | `.imzML` file + `.ibd` | extension, `.ibd` must exist | none |
 | **Bruker timsTOF** | `.d` directory | `analysis.tsf` or `analysis.tdf` | bundled DLL |
 | **Bruker solariX** | `.d` directory | `peaks.sqlite` + `ImagingInfo.xml` | none |
-| **Bruker Rapiflex** | directory | `*.dat` + `*_poslog.txt` | none |
+| **Bruker Rapiflex** | directory | `*.dat` + `*_poslog.txt` + `*_info.txt` | none |
 | **Waters MassLynx** | `.raw` **directory** | `_FUNC*.DAT` files inside | bundled DLL |
 | **PHI SmartSoft-TOF** | `.raw` **file** | `SOFH` magic in first 4 bytes | none |
 | **mzPeak** | `.mzpeak` file | ZIP magic + `mzpeak_index.json` member | none |
@@ -30,6 +30,10 @@ Two Bruker instrument families share the `.d` extension and are told apart by
 what the directory contains: timsTOF writes `analysis.tsf`/`analysis.tdf`,
 solariX (FT-ICR / MRMS) writes `peaks.sqlite` alongside `ImagingInfo.xml`.
 
+Shimadzu `.imdx` and `.kbd` files are recognised but not read yet. Thyra stops
+and names the workaround: export the dataset as imzML from IMAGEREVEAL MS and
+convert that.
+
 ---
 
 ## The `.raw` collision
@@ -40,9 +44,11 @@ Two vendors claim `.raw`, and they are told apart by **shape, not extension**:
 - **PHI** `.raw` is a *single file* whose header begins with the ASCII magic
   `SOFH`
 
-Detection checks the directory case first, then the file magic. A `.raw` path
-that is neither raises an error naming both possibilities, rather than a
-confusing Waters-specific complaint:
+Detection checks the directory case first, then the file magic. A `.raw` file
+that is neither -- a Thermo `.raw`, for instance -- raises an error naming both
+possibilities, rather than a confusing Waters-specific complaint (a `.raw`
+folder with no `_FUNC` files is reported as an incomplete Waters
+acquisition):
 
 ```
 Unrecognised .raw file: <path>. Expected either a Waters directory containing
@@ -58,17 +64,16 @@ actually populate from each.
 
 | | imzML | timsTOF | solariX | Rapiflex | Waters | PHI | mzPeak |
 |---|---|---|---|---|---|---|---|
-| Pixel size from metadata | yes | yes | yes (`.mis`) | yes | yes | yes | sometimes |
-| Optical image | -- | yes | -- | yes | -- | -- | -- |
-| Optical alignment | -- | yes (`.mis`) | -- | -- | -- | -- | -- |
+| Pixel size from metadata | when declared | yes | yes (`.mis`) | yes (`_info.txt`) | yes | yes | when declared |
+| Optical image | -- | yes | yes | yes | -- | -- | -- |
+| Optical alignment | -- | yes (`.mis`) | -- | yes (`.mis`) | -- | -- | -- |
 | Multi-region | -- | yes | recorded | -- | -- | mosaic tiles | -- |
-| 3D / multi-slice | yes | yes | -- | -- | -- | -- | -- |
-| Native non-m/z axis kept | -- | -- | -- | -- | -- | flight time | -- |
+| 3D / multi-slice | yes | -- | -- | -- | -- | -- | -- |
+| Native non-m/z axis kept | -- | -- | -- | -- | -- | flight time, with `--no-resample` | -- |
 
 Anything a format does not supply is simply absent from the output rather than
-guessed at. Pixel size is the one exception worth knowing about: when a source
-cannot report it, the CLI falls back to a default and records that it did so in
-`uns` (see [Output Format](output-format.md)).
+guessed at. That includes the pixel size: when a source cannot report it, the
+conversion stops before writing anything and asks for `--pixel-size`.
 
 "Optical image" means TIFF, JPEG, PNG or BMP, matched case-insensitively on the
 suffix -- FlexImaging exports more than TIFF, and a Rapiflex `.mis` regularly
@@ -96,12 +101,10 @@ holds only offsets and the binary holds the data.
 
 **Pixel numbering.** The specification numbers x and y from 1, and Thyra
 subtracts that to reach the 0-based indices the store uses. Exports numbered
-from **0** exist, and on those the subtraction used to produce `x = -1` for the
-first column, which the grid guard then dropped -- a 3x3 acquisition stored as
-4 pixels, with a warning naming a 2x2 grid the file never declared. Since
-v3.24.0 the base is measured: a file whose smallest coordinate is 0 is rebased
-on 0, and a file starting at 1 -- or at 5, because it is a crop of a larger
-slide -- keeps the base of 1 and does not move. z is separate and rebases on
+from **0** exist too, and a fixed subtraction would put their first column at
+`x = -1`, so the base is measured: a file whose smallest coordinate is 0 is
+rebased on 0, and a file starting at 1 -- or at 5, because it is a crop of a
+larger slide -- keeps the base of 1 and does not move. z is separate and rebases on
 the smallest plane present, because z has no origin to preserve. Whatever was
 subtracted is recorded in `coordinate_systems.global.coordinate_offsets_px`.
 
@@ -255,14 +258,14 @@ Two things to know up front:
 
 ## Bruker Rapiflex
 
-A folder of `*.dat` files with `*_poslog.txt` and `*_info.txt` alongside. The
-position log supplies the pixel grid. No SDK required.
+A folder of `*.dat` files with `*_poslog.txt` and `*_info.txt` alongside; all
+three are needed for the folder to be recognised, and only the first `.dat` is
+read. The `.dat` header gives the raster size, and the position log places
+each spectrum on it. No SDK required.
 
-The raster step comes from the `Raster:` line in `*_info.txt` or the
-`<Raster>` element of the `.mis`. Without either, Thyra refuses and asks for
-`--pixel-size`, the same way the solariX reader does -- it used to fall back
-to 20 um and record that guess in the store as an automatically detected
-measurement.
+The raster step comes from the `Raster:` line in `*_info.txt`. Without it,
+Thyra refuses and asks for `--pixel-size`, the same way the solariX reader
+does, rather than guessing a value.
 
 The `.dat` header's raster origin reaches the store as
 `coordinate_offsets_px`, with `stage_offset_um` beside it, so a Rapiflex
@@ -275,13 +278,15 @@ images -- a slide overview and one or two more beside the alignment scan -- and
 they are frequently `.jpg` rather than `.tif`; all of them are carried into the
 store, but only the named one gets the teaching points' coordinate space.
 
-**The alignment image is cropped to the section it aligns.** The scan the
-`.mis` names is the whole slide, and every `.d` cut from that slide names the
-same one, so a project of many sections used to hold as many copies of one
+**The alignment image is cropped to the section it aligns.** This applies to
+Rapiflex and timsTOF acquisitions alike. The scan the `.mis` names is the whole
+slide, and every acquisition cut from that slide names the same one, so
+without the crop a project of many sections would hold as many copies of one
 photo, each right for its own section and centimetres off for the others. When
 a conversion covers exactly one region -- a single-region acquisition, or one
-region of a multi-region file selected with `region=` -- the store holds only
-that region's Area box plus a 10% margin, pyramided from the crop's size, and
+region of a multi-region timsTOF file selected with `--region` -- the store
+holds only that region's Area box plus a 10% margin, pyramided from the crop's
+size, and
 the element carries a translation by the crop's origin in front of the
 transform the whole scan would have had. Nothing on the MSI side changes: the
 raster-to-image affine, the pixel polygons and `coordinate_systems` keep
@@ -449,8 +454,9 @@ directly, so it behaves identically on every platform.
 It differs from the other formats in one important way: it records **individual
 ion arrivals**, not per-pixel spectra. Thyra aggregates those events into sparse
 spectra on the detector's time-channel grid. Because flight time is what the
-instrument actually measures, Thyra also stores it as `var["tof_us"]` so the
-mass calibration stays reversible.
+instrument actually measures, a conversion with `--no-resample` also stores it
+as `var["tof_us"]`, so the mass calibration stays reversible. A resampled
+conversion, the default, has no channel grid left to label.
 
 ```bash
 thyra tofsims_run.raw out.zarr
@@ -472,12 +478,11 @@ tested against synthetic files -- if you have real data in one of those modes,
 please [open an issue](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues).
 
 **Previewing costs nothing.** Recording events rather than spectra means the
-header cannot say which pixels carry one; counting them means decoding the
-whole stream, which `preview_msi` used to do despite promising otherwise --
-linear in file size, so a multi-gigabyte acquisition previewed as slowly as it
-converted. Since v3.24.0 a preview answers from the header and the block chain
-alone, and reports `n_pixels` as `None`: unknown, rather than quietly filled in
-with the raster size that `grid_dims` already carries. A conversion is
+header cannot say which pixels carry one; counting them would mean decoding
+the whole stream, as slowly as a conversion. So a preview answers from the
+header and the block chain alone, and reports `n_pixels` as `None`: unknown,
+rather than quietly filled in with the raster size that `grid_dims` already
+carries. A conversion is
 unaffected and still counts every pixel exactly.
 
 See [PHI ToF-SIMS Notes](phi-tofsims-notes.md) for the file layout, the

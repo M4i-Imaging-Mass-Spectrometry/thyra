@@ -191,11 +191,11 @@ succeeding. That is exactly where SCiLS puts `MS:1000127`.
 
 The specification numbers x and y from 1, and pyimzml passes through whatever
 the document holds. Exports numbered from **0** exist, so subtracting a
-constant 1 -- which Thyra did until v3.24.0 -- produced `x = -1` for the first
-column of one. A negative index is a legal *negative* numpy index, so the
-converter's grid guard dropped those spectra rather than crashing: a 3x3
-acquisition at coordinates 0..2 previewed as `grid (2, 2)`, warned that "5
-spectra sat outside the declared 2x2x1 grid", stored 4 rows and exited 0.
+constant 1 would put the first column of one at `x = -1`. A negative index is a
+legal *negative* numpy index, so the converter's grid guard would drop those
+spectra rather than crash: a 3x3 acquisition at coordinates 0..2 previewed as
+`grid (2, 2)`, warned that "5 spectra sat outside the declared 2x2x1 grid",
+stored 4 rows and exited 0.
 
 The base is now measured, by `thyra.utils.imzml_coordinate_base`, and the rule
 is deliberately **not** the one z uses:
