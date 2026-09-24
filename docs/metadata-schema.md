@@ -245,36 +245,21 @@ standard deviation is 3578 %. And no person reaches the section:
 the reference list's name, which is text the lab chose.
 
 The `alignment` section says which optical image the source registers its
-raster onto, and how. flexImaging is the one source that states a
-registration, in the imaging sequence file (`.mis`) it writes beside the
-acquisition, and every Bruker reader that finds one reads it the same way:
+raster onto, and how. Only flexImaging states one, in the `.mis` file beside
+a Bruker acquisition:
 
 | Source | `optical_image_file` | `method` | `teaching_points` |
 |--------|----------------------|----------|-------------------|
-| Bruker tsf/tdf, rapiflex, solariX, with a `.mis` | `<ImageFile>`, name only | `"teaching points"` when the sequence lists three or more | each `<TeachPoint>`: a pixel of that image and the stage position of the same feature |
-| A Bruker `.d` with no `.mis`, and every other format | -- | -- | -- |
+| Bruker tsf/tdf, rapiflex, solariX, with a `.mis` | `<ImageFile>`, name only | `"teaching points"` when there are three or more | each `<TeachPoint>` |
+| Everything else | -- | -- | -- |
 
-Checked on 57 sequence files from flexImaging 4.1 to 7.2, solariX and
-timsTOF: `<ImageFile>` is a bare name in every one, and each lists three
-teaching points, as many as fix an affine map from the image to the stage.
-A fit through exactly that many has no residual, so none is reported. The
-stage positions are micrometres: carried through that map, 82 of the 86 Areas
-whose region the data hold match the raster it spans (positions times step)
-to within two steps, and the other four belong to the three acquisitions that
-hold fewer regions than their sequence lists. They are in the frame the
-teaching was done in, which is not the frame the acquisition records its
-motor positions in -- on the timsTOF acquisitions read the two differ by one
-fixed translation, about 52 mm by 45 mm -- so the points place the image on
-the target, not on the recorded positions.
-
-Two things are deliberately not in the section. The Areas the sequence
-defines stay in `raw_metadata`: they are the regions the run was planned
-with, and an acquisition can hold fewer of them than the sequence lists --
-those three do, and there an Area's place in the list no longer says which
-region it is. And whether a conversion placed
-the raster in the image's pixels is what the conversion did, not a fact about
-the source: the store's `coordinate_systems` attribute says so, with the
-affine it used (see [Coordinate Systems](coordinate-systems.md)).
+The stage positions are in micrometres, in the frame the teaching was done
+in. The positions the acquisition records its spectra at are offset from that
+frame, so the points place the image on the target, not on those positions.
+The `.mis` Areas stay in `raw_metadata`: an acquisition can hold fewer of them
+than the file lists. Whether a conversion placed the raster in the image's
+pixels is for the store's `coordinate_systems` attribute to say (see
+[Coordinate Systems](coordinate-systems.md)).
 
 Everything else -- organism, tissue, condition, matrix -- cannot come from
 a raw file and stays empty until you provide it.
