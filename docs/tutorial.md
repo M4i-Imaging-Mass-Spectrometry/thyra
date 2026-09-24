@@ -414,7 +414,7 @@ squidpy, and scanpy work on it directly.
 
 ## Where to go next
 
-- **[Look at the result](explore-the-output.ipynb)**: optical overlays,
+- **[Explore the result in Python](explore-the-output.ipynb)**: optical overlays,
   per-pixel spectra, z-slices and metadata
 - **[Troubleshooting](troubleshooting.md)**: common errors and their fixes
 - **[Output format](output-format.md)**: the full element and metadata layout

@@ -238,8 +238,8 @@ The documentation source is in the `docs/` folder. Many readers are
 scientists who have never used a terminal, so the site has layers, and every
 topic should have all of them:
 
-1. **Beginner pages**, under "Get started". They say what to do and what the
-   reader gets, in plain words.
+1. **Beginner pages**, under "Get started" and "Guides". They say what to do
+   and what the reader gets, in plain words.
 2. **Advanced boxes** inside those pages, for optional depth. They are always
    collapsed and their title starts with "Advanced:", so a beginner sees one
    line and knows it is optional:

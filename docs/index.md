@@ -28,8 +28,8 @@ upload.
     thyra my_slide.d my_slide.zarr
     ```
 
-3. **Open** the result in Python, in napari, or in any tool that reads
-   SpatialData.
+3. **Open** the result in any tool that reads SpatialData. See
+   [Look at the result](look-at-the-result.md).
 
 Thyra works out the file type, the pixel size and the m/z axis for you.
 
@@ -60,6 +60,8 @@ One folder ending in `.zarr`. It holds:
   [Your first conversion](getting-started.md).
 - **Want to see it work first?** Part 1 of the [Tutorial](tutorial.md) uses
   example data and takes about a minute once Thyra is installed.
+- **Converting your own data?** See [Which files can I convert?](which-files.md)
+  and [Change how Thyra converts](settings.md).
 - **Want every detail?** The [Technical reference](technical-reference.md)
   covers every option and every format.
 

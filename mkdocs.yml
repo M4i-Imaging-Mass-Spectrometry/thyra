@@ -90,19 +90,25 @@ markdown_extensions:
       permalink: true
   - tables
 
-# Two layers, on purpose. "Get started" is written for someone who has never
-# used a terminal: plain words, short pages, optional depth folded into
-# "Advanced" boxes. "Technical reference" holds every detail for readers who
-# want it. docs/contributing.md ("Writing the documentation") has the rules.
+# Two layers, on purpose. "Get started" and "Guides" are written for someone
+# who has never used a terminal: plain words, short pages, optional depth
+# folded into "Advanced" boxes. "Technical reference" holds every detail for
+# readers who want it. docs/contributing.md ("Writing the documentation") has
+# the rules.
 nav:
   - Home: index.md
   - Get started:
       - Install: install.md
       - Your first conversion: getting-started.md
+      - Look at the result: look-at-the-result.md
       - Tutorial: tutorial.md
-      - Look at the result: explore-the-output.ipynb
       - Troubleshooting: troubleshooting.md
       - Glossary: glossary.md
+  - Guides:
+      - Which files can I convert?: which-files.md
+      - Change how Thyra converts: settings.md
+      - Describe and share your data: describe-your-data.md
+      - Explore the result in Python: explore-the-output.ipynb
   - Technical reference:
       - technical-reference.md
       - Supported formats: supported-formats.md

@@ -34,7 +34,7 @@ come first, then the mass spectrometry ones.
 
 **Jupyter notebook**
 : A document that mixes text with Python code you can run piece by piece. The
-  [Look at the result](explore-the-output.ipynb) page is one.
+  [Explore the result in Python](explore-the-output.ipynb) page is one.
 
 **SpatialData**
 : An open format and Python library for spatial data from biology, such as
