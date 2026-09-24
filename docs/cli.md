@@ -216,7 +216,7 @@ the table after this one says when each option is actually needed.
 |--------|---------|-------------|
 | `--resample-method METHOD` | `auto` | `auto`, `nearest_neighbor`, or `tic_preserving`. A value that contradicts the detector's own choice is applied, and warned about |
 | `--mass-axis-type TYPE` | `auto` | `auto`, `constant`, `linear_tof`, `reflector_tof`, `tof`, `orbitrap`, `fticr` |
-| `--tof-law A B` | auto | Coefficients of the `tof` width law `sqrt(A m + B m^2)` mDa (`A` in mDa<sup>2</sup>/Da, `B` dimensionless). Only for an instrument Thyra has no pair for; an MRT centroid run or a timsTOF supplies its own |
+| `--tof-law A B` | auto | Coefficients of the `tof` width law `sqrt(A m + B m^2)` mDa (`A` in mDa<sup>2</sup>/Da, `B` dimensionless). Only for an instrument Thyra has no pair for; an MRT centroid run, a PHI run or a timsTOF supplies its own |
 | `--resample-bins INTEGER` | auto | Number of bins (mutually exclusive with `--resample-width-at-mz`) |
 | `--resample-min-mz FLOAT` | auto | Minimum m/z value. Inclusive: a peak sitting exactly on it lands in the first bin |
 | `--resample-max-mz FLOAT` | auto | Maximum m/z value. Inclusive, as above; peaks outside the range are dropped, never folded into the edge bins |
@@ -253,9 +253,10 @@ default), so there is no separate flag for that quantity.
       current is unchanged. Correct for **profile** data on a target axis
       whose bin widths scale the same way the source points are spaced.
     - **`auto`** -- Picks `tic_preserving` only where the source grid's law
-      is known and the target axis follows it: Bruker flexImaging / Rapiflex
-      data (uniform in m/z, onto `constant`) and the Waters profile trace
-      (uniform in flight time, onto `linear_tof`). Everything else gets
+      is known and the target axis follows it: Bruker rapifleX and other
+      Bruker MALDI-TOF data, but not timsTOF (uniform in m/z, onto
+      `constant`), and the Waters profile trace (uniform in flight time, onto
+      `linear_tof`). Everything else gets
       `nearest_neighbor` -- including profile data from an instrument Thyra
       cannot identify, because the interpolating method is only exact when
       the two axis laws match. See
@@ -269,16 +270,16 @@ default), so there is no separate flag for that quantity.
     measured. So the bin count is checked against the machine's free memory
     before the axis is materialised: past half of it the conversion is
     refused with the projection and the free memory printed, and past a
-    quarter it is attempted with a `WARNING`. On an 8 GB machine that is
-    around 21 million bins. `--resample-bins` and a small
+    quarter it is attempted with a `WARNING`. With 8 GB of memory free, the
+    refusal starts at around 21 million bins. `--resample-bins` and a small
     `--resample-width-at-mz` are the two ways to ask for more than that; a
     wide-range source at a fine width reaches it without either.
 
 !!! info "Choosing a mass axis type"
     The axis type determines how bin widths scale with m/z:
 
-    - **`constant`** -- Uniform bin width (Da). Suitable for MALDI-TOF in linear mode.
-    - **`linear_tof`** -- Width scales as sqrt(m/z). Matches TOF resolution.
+    - **`constant`** -- Uniform bin width (Da). Used for Bruker MALDI-TOF data, whose spectra arrive evenly spaced in m/z, and for profile data Thyra cannot identify.
+    - **`linear_tof`** -- Width scales as sqrt(m/z). Matches a linear (axial) TOF, whose flight time grows as sqrt(m/z).
     - **`reflector_tof`** -- Width scales linearly with m/z (constant relative resolution). Matches reflector TOF.
     - **`tof`** -- Width follows a measured peak-width law `sqrt(A m + B m^2)`, of which the two above are the limits. See [the two-term TOF law](resampling.md#the-two-term-tof-law).
     - **`orbitrap`** -- Width scales as m/z^(3/2). Matches Orbitrap resolution.
@@ -288,10 +289,9 @@ default), so there is no separate flag for that quantity.
 ### Examples
 
 ```bash
-# Physics-based resampling for Orbitrap data
-thyra input.imzML output.zarr \
-    --resample-method tic_preserving \
-    --mass-axis-type orbitrap
+# An Orbitrap imzML whose analyser Thyra could not identify: name the axis
+# and leave the method on auto, which bins rather than interpolates
+thyra input.imzML output.zarr --mass-axis-type orbitrap
 
 # Fixed number of bins
 thyra input.imzML output.zarr --resample-bins 50000
@@ -458,7 +458,7 @@ other input it is logged as ignored.
 # An MRT run: the profile trace on a linear_tof axis at 1.3 mDa, no flags needed
 thyra mrt_run.raw output.zarr
 
-# The same run through the vendor peak picker instead (reflector_tof, 2 mDa)
+# The same run through the vendor peak picker instead (the tof law, 1.75 mDa)
 thyra mrt_run.raw output.zarr --waters-spectrum centroid
 
 # A Synapt run's profile trace; the bin width follows its own digitiser
