@@ -995,3 +995,175 @@ class TestSpectrumCount:
 
     def test_a_zero_is_not_a_count(self):
         assert self._n_spectra(n_spectra=0) is None
+
+
+# The imaging sequence as ``parse_mis_file`` hands it on, after a store's
+# path rule: the method path cut to its name. Teaching points and the Area
+# are those of a real timsTOF sequence file.
+_SEQUENCE = {
+    "Method": "imaging_pos.m",
+    "ImageFile": "slide_0000.tif",
+    "OriginalImage": "slide_0000_original.tif",
+    "BaseGeometry": "MTP Slide Adapter II",
+    "teaching_points": [
+        {"image": [4780, 784], "stage": [-26352, 26386]},
+        {"image": [13648, 11296], "stage": [-8793, 5388]},
+        {"image": [32156, 724], "stage": [28003, 26505]},
+    ],
+    "raster": [20, 20],
+    "areas": [{"name": "01", "p1": [22695, 1593], "p2": [23108, 1858]}],
+}
+
+_SECTION = {
+    "optical_image_file": "slide_0000.tif",
+    "method": "teaching points",
+    "teaching_points": [
+        {
+            "image_x_px": 4780.0,
+            "image_y_px": 784.0,
+            "stage_x_um": -26352.0,
+            "stage_y_um": 26386.0,
+        },
+        {
+            "image_x_px": 13648.0,
+            "image_y_px": 11296.0,
+            "stage_x_um": -8793.0,
+            "stage_y_um": 5388.0,
+        },
+        {
+            "image_x_px": 32156.0,
+            "image_y_px": 724.0,
+            "stage_x_um": 28003.0,
+            "stage_y_um": 26505.0,
+        },
+    ],
+}
+
+
+class TestAlignmentSection:
+    """The flexImaging registration, read the same way for every Bruker reader.
+
+    tsf/tdf, rapiflex and solariX each parse the ``.mis`` beside the
+    acquisition with ``parse_mis_file`` and hand it on as
+    ``raw_metadata["mis_metadata"]``; nothing else Thyra reads states a
+    registration.
+    """
+
+    def _alignment(self, raw_metadata=None, **sections):
+        meta = build_msi_metadata(
+            _comprehensive(raw_metadata=raw_metadata, **sections),
+            pixel_size_um=(20.0, 20.0),
+        )
+        return meta.alignment
+
+    def test_timstof_states_the_image_and_the_points_it_was_taught_with(self):
+        alignment = self._alignment(
+            raw_metadata={
+                "global_metadata": {"InstrumentVendor": "Bruker"},
+                "frame_info": [],
+                "mis_metadata": _SEQUENCE,
+            }
+        )
+        assert alignment is not None
+        assert alignment.model_dump(exclude_none=True) == _SECTION
+
+    def test_rapiflex_and_solarix_state_it_from_the_same_parse(self):
+        rapiflex = self._alignment(
+            raw_metadata={"info_metadata": {}, "mis_metadata": _SEQUENCE},
+            format_specific={
+                "format": "Rapiflex",
+                "teaching_points": _SEQUENCE["teaching_points"],
+            },
+        )
+        solarix = self._alignment(
+            raw_metadata={"properties": {}, "mis_metadata": _SEQUENCE},
+            format_specific={"mis_file": "run.mis"},
+        )
+        for alignment in (rapiflex, solarix):
+            assert alignment is not None
+            assert alignment.model_dump(exclude_none=True) == _SECTION
+
+    def test_the_areas_stay_out_of_the_section(self):
+        # The areas are the regions the run was planned with, and an
+        # acquisition can hold fewer of them than the sequence lists.
+        alignment = self._alignment(raw_metadata={"mis_metadata": _SEQUENCE})
+        assert alignment is not None
+        assert "areas" not in alignment.model_dump()
+
+    def test_fewer_than_three_points_are_listed_without_a_method(self):
+        sequence = dict(_SEQUENCE, teaching_points=_SEQUENCE["teaching_points"][:2])
+        alignment = self._alignment(raw_metadata={"mis_metadata": sequence})
+        assert alignment is not None
+        assert alignment.method is None
+        assert len(alignment.teaching_points) == 2
+
+    def test_a_point_that_is_not_two_pairs_of_numbers_is_dropped(self):
+        good = _SEQUENCE["teaching_points"]
+        for bad in (
+            {"image": [4780], "stage": [-26352, 26386]},
+            {"image": [4780, 784]},
+            {"image": [4780, "x"], "stage": [-26352, 26386]},
+            {"image": [4780, 784], "stage": [-26352, True]},
+            "4780,784;-26352,26386",
+        ):
+            sequence = dict(_SEQUENCE, teaching_points=[bad, *good[1:]])
+            alignment = self._alignment(raw_metadata={"mis_metadata": sequence})
+            assert alignment is not None
+            assert len(alignment.teaching_points) == 2, bad
+            assert alignment.method is None, bad
+
+    def test_the_image_is_a_name_even_when_the_vendor_recorded_a_path(self):
+        for recorded in ("D:\\Data\\slide_0000.tif", "..\\scans\\slide_0000.tif"):
+            sequence = dict(_SEQUENCE, ImageFile=recorded)
+            alignment = self._alignment(raw_metadata={"mis_metadata": sequence})
+            assert alignment is not None
+            assert alignment.optical_image_file == "slide_0000.tif", recorded
+
+    def test_an_image_without_points_is_still_the_image(self):
+        sequence = {"ImageFile": "slide_0000.tif", "raster": [20, 20]}
+        alignment = self._alignment(raw_metadata={"mis_metadata": sequence})
+        assert alignment is not None
+        assert alignment.model_dump(exclude_none=True) == {
+            "optical_image_file": "slide_0000.tif",
+            "teaching_points": [],
+        }
+
+    def test_a_sequence_that_registers_nothing_has_no_section(self):
+        for sequence in ({}, {"raster": [20, 20], "areas": _SEQUENCE["areas"]}):
+            assert self._alignment(raw_metadata={"mis_metadata": sequence}) is None
+
+    def test_sources_without_a_sequence_have_no_section(self):
+        # imzML, PHI, Waters, and a Bruker .d with no .mis beside it.
+        for raw_metadata, acquisition_params in (
+            ({"cvParams": [{"accession": "MS:1000130"}]}, None),
+            ({"calibration": {"recalibrated": False}}, None),
+            (None, {"acquisition_date": "07-Nov-2019 14:09:44"}),
+            ({"global_metadata": {"InstrumentVendor": "Bruker"}}, None),
+        ):
+            assert (
+                self._alignment(
+                    raw_metadata=raw_metadata, acquisition_params=acquisition_params
+                )
+                is None
+            )
+        assert build_msi_metadata(None, pixel_size_um=(5.0, 5.0)).alignment is None
+
+    def test_built_section_passes_validation(self):
+        from thyra.metadata.schema import validate_document
+
+        meta = build_msi_metadata(
+            _comprehensive(raw_metadata={"mis_metadata": _SEQUENCE}),
+            pixel_size_um=(20.0, 20.0),
+        )
+        model, issues = validate_document(meta.to_uns_dict())
+        assert model is not None and model.alignment is not None
+        assert len(model.alignment.teaching_points) == 3
+        assert issues == []
+
+    def test_a_document_carries_the_points_as_a_list(self):
+        # The same shape a converted store reads back as.
+        document = build_metadata_document(
+            _comprehensive(raw_metadata={"mis_metadata": _SEQUENCE}),
+            pixel_size_um=(20.0, 20.0),
+        )
+        assert document["alignment"] == _SECTION

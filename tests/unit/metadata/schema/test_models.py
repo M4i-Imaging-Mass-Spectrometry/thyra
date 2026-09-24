@@ -95,6 +95,8 @@ class TestCvBindings:
             "MS:1000045",  # collision energy
             "IMS:1006000",  # repetition rate
             "IMS:1006001",  # laser shots per spectrum
+            "IMS:1006008",  # optical image location
+            "IMS:1006017",  # method used to align optical image
         }
 
     def test_every_binding_resolves_in_the_local_tables(self):
@@ -147,6 +149,9 @@ class TestCvBindings:
         ):
             assert f"calibration.{field}" in paths
         assert "ms_analysis.n_spectra" in paths
+        # IMS names the optical image and the alignment method, and has no
+        # term for the teaching points a flexImaging registration rests on.
+        assert "alignment.teaching_points" in paths
 
     def test_the_calibration_step_term_resolves_locally(self):
         from thyra.metadata.ontology.cache import ONTOLOGY
@@ -365,6 +370,89 @@ class TestCalibration:
         doc["schema_version"] = "0.7.0"
         doc["ms_analysis"]["manufacturer"] = "Bruker"
         assert MSIMetadata.model_validate(doc).calibration is None
+
+
+# The first teaching point of a real flexImaging sequence file. Its stage x is
+# negative: stage positions are signed.
+_POINT = {
+    "image_x_px": 4780.0,
+    "image_y_px": 784.0,
+    "stage_x_um": -26352.0,
+    "stage_y_um": 26386.0,
+}
+
+
+class TestAlignment:
+    def _document(self, **alignment) -> dict:
+        doc = _minimal().model_dump()
+        doc["alignment"] = alignment
+        return doc
+
+    def test_the_section_validates(self):
+        from thyra.metadata.schema import Alignment, TeachingPoint
+
+        section = Alignment(
+            optical_image_file="slide_0000.tif",
+            method="teaching points",
+            teaching_points=[
+                TeachingPoint(**_POINT),
+                TeachingPoint(
+                    image_x_px=13648,
+                    image_y_px=11296,
+                    stage_x_um=-8793,
+                    stage_y_um=5388,
+                ),
+                TeachingPoint(
+                    image_x_px=32156,
+                    image_y_px=724,
+                    stage_x_um=28003,
+                    stage_y_um=26505,
+                ),
+            ],
+        )
+        meta = MSIMetadata.model_validate(self._document(**section.model_dump()))
+        assert meta.alignment == section
+
+    def test_an_absent_section_is_absent_in_the_uns_dict(self):
+        assert _minimal().alignment is None
+        assert "alignment" not in _minimal().to_uns_dict()
+
+    def test_extra_keys_are_forbidden(self):
+        with pytest.raises(ValidationError):
+            MSIMetadata.model_validate(self._document(areas=[]))
+        with pytest.raises(ValidationError):
+            MSIMetadata.model_validate(
+                self._document(teaching_points=[{**_POINT, "name": "01"}])
+            )
+
+    def test_a_teaching_point_is_both_of_its_positions(self):
+        for missing in _POINT:
+            point = {k: v for k, v in _POINT.items() if k != missing}
+            with pytest.raises(ValidationError, match=missing):
+                MSIMetadata.model_validate(self._document(teaching_points=[point]))
+
+    def test_the_image_must_be_a_name_not_a_path(self):
+        for path in ("D:\\Data\\slide_0000.tif", "../scans/slide_0000.tif"):
+            with pytest.raises(ValidationError, match="not a path"):
+                MSIMetadata.model_validate(self._document(optical_image_file=path))
+
+    def test_the_teaching_points_are_packed_in_the_uns_dict(self):
+        # A list of objects does not survive AnnData/zarr, so it travels as
+        # JSON, exactly as the isolation windows do.
+        import json
+
+        meta = MSIMetadata.model_validate(
+            self._document(optical_image_file="slide.tif", teaching_points=[_POINT])
+        )
+        stored = meta.to_uns_dict()["alignment"]
+        assert json.loads(stored["teaching_points"]) == [_POINT]
+        assert stored["optical_image_file"] == "slide.tif"
+
+    def test_a_0_8_0_document_still_validates(self):
+        doc = _minimal().to_uns_dict()
+        doc["schema_version"] = "0.8.0"
+        doc["calibration"] = {"lock_mass_corrected": False}
+        assert MSIMetadata.model_validate(doc).alignment is None
 
 
 class TestSpectrumCount:

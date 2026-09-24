@@ -30,8 +30,10 @@ from .models import (
     MSI_VAR_MOBILITY_COLUMN,
     MSI_VAR_PRECURSOR_COLUMN,
     MSI_VAR_PRECURSOR_INDEX_COLUMN,
+    PACKED_OBJECT_LISTS,
     MSIMetadata,
     OntologyTerm,
+    holder_of,
 )
 
 logger = logging.getLogger(__name__)
@@ -182,6 +184,20 @@ def _check_ontology_terms(meta: MSIMetadata) -> List[ValidationIssue]:
     return issues
 
 
+def _with_value_at(
+    node: Dict[str, Any], path: Tuple[str, ...], value: Any
+) -> Dict[str, Any]:
+    """A copy of ``node`` holding ``value`` at ``path``.
+
+    Only the mappings on the path are copied; everything beside them is
+    shared, and the caller's document is left as it was.
+    """
+    copy = dict(node)
+    head, *rest = path
+    copy[head] = _with_value_at(node[head], tuple(rest), value) if rest else value
+    return copy
+
+
 def validate_document(
     doc: Any,
 ) -> Tuple[Optional[MSIMetadata], List[ValidationIssue]]:
@@ -215,27 +231,20 @@ def validate_document(
                 ValidationIssue("error", "processing", f"not valid JSON: {exc}")
             ]
 
-    # ``ms_analysis.fragmentation.windows`` is JSON on disk for the same
-    # reason; accept both spellings here too.
-    analysis = doc.get("ms_analysis")
-    if isinstance(analysis, dict) and isinstance(analysis.get("fragmentation"), dict):
-        windows = analysis["fragmentation"].get("windows")
-        if isinstance(windows, str):
-            doc = dict(doc)
-            analysis = dict(analysis)
-            fragmentation = dict(analysis["fragmentation"])
-            try:
-                fragmentation["windows"] = json.loads(windows)
-            except json.JSONDecodeError as exc:
-                return None, [
-                    ValidationIssue(
-                        "error",
-                        "ms_analysis.fragmentation.windows",
-                        f"not valid JSON: {exc}",
-                    )
-                ]
-            analysis["fragmentation"] = fragmentation
-            doc["ms_analysis"] = analysis
+    # The lists of objects nested in the block (the isolation windows, the
+    # teaching points) are JSON on disk for the same reason; accept both
+    # spellings of each here too.
+    for path in PACKED_OBJECT_LISTS:
+        holder = holder_of(doc, path)
+        packed = holder.get(path[-1]) if holder is not None else None
+        if not isinstance(packed, str):
+            continue
+        try:
+            doc = _with_value_at(doc, path, json.loads(packed))
+        except json.JSONDecodeError as exc:
+            return None, [
+                ValidationIssue("error", ".".join(path), f"not valid JSON: {exc}")
+            ]
 
     issues = _check_schema_version(doc)
     if any(issue.severity == "error" for issue in issues):

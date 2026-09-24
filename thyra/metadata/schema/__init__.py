@@ -42,6 +42,7 @@ from .models import (
     MSI_VAR_REQUIRED_COLUMNS,
     MSI_VAR_RESERVED_COLUMNS,
     Acquisition,
+    Alignment,
     Calibration,
     Fragmentation,
     IonMobility,
@@ -57,8 +58,14 @@ from .models import (
     SampleInformation,
     SamplePreparation,
     SoftwareRef,
+    TeachingPoint,
 )
-from .store_io import decode_isolation_windows, deep_merge, read_msi_metadata_blocks
+from .store_io import (
+    decode_isolation_windows,
+    decode_packed_lists,
+    deep_merge,
+    read_msi_metadata_blocks,
+)
 from .validate import ValidationIssue, check_store_var_conventions, validate_document
 
 __all__ = [
@@ -69,6 +76,7 @@ __all__ = [
     "MSI_VAR_REQUIRED_COLUMNS",
     "MSI_VAR_RESERVED_COLUMNS",
     "Acquisition",
+    "Alignment",
     "Calibration",
     "Fragmentation",
     "IonMobility",
@@ -84,11 +92,13 @@ __all__ = [
     "SampleInformation",
     "SamplePreparation",
     "SoftwareRef",
+    "TeachingPoint",
     "ValidationIssue",
     "build_metadata_document",
     "build_msi_metadata",
     "check_store_var_conventions",
     "decode_isolation_windows",
+    "decode_packed_lists",
     "deep_merge",
     "forget_resolved_table",
     "read_msi_metadata_blocks",

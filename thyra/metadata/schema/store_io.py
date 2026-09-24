@@ -9,10 +9,10 @@ exporting metadata from a 100+ GB store costs nothing.
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, Union
+from typing import Any, Dict, Tuple, Union
 
 from ...utils.windows_paths import prepare_zarr_read_path
-from .models import MSI_METADATA_UNS_KEY
+from .models import MSI_METADATA_UNS_KEY, PACKED_OBJECT_LISTS, holder_of
 
 logger = logging.getLogger(__name__)
 
@@ -78,14 +78,14 @@ def read_msi_metadata_blocks(store_path: Union[str, Path]) -> Dict[str, Dict[str
                     logger.warning(
                         "Table %s has an unparseable processing section", name
                     )
-        decode_isolation_windows(block, name)
+        decode_packed_lists(block, name)
         blocks[name] = block
 
     return blocks
 
 
-def decode_isolation_windows(block: Dict[str, Any], name: str) -> None:
-    """Parse ``ms_analysis.fragmentation.windows`` back from its JSON string.
+def decode_packed_lists(block: Dict[str, Any], name: str) -> None:
+    """Parse every list in :data:`PACKED_OBJECT_LISTS` back from its JSON string.
 
     Stored as JSON for the same reason ``processing`` is -- a list of
     objects does not round-trip through AnnData/zarr. Decoded in place so
@@ -97,21 +97,31 @@ def decode_isolation_windows(block: Dict[str, Any], name: str) -> None:
     from a raw file and one read back out of a converted store have the
     same shape.
     """
-    fragmentation = block.get("ms_analysis")
-    if not isinstance(fragmentation, dict):
-        return
-    fragmentation = fragmentation.get("fragmentation")
-    if not isinstance(fragmentation, dict):
-        return
-    windows = fragmentation.get("windows")
-    if not isinstance(windows, str):
+    for path in PACKED_OBJECT_LISTS:
+        _decode_packed_list(block, path, name)
+
+
+def decode_isolation_windows(block: Dict[str, Any], name: str) -> None:
+    """Parse ``ms_analysis.fragmentation.windows`` back from its JSON string.
+
+    The decoder from when the windows were the only packed list, kept for
+    callers that ask for them by name; :func:`decode_packed_lists` decodes
+    every packed list, these included.
+    """
+    _decode_packed_list(block, ("ms_analysis", "fragmentation", "windows"), name)
+
+
+def _decode_packed_list(
+    block: Dict[str, Any], path: Tuple[str, ...], name: str
+) -> None:
+    holder = holder_of(block, path)
+    packed = holder.get(path[-1]) if holder is not None else None
+    if holder is None or not isinstance(packed, str):
         return
     try:
-        fragmentation["windows"] = json.loads(windows)
+        holder[path[-1]] = json.loads(packed)
     except json.JSONDecodeError:
-        logger.warning(
-            "Table %s has an unparseable fragmentation.windows section", name
-        )
+        logger.warning("Table %s has an unparseable %s", name, ".".join(path))
 
 
 def deep_merge(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:

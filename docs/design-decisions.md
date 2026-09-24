@@ -1923,8 +1923,10 @@ requires. The distinction the schema is missing is not present/absent, it is
 |---|---|---|
 | `sample` | whole section | -- |
 | `preparation` | whole section | -- |
-| `ms_analysis` | polarity, ionisation source, analyzer, instrument model, resolving power, ion mobility, fragmentation | `pixel_size_um` |
+| `ms_analysis` | polarity, ionisation source, analyzer, instrument model, manufacturer, serial number, spectrum count, resolving power, ion mobility, fragmentation | `pixel_size_um` |
 | `acquisition` | `acquisition_datetime`, `method_file` | `laser_power_percent`, `laser_frequency_hz`, `shots_per_pixel` |
+| `calibration` | whole section | -- |
+| `alignment` | -- | whole section: it registers a raster onto an optical image, and a run with no raster has neither |
 | `processing` | whole section | -- |
 | `provenance` | whole section | -- |
 

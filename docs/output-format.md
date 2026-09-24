@@ -120,7 +120,12 @@ print(f"Offset: ({matrix[0,2]:.0f}, {matrix[1,2]:.0f})")
     The optical image has an Identity transform and defines the reference
     coordinate system. The TIC image has an Affine transform (scale + offset)
     that positions it in the optical coordinate space. This comes from the
-    teaching point calibration in the `.mis` file (Bruker data).
+    acquisition Areas in the flexImaging `.mis` file (Bruker data): each
+    region's raster is stretched onto the box its Area occupies in the
+    optical image. The teaching points in the same file register that image
+    to the instrument's stage; the placement does not use them, and they are
+    recorded in `uns["msi_metadata"]["alignment"]` (see
+    [Structured metadata](#structured-metadata-unsmsi_metadata)).
 
 ### Which image is which: `attrs["optical_images"]`
 
@@ -1017,10 +1022,10 @@ Beside it, when the source format provides them:
 
 | Key | Contents |
 |-----|----------|
-| `format_specific` | Vendor metadata (imzML file mode and UUID; FlexImaging areas and teaching points for solariX and rapiflex, whose `.mis` the extractor reads -- the tsf/tdf extractor does not carry them; `instrument_source_type` for Bruker tsf/tdf, Bruker's own code for what ionised the sample, recorded raw because its labels are not documented in the file; for Bruker tsf/tdf also `instrument_calibration`, the m/z calibration the run started with as the analysis database's `CalibrationInfo` states it, and `calibration`, the states of `calibration.sqlite` when the acquisition has one) |
+| `format_specific` | Vendor metadata (imzML file mode and UUID; flexImaging areas and teaching points for rapiflex; `instrument_source_type` for Bruker tsf/tdf, Bruker's own code for what ionised the sample, recorded raw because its labels are not documented in the file; for Bruker tsf/tdf also `instrument_calibration`, the m/z calibration the run started with as the analysis database's `CalibrationInfo` states it, and `calibration`, the states of `calibration.sqlite` when the acquisition has one) |
 | `acquisition_params` | Polarity, scan range, laser settings, timestamp and method name, in the vendor's spelling and unit |
 | `instrument_info` | Instrument model, serial, software version |
-| `raw_metadata` | Source metadata as read, for round-trip fidelity |
+| `raw_metadata` | Source metadata as read, for round-trip fidelity. For a Bruker tsf/tdf, rapiflex or solariX acquisition with a flexImaging imaging sequence (`.mis`) beside it, `mis_metadata` is that file as parsed: the optical image's name, the teaching points, the Areas and the raster step |
 | `regions` | Acquisition region summary, as a JSON string (see [Regions](#regions)) |
 
 A section the source format has nothing for is omitted rather than written
@@ -1086,11 +1091,12 @@ terms, and a schema a validator can hold it to.
 ```python
 block = msi_table.uns["msi_metadata"]
 
-print(block["schema_version"])                    # "0.8.0"
+print(block["schema_version"])                    # "0.9.0"
 print(block["ms_analysis"]["pixel_size_um"])      # {"x": 20.0, "y": 20.0}
 print(block["provenance"]["source_format"])       # "imzml"
 print(block.get("acquisition"))                   # see below; absent for imzML
 print(block.get("calibration"))                   # see below; absent for imzML
+print(block.get("alignment"))                     # see below; absent for imzML
 ```
 
 `block["acquisition"]` is the normalised view of the run itself, filled
@@ -1132,6 +1138,23 @@ conversion can be told to apply one the source does not consider current;
 it is the `m/z calibration` step of `processing` (PSI-MS `MS:1001485`). See
 [Metadata Schema](metadata-schema.md#what-is-auto-populated) for where each
 vendor states each field and what is deliberately left out.
+
+`block["alignment"]` says which optical image the source registers its
+raster onto, and how. It is filled from the flexImaging imaging sequence
+(`.mis`) beside a Bruker tsf/tdf, rapiflex or solariX acquisition, and is
+absent for everything else:
+
+| Field | Meaning and unit |
+|-------|------------------|
+| `optical_image_file` | File name of the optical image the registration is stated in, the `.mis` `<ImageFile>`; never a path |
+| `method` | How that image was aligned with the raster: `"teaching points"`, when the sequence lists the three that fix the registration |
+| `teaching_points` | One `{image_x_px, image_y_px, stage_x_um, stage_y_um}` per point: a pixel of the image, counted from its top-left corner, and the stage position of the same feature in micrometres. Stored as a JSON string, like `processing`; `read_msi_metadata_blocks` and `thyra validate` decode it |
+
+When the store holds that image, it is the element
+`attrs["optical_images"]["alignment_element"]` names. Whether this
+conversion placed the raster in the image's pixels is not in the section,
+because it is something the conversion did: the store's `coordinate_systems`
+attribute says so (`unit: "pixel"`), with the affine it used.
 
 It is written by every converter path identically, validated by
 `thyra validate`, and exported to a METASPACE submission by

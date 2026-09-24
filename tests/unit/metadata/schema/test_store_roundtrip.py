@@ -345,3 +345,109 @@ class TestCalibrationSectionRoundTrip:
         for block in read_msi_metadata_blocks(store).values():
             assert "calibration" not in block
             assert "m/z calibration" not in [s["name"] for s in block["processing"]]
+
+
+_TEACHING_POINTS = [
+    {"image": [4780, 784], "stage": [-26352, 26386]},
+    {"image": [13648, 11296], "stage": [-8793, 5388]},
+    {"image": [32156, 724], "stage": [28003, 26505]},
+]
+
+
+class _ReaderWithAlignmentFacts(MockMSIReader):
+    """The mock reader with the imaging sequence a Bruker extractor hands on."""
+
+    def _create_metadata_extractor(self):
+        from dataclasses import replace
+
+        extractor = super()._create_metadata_extractor()
+        implementation = extractor._extract_comprehensive_impl
+
+        def with_sequence():
+            return replace(
+                implementation(),
+                raw_metadata={
+                    "mis_metadata": {
+                        "ImageFile": "slide_0000.tif",
+                        "teaching_points": _TEACHING_POINTS,
+                        "raster": [10, 10],
+                        "areas": [{"name": "01", "p1": [0, 0], "p2": [40, 40]}],
+                    }
+                },
+            )
+
+        extractor._extract_comprehensive_impl = with_sequence
+        return extractor
+
+
+@pytest.fixture(scope="module")
+def store_with_alignment(tmp_path_factory):
+    from thyra.converters.spatialdata import SpatialDataConverter
+
+    output = tmp_path_factory.mktemp("schema_store_align") / "out.zarr"
+    converter = SpatialDataConverter(
+        reader=_ReaderWithAlignmentFacts(
+            MockMSIConfig(n_x=4, n_y=4, n_mz_bins=200, peaks_per_spectrum=(10, 20))
+        ),
+        output_path=output,
+        dataset_id="mock",
+        pixel_size_um=10.0,
+    )
+    assert converter.convert() is True
+    return output
+
+
+class TestAlignmentSectionRoundTrip:
+    """The teaching points survive the store as JSON and read back as a list."""
+
+    def test_the_section_reads_back_as_written(self, store_with_alignment):
+        blocks = read_msi_metadata_blocks(store_with_alignment)
+        assert blocks
+        for block in blocks.values():
+            alignment = block["alignment"]
+            assert alignment["optical_image_file"] == "slide_0000.tif"
+            assert alignment["method"] == "teaching points"
+            assert [
+                (p["image_x_px"], p["image_y_px"], p["stage_x_um"], p["stage_y_um"])
+                for p in alignment["teaching_points"]
+            ] == [
+                (4780.0, 784.0, -26352.0, 26386.0),
+                (13648.0, 11296.0, -8793.0, 5388.0),
+                (32156.0, 724.0, 28003.0, 26505.0),
+            ]
+            meta, issues = validate_document(block)
+            assert meta is not None and meta.alignment is not None
+            assert not [i for i in issues if i.severity == "error"]
+
+    def test_the_points_are_stored_packed(self, store_with_alignment):
+        # A list of objects comes back from AnnData/zarr as repr strings, so
+        # the store holds JSON and every reader of the block unpacks it.
+        import spatialdata as sd
+
+        sdata = sd.read_zarr(store_with_alignment)
+        for table in sdata.tables.values():
+            stored = table.uns["msi_metadata"]["alignment"]["teaching_points"]
+            assert isinstance(stored, str)
+            assert len(json.loads(stored)) == 3
+
+    def test_an_unparseable_point_list_is_an_error_not_a_crash(
+        self, store_with_alignment
+    ):
+        import spatialdata as sd
+
+        sdata = sd.read_zarr(store_with_alignment)
+        block = dict(next(iter(sdata.tables.values())).uns["msi_metadata"])
+        block["alignment"] = dict(block["alignment"], teaching_points="[{not json")
+        meta, issues = validate_document(block)
+        assert meta is None
+        assert [i.location for i in issues] == ["alignment.teaching_points"]
+
+    def test_validate_cli_passes_with_the_section_present(self, store_with_alignment):
+        from thyra.metadata.schema.cli import validate_command
+
+        result = CliRunner().invoke(validate_command, [str(store_with_alignment)])
+        assert result.exit_code == 0, result.output
+
+    def test_a_store_without_the_facts_has_no_section(self, store):
+        for block in read_msi_metadata_blocks(store).values():
+            assert "alignment" not in block
