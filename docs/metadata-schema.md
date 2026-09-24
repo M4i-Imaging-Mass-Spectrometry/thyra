@@ -1,5 +1,10 @@
 # Metadata Schema
 
+!!! tip "In plain words"
+    [Describe and share your data](describe-your-data.md) covers what Thyra
+    records and how to prepare a METASPACE submission, in plain words. This
+    page has every field.
+
 Every store Thyra writes carries a versioned, ontology-mapped metadata
 block: `table.uns["msi_metadata"]`. Its base fields mirror the
 [METASPACE](https://metaspace2020.org) submission form, so a converted
@@ -100,10 +105,9 @@ is readable without resolving anything.
 `pixel_size_um` is the one acquisition field that is required: conversion
 refuses to run without a pixel size, so a document without it describes no
 store Thyra ever wrote. It is a pair because a raster need not be square, and
-the same pair now reaches the rest of the store -- the root attrs, the
+the same pair reaches the rest of the store -- the root attrs, the
 coordinate system and its affine, the element transforms and
-`obs["spatial_x"]`/`["spatial_y"]`. This block used to be the only place the y
-pitch survived.
+`obs["spatial_x"]`/`["spatial_y"]`.
 
 !!! note "Unknown fields are rejected"
     Validation refuses keys the schema does not define, so a typo fails

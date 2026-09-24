@@ -1,5 +1,9 @@
 # Resampling
 
+!!! tip "In plain words"
+    [Change how Thyra converts](settings.md#choose-the-mz-axis) explains the
+    shared m/z axis in plain words. This page has every detail.
+
 Mass axis resampling maps every spectrum in a dataset onto one shared m/z axis.
 It is **enabled by default**, and by default every parameter is chosen
 automatically from the acquisition metadata.
@@ -136,28 +140,10 @@ catch-all default. This table is the actual observed behaviour of that chain:
     start. Only the peak width has any business setting a bin width, so the
     target axis takes the two-term law fitted to it.
 
-    Getting this wrong was expensive. PHI used to inherit the generic
-    `linear_tof` default of 17 mDa at m/z 300, which put 42% of the peaks
-    measured across a twelve-acquisition corpus under two bins per peak
-    width, and exactly **one bin** inside the 6 mDa window the reference
-    acquisition's own vendor peak list uses at nominal m/z 27 to separate
-    C<sup>15</sup>N<sup>-</sup> from <sup>13</sup>CN<sup>-</sup>, 6.3 mDa
-    apart. Measured against the instrument's own `.bif6` peak-image export:
-
-    | | `--no-resample` | old `linear_tof` default | `tof` default |
-    |---|---|---|---|
-    | bins | 863,670 | 86,204 | 103,070 |
-    | store | 65.8 MB | 46.5 MB | 51.6 MB |
-    | TIC vs the vendor's own export | exact, 262,144/262,144 px | exact | exact |
-    | per-peak recovery | 97.9--103.6% | 88.6--113.1% | 92.8--105.1% |
-    | worst correlation | 0.9509 | 0.9024 | **0.9695** |
-    | bins in the 6 mDa window at m/z 27 | 12 | **1** | 3 |
-
-    Nearest-neighbour conserves counts, so the total ion image is bit-exact
-    against the vendor's export on all three -- only *windowed* numbers
-    move, and on the old axis they moved in both directions at once
-    (113.1% for one ion, 88.6% for another), which is the signature of one
-    bin per peak.
+    The generic `linear_tof` default of 17 mDa at m/z 300 would put 42% of
+    the measured peaks under two bins per peak width. The measurements
+    behind this choice, against the instrument's own peak-image export, are
+    in [Design Decisions](design-decisions.md#d20-the-phi-target-axis-follows-measured-peak-width-fitted-at-its-narrow-edge).
 
 !!! tip "Resampling stays on by default for PHI"
     It is reasonable to ask whether PHI should default to `--no-resample`,
@@ -403,10 +389,10 @@ discarded, not folded into the edge bins. Widen the resampling range to keep
 them.
 ```
 
-Folding them in instead would be worse, and used to happen: clamping every
-out-of-range peak onto the nearest edge bin put 654,158 counts in bin 0 of
-`pea.imzML` cropped to 400-800 m/z, where a real peak there is around 80. The
-total was conserved exactly, so no TIC check could see it.
+Folding them in instead would be worse: clamping every out-of-range peak onto
+the nearest edge bin puts 654,158 counts in bin 0 of `pea.imzML` cropped to
+400-800 m/z, where a real peak there is around 80. The total is conserved
+exactly, so no TIC check would see it.
 
 ---
 
@@ -655,10 +641,7 @@ It has no effect when resampling is on, which is the default: a resampled axis
 has the bin count you asked for.
 
 The value is a count, so it must be a positive integer or `None`. Anything
-else is refused before the file is opened. It used to be accepted and then
-used: a cap of `-1` or `0` turned every file into a refusal for "exceeding"
-a limit it could not satisfy, in a message that named the caller's own value
-back at them as if the data were at fault.
+else is refused before the file is opened.
 
 ---
 

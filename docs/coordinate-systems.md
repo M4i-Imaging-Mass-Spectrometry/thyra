@@ -1,5 +1,9 @@
 # Coordinate Systems
 
+!!! tip "In plain words"
+    To look at a result, see [Look at the result](look-at-the-result.md).
+    This page is for programs that place Thyra's data on a slide or an image.
+
 Every SpatialData zarr Thyra writes carries a small but crucial promise:
 **all elements within the zarr resolve to the same physical frame at the
 ``"global"`` coordinate system, and that frame is documented in the
@@ -215,9 +219,8 @@ carried in alongside them by the *inverse* of the alignment affine
 rather than being the frame everything else is expressed in.
 
 So the alignment matrix existing does not by itself mean the store is in
-optical pixels; whether it was applied does. Thyra used to read only the
-former when writing this attr, and declared ``unit="pixel"`` on stores
-whose every element was in micrometers (issue #288).
+optical pixels; whether it was applied does, and that is what Thyra reads
+when it writes this attr.
 
 Note that the modes pick the right convention for what is
 actually known about the data; consumers should look at

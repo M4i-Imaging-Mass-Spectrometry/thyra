@@ -317,13 +317,13 @@ than a fixed spacing: whatever `k` puts a bin of that width at
 ## Previewing without decoding events
 
 `preview_msi` promises that no spectra are decoded, and passes
-`metadata_only=True` to the reader to keep that promise. `PhiReader` used to
-swallow the kwarg, and the extractor called `occupied_channel_counts()`,
-which walks every 8-byte event in the file: 0.16 s for a 16 MB acquisition with
-2.02 M events, 0.14 s for a 14 MB one -- linear, so previewing a multi-gigabyte
-SmartSoft file cost what converting it costs.
+`metadata_only=True` to the reader to keep that promise. It matters here:
+counting the occupied channels, `occupied_channel_counts()`, walks every 8-byte
+event in the file -- 0.16 s for a 16 MB acquisition with 2.02 M events, 0.14 s
+for a 14 MB one, linear in size -- so a preview that counted them would cost
+what a conversion costs.
 
-`PhiReader(path, metadata_only=True)` now answers from the acquisition header
+`PhiReader(path, metadata_only=True)` answers from the acquisition header
 and the block chain alone. Everything header-derived is still exact --
 dimensions, coordinate bounds, m/z range, pixel size, and both detector
 verdicts. What it cannot answer is which pixels carry an event, because that is

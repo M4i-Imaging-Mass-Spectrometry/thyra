@@ -232,12 +232,13 @@ One finding was real enough to grow code: **`imzmldict` discards
 `unitAccession`.** `convert_cv_param(accession, value)` takes no unit argument,
 so `__readimzmlmeta` cannot carry one even though `ParamGroup.cv_params`
 preserves it. `imzmldict['pixel size x']` is a bare number in whatever unit the
-vendor declared, and Thyra used to label it micrometres. A file declaring its
-pixel as `4406.25` nanometre (`UO:0000018`) therefore landed on disk with
-`obs/spatial_x` a thousand times too large, and `convert_msi` returned `True`.
+vendor declared, so reading it as micrometres is wrong: a file declaring its
+pixel as `4406.25` nanometre (`UO:0000018`) would land on disk with
+`obs/spatial_x` a thousand times too large, and `convert_msi` would still
+return `True`.
 
 The information is never lost from the document, only from the dict, so
-`ImzMLMetadataExtractor` now reads the unit-bearing path — each `cv_params`
+`ImzMLMetadataExtractor` reads the unit-bearing path — each `cv_params`
 tuple is `(name, accession, value, raw_name, raw_value, unit_name,
 unit_accession)` — and converts: `UO:0000016` mm x1000, `UO:0000017` um x1,
 `UO:0000018` nm /1000. Any other declared unit is refused with a
@@ -260,15 +261,14 @@ than characterise the error.
 
 The imzML specification puts the binary file's UUID in the first 16 bytes of
 the `.ibd` and the same value in the XML as `IMS:1000080`. pyimzml reads
-neither against the other -- it never touches the header bytes at all -- and
-Thyra used to read only the XML term, for the metadata store.
+neither against the other -- it never touches the header bytes at all.
 
 That pair is the only thing that can tell an `.imzML` apart from a *different*
 acquisition's `.ibd` renamed to sit beside it. Every other check Thyra makes
 (`ImzMLReader._validate_parser_state`) reads the XML's own offsets and lengths
 against the binary's size, which a wrong-but-similarly-shaped file satisfies.
 
-Thyra now compares them and **warns**, naming both values and both filenames,
+Thyra compares them and **warns**, naming both values and both filenames,
 rather than refusing. That is measured, not cautious: of the three real files
 in the corpus, `pea` and the Xenium export match byte for byte, while
 `bellini` -- an IONTOF SurfaceLab 7.5 export -- declares

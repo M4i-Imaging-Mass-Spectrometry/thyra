@@ -1,5 +1,9 @@
 # Supported Formats
 
+!!! tip "In plain words"
+    [Which files can I convert?](which-files.md) says what to point Thyra at
+    for each instrument, in plain words. This page has every detail.
+
 Thyra reads seven MSI formats and writes all of them into the same
 SpatialData/Zarr layout. The input format is detected from the path and no flag
 selects it. The `--format` option on the CLI and `format_type` in the Python
@@ -111,9 +115,7 @@ subtracted is recorded in `coordinate_systems.global.coordinate_offsets_px`.
 **Previewing reads the head, not the document.** An imzML states its raster,
 its pitch, its instrument and its spectrum count in the block before `<run>`,
 and `preview_msi` answers from there -- 0.4 ms whether the document is 29 MB or
-2.0 GiB. It used to parse the whole spectrum list for the offsets and then
-decode every m/z array out of the `.ibd` for the mass range: 64 s on a 2.0 GiB
-export, for numbers the head already holds. The mass range is the one thing it
+2.0 GiB. The mass range is the one thing it
 does not hold, and it is read from the per-spectrum `MS:1000528` / `MS:1000527`
 terms in the XML -- the same extrema, to the six decimals the file records,
 without opening the binary. On a continuous-mode file every spectrum shares one

@@ -1,5 +1,9 @@
 # CLI Reference
 
+!!! tip "In plain words"
+    [Change how Thyra converts](settings.md) explains the common options one
+    task at a time. This page lists every option.
+
 ```
 thyra [OPTIONS] INPUT OUTPUT
 ```
@@ -309,45 +313,31 @@ thyra input.imzML output.zarr \
 
 ## Performance
 
-No options. Every conversion streams and every table is CSC, so the two
-flags that used to live here select nothing.
+No options: every conversion streams, and every table is CSC.
 
 !!! info "Every conversion streams"
     There is no streaming mode to switch on: every conversion makes two passes
     over the source -- one to count, one to scatter straight into memory-mapped
     CSC arrays -- and writes each table from those arrays, so the matrix is
-    never held in RAM whatever the dataset's size. The in-memory converter
-    that used to handle small datasets was folded into this one in v3.23 (see
-    [Design Decisions](design-decisions.md#d11-one-converter)); on a small
-    file the second pass costs about a third of the run.
+    never held in RAM whatever the dataset's size. On a small file the second
+    pass costs about a third of the run;
+    [Design Decisions](design-decisions.md#d11-one-converter) explains why
+    there is one converter.
 
-!!! warning "`--streaming` is deprecated"
-    `--streaming auto|true|false` used to pick the converter. It is still
-    accepted so existing scripts keep running, but it selects nothing.
+!!! warning "Options kept or removed for old scripts"
+    - `--streaming auto|true|false` is still accepted so existing scripts
+      keep running, but it selects nothing.
+    - `--optimize-chunks` is still accepted but does nothing, logs a
+      warning, and will be dropped in a future release. Chunk sizes are
+      chosen at write time.
+    - `--sparse-format` was removed in v3.22: passing it fails as an unknown
+      option. Every table is CSC, the layout an ion image reads down, because
+      one m/z across all pixels is one contiguous column. For the row-wise
+      layout, convert after reading:
 
-!!! warning "`--sparse-format` was removed in v3.22"
-    Every table is CSC, so there is nothing left to choose and the option is
-    gone rather than kept as a no-op. It was only ever honoured by the
-    in-memory converters, which made its meaning depend on `--streaming`; on
-    the streaming route a `csr` request spent a release silently producing
-    CSC.
-
-    CSC is the layout an ion image reads down -- one m/z across all pixels is
-    one contiguous column. If you want the row-wise layout instead, take it
-    after reading rather than at write time:
-
-    ```python
-    X = sdata.tables["dataset_z0"].X.tocsr()
-    ```
-
-!!! warning "`--optimize-chunks` is deprecated"
-    The flag is still accepted, so existing scripts keep running, but it does
-    nothing and now logs a warning. It will be dropped in a future release.
-
-    It never did anything: the post-hoc pass it invoked was written for a dense
-    4-D image layout and could not read the sparse table the converter actually
-    writes, so it failed on every conversion and the CLI still exited 0. Chunk
-    sizes are chosen at write time instead.
+        ```python
+        X = sdata.tables["msi_dataset_z0"].X.tocsr()
+        ```
 
 ---
 
