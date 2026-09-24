@@ -17,11 +17,14 @@ Point Thyra at the file or folder your instrument wrote:
 | Your instrument | Point Thyra at |
 |---|---|
 | Bruker timsTOF or solariX | the folder ending in `.d` |
-| Bruker rapifleX | the folder that holds the `.dat` and `_poslog.txt` files |
+| Bruker rapifleX | the folder that holds the `.dat`, `_poslog.txt` and `_info.txt` files |
 | Waters (MassLynx) | the folder ending in `.raw` |
 | PHI nanoTOF (ToF-SIMS) | the file ending in `.raw` |
 | Any instrument that exports imzML | the `.imzML` file, with its `.ibd` file next to it |
 | mzPeak (experimental) | the `.mzpeak` file |
+
+What each instrument needs, and which computers can read it:
+[Which files can I convert?](which-files.md)
 
 No data at hand? This command makes a small example dataset to practise on:
 
@@ -61,10 +64,7 @@ A new folder, `brain_section_1.zarr`, is your converted dataset. Keep the
 folder whole: copy or move it like any other folder, but do not take files
 out of it.
 
-To look inside it, see [Look at the result](explore-the-output.ipynb). Any
-tool that reads SpatialData can open it, including napari with the
-[napari-spatialdata](https://spatialdata.scverse.org/projects/napari/en/latest/)
-plugin.
+**Next:** [look at the result](look-at-the-result.md).
 
 ## Common situations
 
@@ -89,8 +89,9 @@ Type the number and press Enter.
 
 ### Your acquisition has several regions
 
-Thyra converts all regions by default. To convert only one, add `--region`
-and the region's name as flexImaging shows it:
+Thyra converts all regions of a Bruker timsTOF slide into one result. To
+convert only one, add `--region` and the region's name as flexImaging shows
+it:
 
 ```bash
 thyra data.d region_03.zarr --region 03
@@ -132,6 +133,9 @@ need that. To keep each spectrum's own m/z values instead, add
 Thyra saves each slice as its own 2D dataset. To keep them together as one
 3D volume, add `--handle-3d`.
 
+Every other option is explained, one task at a time, in
+[Change how Thyra converts](settings.md).
+
 ## Convert from Python
 
 ??? advanced "Advanced: Use Thyra inside a Python script or notebook"
@@ -154,6 +158,6 @@ each one.
 
 ## Go deeper
 
+- [Change how Thyra converts](settings.md): the common options, explained.
 - [Command-line options](cli.md): every option, with examples.
-- [Resampling](resampling.md): how the shared m/z axis is chosen.
 - [Output format](output-format.md): everything inside the `.zarr` folder.
