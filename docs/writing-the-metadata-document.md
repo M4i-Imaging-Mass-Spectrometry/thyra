@@ -52,7 +52,7 @@ Required at the root:
 
 | Field | What it is |
 |---|---|
-| `schema_version` | The version this document conforms to, `MAJOR.MINOR.PATCH`. Defaults to the current version in Thyra's models; another writer states it explicitly. |
+| `schema_version` | The version this document conforms to, `MAJOR.MINOR.PATCH`. Defaults to the current version in Thyra's models; another writer states it explicitly. The published JSON Schema file lists only `ms_analysis` and `provenance` as required, so a generic validator accepts a document without it, but `thyra validate` refuses one: always write it. |
 | `ms_analysis` | How the data was acquired. Its one required member today is `pixel_size_um` (`{"x": ..., "y": ...}` in micrometres); everything else is optional. |
 | `provenance` | Who wrote the document. Its one required member is `thyra_version`, which for another program is the writing software's own version string; the name is a historical accident of the field and its meaning is "the version of whatever wrote this". |
 

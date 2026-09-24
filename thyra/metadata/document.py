@@ -17,9 +17,11 @@ does not validate against schema 0.6.0, which requires the pitch.  That
 is the point rather than a failure: see design decision D23 in
 docs/design-decisions.md.
 
-No spectra are read and no vendor SDK is loaded: every reader is built
-with ``metadata_only=True``, the same way :mod:`thyra.preview` builds
-one.
+Every reader is built with ``metadata_only=True``, the same way
+:mod:`thyra.preview` builds one, so for every format but Waters no
+spectra are read and no vendor SDK is loaded. The Waters extractor still
+loads MassLynx and passes over every MS scan for the mass range and the
+spectrum count.
 """
 
 from __future__ import annotations

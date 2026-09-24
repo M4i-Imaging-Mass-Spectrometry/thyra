@@ -4,7 +4,8 @@
 thyra [OPTIONS] INPUT OUTPUT
 ```
 
-**INPUT** -- Path to input MSI file or directory (`.imzML`, `.d`, `.raw`)
+**INPUT** -- Path to input MSI file or directory (`.imzML`, `.d`, `.raw`, a
+Rapiflex acquisition folder, or `.mzpeak`)
 
 **OUTPUT** -- Path for output `.zarr` directory
 
@@ -113,9 +114,8 @@ thyra data.d output.zarr --no-optical
     the whole mapping at `INFO` during startup -- a header line
     `Region mapping (DB RegionNumber -> .mis Area Name):` followed by one
     `RegionNumber <n> -> Area '<name>' (<n> frames)` line per region -- so a
-    plain run already tells you which is which before you pick one.
-
-    Use `-v DEBUG` for the per-region spectrum counts as well.
+    plain run already tells you which is which, and how many frames each
+    holds, before you pick one.
 
 ---
 
@@ -381,7 +381,7 @@ Guide, p.81).
 
     Use it when a file declares the wrong thing -- that does happen. When the
     override contradicts an explicit declaration Thyra logs a warning naming
-    both values; run with `-v INFO` to see it, and check the result.
+    both values; it is in the normal output, so check it and the result.
 
 ### Examples
 
@@ -389,8 +389,9 @@ Guide, p.81).
 # The file says centroid but it is really profile data
 thyra input.imzML output.zarr --spectrum-type profile
 
-# See what detection would have concluded before overriding it
-thyra input.imzML output.zarr -v INFO
+# See what detection concludes first: a plain run logs the detected
+# spectrum type and the resampling it chose
+thyra input.imzML output.zarr
 ```
 
 ---
@@ -398,14 +399,15 @@ thyra input.imzML output.zarr -v INFO
 ## Bruker-Specific
 
 Grouped here because this is where they are reached for. All but
-`--intensity-threshold` only apply when converting Bruker `.d` directories;
-that one is honoured by every reader, and is here because continuous-mode
-Bruker data is what usually needs it.
+`--intensity-threshold` only apply to Bruker timsTOF `.d` directories, and
+`--interactive-calibration` to solariX ones as well; on any other input they
+are logged as ignored. `--intensity-threshold` is honoured by every reader,
+and is here because continuous-mode Bruker data is what usually needs it.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--use-recalibrated / --no-recalibrated` | enabled | Use recalibrated m/z state. Bruker `.d` only |
-| `--interactive-calibration` | off | Display available calibration states. Bruker `.d` only |
+| `--use-recalibrated / --no-recalibrated` | enabled | Use recalibrated m/z state. timsTOF only |
+| `--interactive-calibration` | off | Display available calibration states. timsTOF and solariX |
 | `--intensity-threshold FLOAT` | none | Minimum intensity filter. **Every format** |
 | `--tdf-spectrum {scan_sum,vendor_centroid}` | `scan_sum` | How a TDF (TIMS) frame's mobility scans collapse into one spectrum per pixel. Bruker TDF only |
 
@@ -415,8 +417,8 @@ Bruker data is what usually needs it.
 # Use raw (non-recalibrated) m/z values
 thyra data.d output.zarr --no-recalibrated
 
-# List the calibration states the file carries (display only -- the
-# active state is always the one used; choosing one is issue #54)
+# List the calibration states the file carries. Display only: it cannot
+# choose one, and the conversion then runs as it would without the flag
 thyra data.d output.zarr --interactive-calibration
 
 # Filter low-intensity signals (useful for continuous-mode Bruker data)
@@ -559,9 +561,11 @@ thyra metadata INPUT [OPTIONS]
 ```
 
 Writes the `msi_metadata` document for a raw source without converting
-it. **INPUT** is a file or folder in any format Thyra reads. No spectra
-are decoded, no vendor SDK is loaded and nothing is written beside the
-input, so this is a header read on a dataset of any size.
+it. **INPUT** is a file or folder in any format Thyra reads. For every
+format but Waters, no spectra are decoded, no vendor SDK is loaded and
+nothing is written beside the input, so this is a header read on a dataset
+of any size. A Waters run is described through the MassLynx library, which
+reads every scan: it takes a while, and needs Windows or Linux.
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -592,8 +596,8 @@ thyra metadata raw_data.d --merge sample.json -o meta.json
     document Thyra had written until now described an image. A Bruker
     `.d` from a run that imaged nothing -- an electrospray acquisition
     on a timsTOF-family instrument -- states its instrument, polarity,
-    mass range, precursor schedule and acquisition time exactly as an
-    imaging run does, and states no pixel size, because there is no
+    precursor schedule and acquisition time exactly as an imaging run
+    does, and states no pixel size, because there is no
     raster. `thyra metadata` writes that document, reports the one
     validation error, and exits `1`. Converting such a file is refused
     with a message that says so. The split that would make the document

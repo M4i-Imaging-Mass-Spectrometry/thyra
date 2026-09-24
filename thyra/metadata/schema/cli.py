@@ -301,9 +301,10 @@ def metadata_command(
 
     INPUT is a file or folder in any format Thyra reads. The document is
     the same versioned msi_metadata block a conversion would write into
-    the store, built straight from the vendor metadata: no spectra are
-    read, no vendor SDK is loaded and nothing is written beside the
-    input.
+    the store, built straight from the vendor metadata. Nothing is
+    written beside the input, and for every format but Waters no spectra
+    are read and no vendor SDK is loaded; a Waters run is described
+    through the MassLynx library, which reads every scan.
 
     Validation issues are reported on stderr and the exit status follows
     them: 0 when the document conforms (warnings allowed), 1 otherwise.

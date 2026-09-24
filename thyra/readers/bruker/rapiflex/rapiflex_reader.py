@@ -85,8 +85,8 @@ class RapiflexMetadataExtractor(MetadataExtractor):
         if pixel_x is None or pixel_y is None:
             logger.warning(
                 "%s declares no raster step (looked for 'Raster' in "
-                "sample_info.txt and the .mis), so the pixel size is "
-                "unknown. Pass --pixel-size to supply it.",
+                "its _info.txt), so the pixel size is unknown. Pass "
+                "--pixel-size to supply it.",
                 self._reader.data_path.name,
             )
             pixel_size = None
