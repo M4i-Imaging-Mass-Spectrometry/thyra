@@ -219,19 +219,24 @@ catch-all default. This table is the actual observed behaviour of that chain:
     method. They do not. `tic_preserving` is chosen for **profile** data, where
     a peak is spread over many points and rebinning would otherwise change the
     total ion count. Orbitrap and FT-ICR data is normally centroided, so it gets
-    `nearest_neighbor`, which is the correct choice for discrete peaks. If you
-    have *profile* Orbitrap or FT-ICR data, set
-    `--resample-method tic_preserving` yourself.
+    `nearest_neighbor`, which is the correct choice for discrete peaks. Keep
+    `nearest_neighbor` for *profile* Orbitrap or FT-ICR data too: Thyra
+    cannot tell whether an imzML's points follow the analyser's own spacing
+    law, and `tic_preserving` onto the `orbitrap` or `fticr` axis of a source
+    that does not follow it distorts intensity ratios by 7x or more (see the
+    box below).
 
-!!! danger "Do not combine `tic_preserving` with a non-uniform axis type"
+!!! danger "Do not combine `tic_preserving` with an axis your data does not follow"
     `tic_preserving` interpolates onto the target axis and then applies a
-    single scaling factor to the whole spectrum. A single factor cannot
-    account for bin widths that vary across the mass range, so pairing it with
-    `linear_tof`, `reflector_tof`, `orbitrap` or `fticr` suppresses high-m/z
-    ions relative to low-m/z ones. Measured across 300-1100 m/z, two ions of
-    equal abundance come back with their ratio distorted by 1.9x on
-    `linear_tof`, 3.7x on `reflector_tof`, 7.0x on `orbitrap` and 13.4x on
-    `fticr`.
+    single scaling factor to the whole spectrum. That is exact only when the
+    target axis is spaced the way the source's own points are. Otherwise a
+    single factor cannot account for bin widths that vary across the mass
+    range differently from the source spacing. On a source sampled evenly in
+    m/z, pairing it with `linear_tof`, `reflector_tof`, `orbitrap` or `fticr`
+    suppresses high-m/z ions relative to low-m/z ones: across 300-1100 m/z,
+    two ions of equal abundance come back with their ratio distorted by 1.9x
+    on `linear_tof`, 3.7x on `reflector_tof`, 7.0x on `orbitrap` and 13.4x
+    on `fticr` -- the ratio of the bin widths at the two masses.
 
     Auto-selection cannot produce these pairings. `tic_preserving` is only
     ever chosen alongside an axis whose law the source grid itself follows --
@@ -246,14 +251,8 @@ catch-all default. This table is the actual observed behaviour of that chain:
     naming `--resample-method tic_preserving` yourself, and Thyra takes you
     at your word -- with a warning when it contradicts the detector.
 
-    Before Thyra 3.24 one flag was enough: this paragraph said two were
-    needed, but the gate was evaluated against the axis the *detector*
-    preferred rather than the one the conversion would build, so
-    `--mass-axis-type fticr` alone reached the 13.4x distortion above with
-    `--resample-method` left at its `auto` default (issue #286).
-
-    If you want a non-uniform axis, use `nearest_neighbor`, which moves each
-    peak into a single bin and is unaffected by bin width.
+    If your data does not follow the axis you want, use `nearest_neighbor`,
+    which moves each peak into a single bin and is unaffected by bin width.
 
 The chosen detector, method, and axis type are all logged:
 
@@ -384,11 +383,11 @@ The declared range is not quite the same as the span of the axis points. Every
 physics axis type lays its bins as `target_bins + 1` edges across the range and
 stores the **centres**, so the first and last centre sit half a bin inside the
 range you asked for: a source declaring 50-1000 m/z builds an axis running
-`50.0001` to `999.9975`. A peak at exactly 50.0 belongs in the first bin, and
-until v3.24.0 it was thrown away instead. That mattered most for sources whose
-declared range *is* their first and last sample -- PHI ToF-SIMS takes its mass
-range from the first and last detector channel, so both channels were lost in
-every pixel.
+`50.0001` to `999.9975`. A peak at exactly 50.0 still belongs in the first
+bin, and Thyra keeps it there. That matters most for sources whose declared
+range *is* their first and last sample: PHI ToF-SIMS takes its mass range from
+the first and last detector channel, so dropping boundary peaks would lose both
+channels in every pixel.
 
 `constant` axes are unaffected either way: they are laid out with
 `np.linspace(min_mz, max_mz, n)`, whose end points already are the declared
@@ -536,6 +535,7 @@ that, the axis type's default applies:
 | Waters vendor centroid, other instruments | 2 mDa | 1000 |
 | Waters SELECT SERIES MRT profile trace | 1.3 mDa | 1000 |
 | Waters profile trace, other instruments | 1.14 x the run's predicted sample spacing | 1000 |
+| PHI SmartSoft-TOF (ToF-SIMS) | `tof` law at 3 bins per FWHM (about 57 mDa) | 1000 |
 | any other source, `linear_tof` | 17 mDa | 300 |
 | any other source, everything else | 5 mDa | 1000 |
 
@@ -570,7 +570,8 @@ The count is then derived per axis type:
 
 Each is the integral of `1 / width(m)` across the mass range, so the bin width
 the axis actually realizes at your reference m/z is the width you asked for.
-The result is floored at 100 bins.
+A count derived this way is floored at 100 bins; a count given with
+`--resample-bins` is used as it is.
 
 A worked example, from the [tutorial](tutorial.md)'s synthetic dataset --
 250-1200 Da, `constant` axis, default 5 mDa width:
@@ -626,7 +627,7 @@ Thyra gives up once that axis passes **10 million** unique m/z values, and says
 what to do instead:
 
 ```
-ValueError: Common mass axis exceeded 10,000,000 unique m/z values after
+Common mass axis exceeded 10,000,000 unique m/z values after
 12,400 of 918,855 spectra (10,004,112 so far). The peak lists in this dataset
 do not share m/z values, so a raw axis grows to roughly one column per peak,
 which is not usable downstream. Convert with resampling instead (it is the
@@ -669,8 +670,9 @@ automatic.
 === "CLI"
 
     ```bash
-    # Method and axis type. nearest_neighbor is the pairing to use with a
-    # non-uniform axis -- see the warning under "Selection" above.
+    # Method and axis type. nearest_neighbor is the pairing to use with an
+    # axis your data does not follow -- see the danger box under
+    # "Which detector wins" above.
     thyra input.imzML output.zarr \
         --resample-method nearest_neighbor \
         --mass-axis-type orbitrap
@@ -745,7 +747,7 @@ confirming a `constant` axis at the default width.
 
 - **Leave it alone** unless you have a reason. The detected settings are right for the common Bruker and imzML cases.
 - **Disable it** (`--no-resample`) when you want the untouched vendor axis -- your own peak picking, centroiding, or calibration downstream.
-- **Set `tic_preserving`** if quantitation matters and your data is profile, especially profile data from a high-resolution analyser, which the automatic choice will not pick it for.
+- **Leave the method on `auto`** for profile data too. Thyra picks `tic_preserving` only where it knows the spectra follow the target axis (Bruker rapifleX and other Bruker MALDI-TOF data, and the Waters profile trace); anywhere else interpolation would distort intensity ratios, as the danger box above measures.
 - **Set `--resample-bins`** any time you need to match another tool's axis exactly.
 - **Narrow the mass range** (`--resample-min-mz` / `--resample-max-mz`) before increasing bin counts; it is usually the cheaper way to get the resolution you need where you need it.
 

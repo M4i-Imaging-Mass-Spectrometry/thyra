@@ -175,7 +175,7 @@ the examples above) or construct the dataclass directly:
 from thyra.resampling.types import ResamplingConfig, ResamplingMethod, AxisType
 
 config = ResamplingConfig(
-    method=ResamplingMethod.TIC_PRESERVING,
+    method=ResamplingMethod.NEAREST_NEIGHBOR,
     axis_type=AxisType.ORBITRAP,
     target_bins=50000,
 )
