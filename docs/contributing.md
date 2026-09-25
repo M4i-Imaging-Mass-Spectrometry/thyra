@@ -284,6 +284,15 @@ uv sync --group docs
 uv run mkdocs serve
 ```
 
+Every pull request that touches the docs, `mkdocs.yml` or the package runs
+the **Docs check**: `mkdocs build --strict`, which fails on a broken link, a
+missing page, or a link to a section that does not exist. Run the same
+command locally to see those failures first:
+
+```bash
+uv run mkdocs build --strict
+```
+
 ## Development Workflow
 
 ### Typical Contribution Flow
