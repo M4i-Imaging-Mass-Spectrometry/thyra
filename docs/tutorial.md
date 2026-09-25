@@ -59,9 +59,9 @@ Wrote example_data/synthetic_brain.ibd
 
 This is a brain-like phantom: an elliptical "section" containing a distinct
 inner structure, over a m/z range of 250-1200. Three groups of peaks are
-written into it -- one shared across the whole section, one confined to the
-outer region, one confined to the inner region, plus low-mass matrix ions
-covering the entire slide. That gives the images below real spatial structure
+written into it: one shared across the whole section, one confined to the
+outer region and one confined to the inner region. Low-mass matrix ions cover
+the entire slide. That gives the images below real spatial structure
 to show.
 
 The same `--seed` always produces the same spectra: identical m/z axis,
@@ -103,7 +103,7 @@ Conversion takes a few seconds and produces a roughly 31 MB `.zarr` directory.
 
 !!! info "Why 190,000 m/z bins from 4,000 input points?"
     Resampling is on by default and builds a uniform axis with 5 mDa bins
-    across the mass range, which is finer than this phantom's 0.24 Da spacing.
+    across the mass range. That is finer than this phantom's 0.24 Da spacing.
     The result is correct and stays compact because it is stored sparsely --
     only 4,000 bins per spectrum are populated. Pass `--no-resample` to keep
     the original axis instead. See [Resampling](resampling.md) for how the axis
@@ -243,10 +243,10 @@ for target, label in [(760.6, "whole section"),
     plt.show()
 ```
 
-The three images differ: m/z 760.6 covers the whole section, 772.5 covers the
-outer region with the inner structure punched out as a hole, and 888.6 lights
-up only the inner structure. That contrast is what makes MSI worth doing, and
-seeing it here confirms intensities landed on the right pixels.
+The three images differ. m/z 760.6 covers the whole section. m/z 772.5 covers
+the outer region, with the inner structure punched out as a hole. m/z 888.6
+lights up only the inner structure. That contrast is what makes MSI worth
+doing, and seeing it here confirms intensities landed on the right pixels.
 
 !!! warning "Always integrate over a window, never a single bin"
     On a resampled axis most bins are empty by construction. Picking the single
