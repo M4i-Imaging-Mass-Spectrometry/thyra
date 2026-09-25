@@ -1,0 +1,51 @@
+name: Docs check
+
+# Builds the documentation site in strict mode on every pull request that can
+# change it, so a broken link, a missing page or a link to a section that does
+# not exist fails the pull request instead of reaching the published site.
+# docs.yml only builds after a merge to main, and not strictly: without this,
+# such a mistake was found by a reader.
+#
+# A workflow of its own, not a pull_request trigger on docs.yml: docs.yml sets
+# its `pages-deploy` concurrency group for the whole workflow, and a pull
+# request run in that group would queue behind a deploy, or cancel one that is
+# waiting.
+#
+# It installs the docs toolchain the same way docs.yml does, so it predicts what
+# the deploy will build.
+
+on:
+  pull_request:
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "thyra/**"
+      - "CHANGELOG.md"
+      - ".github/workflows/docs-check.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build the site (strict)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install docs dependencies
+        run: pip install mkdocs-material "mkdocstrings[python]" mkdocs-jupyter
+
+      - name: Install thyra (for API docs)
+        run: pip install -e .
+
+      - name: Build
+        run: mkdocs build --strict

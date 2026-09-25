@@ -43,6 +43,13 @@ extra_css:
 exclude_docs: |
   includes/
 
+# MkDocs only reports a link to a missing section, or a link it cannot
+# resolve, at INFO. As warnings, `mkdocs build --strict` -- which the Docs
+# check runs on every pull request -- fails on them like on a missing page.
+validation:
+  anchors: warn
+  unrecognized_links: warn
+
 plugins:
   - search
   - mkdocs-jupyter:
