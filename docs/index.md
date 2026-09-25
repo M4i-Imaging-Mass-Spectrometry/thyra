@@ -19,6 +19,13 @@ The browser version runs in Google Colab, so it needs a Google account but
 nothing on your computer. It converts example data, or an imzML file you
 upload.
 
+![The total ion current and two ion images of a sagittal mouse brain section, converted with Thyra](assets/mouse-brain-ion-images.webp)
+
+<small>A sagittal mouse brain section converted with Thyra: the total ion
+current and two ion images. MALDI-MSI data from
+[10.5281/zenodo.18326569](https://doi.org/10.5281/zenodo.18326569)
+(CC-BY-4.0), the dataset in the [Tutorial](tutorial.md).</small>
+
 ## How it works
 
 1. **Install** Thyra. The [Install](install.md) page walks you through it.

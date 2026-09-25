@@ -18,6 +18,13 @@ program.
 
 **[Documentation](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra)** | [Install](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/install/) | [Your first conversion](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/getting-started/) | [Tutorial](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/tutorial/) | [Technical reference](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/technical-reference/)
 
+![The total ion current and two ion images of a sagittal mouse brain section, converted with Thyra](docs/assets/mouse-brain-ion-images.webp)
+
+<sub>A sagittal mouse brain section converted with Thyra: the total ion current
+and two ion images. MALDI-MSI data from
+[10.5281/zenodo.18326569](https://doi.org/10.5281/zenodo.18326569),
+CC-BY-4.0.</sub>
+
 ## Quick start
 
 ```bash
