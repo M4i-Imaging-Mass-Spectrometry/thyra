@@ -167,10 +167,10 @@ Add `-v DEBUG` for more detail. The file is added to, not replaced, on every
 run.
 
 ??? advanced "Advanced: exit status, for scripts"
-    `thyra` exits with status 0 when the result was written, 1 when the
-    conversion failed or was refused, and 2 when the command itself is
-    wrong, for example an option that does not exist or a result that
-    already exists.
+    `thyra` exits with status 0 when the result was written, and 1 when the
+    conversion failed or was refused. It exits with 2 when the command
+    itself is wrong, for example an option that does not exist or a result
+    that already exists.
 
 ## Options for one kind of instrument
 

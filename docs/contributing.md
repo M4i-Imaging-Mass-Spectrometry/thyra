@@ -267,6 +267,13 @@ topic should have all of them:
 - Cut before you add. A change that makes a beginner page longer needs a
   reason.
 
+`tests/unit/test_docs_plain_language.py` checks every page under Home, "Get
+started" and "Guides" against these rules: no sentence over 25 words, an
+average of at most 20, no version history or issue numbers, and a word budget
+for each page's main text. Text inside "Advanced:" boxes does not count
+towards the budget. If a page really needs more words, raise its budget in
+that file, so the growth is a decision someone reviews.
+
 When a code change needs a documentation change, write the shortest
 sentence the beginner page needs. Put the detail on the technical page and
 the reasons in Design decisions.

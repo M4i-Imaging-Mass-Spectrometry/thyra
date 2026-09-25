@@ -54,8 +54,8 @@ will need `--pixel-size`.
 - Keep the `.mis` file from flexImaging next to the `.d` folder, ideally with
   the same name. It gives the pixel size and lines the data up with the
   optical image.
-- Thyra adds every image (TIFF, JPEG, PNG or BMP) it finds in the `.d`
-  folder, in the folder you pointed at, and in the folder above the `.d`.
+- Thyra adds every image it finds (TIFF, JPEG, PNG or BMP). It looks in the
+  `.d` folder, in the folder you pointed at, and in the folder above the `.d`.
   Unrelated pictures in those folders end up in the result too. To leave all
   images out, add `--no-optical`.
 - A slide with several regions is converted as one dataset, with every pixel

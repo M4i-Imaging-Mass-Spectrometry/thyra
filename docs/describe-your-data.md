@@ -62,8 +62,8 @@ error means the description does not follow the rules, and the line says
 
 ??? advanced "Advanced: what `thyra validate` checks"
     It checks that the description follows the published rules for its
-    version, that every value is of the right kind, and that the codes from
-    the mass spectrometry vocabularies match their names. For a result, it
+    version and that every value is of the right kind. It also checks that
+    the codes from the mass spectrometry vocabularies match their names. For a result, it
     also checks that every table carries a description and that its m/z
     values are numbers in increasing order. It never reads the intensities.
     It exits with status 0 when everything conforms, 1 when something does
@@ -124,7 +124,7 @@ not change, so keep `sample.json` next to your data.
       is refused with an error that names it.
     - **Several tables.** A result with several slices, or with an extra
       table for ion mobility or MS/MS, needs `--table` to say which table to
-      export, for example `--table msi_dataset_z0`.
+      export. For example: `--table msi_dataset_z0`.
     - **Submitting from Python.** The `metaspace2020` Python client can
       submit a dataset with this file as its metadata. It needs a METASPACE
       account and an API key.
