@@ -1,5 +1,9 @@
 # Output Format
 
+!!! tip "In plain words"
+    [Look at the result](look-at-the-result.md) explains what the result holds
+    and how to open it, in plain words. This page has every detail.
+
 Thyra converts MSI data into [SpatialData](https://spatialdata.scverse.org/)
 objects stored as Zarr directories. This page describes what the output
 contains and how to work with it.
@@ -198,9 +202,8 @@ contributes two spectra of ion current over one row -- which is what that row
 really holds.
 
 On a multi-slice source converted as 2D each plane's table carries **its own**
-mean. They used to all carry one dataset-wide vector, so a plane brighter or
-dimmer than the average was described by a spectrum that was not its own; the
-3D volume path had the same key fixed a release earlier.
+mean, so a plane brighter or dimmer than the average is described by its own
+spectrum.
 
 ### Per-Region Average Spectrum
 
@@ -504,11 +507,9 @@ bin reproduces that bin's column of the summed table, per pixel. That is what
 | `current_ratio_pixel_min` / `_max` | the same ratio across pixels |
 
 The comparison is per pixel, one bounded pass over each table's memmaps. A
-per-cell deviation (`max_absolute_deviation` / `max_relative_deviation`)
-was recorded up to v3.21 by the in-memory converter only; it needed the
-marginal and its difference from the summed table materialised, each as
-large as the summed table, and went with that converter (see
-[Design Decisions](design-decisions.md#d11-one-converter)). The snippet
+per-cell deviation is not stored: it would need the marginal and its
+difference from the summed table in memory, each as large as the summed table
+(see [Design Decisions](design-decisions.md#d11-one-converter)). The snippet
 below computes it from the two stored matrices when it is wanted.
 
 ```python

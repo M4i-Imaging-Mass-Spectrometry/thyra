@@ -1,5 +1,10 @@
 # Writing the Metadata Document from Another Program
 
+!!! tip "In plain words"
+    To describe your own data with Thyra, see
+    [Describe and share your data](describe-your-data.md). This page is for
+    programs that write the document themselves.
+
 The `msi_metadata` document is not tied to Thyra. It is a JSON object
 with a published schema, and any program that can describe a mass
 spectrometry acquisition can write one and check it, in any language,

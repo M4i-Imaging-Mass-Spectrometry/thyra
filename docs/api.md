@@ -1,5 +1,9 @@
 # API Reference
 
+!!! tip "In plain words"
+    [Change how Thyra converts](settings.md#convert-from-python) shows the
+    common settings from Python. This page documents every function.
+
 Thyra's Python API centres on two functions: `convert_msi`, which does the
 work, and `preview_msi`, which tells you what an input is without converting
 it. For most use cases those are all you need. The remaining sections document
