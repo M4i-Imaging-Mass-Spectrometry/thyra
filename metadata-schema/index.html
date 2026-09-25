@@ -1,0 +1,3178 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Convert imaging mass spectrometry data from Bruker, Waters, PHI and imzML into the open SpatialData format">
+      
+      
+      
+        <link rel="canonical" href="https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/metadata-schema/">
+      
+      
+        <link rel="prev" href="../coordinate-systems/">
+      
+      
+        <link rel="next" href="../writing-the-metadata-document/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/favicon.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Metadata schema - Thyra</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#metadata-schema" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Thyra" class="md-header__button md-logo" aria-label="Thyra" data-md-component="logo">
+      
+  <img src="../assets/thyra-logomark.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Thyra
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Metadata schema
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/M4i-Imaging-Mass-Spectrometry/thyra" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    M4i-Imaging-Mass-Spectrometry/thyra
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../install/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Get started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../which-files/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../technical-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Technical reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../migration-4.0/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Project
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Thyra" class="md-nav__button md-logo" aria-label="Thyra" data-md-component="logo">
+      
+  <img src="../assets/thyra-logomark.svg" alt="logo">
+
+    </a>
+    Thyra
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/M4i-Imaging-Mass-Spectrometry/thyra" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    M4i-Imaging-Mass-Spectrometry/thyra
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Get started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Get started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Your first conversion
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../look-at-the-result/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Look at the result
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorial
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Glossary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../which-files/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Which files can I convert?
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Change how Thyra converts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../describe-your-data/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Describe and share your data
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../explore-the-output/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Explore the result in Python
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Technical reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Technical reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../technical-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Technical reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../supported-formats/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Supported formats
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command-line options
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../resampling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resampling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../output-format/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Output format
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coordinate-systems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coordinate systems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metadata schema
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metadata schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-document" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The document
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The document">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-is-auto-populated" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is auto-populated
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#processing-history" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Processing history
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#psi-cv-alignment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PSI CV alignment
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="PSI CV alignment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#candidate-cv-terms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Candidate CV terms
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#linkml-rendering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LinkML rendering
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#var-column-conventions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        var column conventions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#storage-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage contract
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#versioning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Versioning
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#thyra-metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        thyra metadata
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#thyra-validate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        thyra validate
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#thyra-export-metaspace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        thyra export-metaspace
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#completing-the-metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Completing the metadata
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#python-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python API
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../writing-the-metadata-document/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Writing the metadata document
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../design-decisions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design decisions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_11" id="__nav_4_11_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Format notes
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Format notes
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../imzml-parser-notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    imzML
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../phi-tofsims-notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PHI ToF-SIMS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solarix-notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bruker solariX
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Project
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../migration-4.0/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migrating to 4.0
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../code-of-conduct/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Code of conduct
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-document" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The document
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The document">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-is-auto-populated" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is auto-populated
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#processing-history" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Processing history
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#psi-cv-alignment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PSI CV alignment
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="PSI CV alignment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#candidate-cv-terms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Candidate CV terms
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#linkml-rendering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LinkML rendering
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#var-column-conventions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        var column conventions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#storage-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage contract
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#versioning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Versioning
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#thyra-metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        thyra metadata
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#thyra-validate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        thyra validate
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#thyra-export-metaspace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        thyra export-metaspace
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#completing-the-metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Completing the metadata
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#python-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python API
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href=".." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../technical-reference/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Technical reference
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="metadata-schema">Metadata Schema<a class="headerlink" href="#metadata-schema" title="Permanent link">&para;</a></h1>
+<div class="admonition tip">
+<p class="admonition-title">In plain words</p>
+<p><a href="../describe-your-data/">Describe and share your data</a> covers what Thyra
+records and how to prepare a METASPACE submission, in plain words. This
+page has every field.</p>
+</div>
+<p>Every store Thyra writes carries a versioned, ontology-mapped metadata
+block: <code>table.uns["msi_metadata"]</code>. Its base fields mirror the
+<a href="https://metaspace2020.org">METASPACE</a> submission form, so a converted
+dataset already holds every answer its source reports; the rest, such as
+the organism and the matrix, is added when you export (see
+<a href="#completing-the-metadata">Completing the metadata</a>).</p>
+<p>The schema exists because MSI has had no structured metadata convention
+the way other spatial omics modalities do. Vendor files spell the same
+fact many ways, imzML metadata is free-form cvParams, and every pipeline
+re-invents its own dictionary. This block fixes the names, maps them to
+ontologies, and ships a validator.</p>
+<div class="admonition info">
+<p class="admonition-title">Where this sits in the format stack</p>
+<p>Raw/archival exchange is the domain of
+<a href="https://github.com/HUPO-PSI/mzPeak">mzPeak</a> (the HUPO-PSI working
+draft succeeding mzML); <abbr title="An open format and Python library for spatial biology data, from the scverse community">SpatialData</abbr> is the analysis-ready layer and
+Thyra's output. Thyra is the bridge between the two, and this
+schema is the analysis-layer metadata contract: PSI CV-anchored
+like the raw layer, so nothing is lost crossing the bridge. Raw
+ragged spectra stay in the raw layer; they are deliberately not
+part of Thyra's output.</p>
+</div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">spatialdata</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">sd</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">sdata</span> <span class="o">=</span> <span class="n">sd</span><span class="o">.</span><span class="n">read_zarr</span><span class="p">(</span><span class="s2">"output.zarr"</span><span class="p">)</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">block</span> <span class="o">=</span> <span class="n">sdata</span><span class="o">.</span><span class="n">tables</span><span class="p">[</span><span class="s2">"msi_dataset_z0"</span><span class="p">]</span><span class="o">.</span><span class="n">uns</span><span class="p">[</span><span class="s2">"msi_metadata"</span><span class="p">]</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="nb">print</span><span class="p">(</span><span class="n">block</span><span class="p">[</span><span class="s2">"schema_version"</span><span class="p">])</span>                       <span class="c1"># "0.9.0"</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="nb">print</span><span class="p">(</span><span class="n">block</span><span class="p">[</span><span class="s2">"ms_analysis"</span><span class="p">][</span><span class="s2">"pixel_size_um"</span><span class="p">])</span>         <span class="c1"># {"x": 20.0, "y": 20.0}</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="nb">print</span><span class="p">(</span><span class="n">block</span><span class="p">[</span><span class="s2">"ms_analysis"</span><span class="p">][</span><span class="s2">"ionisation_source"</span><span class="p">])</span>     <span class="c1"># "MALDI"</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="nb">print</span><span class="p">(</span><span class="n">block</span><span class="p">[</span><span class="s2">"ms_analysis"</span><span class="p">][</span><span class="s2">"ionisation_source_term"</span><span class="p">])</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="c1"># {"accession": "MS:1000075",</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="c1">#  "name": "matrix-assisted laser desorption ionization"}</span>
+</code></pre></div>
+<hr />
+<h2 id="the-document">The document<a class="headerlink" href="#the-document" title="Permanent link">&para;</a></h2>
+<p>Seven sections and a processing list. <code>ms_analysis</code> and <code>provenance</code> are
+written by the converter for every store; <code>acquisition</code>, <code>calibration</code> and
+<code>alignment</code> are each written when the reader reports at least one of their
+facts and are absent otherwise; <code>sample</code> and <code>preparation</code> describe things no raw file
+records (what the tissue was, how it was prepared) and are supplied by you --
+see <a href="#completing-the-metadata">Completing the metadata</a>.</p>
+<table>
+<thead>
+<tr>
+<th>Section</th>
+<th>Field</th>
+<th>Type</th>
+<th>Ontology</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>(root)</td>
+<td><code>schema_version</code></td>
+<td><code>MAJOR.MINOR.PATCH</code> string; <code>thyra validate</code> requires it, the published JSON Schema does not</td>
+<td>--</td>
+</tr>
+<tr>
+<td><code>sample</code></td>
+<td><code>organism</code>, <code>organism_term</code></td>
+<td>text + term</td>
+<td>NCBITaxon</td>
+</tr>
+<tr>
+<td></td>
+<td><code>organism_part</code>, <code>organism_part_term</code></td>
+<td>text + term</td>
+<td>UBERON</td>
+</tr>
+<tr>
+<td></td>
+<td><code>condition</code></td>
+<td>text</td>
+<td>--</td>
+</tr>
+<tr>
+<td></td>
+<td><code>sample_growth_conditions</code></td>
+<td>text</td>
+<td>--</td>
+</tr>
+<tr>
+<td><code>preparation</code></td>
+<td><code>sample_stabilisation</code></td>
+<td>text</td>
+<td>--</td>
+</tr>
+<tr>
+<td></td>
+<td><code>tissue_modification</code></td>
+<td>text</td>
+<td>--</td>
+</tr>
+<tr>
+<td></td>
+<td><code>matrix</code>, <code>matrix_term</code></td>
+<td>text + term</td>
+<td>CHEBI</td>
+</tr>
+<tr>
+<td></td>
+<td><code>matrix_application</code></td>
+<td>text</td>
+<td>--</td>
+</tr>
+<tr>
+<td></td>
+<td><code>solvent</code></td>
+<td>text</td>
+<td>--</td>
+</tr>
+<tr>
+<td><code>ms_analysis</code></td>
+<td><code>polarity</code>, <code>polarity_term</code></td>
+<td><code>"positive"</code>/<code>"negative"</code> + term</td>
+<td>PSI-MS</td>
+</tr>
+<tr>
+<td></td>
+<td><code>ionisation_source</code>, <code>ionisation_source_term</code></td>
+<td>text + term</td>
+<td>PSI-MS</td>
+</tr>
+<tr>
+<td></td>
+<td><code>analyzer</code>, <code>analyzer_term</code></td>
+<td>text + term</td>
+<td>PSI-MS</td>
+</tr>
+<tr>
+<td></td>
+<td><code>instrument_model</code></td>
+<td>text</td>
+<td>--</td>
+</tr>
+<tr>
+<td></td>
+<td><code>manufacturer</code></td>
+<td>text, the source's own spelling where it states one; set by Thyra for Waters, Rapiflex and PHI, and <code>"Bruker"</code> for a solariX file that does not say</td>
+<td>PSI-MS (<code>MS:1001269</code>)</td>
+</tr>
+<tr>
+<td></td>
+<td><code>serial_number</code></td>
+<td>text, identifies one physical machine</td>
+<td>PSI-MS (<code>MS:1000529</code>)</td>
+</tr>
+<tr>
+<td></td>
+<td><code>detector_resolving_power</code></td>
+<td><code>{value, at_mz}</code></td>
+<td>--</td>
+</tr>
+<tr>
+<td></td>
+<td><code>pixel_size_um</code></td>
+<td><code>{x, y}</code>, <strong>required</strong></td>
+<td>--</td>
+</tr>
+<tr>
+<td></td>
+<td><code>n_spectra</code></td>
+<td>integer, the spectra the source holds as its reader counted them</td>
+<td>--</td>
+</tr>
+<tr>
+<td></td>
+<td><code>ion_mobility</code></td>
+<td><code>{present, separation, separation_term, unit_term, range_lower, range_upper, num_scans, resolved_table, grid}</code></td>
+<td>PSI-MS (<code>MS:1002815</code> / <code>MS:1002476</code>, unit <code>MS:1002814</code>)</td>
+</tr>
+<tr>
+<td></td>
+<td><code>fragmentation</code></td>
+<td><code>{present, ms_level, constant_across_pixels, merges_precursors, dissociation_term, windows, resolved_table}</code></td>
+<td>PSI-MS (<code>MS:1000511</code>; windows <code>MS:1000827</code> / <code>828</code> / <code>829</code>, <code>MS:1000045</code>, <code>MS:1000133</code>)</td>
+</tr>
+<tr>
+<td><code>acquisition</code></td>
+<td><code>acquisition_datetime</code></td>
+<td>ISO 8601 <code>YYYY-MM-DDThh:mm:ss[.fff]</code>, with a UTC offset only when the source recorded one</td>
+<td>--</td>
+</tr>
+<tr>
+<td></td>
+<td><code>laser_power_percent</code></td>
+<td>number, percent of the laser's range</td>
+<td>--</td>
+</tr>
+<tr>
+<td></td>
+<td><code>laser_frequency_hz</code></td>
+<td>number, hertz</td>
+<td>IMS (<code>IMS:1006000</code>)</td>
+</tr>
+<tr>
+<td></td>
+<td><code>shots_per_pixel</code></td>
+<td>integer, laser shots summed into one pixel's spectrum</td>
+<td>IMS (<code>IMS:1006001</code>)</td>
+</tr>
+<tr>
+<td></td>
+<td><code>method_file</code></td>
+<td>text, the acquisition method's file name (never a path)</td>
+<td>--</td>
+</tr>
+<tr>
+<td><code>calibration</code></td>
+<td><code>calibration_datetime</code></td>
+<td>ISO 8601 at the source's precision (<code>YYYY-MM-DDThh:mm[:ss[.fff]]</code>), with a UTC offset only when the source recorded one</td>
+<td>--</td>
+</tr>
+<tr>
+<td></td>
+<td><code>recalibrated</code></td>
+<td>boolean, a calibration made after the acquisition replaced the one it ran under</td>
+<td>--</td>
+</tr>
+<tr>
+<td></td>
+<td><code>original_calibration_datetime</code></td>
+<td>as <code>calibration_datetime</code>, for the calibration a recalibration replaced</td>
+<td>--</td>
+</tr>
+<tr>
+<td></td>
+<td><code>software</code>, <code>software_version</code></td>
+<td>text, what made the calibration, in the source's words</td>
+<td>--</td>
+</tr>
+<tr>
+<td></td>
+<td><code>n_reference_peaks</code></td>
+<td>integer, the reference peaks the calibration was fitted to</td>
+<td>--</td>
+</tr>
+<tr>
+<td></td>
+<td><code>mz_standard_deviation_ppm</code></td>
+<td>number, their residual in ppm (see below); never zero</td>
+<td>--</td>
+</tr>
+<tr>
+<td></td>
+<td><code>lock_mass_corrected</code></td>
+<td>boolean, the m/z values were corrected against a lock mass</td>
+<td>--</td>
+</tr>
+<tr>
+<td><code>alignment</code></td>
+<td><code>optical_image_file</code></td>
+<td>text, the file name of the optical image the raster is registered onto (never a path)</td>
+<td>IMS (<code>IMS:1006008</code>)</td>
+</tr>
+<tr>
+<td></td>
+<td><code>method</code></td>
+<td>text, how that image was aligned with the raster, e.g. <code>"teaching points"</code></td>
+<td>IMS (<code>IMS:1006017</code>)</td>
+</tr>
+<tr>
+<td></td>
+<td><code>teaching_points</code></td>
+<td>list of <code>{image_x_px, image_y_px, stage_x_um, stage_y_um}</code>: a pixel of the image and the stage position of the same feature</td>
+<td>--</td>
+</tr>
+<tr>
+<td><code>processing</code></td>
+<td>list of <code>{name, action_term, software {name, version, uri}, parameters}</code></td>
+<td>ordered steps, oldest first</td>
+<td>PSI-MS data processing action (<code>MS:1001485</code> for <code>m/z calibration</code>)</td>
+</tr>
+<tr>
+<td><code>provenance</code></td>
+<td><code>thyra_version</code></td>
+<td>text, required</td>
+<td>--</td>
+</tr>
+<tr>
+<td></td>
+<td><code>source_format</code></td>
+<td><code>"imzml"</code>, <code>"bruker"</code>, ...</td>
+<td>--</td>
+</tr>
+<tr>
+<td></td>
+<td><code>source_path</code></td>
+<td>text, the source's path in a store block and its name alone in a document</td>
+<td>--</td>
+</tr>
+<tr>
+<td></td>
+<td><code>pixel_size_source</code></td>
+<td><code>"automatic"</code> / <code>"manual"</code> / <code>"default"</code></td>
+<td>--</td>
+</tr>
+</tbody>
+</table>
+<p>An ontology term is always the pair
+<code>{"accession": "MS:1000075", "name": "matrix-assisted laser desorption ionization"}</code> --
+a <a href="https://www.w3.org/TR/curie/">CURIE</a> plus the term's label, so the block
+is readable without resolving anything.</p>
+<p><code>pixel_size_um</code> is the one acquisition field that is required: conversion
+refuses to run without a pixel size, so a document without it describes no
+store Thyra ever wrote. It is a pair because a raster need not be square, and
+the same pair reaches the rest of the store -- the root attrs, the
+coordinate system and its affine, the element transforms and
+<code>obs["spatial_x"]</code>/<code>["spatial_y"]</code>.</p>
+<div class="admonition note">
+<p class="admonition-title">Unknown fields are rejected</p>
+<p>Validation refuses keys the schema does not define, so a typo fails
+loudly instead of becoming an unread field. Anything genuinely
+vendor-specific already has a home in the sections beside this block
+(<code>format_specific</code>, <code>acquisition_params</code>, <code>raw_metadata</code> -- see
+<a href="../output-format/#provenance">Output Format</a>).</p>
+</div>
+<h3 id="what-is-auto-populated">What is auto-populated<a class="headerlink" href="#what-is-auto-populated" title="Permanent link">&para;</a></h3>
+<p>Auto-population is deliberately honest: a field the source does not report
+is left unset, never guessed. The only inferences are facts that follow
+from the format itself.</p>
+<table>
+<thead>
+<tr>
+<th>Source</th>
+<th>polarity</th>
+<th>ionisation source</th>
+<th>analyzer</th>
+<th>instrument model</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>imzML</td>
+<td>from <code>MS:1000130</code> / <code>MS:1000129</code></td>
+<td>--</td>
+<td>from the <code>&lt;analyzer&gt;</code> component cvParam</td>
+<td>from the instrumentConfiguration (model term or <code>MS:1000031</code> value)</td>
+</tr>
+<tr>
+<td>Bruker timsTOF <code>.d</code></td>
+<td>from <code>Frames.Polarity</code>, when every frame agrees</td>
+<td>MALDI, when the laser tables are present</td>
+<td>TOF</td>
+<td>from the DB</td>
+</tr>
+<tr>
+<td>Bruker solariX <code>.d</code></td>
+<td>from the file</td>
+<td>--</td>
+<td>--</td>
+<td>from the file</td>
+</tr>
+<tr>
+<td>Bruker Rapiflex</td>
+<td>--</td>
+<td>--</td>
+<td>--</td>
+<td>--</td>
+</tr>
+<tr>
+<td>PHI <abbr title="Time-of-flight secondary ion mass spectrometry">ToF-SIMS</abbr></td>
+<td>from the header</td>
+<td>SIMS</td>
+<td>TOF</td>
+<td>platform name</td>
+</tr>
+<tr>
+<td>Waters <code>.raw</code></td>
+<td>--</td>
+<td>--</td>
+<td>--</td>
+<td><code>SELECT SERIES MRT</code> on an MRT, Thyra's own label; otherwise unset</td>
+</tr>
+</tbody>
+</table>
+<p>A timsTOF <code>.d</code> also fills <code>ion_mobility</code>: <code>present: true</code> for a TDF acquisition
+(<abbr title="Trapped ion mobility spectrometry: separates ions by size and shape as well as by m/z">TIMS</abbr> engaged), with the acquired 1/K0 range and the ramp length in scans,
+and <code>present: false</code> for TSF. An imzML states it as well: <code>present: true</code>
+with the array's terms when the file declares a mobility array, <code>present:
+false</code> otherwise. Other formats leave the field unset, which means "not
+reported", not "no mobility". The MSI table is always summed over
+the ramp; how it was summed is the <code>tdf_spectrum</code> parameter of the
+<code>conversion</code> processing step (see <a href="../supported-formats/#bruker-timstof">Supported Formats</a>).
+<code>resolved_table</code> names the mobility-resolved sibling table when one was
+written beside the summed table, and <code>grid</code> (<code>{law, lower, upper,
+n_channels}</code>) describes the common mobility grid such a table was binned onto
+when it was built from per-pixel mobility values (<code>--mobility-grid</code>); both
+are unset otherwise. <code>grid</code> is the only thing in the store that says which of
+the two mechanisms filled that table -- reading it off a shared feature axis
+bins nothing -- and it is a description, not a structural difference: the
+table is the same shape either way.
+The arrays that describe the axis itself and the mass-mobility heatmap live
+outside this block, in <code>uns["mobility_axis"]</code> and <code>uns["mobility_heatmap"]</code>
+(see <a href="../output-format/#ion-mobility">Output Format</a>): this block is versioned
+and carries no arrays.</p>
+<p>Bruker <code>.d</code> also fills <code>fragmentation</code> from <code>Frames.MsMsType</code> and whichever
+precursor table the acquisition uses -- <code>PasefFrameMsMsInfo</code> for <abbr title="Parallel accumulation-serial fragmentation: a Bruker timsTOF mode for MS/MS">PASEF</abbr> frames,
+<code>FrameMsMsInfo</code> for single-precursor ones -- in a TSF acquisition as well as
+a TDF one. What stays TDF-only is the demultiplexed sibling table, which
+needs the mobility scan ranges only <abbr title="Parallel accumulation-serial fragmentation: a Bruker timsTOF mode for MS/MS">PASEF</abbr> records. <code>present: false</code> records a survey
+acquisition; the field is left unset when the database cannot be asked at all,
+which means "not reported", not "MS1". <code>windows</code> is stored as a JSON string
+(a list of objects does not round-trip through <abbr title="The Python table format that holds the spectra: one row per pixel, one column per m/z bin">AnnData</abbr>/zarr) and decoded by
+<code>read_msi_metadata_blocks</code> and <code>thyra validate</code>. The field names and terms are
+mzPeak's, so an archive and a store describe a precursor the same way; see
+<a href="../output-format/#fragmentation-msms">Output Format</a> for the array block
+beside it and for what <code>merges_precursors</code> means for the stored spectrum.
+Waters <code>.raw</code> fills it too, from the precursor m/z MassLynx reports per scan:
+a file whose converted functions carry one reports it here, and a file that
+also holds MS1 functions converts those alone, reports MS1, and lists the
+MS/MS functions it left out under <code>excluded_functions</code> in the Waters-specific
+block. The MS level MassLynx reports is not used on its own, because on a
+raster it split across functions the level is a chunk artefact (see
+<a href="../supported-formats/#which-functions-hold-the-image">Supported Formats</a>).</p>
+<p>The <code>acquisition</code> section is filled the same way, from the vendor values
+the reader already keeps in <code>uns["acquisition_params"]</code>, and only where
+the value's meaning and unit were checked against an acquisition:</p>
+<table>
+<thead>
+<tr>
+<th>Source</th>
+<th><code>acquisition_datetime</code></th>
+<th><code>laser_power_percent</code></th>
+<th><code>laser_frequency_hz</code></th>
+<th><code>shots_per_pixel</code></th>
+<th><code>method_file</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bruker tsf/tdf</td>
+<td><code>GlobalMetadata.AcquisitionDateTime</code>, with offset</td>
+<td><code>MaldiFrameInfo.LaserPower</code></td>
+<td><code>MaldiFrameInfo.LaserRepRate</code></td>
+<td><code>MaldiFrameInfo.NumLaserShots</code></td>
+<td><code>GlobalMetadata.MethodName</code>, name only</td>
+</tr>
+<tr>
+<td>Bruker solariX</td>
+<td><code>Properties.AcquisitionDateTime</code>, with offset</td>
+<td><code>Spectra.LaserPower</code></td>
+<td><code>Spectra.LaserRepRate</code></td>
+<td><code>Spectra.NumSummations</code> (it equals the method's <code>NumLaserShots</code>)</td>
+<td>the <code>*.m</code> directory's name</td>
+</tr>
+<tr>
+<td>Bruker rapiflex</td>
+<td>-- (the info file's <code>Start Time</code> format is unverified)</td>
+<td>-- (unit unverified)</td>
+<td>--</td>
+<td><code>Number of Shots</code></td>
+<td><code>Method</code></td>
+</tr>
+<tr>
+<td>PHI <abbr title="Time-of-flight secondary ion mass spectrometry">ToF-SIMS</abbr></td>
+<td><code>AcqFileDate</code>, no offset</td>
+<td>-- (ion gun)</td>
+<td>--</td>
+<td>--</td>
+<td>--</td>
+</tr>
+<tr>
+<td>Waters <code>.raw</code></td>
+<td>MassLynx's acquisition date and time, no offset</td>
+<td>--</td>
+<td>--</td>
+<td>--</td>
+<td><code>$$ MS Method</code> in <code>_header.txt</code>, name only</td>
+</tr>
+<tr>
+<td>imzML</td>
+<td>--</td>
+<td>--</td>
+<td>--</td>
+<td>--</td>
+<td>--</td>
+</tr>
+</tbody>
+</table>
+<p>A Bruker per-frame value that varied across the acquisition is reported in
+<code>acquisition_params</code> as a <code>[min, max]</code> pair and leaves the schema field
+unset: the section states one value per acquisition or none. A timestamp
+in a format the builder does not parse stays unset too, with the raw
+string untouched beside it. No time zone is ever assumed: PHI and Waters
+record none, so their timestamps carry none.
+<code>resolved_table</code> names the demultiplexed sibling table when one was written,
+mirroring <code>ion_mobility.resolved_table</code>, so both kinds of sibling are
+discoverable from this block alone.</p>
+<p>A precursor's m/z here and in <code>var["precursor_mz"]</code> is the <strong>isolation window
+target</strong> (<code>MS:1000827</code>) -- the m/z the quadrupole was set to -- and not
+<code>MS:1000744</code>, a selected ion whose m/z was measured. mzPeak keeps the two in
+separate files for the same reason; do not read either as a monoisotopic mass.</p>
+<p><code>detector_resolving_power</code> is filled when the source states both the value
+and the m/z it is quoted at (an extractor reports them as <code>resolving_power</code>
+and <code>resolving_power_at_mz</code>); one without the other is not written, because
+a resolving power is not comparable without its reference m/z. No shipped
+reader states the pair today, so for the formats Thyra converts it is
+supplied by you like the fields below.</p>
+<p><code>n_spectra</code> is the reader's own count of the spectra the source holds -- the
+ones present, not the positions the raster covers, and one region's when one
+was read. It is left unset where the reader did not count (a PHI preview
+decodes no events, so <code>thyra metadata</code> has no count for PHI), and the table can
+have fewer rows than it says: a spectrum with nothing in it is not stored.</p>
+<p>The <code>calibration</code> section describes how the source's m/z values were
+calibrated. "The calibration" is the one they rest on: the most recent
+recalibration when there is one, otherwise the calibration the acquisition
+ran under. Every field comes from what the vendor states, and only where its
+meaning was checked against real acquisitions:</p>
+<table>
+<thead>
+<tr>
+<th>Source</th>
+<th><code>calibration_datetime</code></th>
+<th><code>recalibrated</code></th>
+<th><code>software</code>, <code>software_version</code></th>
+<th><code>n_reference_peaks</code>, <code>mz_standard_deviation_ppm</code></th>
+<th><code>lock_mass_corrected</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bruker tsf/tdf</td>
+<td><code>CalibrationInfo.CalibrationDateTime</code> in the analysis database, with offset; for recalibrated data the latest <code>calibration.sqlite</code> state's time, with the database's as <code>original_calibration_datetime</code></td>
+<td>from <code>calibration.sqlite</code>: its first state is written at acquisition, so only a second is a recalibration; unset without the file</td>
+<td><code>CalibrationSoftware</code>, <code>CalibrationSoftwareVersion</code>; the latest state's source and version when recalibrated</td>
+<td>the reference masses with a corrected mass, and <code>MzStandardDeviationPPM</code>; unset for a recalibration, since no recalibrated acquisition was at hand to check what its state records</td>
+<td>--</td>
+</tr>
+<tr>
+<td>PHI <abbr title="Time-of-flight secondary ion mass spectrometry">ToF-SIMS</abbr></td>
+<td>the appended recalibration's <code>BlockAppendedDate</code>, no offset; unset for the header's calibration, which has no date</td>
+<td>an appended block with new coefficients</td>
+<td>--</td>
+<td>the calibrants of the calibration in force, from their measured and theoretical m/z</td>
+<td>--</td>
+</tr>
+<tr>
+<td>Waters <code>.raw</code></td>
+<td><code>$$ Cal Date</code> and <code>$$ Cal Time</code> in <code>_header.txt</code>, to the minute, no offset</td>
+<td>--</td>
+<td>--</td>
+<td>-- (<code>Cal StdDev</code> is 0 on every file read)</td>
+<td>MassLynx <code>isLockmassCorrected</code></td>
+</tr>
+<tr>
+<td>imzML, solariX, rapiflex, mzPeak</td>
+<td>--</td>
+<td>--</td>
+<td>--</td>
+<td>--</td>
+<td>--</td>
+</tr>
+</tbody>
+</table>
+<p><code>mz_standard_deviation_ppm</code> is the square root of the reference peaks'
+summed squared m/z errors after the calibration, in ppm, over one less than
+the number of peaks. That is Bruker's <code>MzStandardDeviationPPM</code>, recomputed
+from the file's own arrays to six decimals on four acquisitions, and PHI's
+calibrants give the same statistic: refitting their theoretical m/z against
+the flight times the stated coefficients imply reproduces the coefficients
+exactly, so each calibrant's measured m/z is its position under the fit and
+the difference its residual. A value is never written where it has nothing
+to say. A standard deviation of zero is left unset -- a timsTOF calibrated on
+two peaks fits both exactly, and the online lock-mass state a MALDI timsTOF
+writes records <code>0.000000</code> against a single reference mass and no measured
+mass at all -- and so is one over fewer than two peaks. The count stands on
+its own.</p>
+<p>Three things are deliberately not in the section. On a timsTOF, the first
+state of <code>calibration.sqlite</code> is an online lock-mass calibration, and whether
+Bruker's library applies it depends on the file: a TSF applies it when opened
+with <code>--use-recalibrated</code> (the default), a TDF gives the same m/z with it or
+without it, measured on one acquisition of each. Which calibration a
+conversion applied is therefore a processing step (below), and
+<code>lock_mass_corrected</code> is left unset for timsTOF rather than stated for data it
+may not describe. The mobility calibration's keys are not read: on the one
+imaging TDF with <abbr title="Trapped ion mobility spectrometry: separates ions by size and shape as well as by m/z">TIMS</abbr> engaged its measured voltages are all zero and its
+standard deviation is 3578 %. And no person reaches the section:
+<code>CalibrationUser</code> and <code>MobilityCalibrationUser</code> are not read, and neither is
+the reference list's name, which is text the lab chose.</p>
+<p>The <code>alignment</code> section says which optical image the source registers its
+raster onto, and how. Only flexImaging states one, in the <code>.mis</code> file beside
+a Bruker acquisition:</p>
+<table>
+<thead>
+<tr>
+<th>Source</th>
+<th><code>optical_image_file</code></th>
+<th><code>method</code></th>
+<th><code>teaching_points</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bruker tsf/tdf, rapiflex, solariX, with a <code>.mis</code></td>
+<td><code>&lt;ImageFile&gt;</code>, name only</td>
+<td><code>"teaching points"</code> when there are three or more</td>
+<td>each <code>&lt;TeachPoint&gt;</code></td>
+</tr>
+<tr>
+<td>Everything else</td>
+<td>--</td>
+<td>--</td>
+<td>--</td>
+</tr>
+</tbody>
+</table>
+<p>The stage positions are in micrometres, in the frame the teaching was done
+in. The positions the acquisition records its spectra at are offset from that
+frame, so the points place the image on the target, not on those positions.
+The <code>.mis</code> Areas stay in <code>raw_metadata</code>: an acquisition can hold fewer of them
+than the file lists. Whether a conversion placed the raster in the image's
+pixels is for the store's <code>coordinate_systems</code> attribute to say (see
+<a href="../coordinate-systems/">Coordinate Systems</a>).</p>
+<p>Everything else -- organism, tissue, condition, matrix -- cannot come from
+a raw file and stays empty until you provide it.</p>
+<h3 id="processing-history">Processing history<a class="headerlink" href="#processing-history" title="Permanent link">&para;</a></h3>
+<p><code>processing</code> is the dataset's processing provenance, modeled on
+<a href="https://github.com/HUPO-PSI/mzQC">mzQC</a>: an ordered list of steps, each
+naming the software that performed it and the parameters it ran with, and
+the PSI-MS data processing action it is (<code>action_term</code>) where one exists.
+The converter records its own steps -- <code>conversion</code> always, <code>m/z calibration</code>
+when the reader turned flight times or digitiser indices into m/z with a
+calibration it chose, and <code>mass axis resampling</code> with the resolved resampling
+parameters when resampling was enabled. Downstream tools (normalisation, peak
+picking, annotation) append theirs when they modify the store.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">[</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  <span class="p">{</span><span class="s2">"name"</span><span class="p">:</span> <span class="s2">"conversion"</span><span class="p">,</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>   <span class="s2">"software"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"name"</span><span class="p">:</span> <span class="s2">"thyra"</span><span class="p">,</span> <span class="s2">"version"</span><span class="p">:</span> <span class="s2">"4.1.0"</span><span class="p">}},</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>  <span class="p">{</span><span class="s2">"name"</span><span class="p">:</span> <span class="s2">"m/z calibration"</span><span class="p">,</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>   <span class="s2">"action_term"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"accession"</span><span class="p">:</span> <span class="s2">"MS:1001485"</span><span class="p">,</span> <span class="s2">"name"</span><span class="p">:</span> <span class="s2">"m/z calibration"</span><span class="p">},</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>   <span class="s2">"software"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"name"</span><span class="p">:</span> <span class="s2">"thyra"</span><span class="p">,</span> <span class="s2">"version"</span><span class="p">:</span> <span class="s2">"4.1.0"</span><span class="p">},</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>   <span class="s2">"parameters"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"calibration"</span><span class="p">:</span> <span class="s2">"appended"</span><span class="p">}},</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>  <span class="p">{</span><span class="s2">"name"</span><span class="p">:</span> <span class="s2">"mass axis resampling"</span><span class="p">,</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>   <span class="s2">"software"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"name"</span><span class="p">:</span> <span class="s2">"thyra"</span><span class="p">,</span> <span class="s2">"version"</span><span class="p">:</span> <span class="s2">"4.1.0"</span><span class="p">},</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>   <span class="s2">"parameters"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"method"</span><span class="p">:</span> <span class="s2">"nearest_neighbor"</span><span class="p">,</span> <span class="s2">"target_bins"</span><span class="p">:</span> <span class="mi">50000</span><span class="p">,</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>                  <span class="s2">"reference_mz"</span><span class="p">:</span> <span class="mf">1000.0</span><span class="p">}}</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="p">]</span>
+</code></pre></div>
+<p>The <code>m/z calibration</code> step is how a store says which calibration it holds,
+as distinct from what the source states in <code>calibration</code>: a conversion can be
+told to apply one the source does not consider current. Its parameters are
+in the reader's own terms:</p>
+<table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Parameter</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PHI <abbr title="Time-of-flight secondary ion mass spectrometry">ToF-SIMS</abbr></td>
+<td><code>calibration</code>: <code>"appended"</code> / <code>"header"</code></td>
+<td>the coefficients Thyra computed m/z from: the recalibration appended to the file whenever there is one, unless the reader's <code>use_appended_calibration</code> was turned off</td>
+</tr>
+<tr>
+<td>Bruker tsf/tdf</td>
+<td><code>use_recalibrated_state</code>: <code>true</code> / <code>false</code></td>
+<td>the option Bruker's library was opened with (<code>--use-recalibrated</code> / <code>--no-recalibrated</code>). The library applies the calibration itself, and what it does with a stored state differs by file type (see the <code>calibration</code> section above), so the option is recorded as the option</td>
+</tr>
+</tbody>
+</table>
+<p>Other readers take the m/z values the source stores, apply nothing and
+record no step.</p>
+<p>On disk the list is stored as a JSON string (<abbr title="The Python table format that holds the spectra: one row per pixel, one column per m/z bin">AnnData</abbr>/zarr cannot
+round-trip a list of objects -- the same reason <code>uns["regions"]</code> is
+JSON); <code>read_msi_metadata_blocks</code> and <code>validate_document</code> decode it
+transparently.</p>
+<hr />
+<h2 id="psi-cv-alignment">PSI CV alignment<a class="headerlink" href="#psi-cv-alignment" title="Permanent link">&para;</a></h2>
+<p>Beyond the per-document <code>*_term</code> values, every schema <strong>field</strong> that
+instantiates a PSI CV concept is bound to that concept's accession in
+the JSON Schema itself (a <code>cv</code> annotation on the field definition), so
+the claim "Thyra's output is annotated with the same PSI CV terms as
+the raw file it came from" is machine-checkable from the committed
+artifact alone:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>CV concept</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ms_analysis.pixel_size_um.x</code></td>
+<td><code>IMS:1000046</code> pixel size (x)</td>
+</tr>
+<tr>
+<td><code>ms_analysis.pixel_size_um.y</code></td>
+<td><code>IMS:1000047</code> pixel size y</td>
+</tr>
+<tr>
+<td><code>ms_analysis.polarity</code></td>
+<td><code>MS:1000465</code> scan polarity</td>
+</tr>
+<tr>
+<td><code>ms_analysis.ionisation_source</code></td>
+<td><code>MS:1000008</code> ionization type</td>
+</tr>
+<tr>
+<td><code>ms_analysis.analyzer</code></td>
+<td><code>MS:1000443</code> mass analyzer type</td>
+</tr>
+<tr>
+<td><code>ms_analysis.instrument_model</code></td>
+<td><code>MS:1000031</code> instrument model</td>
+</tr>
+<tr>
+<td><code>ms_analysis.manufacturer</code></td>
+<td><code>MS:1001269</code> instrument vendor</td>
+</tr>
+<tr>
+<td><code>ms_analysis.serial_number</code></td>
+<td><code>MS:1000529</code> instrument serial number</td>
+</tr>
+<tr>
+<td><code>ms_analysis.detector_resolving_power</code></td>
+<td><code>MS:1000800</code> mass resolving power</td>
+</tr>
+<tr>
+<td><code>ms_analysis.ion_mobility.separation</code></td>
+<td><code>MS:1002892</code> ion mobility attribute</td>
+</tr>
+<tr>
+<td><code>ms_analysis.fragmentation.ms_level</code></td>
+<td><code>MS:1000511</code> ms level</td>
+</tr>
+<tr>
+<td><code>ms_analysis.fragmentation.windows[].target</code></td>
+<td><code>MS:1000827</code> isolation window target m/z</td>
+</tr>
+<tr>
+<td><code>ms_analysis.fragmentation.windows[].lower_offset</code></td>
+<td><code>MS:1000828</code> isolation window lower offset</td>
+</tr>
+<tr>
+<td><code>ms_analysis.fragmentation.windows[].upper_offset</code></td>
+<td><code>MS:1000829</code> isolation window upper offset</td>
+</tr>
+<tr>
+<td><code>ms_analysis.fragmentation.windows[].collision_energy</code></td>
+<td><code>MS:1000045</code> collision energy</td>
+</tr>
+<tr>
+<td><code>acquisition.laser_frequency_hz</code></td>
+<td><code>IMS:1006000</code> repetition rate</td>
+</tr>
+<tr>
+<td><code>acquisition.shots_per_pixel</code></td>
+<td><code>IMS:1006001</code> laser shots per spectrum</td>
+</tr>
+<tr>
+<td><code>alignment.optical_image_file</code></td>
+<td><code>IMS:1006008</code> optical image location</td>
+</tr>
+<tr>
+<td><code>alignment.method</code></td>
+<td><code>IMS:1006017</code> method used to align optical image</td>
+</tr>
+</tbody>
+</table>
+<p>On the input side, every imzML file-description cvParam is preserved in
+<code>uns["raw_metadata"]["cvParams"]</code> <strong>with its accession</strong> (and unit
+accession where the source set one) -- the name alone cannot be resolved
+back to the CV concept. The list is stored as a JSON string (see
+<a href="../output-format/#provenance">Output Format</a> for why); <code>json.loads</code>
+hands back the list of terms. Polarity declared there (<code>MS:1000130</code> /
+<code>MS:1000129</code>) auto-populates the schema field.</p>
+<h3 id="candidate-cv-terms">Candidate CV terms<a class="headerlink" href="#candidate-cv-terms" title="Permanent link">&para;</a></h3>
+<p>Several imaging concepts this schema needs have no CV term yet. They
+are tracked in <code>CANDIDATE_CV_CONCEPTS</code> as the vocabulary to raise in
+the PSI/mzPeak imaging discussions, so this schema and the future
+standard converge:</p>
+<ul>
+<li>pixel size semantics (raster pitch vs laser spot vs binned size)</li>
+<li>pixel size provenance (measured vs user-supplied vs default)</li>
+<li>coordinate origin and axis handedness</li>
+<li>stage offset of the raster origin</li>
+<li>ROI / acquisition region identity</li>
+<li>missing / empty pixel semantics</li>
+<li>continuous-vs-processed source provenance after conversion</li>
+<li>mass axis resampling provenance (method, axis law, target bins)</li>
+<li>acquisition start timestamp (mzML has only the run's <code>startTimeStamp</code>
+  attribute; <code>MS:1000747</code> is the completion time)</li>
+<li>laser power as a percentage of the instrument's range (<code>MS:1000846</code>
+  pulse energy is in joules)</li>
+<li>acquisition method identity (<code>MS:1002128</code> names a method file format,
+  not the method)</li>
+<li>number of spectra of any MS level (<code>MS:4000059</code> and <code>MS:4000060</code> count MS1
+  and MS2 spectra separately)</li>
+<li>when an m/z calibration was made, whether a recalibration replaced it, and
+  what software made it (<code>MS:1001485</code> m/z calibration is a processing action
+  with no attributes; <code>MS:1003200</code> software version is scoped to spectral
+  libraries)</li>
+<li>an m/z calibration's fit: its residual in ppm and how many reference peaks
+  it rests on (<code>MS:1000014</code> accuracy is an analyzer attribute, <code>MS:4000072</code>
+  the error of one identified ion)</li>
+<li>lock-mass correction of the m/z values</li>
+<li>a teaching point: a pixel of the optical image paired with the stage
+  position of the same feature (<code>IMS:1006017</code> names the alignment method,
+  with no term for the points it rests on)</li>
+</ul>
+<p><code>MS:1001485</code> itself is used, as the <code>action_term</code> of the <code>m/z calibration</code>
+processing step -- the one place the schema names a calibration as
+something done rather than something stated.</p>
+<h3 id="linkml-rendering">LinkML rendering<a class="headerlink" href="#linkml-rendering" title="Permanent link">&para;</a></h3>
+<p>The schema is also rendered as LinkML at
+<code>thyra/metadata/schema/msi_metadata.linkml.yaml</code> -- classes, slots,
+required flags, <code>slot_uri</code> CV bindings and the polarity enum with
+<code>meaning:</code> accessions. The pydantic models remain the source of truth
+for what Thyra writes and validates; the YAML is the discussion artifact
+for LinkML-native settings (the PSI/mzPeak imaging work, the planned
+spec repository), and a unit test keeps the two from drifting. A later
+migration to LinkML-as-source changes no field names and nothing on
+disk.</p>
+<hr />
+<h2 id="var-column-conventions">var column conventions<a class="headerlink" href="#var-column-conventions" title="Permanent link">&para;</a></h2>
+<p>The MSI table's <code>.var</code> column names are fixed by the spec so every
+consumer can rely on one spelling:</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Written by</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mz</code></td>
+<td>every converter, <strong>required</strong></td>
+<td>The common mass axis. Numeric, finite, strictly increasing -- except on a sibling table, where the pair is what is unique and sorted: <code>(mz, mobility)</code> on a mobility-resolved one, <code>(precursor_mz, precursor_mobility, mz)</code> on a demultiplexed MS/MS one, where <code>precursor_index</code> identifies the block.</td>
+</tr>
+<tr>
+<td><code>mobility</code></td>
+<td>the converter, on mobility-resolved tables only</td>
+<td>The feature's ion mobility (1/K0 or drift time; see <code>uns["mobility_axis"]</code>). Its presence is what marks the table as mobility-resolved.</td>
+</tr>
+<tr>
+<td><code>precursor_mz</code></td>
+<td>the converter, on demultiplexed MS/MS tables only</td>
+<td>The isolated m/z the feature's fragments came from (see <code>uns["msms_schedule"]</code>). Its presence is what marks the table as demultiplexed; such a table never carries <code>mobility</code> as well.</td>
+</tr>
+<tr>
+<td><code>mz_index</code></td>
+<td>the converter, on sibling tables only</td>
+<td>Column of the feature's m/z on the summed MSI table's axis</td>
+</tr>
+<tr>
+<td><code>mobility_index</code></td>
+<td>the converter, on mobility-resolved tables only</td>
+<td>The feature's position on the table's mobility axis: the rank of its mobility among the distinct values a shared-axis source lists, or the channel it fell in on a common grid (<code>ion_mobility.grid</code>)</td>
+</tr>
+<tr>
+<td><code>precursor_mobility</code></td>
+<td>the converter, on demultiplexed MS/MS tables only</td>
+<td>The 1/K0 the precursor was isolated at (the middle of its mobility window). What tells two precursors sharing an m/z apart -- an isomer pair -- so they are never merged</td>
+</tr>
+<tr>
+<td><code>precursor_index</code></td>
+<td>the converter, on demultiplexed MS/MS tables only</td>
+<td>The precursor's position in <strong>this store's</strong> precursor axis, and the identity of its column block. Means nothing outside the store: align two stores on <code>(precursor_mz, precursor_mobility)</code></td>
+</tr>
+<tr>
+<td><code>formula</code></td>
+<td>annotation tools</td>
+<td>Molecular formula of the annotation</td>
+</tr>
+<tr>
+<td><code>adduct</code></td>
+<td>annotation tools</td>
+<td>Adduct, e.g. <code>+H</code>, <code>-H</code>, <code>+Na</code></td>
+</tr>
+<tr>
+<td><code>annotation_source</code></td>
+<td>annotation tools</td>
+<td>Tool/database that produced the annotation</td>
+</tr>
+<tr>
+<td><code>fdr</code></td>
+<td>annotation tools</td>
+<td>False discovery rate of the annotation</td>
+</tr>
+</tbody>
+</table>
+<p>Readers may add extra per-channel columns (a non-m/z native axis such as
+flight time stays alongside <code>mz</code>), and annotation tools may add columns
+beyond these -- but the reserved names above must never be reused with a
+different meaning. <code>thyra validate</code> checks the <code>mz</code> contract on every
+table of a store.</p>
+<hr />
+<h2 id="storage-contract">Storage contract<a class="headerlink" href="#storage-contract" title="Permanent link">&para;</a></h2>
+<ul>
+<li>The block lives at <code>table.uns["msi_metadata"]</code>, in every table the
+  store has. This location is stable, like <code>uns["essential_metadata"]</code>
+  and the <code>coordinate_systems</code> root attribute; consumers read it from
+  here and nowhere else.</li>
+<li>It is written identically by every converter write path (the uns
+  parity tests assert this), and records no time of the conversion
+  itself -- the acquisition's start time comes from the source -- so
+  converting the same input twice produces the same block.</li>
+<li>Sections with nothing in them are omitted rather than written empty,
+  following the store-wide convention.</li>
+</ul>
+<h2 id="versioning">Versioning<a class="headerlink" href="#versioning" title="Permanent link">&para;</a></h2>
+<p><code>schema_version</code> follows semantic-version rules:</p>
+<ul>
+<li>Adding an optional field bumps the <strong>minor</strong> version.</li>
+<li>Renaming, removing, retyping, or making a field required bumps the
+  <strong>major</strong> version.</li>
+<li>A validator implementing major version N rejects documents with a
+  different major version, accepts older minors, and warns on newer
+  minors.</li>
+</ul>
+<p>Versions so far: 0.1.0 (initial), 0.2.0 (<code>ms_analysis.ion_mobility</code>
+added), 0.3.0 (<code>ion_mobility.resolved_table</code> and <code>ion_mobility.grid</code> added),
+0.4.0 (<code>ms_analysis.fragmentation</code> added), 0.5.0
+(<code>fragmentation.resolved_table</code> added), 0.6.0 (the <code>acquisition</code> section
+added), 0.7.0 (<code>ms_analysis.manufacturer</code> and <code>ms_analysis.serial_number</code>
+added), 0.8.0 (the <code>calibration</code> section, <code>ms_analysis.n_spectra</code> and
+the processing steps' <code>action_term</code> added), 0.9.0 (the <code>alignment</code> section
+added).</p>
+<p>The JSON Schema rendering is published at a fixed, versioned address,
+which is also its <code>$id</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.9.0/msi_metadata.schema.json
+</code></pre></div>
+<p>Every version from 0.6.0 on has its own folder under that path, and a
+published folder is never edited; there is deliberately no <code>latest</code>. The LinkML source of
+the same version is served beside it as <code>msi_metadata.linkml.yaml</code>. A
+program that writes the document without Thyra validates against that
+address; see <a href="../writing-the-metadata-document/">Writing the Metadata Document</a>.</p>
+<p>The same file is committed at
+<code>thyra/metadata/schema/msi_metadata_schema_v0_9.json</code> and ships in the
+wheel, so a Python consumer can validate documents offline without
+importing Thyra:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">importlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">resources</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">schema</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="n">resources</span><span class="o">.</span><span class="n">files</span><span class="p">(</span><span class="s2">"thyra.metadata.schema"</span><span class="p">)</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    <span class="o">.</span><span class="n">joinpath</span><span class="p">(</span><span class="s2">"msi_metadata_schema_v0_9.json"</span><span class="p">)</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>    <span class="o">.</span><span class="n">read_text</span><span class="p">()</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="p">)</span>
+</code></pre></div>
+<p>Unit tests keep the package artifact in sync with the models and the
+published copy in sync with the package artifact; regenerate both with
+<code>python -m thyra.metadata.schema.generate</code> after a model change. A
+version bump creates a new folder under <code>docs/schema/</code>; the previous
+version's folder stays as it is. <code>docs/schema/SHA256SUMS</code> records the
+SHA-256 of every published file, and a unit test fails when any of them
+changes, so regenerating a version that is already published fails the
+suite instead of rewriting it. The pull request that adds a version
+folder appends that folder's lines to <code>SHA256SUMS</code>; the failing test
+prints them.</p>
+<hr />
+<h2 id="thyra-metadata"><code>thyra metadata</code><a class="headerlink" href="#thyra-metadata" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>thyra metadata INPUT [--merge USER.json] [-o OUT.json]
+</code></pre></div>
+<p>Builds the same document from a <strong>raw</strong> source and writes it out, without
+converting anything. <code>INPUT</code> is a file or folder in any format Thyra reads.
+For every format but Waters, no spectra are decoded and no vendor <abbr title="Software development kit: here, the instrument maker's library that reads its raw files">SDK</abbr> is
+loaded, so it is a header read whatever the dataset's size; a Waters run is
+described through the MassLynx library, which reads every scan. The default
+output is stdout.</p>
+<p>The document is the one a conversion would have stored, with three
+differences, and a fourth for PHI data. Two follow from nothing having been
+converted: <code>processing</code> is absent, and no sibling table is named; for PHI,
+<code>ms_analysis.n_spectra</code> is absent too, because counting the pixels that
+carry a spectrum means decoding the whole event stream. The third follows
+from where
+the document goes: <code>provenance.source_path</code> is the source's <strong>name</strong>,
+where a store block carries the path it was converted from. A store sits
+on the machine that wrote it and the path is provenance a reader can act
+on; a document is written to be handed to somebody, and an absolute path
+describes a filesystem they do not have while carrying a user directory
+to a machine that has no use for it. Everything else -- the sections, the
+ontology terms, the JSON shape -- is identical, so a document written
+this way and the same dataset's block read back out of a store compare
+directly.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>thyra<span class="w"> </span>metadata<span class="w"> </span>raw_data.d
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>thyra<span class="w"> </span>metadata<span class="w"> </span>raw_data.d<span class="w"> </span>--merge<span class="w"> </span>sample.json<span class="w"> </span>-o<span class="w"> </span>meta.json
+</code></pre></div>
+<p>An acquisition with no raster has no pixel size, which this schema
+version requires, so its document is reported as invalid and the command
+exits 1 -- while still writing the document, which is the only kind such
+an acquisition has. See
+<a href="../design-decisions/#d23-a-metadata-document-does-not-need-a-pixel-size-proposed">Design Decisions</a>.</p>
+<hr />
+<h2 id="thyra-validate"><code>thyra validate</code><a class="headerlink" href="#thyra-validate" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>thyra validate PATH [--merge USER.json] [--json]
+</code></pre></div>
+<p><code>PATH</code> is a converted <code>.zarr</code> store or a standalone metadata <code>.json</code>
+document. Only the metadata block (and, for stores, the <code>var</code> axis) is
+read -- validating a 100 GB store is instant. For stores it also checks
+the <a href="#var-column-conventions">var column contract</a> and that every table
+carries a metadata block. Exit status is <code>0</code> when every document
+conforms (warnings allowed) and <code>1</code> otherwise, so it can gate CI.</p>
+<p>On Windows, a store whose files sit past the 260-character path limit is
+read through an extended-length path automatically; without that, <abbr title="The storage format under SpatialData: a folder of small files that can be read a piece at a time">Zarr</abbr>
+would return empty terms for the keys it cannot open and the document
+would fail validation for the wrong reason (see
+<a href="../troubleshooting/#windows-long-paths">long paths</a>).</p>
+<p>Errors mean the document does not conform: structural violations, unknown
+PSI-MS/IMS/UO accessions, version incompatibility. Warnings mean it
+conforms but says something suspicious: a term label that does not match
+its accession, or a term from an unexpected ontology.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>thyra<span class="w"> </span>validate<span class="w"> </span>output.zarr
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="c1"># msi_dataset_z0: OK</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>thyra<span class="w"> </span>validate<span class="w"> </span>output.zarr<span class="w"> </span>--json<span class="w">   </span><span class="c1"># machine-readable report on stdout</span>
+</code></pre></div>
+<h2 id="thyra-export-metaspace"><code>thyra export-metaspace</code><a class="headerlink" href="#thyra-export-metaspace" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>thyra export-metaspace PATH [--merge USER.json] [--table NAME] [-o OUT.json]
+</code></pre></div>
+<p>Writes the METASPACE submission metadata JSON (default:
+<code>&lt;input&gt;.metaspace.json</code> next to the input; <code>-o -</code> for stdout). Required
+fields the store cannot know are written empty, or left out in the case of
+<code>Detector_Resolving_Power</code>, and reported as warnings on stderr -- the output
+is a truthful starting point, never a fabricated record. Two values are
+filled without being stated: matrix-free sources (DESI, SIMS) get
+<code>MALDI_Matrix: "none"</code>, and an unset solvent is written as <code>"none"</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>thyra<span class="w"> </span>export-metaspace<span class="w"> </span>output.zarr
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="c1"># warning: Sample_Information.Organism is required ... and is not set</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="c1"># Wrote METASPACE metadata for msi_dataset_z0 to output.metaspace.json</span>
+</code></pre></div>
+<h2 id="completing-the-metadata">Completing the metadata<a class="headerlink" href="#completing-the-metadata" title="Permanent link">&para;</a></h2>
+<p>The fields only you can know go in a small JSON overlay, merged at
+validation or export time with <code>--merge</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">"sample"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">    </span><span class="nt">"organism"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Mus musculus"</span><span class="p">,</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">    </span><span class="nt">"organism_term"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"accession"</span><span class="p">:</span><span class="w"> </span><span class="s2">"NCBITaxon:10090"</span><span class="p">,</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Mus musculus"</span><span class="p">},</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">    </span><span class="nt">"organism_part"</span><span class="p">:</span><span class="w"> </span><span class="s2">"liver"</span><span class="p">,</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">    </span><span class="nt">"organism_part_term"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"accession"</span><span class="p">:</span><span class="w"> </span><span class="s2">"UBERON:0002107"</span><span class="p">,</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"liver"</span><span class="p">},</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">    </span><span class="nt">"condition"</span><span class="p">:</span><span class="w"> </span><span class="s2">"wildtype"</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">  </span><span class="p">},</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">  </span><span class="nt">"preparation"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">    </span><span class="nt">"sample_stabilisation"</span><span class="p">:</span><span class="w"> </span><span class="s2">"fresh frozen"</span><span class="p">,</span>
+<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="w">    </span><span class="nt">"matrix"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2,5-dihydroxybenzoic acid (DHB)"</span><span class="p">,</span>
+<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="w">    </span><span class="nt">"matrix_term"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"accession"</span><span class="p">:</span><span class="w"> </span><span class="s2">"CHEBI:17189"</span><span class="p">,</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2,5-dihydroxybenzoic acid"</span><span class="p">},</span>
+<a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="w">    </span><span class="nt">"matrix_application"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ImagePrep"</span>
+<a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a><span class="w">  </span><span class="p">},</span>
+<a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a><span class="w">  </span><span class="nt">"ms_analysis"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a><span class="w">    </span><span class="nt">"detector_resolving_power"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"value"</span><span class="p">:</span><span class="w"> </span><span class="mi">130000</span><span class="p">,</span><span class="w"> </span><span class="nt">"at_mz"</span><span class="p">:</span><span class="w"> </span><span class="mi">400</span><span class="p">}</span>
+<a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a><span class="p">}</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>thyra<span class="w"> </span>validate<span class="w"> </span>output.zarr<span class="w"> </span>--merge<span class="w"> </span>sample.json
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>thyra<span class="w"> </span>export-metaspace<span class="w"> </span>output.zarr<span class="w"> </span>--merge<span class="w"> </span>sample.json
+</code></pre></div>
+<p>The overlay merges key-by-key over the stored block, so it only needs the
+fields you are adding. Keep it next to the store; it applies unchanged to
+every dataset from the same study.</p>
+<h2 id="python-api">Python API<a class="headerlink" href="#python-api" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">thyra.metadata.schema</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>    <span class="n">MSIMetadata</span><span class="p">,</span>             <span class="c1"># the pydantic model</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>    <span class="n">read_msi_metadata_blocks</span><span class="p">,</span>  <span class="c1"># {table_name: block} from a store</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>    <span class="n">validate_document</span><span class="p">,</span>       <span class="c1"># (model | None, issues)</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>    <span class="n">to_metaspace</span><span class="p">,</span>            <span class="c1"># (submission_dict, warnings)</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="p">)</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="n">blocks</span> <span class="o">=</span> <span class="n">read_msi_metadata_blocks</span><span class="p">(</span><span class="s2">"output.zarr"</span><span class="p">)</span>
+<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="n">meta</span><span class="p">,</span> <span class="n">issues</span> <span class="o">=</span> <span class="n">validate_document</span><span class="p">(</span><span class="n">blocks</span><span class="p">[</span><span class="s2">"msi_dataset_z0"</span><span class="p">])</span>
+<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="n">submission</span><span class="p">,</span> <span class="n">warnings</span> <span class="o">=</span> <span class="n">to_metaspace</span><span class="p">(</span><span class="n">meta</span><span class="p">)</span>
+</code></pre></div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../coordinate-systems/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Coordinate systems">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Coordinate systems
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../writing-the-metadata-document/" class="md-footer__link md-footer__link--next" aria-label="Next: Writing the metadata document">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Writing the metadata document
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["content.code.copy", "content.code.annotate", "content.tabs.link", "content.tooltips", "navigation.footer", "navigation.indexes", "navigation.path", "navigation.tabs", "navigation.sections", "navigation.top", "navigation.instant", "navigation.instant.progress", "search.highlight", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
