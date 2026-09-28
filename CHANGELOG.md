@@ -2,6 +2,134 @@
 
 <!-- version list -->
 
+## v4.1.0 (2026-09-28)
+
+### Bug Fixes
+
+- **bruker**: Let the database's own error win over the no-raster check
+  ([`ff715c0`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/ff715c0d8333f1a7b29fb4c1dc4a75cf1032b787))
+
+- **bruker**: Reach the metadata of a .d that placed no frames on a raster
+  ([`e1973ff`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/e1973ff1e9fc36babdf8609b39ff26e2b18e8a86))
+
+- **cli**: Make three messages say what the code does
+  ([`a0e0069`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a0e006990c4cfbc4d82dd73decc044b47dbdd8c9))
+
+- **converters**: Read the output path when the optical pixels stream
+  ([#380](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/380),
+  [`2cf0d1a`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/2cf0d1a681f79d9bda815052015100a1d04d3452))
+
+- **metadata**: Keep people and acquisition-PC folders out of a store
+  ([#399](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/399),
+  [`7b997c9`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/7b997c985dde048949d9cd96b43a76e03ce0b4b2))
+
+- **metadata**: Know the electrospray family and fill the resolving power
+  ([#389](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/389),
+  [`24323db`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/24323db8d9454888d73e2e6682e718d0faa3afa9))
+
+- **metadata**: Name the source in a document, locate it in a store
+  ([`4cf50e6`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/4cf50e61b874e0d593a303e9ca757c4f44d1d3ce))
+
+- **msms**: Merges_precursors counts precursors, not isolation windows
+  ([#392](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/392),
+  [`dea96b1`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/dea96b1687eba6c7efb5061a9fe294b7ba0c9bb9))
+
+### Documentation
+
+- Add plain guides for formats, settings, the result and metadata
+  ([#404](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/404),
+  [`9eb9a86`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/9eb9a863f6fddcee27f84cc53a089264b92454fc))
+
+- Correct the CLI, metadata and notebook pages against the code
+  ([`7d32862`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/7d328622b724452f012daf702907679b16e2017d))
+
+- Correct what the format and output pages say the code does
+  ([#407](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/407),
+  [`aac49f1`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/aac49f1c2a5b9a3f38dc7dd8c82100b7215578a8))
+
+- Name the metadata command where the other two are listed
+  ([`873eba0`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/873eba03786be5d5b43af4aaf679fb6759cfb65b))
+
+- Point the technical pages to the guides and drop their history
+  ([#409](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/409),
+  [`643a085`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/643a0856930f96bd342eca5fb9a0c9a1a2a6d6d9))
+
+- Put a plain beginner path in front of the technical reference
+  ([#402](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/402),
+  [`d9d1321`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/d9d13218efd9d9c6dc483c16d16612213501f7d4))
+
+- Show a real ion image on the front page and in the README
+  ([#410](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/410),
+  [`b613d10`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/b613d100365d01a85b4f4650b7d8d5d3cab57e2a))
+
+- Stop recommending tic_preserving where it distorts intensities
+  ([#406](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/406),
+  [`e550a7f`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/e550a7ff6a78bb2145c4b8b0a462ce3d47530f86))
+
+- **converters**: Record the converter decomposition as design decision D24
+  ([#391](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/391),
+  [`71310fe`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/71310fea438cb01d3c6159205bbf4b470ed1f346))
+
+- **design**: Propose a metadata core and an imaging profile (D23)
+  ([`17b2293`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/17b22938f4a53d5c4579fd56d35582aca6b40f95))
+
+### Features
+
+- **metadata**: Publish the schema at a versioned address
+  ([#387](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/387),
+  [`f461205`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f46120588c0bb6a3b52277726964653e7e288d77))
+
+- **metadata**: State how the source's m/z values were calibrated (0.8.0)
+  ([#400](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/400),
+  [`43f443e`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/43f443ea0cc88764524124b1d2cc1e39bf256ab9))
+
+- **metadata**: State which optical image the raster is registered onto (0.9.0)
+  ([#405](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/405),
+  [`85ad3d3`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/85ad3d3f678fc9127909500a2be1fa71836b83d4))
+
+- **metadata**: State who built the instrument and which machine it was (0.7.0)
+  ([`aba4e4a`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/aba4e4ad61fad8d571271811eb6749d1cb22af06))
+
+- **metadata**: Write a raw source's metadata document without converting it
+  ([`0767cd2`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/0767cd2a93d28b14595ecfaa9c9803f125a51ff6))
+
+### Performance Improvements
+
+- **registry**: Import a format's module when the format is looked up
+  ([`5033e70`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/5033e70298074aa34e0d1abcbe72db5741eb9474))
+
+### Refactoring
+
+- **converters**: Lift the sibling tables into a SiblingTables collaborator
+  ([#378](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/378),
+  [`88d926a`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/88d926a15266bc65377ed933df9f476c01fc99f3))
+
+- **converters**: One output-path accessor for both collaborators
+  ([#380](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/380),
+  [`2cf0d1a`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/2cf0d1a681f79d9bda815052015100a1d04d3452))
+
+- **converters**: The store assemblers live with the converter
+  ([#393](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/393),
+  [`b610fba`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/b610fbaa9f349541a753d8dfe0c799aa621f20c3))
+
+- **metadata**: Move the CV constants out of the resampling package
+  ([`7938999`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/79389995aad0876ab88dd7510883f5357eabdf57))
+
+### Testing
+
+- **docs**: Hold the beginner pages to the plain-language rules
+  ([#412](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/412),
+  [`bc2636e`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/bc2636eb45c5ac03d5b8de8b357594556c7c8160))
+
+- **metadata**: Capture builder logs with the thyra_logs fixture, split the instrument resolution
+  ([#389](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/389),
+  [`24323db`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/24323db8d9454888d73e2e6682e718d0faa3afa9))
+
+- **metadata**: Hold every published schema version to its recorded bytes
+  ([#397](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/397),
+  [`54305a6`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/54305a69c82cdbfda925ad184423d074ef911dc7))
+
+
 ## v4.0.0 (2026-09-21)
 
 ### Bug Fixes
