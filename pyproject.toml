@@ -11,7 +11,7 @@ maintainers = [{ name = "Theodoros Visvikis", email = "t.visvikis@maastrichtuniv
 license = "MIT"
 license-files = ["LICENSE"]
 readme = "README.md"
-requires-python = ">=3.12, <3.14"
+requires-python = ">=3.12, <3.15"
 keywords = [
     "mass-spectrometry",
     "imaging",
@@ -34,6 +34,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
     "Topic :: Scientific/Engineering :: Information Analysis",
     "Topic :: Scientific/Engineering :: Medical Science Apps.",
@@ -479,6 +480,12 @@ module = [
 ]
 ignore_missing_imports = true
 
+
+[tool.black]
+# Black otherwise infers every version in `requires-python` and, whenever the
+# newest is above the interpreter running it, prints a warning on each run.
+# Formatting follows the oldest target either way, so this changes no output.
+target-version = ["py312"]
 
 [tool.isort]
 profile = "black"

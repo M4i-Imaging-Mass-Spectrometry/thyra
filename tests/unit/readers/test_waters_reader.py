@@ -1,5 +1,6 @@
 """Tests for the Waters .raw MSI reader."""
 
+import ctypes
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -7,7 +8,7 @@ import pytest
 
 from thyra.errors import ConversionRefused
 from thyra.readers.waters.imaging_grid import ImagingGrid, _grid_from_scan_map
-from thyra.readers.waters.masslynx_lib import FunctionType, ScanInfoData
+from thyra.readers.waters.masslynx_lib import FunctionType, ScanInfoData, ScanInfoStruct
 from thyra.readers.waters.waters_reader import WatersReader
 
 
@@ -954,3 +955,32 @@ class TestWatersReaderOffRasterFunctions:
         assert reader._imaging_grid.pixel_count_x == 9
         assert reader._imaging_grid.pixel_size_x == pytest.approx(100.0)
         reader.close()
+
+
+class TestScanInfoStructLayout:
+    """The struct must match the C ScanInfo byte for byte on every Python."""
+
+    def test_size_and_offsets_match_the_c_struct(self):
+        offsets = {
+            name: getattr(ScanInfoStruct, name).offset
+            for name, _ in ScanInfoStruct._fields_
+        }
+
+        assert ctypes.sizeof(ScanInfoStruct) == 44
+        assert offsets == {
+            "msLevel": 0,
+            "polarity": 4,
+            "driftScanCount": 8,
+            "isProfile": 12,
+            "precursorMz": 16,
+            "quadIsolationStart": 20,
+            "quadIsolationEnd": 24,
+            "collisionEnergy": 28,
+            "rt": 32,
+            "laserXPos": 36,
+            "laserYPos": 40,
+        }
+
+    def test_layout_is_explicit(self):
+        # Without it, Python 3.14 warns at import on Linux and macOS.
+        assert ScanInfoStruct._layout_ == "ms"

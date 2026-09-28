@@ -59,6 +59,10 @@ class ScanInfoStruct(Structure):
       collisionEnergy: 28, rt: 32, laserXPos: 36, laserYPos: 40
     """
 
+    # Python 3.14 warns about `_pack_` without `_layout_` off Windows, and
+    # 3.19 will refuse it. "ms" is the layout `_pack_` already implied, and
+    # older Pythons ignore the attribute.
+    _layout_ = "ms"
     _pack_ = 1
     _fields_ = [
         ("msLevel", c_int32),

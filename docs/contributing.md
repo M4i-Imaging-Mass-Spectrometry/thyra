@@ -16,7 +16,7 @@ Thank you for your interest in contributing to Thyra! This document provides gui
 
 ### Prerequisites
 
-- Python 3.12 or 3.13
+- Python 3.12, 3.13 or 3.14
 - [uv](https://docs.astral.sh/uv/) for dependency management
 - Git
 

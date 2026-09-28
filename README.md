@@ -28,7 +28,7 @@ CC-BY-4.0.</sub>
 ## Quick start
 
 ```bash
-uv tool install --python 3.13 thyra                     # or: pip install thyra (Python 3.12 or 3.13)
+uv tool install --python 3.13 thyra                     # or: pip install thyra (Python 3.12 to 3.14)
 thyra-example-data example_data/synthetic_brain.imzML   # makes a small example dataset
 thyra example_data/synthetic_brain.imzML example_data/synthetic_brain.zarr
 ```

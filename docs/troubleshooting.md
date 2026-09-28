@@ -28,15 +28,15 @@ them.
 
 ### pip says "No matching distribution found for thyra"
 
-Your Python version is not one Thyra supports. Thyra needs Python 3.12 or
-3.13; Python 3.14 does not work yet. The simplest fix is to install with uv,
-which fetches Python 3.13 for you: see [Install](install.md).
+Your Python version is not one Thyra supports. Thyra needs Python 3.12, 3.13
+or 3.14. The simplest fix is to install with uv, which fetches Python 3.13
+for you: see [Install](install.md).
 
 ### `thyra --version` shows a version starting with 1
 
 Your Python is 3.11, so pip installed the last old version of Thyra that ran
 on it. Install with uv instead (see [Install](install.md)), or use Python
-3.12 or 3.13.
+3.12, 3.13 or 3.14.
 
 ### pip says "externally-managed-environment"
 
