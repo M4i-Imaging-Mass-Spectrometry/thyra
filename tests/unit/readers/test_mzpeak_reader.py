@@ -150,6 +150,26 @@ class TestIteration:
         assert essential.dimensions == (3, 3, 1)
         assert essential.n_spectra == 7
 
+    def test_the_acquisition_order_is_the_spectrum_index(self, tmp_path):
+        """The archive's own index, not the raster: a serpentine second row."""
+        first, second = grid_spectra(2, 1), grid_spectra(2, 2)[2:]
+        spectra = first + list(reversed(second))
+        archive = build_mzpeak(tmp_path / "serpentine.mzpeak", spectra)
+
+        with MzPeakReader(archive) as reader:
+            assert reader.has_acquisition_order
+            ordered = [
+                (coords, order)
+                for coords, order, _, _ in reader.iter_spectra_with_acquisition_order()
+            ]
+
+        assert ordered == [
+            ((0, 0, 0), 0),
+            ((1, 0, 0), 1),
+            ((1, 1, 0), 2),
+            ((0, 1, 0), 3),
+        ]
+
 
 class TestMassAxis:
     """The reader's view of the m/z axis."""

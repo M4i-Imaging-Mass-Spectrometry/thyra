@@ -1417,16 +1417,22 @@ class ImzMLReader(BaseMSIReader):
     def _iter_spectra_single(
         self, parser: ImzMLParser, total_spectra: int, pbar
     ) -> Generator[
-        Tuple[Tuple[int, int, int], NDArray[np.float64], NDArray[np.float64]],
+        Tuple[
+            Tuple[int, int, int],
+            int,
+            NDArray[np.float64],
+            NDArray[np.float64],
+        ],
         None,
         None,
     ]:
-        """Process spectra one at a time."""
+        """Process spectra one at a time, each with its position in the list."""
         tally = DropTally(logger, "spectra that could not be read")
         for idx in range(total_spectra):
             result = self._process_single_spectrum(parser, idx, pbar, tally)
             if result is not None:
-                yield result
+                coords, mzs, intensities = result
+                yield coords, idx, mzs, intensities
         tally.summarise(total_spectra)
 
     def iter_spectra(self) -> Generator[
@@ -1449,6 +1455,47 @@ class ImzMLReader(BaseMSIReader):
             ValueError: If parser is not initialized and no filepath is
                 available
         """
+        for coords, _, mzs, intensities in self._iter_spectra_with_order():
+            yield coords, mzs, intensities
+
+    @property
+    def has_acquisition_order(self) -> bool:
+        """Always: the file lists its spectra in an order, which is taken as it."""
+        return True
+
+    def iter_spectra_with_acquisition_order(self) -> Generator[
+        Tuple[
+            Tuple[int, int, int],
+            int,
+            NDArray[np.float64],
+            NDArray[np.float64],
+        ],
+        None,
+        None,
+    ]:
+        """:meth:`iter_spectra` with each spectrum's position in the file's list.
+
+        The position is 0-based, counted over every ``<spectrum>`` of the
+        document -- empty ones included -- so it is the mzML ``index`` the
+        spectrum was written with. imzML does not say whether a writer
+        listed the spectra as they were acquired; the list is the only
+        order the file has, and it is taken as the acquisition order.
+        """
+        yield from self._iter_spectra_with_order()
+
+    def _iter_spectra_with_order(
+        self,
+    ) -> Generator[
+        Tuple[
+            Tuple[int, int, int],
+            int,
+            NDArray[np.float64],
+            NDArray[np.float64],
+        ],
+        None,
+        None,
+    ]:
+        """The one loop behind both spectrum iterators, with list positions."""
         self._ensure_parser_initialized()
 
         parser = cast(ImzMLParser, self.parser)

@@ -72,7 +72,11 @@ from pydantic import (
 #        which optical image the source registers its raster onto, by what
 #        method, and the teaching points that registration rests on
 #        (issue #67).
-MSI_METADATA_SCHEMA_VERSION = "0.9.0"
+# 0.10.0: reserved the ``obs`` column ``acquisition_order`` (additive): the
+#        order the spectra were acquired in, written when the reader knows
+#        it (design decision D26).  The document's fields are unchanged,
+#        so a 0.9.0 document is a valid 0.10.0 one.
+MSI_METADATA_SCHEMA_VERSION = "0.10.0"
 
 # Where the block lives inside a converted store:
 # ``table.uns["msi_metadata"]``.  This location is a stable contract
@@ -81,7 +85,7 @@ MSI_METADATA_SCHEMA_VERSION = "0.9.0"
 MSI_METADATA_UNS_KEY = "msi_metadata"
 
 # The committed JSON Schema artifact for this schema version.
-SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_9.json"
+SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_10.json"
 
 # Where every published version of the schema is served (issue #385).
 # ``docs/schema/<version>/`` is copied verbatim onto the documentation
@@ -151,6 +155,18 @@ MSI_VAR_PRECURSOR_COLUMN = "precursor_mz"
 # store's precursor axis and means nothing outside it; two stores are
 # aligned on ``(precursor_mz, precursor_mobility)``.
 MSI_VAR_PRECURSOR_INDEX_COLUMN = "precursor_index"
+
+# The ``obs`` column that says when each row was acquired (0.10.0).  The
+# rows follow the raster grid, which a serpentine scan or a slide of
+# several regions does not, so row order is not acquisition order.  An
+# int64 that grows with acquisition time and is unique within a table:
+# the source's own spectrum number where it numbers them (a Bruker
+# ``Frames.Id`` or ``Spectra.Id``), else the spectrum's 0-based position in
+# the sequence the source lists them in -- so it need not start at 0 or be
+# contiguous.  A row summed from repeated measurements takes the earliest.
+# Written only when the reader knows the order; a missing column is how a
+# store says it does not (design decision D26).
+MSI_OBS_ACQUISITION_ORDER_COLUMN = "acquisition_order"
 
 # Imaging concepts this schema needs that have no PSI CV term yet.
 # These are the candidate terms to raise in the mzPeak / PSI-MS imaging

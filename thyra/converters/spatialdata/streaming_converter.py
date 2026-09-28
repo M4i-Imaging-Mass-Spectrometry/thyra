@@ -51,10 +51,15 @@ from tqdm import tqdm
 
 from ...core.conversion_state import ConversionState
 from ...errors import ConversionRefused
+from ...metadata.schema import MSI_OBS_ACQUISITION_ORDER_COLUMN
 from .base_spatialdata_converter import BaseSpatialDataConverter
 from .csc_assembly import CscAssembly, index_dtype
 
 logger = logging.getLogger(__name__)
+
+#: The acquisition order of a grid position no spectrum has reached yet:
+#: larger than any real one, so the first spectrum's order replaces it.
+_NOT_ACQUIRED = np.iinfo(np.int64).max
 
 
 class _TableUnit:
@@ -62,10 +67,11 @@ class _TableUnit:
 
     Holds what the two passes accumulate for it -- the column counts and
     the scattered matrix (``assembly``), which grid positions carry a
-    spectrum (``occupancy``) and the TIC raster -- and, once pass 1 is
-    done, the row layout: ``kept_grid`` is the grid index of each table
-    row and ``row_of_grid`` the table row of each grid position (-1 when
-    dropped as empty).
+    spectrum (``occupancy``), the TIC raster and, when the reader knows
+    it, each position's acquisition order -- and, once pass 1 is done,
+    the row layout: ``kept_grid`` is the grid index of each table row and
+    ``row_of_grid`` the table row of each grid position (-1 when dropped
+    as empty).
 
     Args:
         key: The table's element key (``{id}_z{z}`` or ``{id}``).
@@ -75,6 +81,8 @@ class _TableUnit:
         n_cols: Length of the mass axis.
         tic_shape: ``(n_y, n_x)`` for a plane, ``(n_z, n_y, n_x)`` for a
             volume.
+        records_order: Whether every spectrum comes with its acquisition
+            order (the reader's ``has_acquisition_order``).
     """
 
     def __init__(
@@ -85,6 +93,7 @@ class _TableUnit:
         n_grid: int,
         n_cols: int,
         tic_shape: Tuple[int, ...],
+        records_order: bool = False,
     ) -> None:
         """Allocate the pass-1 accumulators; the matrix comes after pass 1."""
         self.key = key
@@ -104,14 +113,31 @@ class _TableUnit:
         #: coordinate to name if it does not come out as pass 1's.
         self.observed: Dict[int, Tuple[float, Tuple[int, int, int]]] = {}
         self.tic = np.zeros(tic_shape, dtype=np.float64)
+        #: Per grid position, the smallest acquisition order among the
+        #: spectra it got; ``None`` when the reader does not know the
+        #: order. A position no spectrum reached keeps the sentinel and
+        #: never becomes a row, so no row can read it.
+        self.acquisition_order: Optional[NDArray[np.int64]] = (
+            np.full(self.n_grid, _NOT_ACQUIRED, dtype=np.int64)
+            if records_order
+            else None
+        )
         self.kept_grid: Optional[NDArray[np.int64]] = None
         self.row_of_grid: Optional[NDArray[np.int64]] = None
         self.n_rows = 0
 
     def count(
-        self, grid: int, mz_indices: NDArray[np.int_], values: NDArray[np.float64]
+        self,
+        grid: int,
+        mz_indices: NDArray[np.int_],
+        values: NDArray[np.float64],
+        order: Optional[int] = None,
     ) -> None:
-        """Pass 1: one spectrum at grid position ``grid``."""
+        """Pass 1: one spectrum at grid position ``grid``.
+
+        ``order`` is the spectrum's acquisition order, required when the
+        unit records one.
+        """
         self.assembly.count(grid, mz_indices)
         if self.occupancy[grid]:
             # A pixel the source measured twice. One position is one row,
@@ -122,6 +148,16 @@ class _TableUnit:
             self.assembly.merge_duplicates = True
         self.occupancy[grid] = True
         self.tic.reshape(-1)[grid] += values.sum()
+        if self.acquisition_order is not None:
+            if order is None:
+                raise ValueError(
+                    f"{self.key}: a spectrum reached the table without its "
+                    "acquisition order"
+                )
+            # A row summed from two measurements was first measured at the
+            # earlier one, whatever order the reader yields them in.
+            if order < self.acquisition_order[grid]:
+                self.acquisition_order[grid] = order
 
     def finish_counting(self) -> None:
         """Decide which grid positions become rows, and in what order.
@@ -436,6 +472,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             raise ValueError("Common mass axis is not initialized")
         n_x, n_y, n_z = self._dimensions
         n_cols = len(self._common_mass_axis)
+        records_order = bool(self.reader.has_acquisition_order)
         if self.handle_3d:
             return [
                 _TableUnit(
@@ -445,6 +482,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                     n_x * n_y * n_z,
                     n_cols,
                     (n_z, n_y, n_x),
+                    records_order,
                 )
             ]
         return [
@@ -455,6 +493,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 n_x * n_y,
                 n_cols,
                 (n_y, n_x),
+                records_order,
             )
             for z in range(n_z)
         ]
@@ -533,22 +572,36 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             return units[0], z * n_x * n_y + y * n_x + x
         return units[z], y * n_x + x
 
-    def _iter_pass_spectra(
-        self, passes: Any, phase: str
-    ) -> Generator[Tuple[Tuple[int, int, int], Any, Any, Any], None, None]:
+    def _iter_pass_spectra(self, passes: Any, phase: str) -> Generator[
+        Tuple[Tuple[int, int, int], Optional[int], Any, Any, Any],
+        None,
+        None,
+    ]:
         """The summed spectra of one pass, with the frame record they came from.
 
-        Yields ``(coords, mzs, intensities, frame)``: ``frame`` is the
-        record the sinks are fed from, or ``None`` when the pass reads
-        the summed spectra directly (no sinks, or a reader without
-        records). A frame whose summed spectrum is empty is not yielded,
-        exactly as ``iter_spectra`` never yields it, but the sinks of
-        ``phase`` (``"count"`` or ``"scatter"``) still see it with no row,
-        which is what their own pass would have shown them.
+        Yields ``(coords, order, mzs, intensities, frame)``: ``order`` is
+        the spectrum's acquisition order, or ``None`` when the reader does
+        not know it, and ``frame`` is the record the sinks are fed from,
+        or ``None`` when the pass reads the summed spectra directly (no
+        sinks, or a reader without records). A frame whose summed spectrum
+        is empty is not yielded, exactly as ``iter_spectra`` never yields
+        it, but the sinks of ``phase`` (``"count"`` or ``"scatter"``) still
+        see it with no row, which is what their own pass would have shown
+        them.
         """
+        ordered = bool(self.reader.has_acquisition_order)
         if passes is None or passes.empty:
+            if ordered:
+                for (
+                    coords,
+                    order,
+                    mzs,
+                    intensities,
+                ) in self.reader.iter_spectra_with_acquisition_order():
+                    yield coords, order, mzs, intensities, None
+                return
             for coords, mzs, intensities in self.reader.iter_spectra():
-                yield coords, mzs, intensities, None
+                yield coords, None, mzs, intensities, None
             return
         feed = getattr(passes, phase)
         for frame in self.reader.iter_frame_scans():
@@ -556,7 +609,8 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             if spectrum is None:
                 feed(frame, None)
                 continue
-            yield frame.coords, spectrum[0], spectrum[1], frame
+            order = frame.acquisition_order if ordered else None
+            yield frame.coords, order, spectrum[0], spectrum[1], frame
 
     def _process_spectra(self, state: ConversionState) -> None:
         """Run both passes: count, size the arrays, scatter.
@@ -762,7 +816,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             desc="Pre-scan" if passes is None else "Pre-scan + sibling tables",
             unit="spectrum",
         ) as pbar:
-            for coords, mzs, intensities, frame in self._iter_pass_spectra(
+            for coords, order, mzs, intensities, frame in self._iter_pass_spectra(
                 passes, "count"
             ):
                 x, y, z = coords
@@ -791,7 +845,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                     # never writes -- explicit zeros, out of order, which
                     # scipy reports as a non-canonical matrix.
                     if unit is not None:
-                        unit.count(grid, mz_indices, values)
+                        unit.count(grid, mz_indices, values, order)
 
                         # Behind the same check, and for the same reason
                         # the per-table average is taken over rows: the
@@ -876,7 +930,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             desc="Scatter to CSC" if passes is None else "Scatter to CSC + siblings",
             unit="spectrum",
         ) as pbar:
-            for coords, mzs, intensities, frame in self._iter_pass_spectra(
+            for coords, _, mzs, intensities, frame in self._iter_pass_spectra(
                 passes, "scatter"
             ):
                 x, y, z = coords
@@ -1010,6 +1064,9 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         the in-plane pitch so the table lands in the same micrometre frame
         as the TIC volume's ``Scale``. Column order and dtypes are the ones
         the two in-memory converters wrote, so a store reads back the same.
+        ``acquisition_order`` follows, int64, when the reader knows the
+        order (design decision D26); the rows stay in grid order either
+        way.
         """
         if unit.kept_grid is None or self._dimensions is None:
             raise RuntimeError("The row layout is not decided yet")
@@ -1053,6 +1110,11 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         obs.set_index("instance_id", inplace=True)
         # Always add per-pixel region numbers for a consistent schema.
         obs["region_number"] = self.build_region_numbers(x_idx, y_idx)
+        # Indexed by the same kept grid as every column above, so a row's
+        # order is its own position's, region filtering included: the
+        # filter removes frames before pass 1 ever sees them.
+        if unit.acquisition_order is not None:
+            obs[MSI_OBS_ACQUISITION_ORDER_COLUMN] = unit.acquisition_order[kept]
         return obs
 
     def _tic_image(self, unit: _TableUnit) -> Any:

@@ -313,6 +313,8 @@ implementing and what each one buys you.
         - get_optical_image_paths
         - get_primary_optical_image_path
         - iter_spectra
+        - has_acquisition_order
+        - iter_spectra_with_acquisition_order
         - get_region_map
         - get_region_info
         - has_shared_mass_axis

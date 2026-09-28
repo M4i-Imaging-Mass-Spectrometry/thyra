@@ -54,14 +54,15 @@ class MockMSIReader:
         self.has_shared_mass_axis = False  # Mock data is processed mode
         # This mock duck-types the reader contract rather than subclassing
         # it, so the optional capabilities have to be declared rather than
-        # inherited. All four are absent: a processed-mode m/z + intensity
-        # source with no mobility, no frames and nothing to say about MS
-        # level (issue #275).
+        # inherited. All are absent: a processed-mode m/z + intensity
+        # source with no mobility, no frames, nothing to say about MS
+        # level (issue #275) and no acquisition order.
         self.has_ion_mobility = False
         self.has_shared_mobility_axis = False
         self.has_frame_scans = False
         self.has_fragmentation = False
         self.has_precursor_spectra = False
+        self.has_acquisition_order = False
 
         # Generate consistent random data
         np.random.seed(42)

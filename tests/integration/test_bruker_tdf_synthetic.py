@@ -24,6 +24,7 @@ import logging
 import os
 import shutil
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Dict
 
@@ -281,7 +282,7 @@ class TestSyntheticFixture:
         assert conversion["name"] == "conversion"
         assert conversion["parameters"]["tdf_spectrum"] == "scan_sum"
         assert "resolved_table" not in mobility and "grid" not in mobility
-        assert block["schema_version"] == "0.9.0"
+        assert block["schema_version"] == "0.10.0"
 
     #: What the fixture's calibration.sqlite and analysis database state,
     #: through the schema's ``calibration`` section: the external
@@ -894,6 +895,89 @@ def _capped_copy(source: Path, tmp_path: Path, n_frames: int) -> Path:
             (int(n_frames),),
         )
     return target
+
+
+def _serpentine_copy(tmp_path: Path, split_regions: bool = False) -> Path:
+    """A copy of the fixture whose second row was acquired right to left.
+
+    The committed fixture numbers its frames in raster order, so on it a
+    column of row ranks would pass for a column of frame ids. Here frames 4
+    and 6 trade places, and the second row reads 6, 5, 4 from left to
+    right. With ``split_regions`` the two rows become regions 0 and 1, the
+    way FlexImaging numbers two areas of one slide.
+    """
+    target = tmp_path / "serpentine.d"
+    shutil.copytree(FIXTURE, target)
+    with closing(sqlite3.connect(target / "analysis.tdf")) as conn, conn:
+        for frame, x in ((4, 102), (6, 100)):
+            conn.execute(
+                "UPDATE MaldiFrameInfo SET XIndexPos = ?, SpotName = ? "
+                "WHERE Frame = ?",
+                (x, f"R00X{x}Y11", frame),
+            )
+        if split_regions:
+            conn.execute("UPDATE MaldiFrameInfo SET RegionNumber = 1 WHERE Frame > 3")
+    return target
+
+
+class TestAcquisitionOrder:
+    """``obs["acquisition_order"]`` is each pixel's ``Frames.Id`` (design decision D26).
+
+    Through the real library, on both routes a TDF conversion can take:
+    the frame records that also feed the heatmap, and the plain spectrum
+    iterator when nothing else is written.
+    """
+
+    @pytest.mark.parametrize(
+        "heatmap", [True, False], ids=["frame-records", "spectrum-iterator"]
+    )
+    def test_each_row_carries_its_frame_id(self, tmp_path, heatmap):
+        _open("scan_sum").close()
+        out = _convert_path(
+            _serpentine_copy(tmp_path),
+            tmp_path / "serpentine.zarr",
+            mobility_heatmap=heatmap,
+        )
+        obs = _read_table(out).obs
+
+        # Rows stay in raster order; the column says the scan came back.
+        assert list(zip(obs["x"], obs["y"])) == [
+            (0, 0),
+            (1, 0),
+            (2, 0),
+            (0, 1),
+            (1, 1),
+            (2, 1),
+        ]
+        assert obs["acquisition_order"].dtype == np.int64
+        assert obs["acquisition_order"].tolist() == [1, 2, 3, 6, 5, 4]
+
+    def test_a_selected_region_keeps_the_files_frame_ids(self, tmp_path):
+        # Never renumbered: region 1 holds frames 4-6, not 1-3.
+        _open("scan_sum").close()
+        out = _convert_path(
+            _serpentine_copy(tmp_path, split_regions=True),
+            tmp_path / "region1.zarr",
+            region=1,
+        )
+        obs = _read_table(out).obs
+
+        assert obs["acquisition_order"].tolist() == [6, 5, 4]
+
+    def test_every_table_of_the_store_carries_it(self, tmp_path):
+        spatialdata = pytest.importorskip("spatialdata")
+        _open("scan_sum").close()
+        out = _convert_path(
+            _pasef_copy(tmp_path),
+            tmp_path / "pasef.zarr",
+            msms_table=True,
+            mobility_grid=True,
+        )
+        tables = spatialdata.read_zarr(out).tables
+
+        assert set(tables) == {"tims_z0", "tims_z0_msms", "tims_z0_mobility"}
+        for table in tables.values():
+            assert table.obs["acquisition_order"].tolist() == [1, 2, 3, 4, 5, 6]
 
 
 REAL_DATASET = os.environ.get("THYRA_BRUKER_TDF_DATASET")

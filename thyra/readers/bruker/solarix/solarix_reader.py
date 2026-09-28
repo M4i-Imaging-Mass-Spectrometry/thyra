@@ -550,6 +550,45 @@ class SolarixReader(BrukerBaseMSIReader):
             (the absolute stage-raster origin is subtracted), float64 m/z
             and float64 intensities.
         """
+        for coords, _, mzs, intensities in self._iter_spectra_with_order():
+            yield coords, mzs, intensities
+
+    @property
+    def has_acquisition_order(self) -> bool:
+        """Always: every ``Spectra`` row is numbered, and the numbers grow with time."""
+        return True
+
+    def iter_spectra_with_acquisition_order(self) -> Generator[
+        Tuple[
+            Tuple[int, int, int],
+            int,
+            NDArray[np.float64],
+            NDArray[np.float64],
+        ],
+        None,
+        None,
+    ]:
+        """:meth:`iter_spectra` with each spectrum's ``Spectra.Id``.
+
+        The id as ``peaks.sqlite`` stores it, never renumbered, so a scan
+        that recorded no peaks leaves a gap. On 50 real acquisitions the
+        per-scan ``DateTime`` never decreases along it (D26).
+        """
+        yield from self._iter_spectra_with_order()
+
+    def _iter_spectra_with_order(
+        self,
+    ) -> Generator[
+        Tuple[
+            Tuple[int, int, int],
+            int,
+            NDArray[np.float64],
+            NDArray[np.float64],
+        ],
+        None,
+        None,
+    ]:
+        """The ``Spectra`` walk behind both spectrum iterators, with row ids."""
         if self._closed:
             raise RuntimeError("Reader has been closed")
 
@@ -599,7 +638,12 @@ class SolarixReader(BrukerBaseMSIReader):
                 if mzs.size == 0:
                     continue
 
-                yield (int(x - x_min), int(y - y_min), 0), mzs, intensities
+                yield (
+                    (int(x - x_min), int(y - y_min), 0),
+                    int(spectrum_id),
+                    mzs,
+                    intensities,
+                )
         finally:
             pbar.close()
 

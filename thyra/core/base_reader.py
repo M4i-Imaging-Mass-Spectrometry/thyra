@@ -320,6 +320,54 @@ class BaseMSIReader(ABC):
         return None
 
     # ------------------------------------------------------------------
+    # Acquisition order
+    #
+    # When a spectrum was recorded, relative to the others. ``iter_spectra``
+    # says where each spectrum sits and nothing about when, and the rows a
+    # converter writes follow the grid, which a serpentine scan or a slide
+    # of several regions does not. A drift plotted against the rows is
+    # plotted against raster order.
+    # ------------------------------------------------------------------
+
+    @property
+    def has_acquisition_order(self) -> bool:
+        """Whether the source says in which order its spectra were acquired."""
+        return False
+
+    def iter_spectra_with_acquisition_order(self) -> Generator[
+        Tuple[
+            Tuple[int, int, int],
+            int,
+            NDArray[np.float64],
+            NDArray[np.float64],
+        ],
+        None,
+        None,
+    ]:
+        """:meth:`iter_spectra`, with each spectrum's acquisition order.
+
+        Yields ``((x, y, z), order, mzs, intensities)``: the spectra
+        :meth:`iter_spectra` yields, in its order, with its coordinates and
+        arrays. ``order`` grows with acquisition time and no two spectra
+        share one. It is the source's own number for the spectrum where the
+        source numbers them (a Bruker ``Frames.Id``), else the spectrum's
+        0-based position in the sequence the source lists them in. So it
+        need not start at 0 or be contiguous: sort by it, never index with
+        it.
+
+        The converter reads the spectra through this method whenever
+        :attr:`has_acquisition_order` is True, so a subclass that changes
+        what :meth:`iter_spectra` yields has to change this as well.
+
+        Raises:
+            NotImplementedError: When :attr:`has_acquisition_order` is False.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not know the order its spectra were "
+            "acquired in"
+        )
+
+    # ------------------------------------------------------------------
     # One read per frame for every table
     #
     # A source whose summed spectrum, mobility point cloud and precursor

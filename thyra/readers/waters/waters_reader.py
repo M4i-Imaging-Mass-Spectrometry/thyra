@@ -781,6 +781,50 @@ class WatersReader(BaseMSIReader):
             Tuple of ((x, y, z), mzs, intensities) where coordinates are
             0-based pixel indices.
         """
+        for coords, _, mzs, intensities in self._iter_spectra_with_order():
+            yield coords, mzs, intensities
+
+    @property
+    def has_acquisition_order(self) -> bool:
+        """Always: every scan of a converted function is numbered."""
+        return True
+
+    def iter_spectra_with_acquisition_order(self) -> Generator[
+        Tuple[
+            Tuple[int, int, int],
+            int,
+            NDArray[np.float64],
+            NDArray[np.float64],
+        ],
+        None,
+        None,
+    ]:
+        """:meth:`iter_spectra` with each scan's number in the run.
+
+        MassLynx numbers scans from 0 within each function, and a long
+        raster continues in the next function once one fills (design
+        decision D7), so the scans are numbered on through the converted
+        functions in order: function ``f``'s scan ``s`` is ``s`` plus the
+        scan counts of the converted functions before ``f``. A scan with no
+        stage position keeps its number, so the numbers can have gaps. On
+        three real runs, one split across three functions, the scans'
+        retention time never decreases along these numbers (D26).
+        """
+        yield from self._iter_spectra_with_order()
+
+    def _iter_spectra_with_order(
+        self,
+    ) -> Generator[
+        Tuple[
+            Tuple[int, int, int],
+            int,
+            NDArray[np.float64],
+            NDArray[np.float64],
+        ],
+        None,
+        None,
+    ]:
+        """The scan loop behind both spectrum iterators, with run-wide numbers."""
         ml, handle, imaging_grid, function_types, ms_functions = (
             self._require_initialized()
         )
@@ -793,6 +837,7 @@ class WatersReader(BaseMSIReader):
             unit="spectrum",
             disable=getattr(self, "_quiet_mode", False),
         ) as pbar:
+            first_of_function = 0
             for func in ms_functions:
                 n_scans = ml.get_number_of_scans_in_function(handle, func)
                 for scan in range(n_scans):
@@ -817,11 +862,12 @@ class WatersReader(BaseMSIReader):
                         )
 
                         if mzs.size > 0 and intensities.size > 0:
-                            yield coords, mzs, intensities
+                            yield coords, first_of_function + scan, mzs, intensities
                     except Exception as e:
                         logger.warning(
                             f"Error reading spectrum func={func} scan={scan}: {e}"
                         )
+                first_of_function += n_scans
 
     def close(self) -> None:
         """Close the file handle and release native resources."""

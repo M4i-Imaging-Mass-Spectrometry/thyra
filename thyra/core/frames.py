@@ -46,6 +46,13 @@ class FrameScans(Protocol):
 
     coords: Coords
 
+    @property
+    def acquisition_order(self) -> Optional[int]:
+        """The frame's order as ``iter_spectra_with_acquisition_order`` yields it.
+
+        ``None`` when the reader does not know the order.
+        """
+
     def spectrum(self) -> Optional[Spectrum]:
         """``(mzs, intensities)`` as :meth:`BaseMSIReader.iter_spectra` yields, or ``None``.
 

@@ -34,7 +34,7 @@ import spatialdata as sd
 sdata = sd.read_zarr("output.zarr")
 block = sdata.tables["msi_dataset_z0"].uns["msi_metadata"]
 
-print(block["schema_version"])                       # "0.9.0"
+print(block["schema_version"])                       # "0.10.0"
 print(block["ms_analysis"]["pixel_size_um"])         # {"x": 20.0, "y": 20.0}
 print(block["ms_analysis"]["ionisation_source"])     # "MALDI"
 print(block["ms_analysis"]["ionisation_source_term"])
@@ -452,6 +452,19 @@ beyond these -- but the reserved names above must never be reused with a
 different meaning. `thyra validate` checks the `mz` contract on every
 table of a store.
 
+## obs column conventions
+
+One `.obs` name is fixed by the spec as well. The pixel columns beside it
+(`x`, `y`, `spatial_x`, `region_number` and the rest) are described in
+[Output Format](output-format.md#pixel-coordinates).
+
+| Column | Written by | Meaning |
+|--------|-----------|---------|
+| `acquisition_order` | the converter, when the reader knows the order; absent otherwise | `int64`, grows with acquisition time and is unique within a table. The source's own spectrum number where it has one (Bruker `Frames.Id`, solariX `Spectra.Id`), else the spectrum's 0-based position in the order the source lists them. A row summed from repeated measurements takes the earliest. Sort by it; it is not a row index. See [Acquisition order](output-format.md#acquisition-order) |
+
+A missing column means the order is unknown. The name must never be reused
+with a different meaning.
+
 ---
 
 ## Storage contract
@@ -485,13 +498,14 @@ added), 0.3.0 (`ion_mobility.resolved_table` and `ion_mobility.grid` added),
 added), 0.7.0 (`ms_analysis.manufacturer` and `ms_analysis.serial_number`
 added), 0.8.0 (the `calibration` section, `ms_analysis.n_spectra` and
 the processing steps' `action_term` added), 0.9.0 (the `alignment` section
-added).
+added), 0.10.0 (the `obs` column `acquisition_order` reserved; the document
+is unchanged).
 
 The JSON Schema rendering is published at a fixed, versioned address,
 which is also its `$id`:
 
 ```
-https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.9.0/msi_metadata.schema.json
+https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.10.0/msi_metadata.schema.json
 ```
 
 Every version from 0.6.0 on has its own folder under that path, and a
@@ -501,7 +515,7 @@ program that writes the document without Thyra validates against that
 address; see [Writing the Metadata Document](writing-the-metadata-document.md).
 
 The same file is committed at
-`thyra/metadata/schema/msi_metadata_schema_v0_9.json` and ships in the
+`thyra/metadata/schema/msi_metadata_schema_v0_10.json` and ships in the
 wheel, so a Python consumer can validate documents offline without
 importing Thyra:
 
@@ -511,7 +525,7 @@ import json
 
 schema = json.loads(
     resources.files("thyra.metadata.schema")
-    .joinpath("msi_metadata_schema_v0_9.json")
+    .joinpath("msi_metadata_schema_v0_10.json")
     .read_text()
 )
 ```

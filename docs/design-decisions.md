@@ -2171,3 +2171,103 @@ optional on the document path, one branch in a builder that already
 tolerates `comprehensive is None`. Until then `thyra metadata` on a
 non-imaging source describes it correctly and fails validation on the
 pixel size, which is D23's limit, not this one's.
+
+---
+
+## D26. The acquisition order is an `obs` column, when the source has one
+
+**Status:** Implemented (2026-09-28). Schema 0.10.0.
+
+**Decision.** Every table's `obs` carries `acquisition_order` when the reader
+knows in which order the spectra were acquired, and leaves it out when it does
+not. The column is `int64`, grows with acquisition time and differs from row to
+row. It is the source's own number for a spectrum where the source numbers them
+(Bruker `Frames.Id`, solariX `Spectra.Id`), else the spectrum's 0-based position
+in the order the source lists them (the imzML spectrum list, mzPeak's
+`spectrum_index`, Waters scans numbered on through the converted functions). A
+row summed from two measurements takes the earlier one. The rows stay in grid
+order. A reader reports the order through `has_acquisition_order` and
+`iter_spectra_with_acquisition_order`, and the TDF frame record carries it as
+`acquisition_order`, so the fused passes of D5 keep it too.
+
+**Why.** The rows follow the raster, and nothing in a store said when each pixel
+was measured. A serpentine scan comes back along every second row and a slide
+of several regions is measured one region after another, so a value plotted
+against the row number is plotted against the raster, not against time. Two
+consumers need time. A QC view plots per-pixel values against acquisition order
+to show drift during the run, as SCiLS Lab does; Ousia's QC view labels its axis
+"raster order" because the store offered nothing better. And a per-spectrum
+correction that falls back to "the previous successful spectrum" needs
+"previous" to mean previously acquired. The Bruker reader already walked the
+frames by `Frames.Id` and dropped the id at the last step.
+
+**Why the source's own number and not a rank.** A rank from 0 is what a plot
+wants, and a consumer gets it with one `argsort`. The source's number gives the
+same order, finds the spectrum again in the source, and survives a `--region`
+conversion unchanged: a region's frame ids are not contiguous in the file, and
+renumbering them would make two stores of one slide disagree about the same
+frame. The cost is that the column is not a row index and, for Bruker, not
+0-based; the docs say so where the column is described.
+
+**Why `int64` and not a nullable integer.** pandas' nullable `Int64` was the
+obvious alternative, and its null would be unreachable. A row exists only
+because a spectrum reached it, and every spectrum from a reader that knows the
+order carries one; the converter refuses a spectrum without it rather than
+leave a blank. "Unknown" is therefore a property of a whole table, and the
+store says it by leaving the column out, as it says "not stated" everywhere
+else. Plain `int64` is also what `x`, `y` and `region_number` are, and it is
+stored as one flat array, where anndata stores a nullable integer as values
+plus a mask that any reader of the Zarr without anndata has to know about. The
+price: concatenating a table that has the column with one that has not gives
+pandas' `float64` with NaN, unless the caller asks for `Int64`.
+
+**Why this name.** `spectrum_index` was the other candidate. mzML and mzPeak use
+it for a 0-based list position, while the Bruker value is a 1-based id with
+gaps, so it would mislead exactly the readers who know the name.
+`acquisition_order` says what the column is for and claims nothing about where
+it starts. The spec reserves it beside the `var` names
+(`MSI_OBS_ACQUISITION_ORDER_COLUMN`), and adding an optional name moves
+`schema_version` to 0.10.0, a minor bump by the versioning rule. The document
+itself is unchanged: the 0.10.0 JSON Schema differs from 0.9.0 only in its
+version string.
+
+**What was measured.** Each "grows with time" was checked read-only on real
+acquisitions, 2026-09-28:
+
+| Source | Value | Measured |
+|---|---|---|
+| Bruker timsTOF | `Frames.Id` | `Frames.Time` never decreases along it, on two TDF (713 and 11,752 frames) and two TSF (33,800 and 918,855 frames) |
+| Bruker solariX | `Spectra.Id` | On 50 acquisitions of 4,270 to 30,824 spectra, the per-scan `DateTime` never decreases along it, nor the `minutes` of `ImagingInfo.xml` along its own list |
+| Waters | scan number, carried on through the converted functions | Retention time never decreases along it on three runs of 2,436, 5,400 and 7,683 scans; the last is one raster split across three functions, whose time ranges follow each other |
+| imzML | position in the spectrum list | Not measurable, as the file records no time. The one export available beside its source (918,855 spectra) lists them in frame order, one to one, but that run was rastered row by row, so it cannot tell "as acquired" from "raster order" |
+| mzPeak | `spectrum_index` | Not measured; it is the archive's own order |
+| PHI | absent | Each frame passes over the whole raster and a pixel sums every frame |
+| Bruker rapifleX | absent | See below |
+
+**What a store gains, measured.** Fifteen datasets were converted before and
+after the change: the eight fixtures, two imzML exports, a TSF, a PASEF TDF,
+two Waters runs and a PHI run. They differ in 49 places, all of three kinds:
+each table of an ordered source gains the array and its name in the `obs`
+column list, and every table's `schema_version` moves. The matrix, `var`, the
+other `obs` columns, the images, the shapes and the root attributes are
+byte-identical. On the TDF and the TSF every row holds the frame id
+`MaldiFrameInfo` records at its position; the TSF has 33,690 rows for 33,800
+frames, and the ids of the frames without a row are simply absent.
+
+**Why rapifleX has none yet.** The reader walks the raster offset table of the
+`.dat`. The `_poslog.txt` it also parses is a timestamped list of positions, and
+very likely the acquisition order, but no real rapifleX acquisition was
+available to check it, and a synthetic file can only confirm that code reads a
+field, never what the field means (D7). One real acquisition reopens this.
+
+**Why the earlier of two measurements.** A position measured twice is one row
+holding the sum of both spectra (issue #241), so the row has no single time.
+The earlier is when the pixel was first measured, and it does not depend on the
+order a reader yields the two. It happens on real data: the split Waters run
+above records one stage position twice.
+
+**Known limit.** Two converted Waters functions that cover the same pixels are
+summed (D7), and their scans are numbered one function after the other rather
+than interleaved. Each such row takes the first function's number, which keeps
+the rows in time order as long as the first function visited all of them. No
+real file with two such functions converted was available.

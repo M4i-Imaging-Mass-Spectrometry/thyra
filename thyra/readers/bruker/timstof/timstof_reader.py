@@ -374,6 +374,11 @@ class TdfFrameScans:
         self._unique_mz: Optional[NDArray[np.float64]] = None
 
     @property
+    def acquisition_order(self) -> int:
+        """The frame's ``Frames.Id``, as the reader's ordered iterator gives it."""
+        return self.frame_id
+
+    @property
     def unique_mz(self) -> NDArray[np.float64]:
         """m/z of each unique digitizer index, ascending; converted once."""
         if self._unique_mz is None:
@@ -1443,6 +1448,31 @@ class BrukerReader(BrukerBaseMSIReader):
         # Always use simple sequential iteration
         yield from self._iter_spectra_raw()
 
+    @property
+    def has_acquisition_order(self) -> bool:
+        """Always: every frame is numbered, and the numbers grow with time."""
+        return True
+
+    def iter_spectra_with_acquisition_order(self) -> Generator[
+        Tuple[
+            Tuple[int, int, int],
+            int,
+            NDArray[np.float64],
+            NDArray[np.float64],
+        ],
+        None,
+        None,
+    ]:
+        """:meth:`iter_spectra` with each frame's ``Frames.Id`` as its order.
+
+        The id is the 1-based ``Frames.Id`` the frame loop walks, as the
+        file stores it and never renumbered, so a region-split acquisition
+        keeps the gaps where the other regions' frames were. On four real
+        acquisitions, two TDF and two TSF, ``Frames.Time`` never decreases
+        along it (D26).
+        """
+        yield from self._iter_spectra_with_order()
+
     def _iter_spectra_raw(
         self,
     ) -> Generator[
@@ -1456,6 +1486,28 @@ class BrukerReader(BrukerBaseMSIReader):
         :meth:`_iter_frames` selects. A frame whose read fails is logged
         and skipped; a frame that reads empty is skipped silently.
         """
+        for coords, _, mzs, intensities in self._iter_spectra_with_order():
+            yield coords, mzs, intensities
+
+    def _iter_spectra_with_order(
+        self,
+    ) -> Generator[
+        Tuple[
+            Tuple[int, int, int],
+            int,
+            NDArray[np.float64],
+            NDArray[np.float64],
+        ],
+        None,
+        None,
+    ]:
+        """The frame loop behind both spectrum iterators, with each frame's id.
+
+        One place for the read, the threshold and the skips, so
+        :meth:`iter_spectra` and
+        :meth:`iter_spectra_with_acquisition_order` cannot disagree about
+        which frames they yield.
+        """
         tally = DropTally(logger, "frames whose spectrum could not be read")
         n_seen = 0
         for frame_id, coords in self._iter_frames():
@@ -1468,7 +1520,7 @@ class BrukerReader(BrukerBaseMSIReader):
                 tally.drop(f"frame {frame_id}", e)
                 continue
             if mzs.size > 0 and intensities.size > 0:
-                yield coords, mzs, intensities
+                yield coords, frame_id, mzs, intensities
         tally.summarise(n_seen)
 
     def _iter_frames(
