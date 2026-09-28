@@ -10,9 +10,21 @@ because nothing held it still.
 
 **What holds it still.** The case table below is keyed by the registry's own
 format names, and :func:`test_every_registered_format_is_covered` compares it
-against ``MSIRegistry._readers``. Registering a reader without either a
-conformance case or an explicit exemption fails that test, so a new reader is
-covered the day it lands rather than the day someone remembers.
+against the registry's module table, ``_READER_MODULES``. Registering a reader
+without either a conformance case or an explicit exemption fails that test, so
+a new reader is covered the day it lands rather than the day someone
+remembers.
+
+**Why the module table and not ``MSIRegistry._readers``.** Registration is
+lazy (issue #381): a reader's decorator runs only when its module is first
+imported, which a lookup does on demand, so ``_readers`` holds just the
+readers this process has touched. Compared against it, the verdict would
+depend on which tests ran first -- alone, this file imports every reader but
+Waters -- and a test that imports a reader directly would put it there
+whatever the table says. The module table does not depend on test order,
+and ``tests/unit/test_registry.py`` holds it equal to the
+``@register_reader`` calls under ``thyra/readers/``, so a decorator without
+a table entry fails there.
 
 **Why the factories build their own data.** Each case writes a synthetic
 acquisition into ``tmp_path`` and opens a real reader on it. No mocks: a mock
@@ -37,7 +49,7 @@ import numpy as np
 import pytest
 
 from thyra.core.base_reader import BaseMSIReader
-from thyra.core.registry import _registry
+from thyra.core.registry import _READER_MODULES
 from thyra.readers.bruker import SolarixReader
 from thyra.readers.bruker.rapiflex import RapiflexReader
 from thyra.readers.bruker.timstof.timstof_reader import BrukerReader
@@ -139,7 +151,7 @@ class TestTheCaseTableCoversTheRegistry:
     """The net: a reader cannot be registered without being covered here."""
 
     def test_every_registered_format_is_covered(self):
-        registered = set(_registry._readers)
+        registered = set(_READER_MODULES)
         covered = set(CASES) | set(EXEMPT)
 
         assert registered == covered, (
@@ -153,7 +165,7 @@ class TestTheCaseTableCoversTheRegistry:
 
     @pytest.mark.parametrize("format_name", sorted(EXEMPT))
     def test_exemptions_name_a_registered_format(self, format_name):
-        assert format_name in _registry._readers
+        assert format_name in _READER_MODULES
 
 
 class TestSpectrumIteration:
