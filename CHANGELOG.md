@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v4.2.0 (2026-09-28)
+
+### Features
+
+- Support Python 3.14 ([#413](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/413),
+  [`85e637b`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/85e637b2fe1bc34ecab3c8cd8030f041dd4c090d))
+
+
 ## v4.1.0 (2026-09-28)
 
 ### Bug Fixes
