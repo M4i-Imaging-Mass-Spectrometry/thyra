@@ -313,7 +313,9 @@ def _build_acquisition(
 #       under, from the ``CalibrationInfo`` table of the analysis database.
 #   ``calibration`` -- the states of ``calibration.sqlite``: the one written
 #       at acquisition (on a MALDI run, the online lock-mass calibration)
-#       and any recalibration made afterwards.
+#       and any recalibration made afterwards. Its ``calibration_*`` keys
+#       describe the state the conversion applied, and the newest one is
+#       under ``latest_calibration_*`` when that is a different one.
 # PHI, ``raw_metadata["calibration"]``: the header's calibrants, and the
 #   recalibration SmartSoft appended to the file when there is one.
 # Waters, ``acquisition_params``: MassLynx's lock-mass answer and the
@@ -440,6 +442,23 @@ def _calibrant_fit(calibrants: Any) -> Dict[str, Any]:
     return _reference_fit(n, sd)
 
 
+def _newest_calibration_state(states: Dict[str, Any]) -> Dict[str, Any]:
+    """The newest ``calibration.sqlite`` state, as the reader reports it.
+
+    The reader's ``calibration_*`` keys describe the state a conversion
+    applied. That is the newest one unless the conversion was told to
+    apply none (``--no-recalibrated``); the reader then leaves those keys
+    empty and reports the newest state under ``latest_calibration_*``.
+    """
+    if "latest_calibration_id" not in states:
+        return states
+    return {
+        key[len("latest_") :]: value
+        for key, value in states.items()
+        if key.startswith("latest_")
+    }
+
+
 def _bruker_calibration(format_specific: Dict[str, Any]) -> Dict[str, Any]:
     """The section from a Bruker tsf/tdf source, or nothing.
 
@@ -448,8 +467,9 @@ def _bruker_calibration(format_specific: Dict[str, Any]) -> Dict[str, Any]:
     afterwards. Its first state is written at acquisition time -- on a
     MALDI run it is the online lock-mass calibration -- so only a second
     state is a recalibration, and then the latest is the calibration the
-    data rest on. What that state says about its own fit has not been read
-    off a recalibrated acquisition, so it is not taken.
+    data rest on, whichever one a conversion applied. What that state says
+    about its own fit has not been read off a recalibrated acquisition, so
+    it is not taken.
     """
     at_acquisition = _mapping(format_specific.get("instrument_calibration"))
     states = _mapping(format_specific.get("calibration"))
@@ -458,10 +478,11 @@ def _bruker_calibration(format_specific: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(recalibrated, bool):
         fields["recalibrated"] = recalibrated
     if recalibrated is True:
+        newest = _newest_calibration_state(states)
         active = {
-            "calibration_datetime": states.get("calibration_datetime"),
-            "calibration_software": states.get("calibration_source"),
-            "calibration_software_version": states.get("calibration_software_version"),
+            "calibration_datetime": newest.get("calibration_datetime"),
+            "calibration_software": newest.get("calibration_source"),
+            "calibration_software_version": newest.get("calibration_software_version"),
         }
         original = _calibration_time(at_acquisition.get("calibration_datetime"))
         if original is not None:

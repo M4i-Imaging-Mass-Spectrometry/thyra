@@ -283,11 +283,23 @@ class TestSyntheticFixture:
         assert "resolved_table" not in mobility and "grid" not in mobility
         assert block["schema_version"] == "0.9.0"
 
+    #: What the fixture's calibration.sqlite and analysis database state,
+    #: through the schema's ``calibration`` section: the external
+    #: calibration, not the lock-mass state's placeholders.
+    CALIBRATION_SECTION = {
+        "calibration_datetime": "2025-12-31T23:30:00+00:00",
+        "recalibrated": False,
+        "software": "synthetic",
+        "software_version": "0",
+        "n_reference_peaks": 4,
+        "mz_standard_deviation_ppm": 0.355903,
+    }
+
     def test_conversion_records_the_calibration_and_the_option_it_ran_with(
         self, tmp_path
     ):
         """The external calibration reaches the store; the lock-mass state's
-        placeholders do not, and the option the library was opened with is a
+        placeholders do not, and which calibration the library applied is a
         processing step rather than a claim about the source.
 
         The fixture's per-frame calibrators repeat the analysis database's
@@ -299,14 +311,7 @@ class TestSyntheticFixture:
         out = _convert(tmp_path, "scan_sum")
         block = next(iter(read_msi_metadata_blocks(out).values()))
 
-        assert block["calibration"] == {
-            "calibration_datetime": "2025-12-31T23:30:00+00:00",
-            "recalibrated": False,
-            "software": "synthetic",
-            "software_version": "0",
-            "n_reference_peaks": 4,
-            "mz_standard_deviation_ppm": 0.355903,
-        }
+        assert block["calibration"] == self.CALIBRATION_SECTION
         names = [step["name"] for step in block["processing"]]
         assert names[:2] == ["conversion", "m/z calibration"]
         step = block["processing"][1]
@@ -314,8 +319,48 @@ class TestSyntheticFixture:
             "accession": "MS:1001485",
             "name": "m/z calibration",
         }
-        assert step["parameters"] == {"use_recalibrated_state": True}
+        assert step["parameters"] == {
+            "use_recalibrated_state": True,
+            "calibration": "calibration.sqlite",
+            "calibration_state_id": 1,
+        }
         assert block["ms_analysis"]["n_spectra"] == 6
+
+    def test_no_recalibrated_names_no_state_as_applied(self, tmp_path):
+        """``--no-recalibrated`` has the library apply none of the states.
+
+        So the store says the analysis database's calibration was applied,
+        names no ``calibration.sqlite`` state as the one in use, and keeps
+        the newest state under ``latest_`` names; the section, which
+        describes the source, is the default conversion's.
+        """
+        from thyra.convert import convert_msi
+        from thyra.metadata.schema import read_msi_metadata_blocks
+
+        _open("scan_sum").close()  # skip early where the library is missing
+        out = tmp_path / "synthetic_tims_no_recalibrated.zarr"
+        assert convert_msi(
+            str(FIXTURE),
+            str(out),
+            dataset_id="tims",
+            pixel_size_um=20.0,
+            reader_options={
+                "tdf_spectrum": "scan_sum",
+                "use_recalibrated_state": False,
+            },
+        )
+        block = next(iter(read_msi_metadata_blocks(out).values()))
+        states = _read_table(out).uns["format_specific"]["calibration"]
+
+        assert block["processing"][1]["parameters"] == {
+            "use_recalibrated_state": False,
+            "calibration": "analysis.tdf",
+        }
+        assert block["calibration"] == self.CALIBRATION_SECTION
+        assert states.get("calibration_id") is None
+        assert int(states["latest_calibration_id"]) == 1
+        assert states["latest_calibration_source"] == "synthetic"
+        assert int(states["num_calibration_versions"]) == 1
 
     def test_a_survey_acquisition_is_recorded_as_unfragmented(self, tmp_path, expected):
         """The fixture is MS1, and the store says so rather than staying silent.

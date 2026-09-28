@@ -248,10 +248,11 @@ def _optional_int(value: Any) -> Optional[int]:
 def read_calibration_states(data_path: Path) -> List[Dict[str, Any]]:
     """Every calibration state of a Bruker ``.d``, oldest first.
 
-    The state with the highest ``Id`` is the active one -- the SDK reads
-    the most recent calibration -- so ``states[-1]`` is what a conversion
-    will use and ``len(states) - 1`` is how many times the acquisition
-    has been recalibrated since.
+    The state with the highest ``Id`` is the one Bruker's library applies
+    when opened with ``use_recalibrated_state`` (the default), so
+    ``states[-1]`` is what such a conversion uses; opened without it, the
+    library applies none of them. ``len(states) - 1`` is how many times
+    the acquisition has been recalibrated since.
 
     This is a plain file read rather than a method, because the CLI
     displays it before any reader exists; constructing a
@@ -556,9 +557,11 @@ class BrukerReader(BrukerBaseMSIReader):
             data_path: Path to Bruker .d directory, or parent folder containing it.
                 If a parent folder is provided, the reader will automatically find
                 the .d folder within it.
-            use_recalibrated_state: Whether to use recalibrated/active calibration state.
-                Defaults to True (use active calibration). Set to False to use original
-                calibration from data acquisition.
+            use_recalibrated_state: Passed to Bruker's library, which turns
+                every index into m/z itself. True (default): it applies the
+                newest state in ``calibration.sqlite``, when there is one.
+                False: it applies the calibration in the analysis database
+                and none of the states.
             progress_callback: Optional callback for progress updates
             region: Region selector for multi-region datasets.
                 None (default): convert all regions (no filtering).
@@ -755,14 +758,23 @@ class BrukerReader(BrukerBaseMSIReader):
 
         Returns:
             Dictionary containing calibration metadata, or None if unavailable.
-            Keys include:
-            - calibration_id: ID of active calibration state
-            - calibration_uuid: Unique identifier for this calibration
-            - calibration_datetime: When calibration was performed
-            - calibration_source: Software that created calibration
+            The first five keys describe the state Bruker's library applies,
+            and are all None when it applies none
+            (``use_recalibrated_state=False``):
+            - calibration_id: ``Id`` of the applied state
+            - calibration_uuid: its unique ``Key``
+            - calibration_datetime: when it was made
+            - calibration_source: the software that made it
+            - calibration_software_version: that software's version
+            The rest describe the file, whichever state was applied:
             - num_calibration_versions: Total number of calibration states
-            - recalibrated: Whether data has been recalibrated after acquisition
-            - original_calibration_datetime: Original calibration datetime (if recalibrated)
+            - recalibrated: Whether a state was added after the first
+            - original_calibration_datetime: The first state's datetime (if recalibrated)
+            - calibration_file_size: Size of calibration.sqlite in bytes
+            - latest_calibration_id, latest_calibration_uuid,
+              latest_calibration_datetime, latest_calibration_source,
+              latest_calibration_software_version: the newest state, present
+              only when it is not the applied one
         """
         cal_file = self.data_path / "calibration.sqlite"
 
@@ -793,31 +805,75 @@ class BrukerReader(BrukerBaseMSIReader):
 
     def _parse_calibration_state(
         self, conn: sqlite3.Connection, cal_file: Path
-    ) -> Dict:
-        """The active calibration state and its history, from an open db."""
+    ) -> Optional[Dict]:
+        """What ``calibration.sqlite`` holds, and which state gets applied.
+
+        Bruker's library applies the newest state when opened with
+        ``use_recalibrated_state`` and none of them without it: it then
+        applies the calibration in the analysis database, which the
+        extractor reports as ``instrument_calibration``. That is not the
+        first state, although timsControl writes one as a MALDI run
+        starts. Opened without the option, the library's own
+        ``has_recalibrated_state`` answers 0 on a file that holds one, and
+        a TSF whose only state is a later recalibration reads exactly like
+        its copy without the file. So with the option off, the applied
+        state's keys are all ``None``, and the newest state is reported
+        under ``latest_`` names: it is still what the source states as
+        current, and the schema's ``calibration`` section describes it
+        whichever state a conversion applied.
+        """
         cursor = conn.cursor()
+        cursor.execute(
+            "SELECT Id, Key, DateTime, Source FROM CalibrationState ORDER BY Id"
+        )
+        states = cursor.fetchall()
+        if not states:
+            logger.warning(f"{cal_file} holds no calibration state")
+            return None
+        num_versions = len(states)
+        newest = self._calibration_state(cursor, states[-1])
+        applied = newest if self.use_recalibrated_state else dict.fromkeys(newest)
 
-        # Count total calibration versions
-        cursor.execute("SELECT COUNT(*) FROM CalibrationState")
-        num_versions = cursor.fetchone()[0]
+        metadata: Dict[str, Any] = {
+            **applied,
+            "num_calibration_versions": num_versions,
+            "recalibrated": num_versions > 1,
+            "original_calibration_datetime": (
+                states[0][2] if num_versions > 1 else None
+            ),
+            "calibration_file_size": cal_file.stat().st_size,
+        }
+        if not self.use_recalibrated_state:
+            metadata.update({f"latest_{key}": value for key, value in newest.items()})
 
-        # Get ACTIVE calibration (highest ID = most recent)
-        cursor.execute("""
-            SELECT Id, Key, DateTime, Source
-            FROM CalibrationState
-            ORDER BY Id DESC LIMIT 1
-        """)
-        cal_id, cal_uuid, cal_datetime, cal_source = cursor.fetchone()
+        # Log which calibration is being used
+        if self.use_recalibrated_state:
+            recalibrations = num_versions - 1
+            recal_info = (
+                f" (recalibrated {recalibrations} "
+                f"time{'s' if recalibrations > 1 else ''})"
+                if recalibrations
+                else ""
+            )
+            logger.info(
+                f"Using calibration state {newest['calibration_id']} from "
+                f"{newest['calibration_datetime']}{recal_info}"
+            )
+        else:
+            logger.info(
+                "Using the analysis database's calibration "
+                "(use_recalibrated_state=False), none of the "
+                f"{num_versions} state(s) in calibration.sqlite"
+            )
 
-        # Get original calibration if recalibrated
-        original_datetime = None
-        if num_versions > 1:
-            cursor.execute("""
-                SELECT DateTime FROM CalibrationState
-                ORDER BY Id ASC LIMIT 1
-            """)
-            original_datetime = cursor.fetchone()[0]
+        return metadata
 
+    @staticmethod
+    def _calibration_state(
+        cursor: sqlite3.Cursor, state: Tuple[Any, ...]
+    ) -> Dict[str, Any]:
+        """One ``CalibrationState`` row and its software version, as stored."""
+        state_id, key, datetime_str, source = state
         # The software version only. CalibrationInfo also records who
         # calibrated (CalibrationUser, MobilityCalibrationUser): a person,
         # which does nothing in a store and is not read at all -- see
@@ -829,62 +885,67 @@ class BrukerReader(BrukerBaseMSIReader):
             WHERE CalibrationState = ?
             AND KeyName = 'CalibrationSoftwareVersion'
         """,
-            (cal_id,),
+            (state_id,),
         )
 
         extra_info = dict(cursor.fetchall())
 
-        metadata = {
-            "calibration_id": cal_id,
-            "calibration_uuid": cal_uuid,
-            "calibration_datetime": cal_datetime,
-            "calibration_source": cal_source,
+        return {
+            "calibration_id": state_id,
+            "calibration_uuid": key,
+            "calibration_datetime": datetime_str,
+            "calibration_source": source,
             "calibration_software_version": extra_info.get(
                 "CalibrationSoftwareVersion"
             ),
-            "num_calibration_versions": num_versions,
-            "recalibrated": num_versions > 1,
-            "original_calibration_datetime": original_datetime,
-            "calibration_file_size": cal_file.stat().st_size,
         }
 
-        # Log which calibration is being used
-        if self.use_recalibrated_state:
-            recal_info = (
-                f" (recalibrated {num_versions} times)" if num_versions > 1 else ""
-            )
-            logger.info(
-                f"Using active calibration state {cal_id} from {cal_datetime}"
-                f"{recal_info}"
-            )
-        else:
-            active_info = f", active state is {cal_id}" if num_versions > 1 else ""
-            logger.info(
-                f"Using original calibration (use_recalibrated_state=False)"
-                f"{active_info}"
-            )
-
-        return metadata
-
     def get_applied_mz_calibration(self) -> Optional[Dict[str, Any]]:
-        """The calibration option this reader opened the vendor library with.
+        """Which calibration Bruker's library applies, and where it is stored.
 
         Bruker's library converts every digitiser index to m/z itself, and
-        Thyra's one decision is ``use_recalibrated_state``: ask for the most
-        recent state in ``calibration.sqlite``, or for the calibration the
-        acquisition recorded. What the library then does with a state is
-        its own, and it differs by file type. Measured on one acquisition
-        of each with the same library: a TSF applies the online lock-mass
-        state its MALDI acquisition wrote (the m/z drift across the run,
-        1.5 ppm by mid-run, is gone), and a TDF gives the same m/z with the
-        state, without it and without the file. So the option is recorded
-        as the option, and no more is claimed.
+        Thyra's one decision is ``use_recalibrated_state``. With it on, the
+        library applies the newest state in ``calibration.sqlite``; with it
+        off, or without that file, it applies the calibration in the
+        analysis database and none of the states. That holds for both file
+        types. Measured with the bundled library on 2026-09-28: a
+        DataAnalysis 6.1 recalibration moved every ion of a TSF by +1.3 to
+        +1.7 ppm with the option on, and left the m/z exactly as acquired
+        with it off. A SCiLS Lab 2027a alignment, written into a TDF as its
+        second state, moved each frame by -2.3 to +0.1 ppm with it on and
+        not at all with it off.
 
-        ``None`` for a metadata-only reader, which converts nothing.
+        What a state changes is still the library's business. The online
+        lock-mass state a MALDI run writes as it starts removed a 1.5 ppm
+        drift across the run from a TSF, and changed no m/z on the two TDFs
+        read. So the step names the calibration that was applied, not what
+        it did.
+
+        Returns:
+            ``use_recalibrated_state``, the option, and ``calibration``,
+            where the applied calibration is stored: ``"calibration.sqlite"``
+            with the state's ``Id`` as ``calibration_state_id``, or the
+            analysis database, ``"analysis.tsf"`` or ``"analysis.tdf"``.
+            ``calibration`` is left out when the option is on and a
+            ``calibration.sqlite`` exists that this reader could not read,
+            since which state the library took is then unknown. ``None``
+            for a metadata-only reader, which converts nothing.
         """
         if self._metadata_only:
             return None
-        return {"use_recalibrated_state": bool(self.use_recalibrated_state)}
+        applied: Dict[str, Any] = {
+            "use_recalibrated_state": bool(self.use_recalibrated_state)
+        }
+        state_id = (self._calibration_metadata or {}).get("calibration_id")
+        if state_id is not None:
+            applied["calibration"] = "calibration.sqlite"
+            applied["calibration_state_id"] = int(state_id)
+        elif not (
+            self.use_recalibrated_state
+            and (self.data_path / "calibration.sqlite").exists()
+        ):
+            applied["calibration"] = f"analysis.{self.file_type}"
+        return applied
 
     def _initialize_sdk(self) -> None:
         """Initialize the Bruker SDK with error handling."""

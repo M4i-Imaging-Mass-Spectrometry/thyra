@@ -226,6 +226,12 @@ meaning was checked against real acquisitions:
 | Waters `.raw` | `$$ Cal Date` and `$$ Cal Time` in `_header.txt`, to the minute, no offset | -- | -- | -- (`Cal StdDev` is 0 on every file read) | MassLynx `isLockmassCorrected` |
 | imzML, solariX, rapiflex, mzPeak | -- | -- | -- | -- | -- |
 
+`recalibrated` counts states. A `.d` whose `calibration.sqlite` was created
+by a recalibration -- DataAnalysis writes one into a `.d` that had none --
+holds that recalibration as its only state, so `recalibrated` is false and
+the section describes the analysis database's calibration. The
+`m/z calibration` step still names the state a conversion applied.
+
 `mz_standard_deviation_ppm` is the square root of the reference peaks'
 summed squared m/z errors after the calibration, in ppm, over one less than
 the number of peaks. That is Bruker's `MzStandardDeviationPPM`, recomputed
@@ -240,18 +246,25 @@ writes records `0.000000` against a single reference mass and no measured
 mass at all -- and so is one over fewer than two peaks. The count stands on
 its own.
 
-Three things are deliberately not in the section. On a timsTOF, the first
-state of `calibration.sqlite` is an online lock-mass calibration, and whether
-Bruker's library applies it depends on the file: a TSF applies it when opened
-with `--use-recalibrated` (the default), a TDF gives the same m/z with it or
-without it, measured on one acquisition of each. Which calibration a
-conversion applied is therefore a processing step (below), and
-`lock_mass_corrected` is left unset for timsTOF rather than stated for data it
-may not describe. The mobility calibration's keys are not read: on the one
-imaging TDF with TIMS engaged its measured voltages are all zero and its
-standard deviation is 3578 %. And no person reaches the section:
-`CalibrationUser` and `MobilityCalibrationUser` are not read, and neither is
-the reference list's name, which is text the lab chose.
+Three things are deliberately not in the section. The first is which
+calibration a conversion applied: that is a processing step (below). On a
+timsTOF, Bruker's library turns every index into m/z itself. With
+`--use-recalibrated` (the default) it applies the newest state in
+`calibration.sqlite`, on TSF and TDF alike; with `--no-recalibrated` it
+applies the analysis database's own calibration and none of the states.
+Measured on one acquisition of each: a DataAnalysis 6.1 recalibration moved
+every ion of a TSF by +1.3 to +1.7 ppm, and a SCiLS Lab 2027a alignment,
+written into a TDF as its second state, moved each frame by -2.3 to +0.1 ppm.
+With `--no-recalibrated` both read exactly as acquired. `lock_mass_corrected`
+stays unset for timsTOF, for two reasons. Whether the m/z carry the online
+lock-mass correction depends on that option, so it describes a conversion,
+not the source. And on a TDF the lock-mass state changed no m/z on either of
+the two acquisitions checked, so what it corrects cannot be read off the
+file. The mobility calibration's keys are not read: on the one imaging TDF
+with TIMS engaged its measured voltages are all zero and its standard
+deviation is 3578 %. And no person reaches the section: `CalibrationUser`
+and `MobilityCalibrationUser` are not read, and neither is the reference
+list's name, which is text the lab chose.
 
 The `alignment` section says which optical image the source registers its
 raster onto, and how. Only flexImaging states one, in the `.mis` file beside
@@ -308,7 +321,9 @@ in the reader's own terms:
 | Source | Parameter | Meaning |
 |--------|-----------|---------|
 | PHI ToF-SIMS | `calibration`: `"appended"` / `"header"` | the coefficients Thyra computed m/z from: the recalibration appended to the file whenever there is one, unless the reader's `use_appended_calibration` was turned off |
-| Bruker tsf/tdf | `use_recalibrated_state`: `true` / `false` | the option Bruker's library was opened with (`--use-recalibrated` / `--no-recalibrated`). The library applies the calibration itself, and what it does with a stored state differs by file type (see the `calibration` section above), so the option is recorded as the option |
+| Bruker tsf/tdf | `use_recalibrated_state`: `true` / `false` | the option Bruker's library was opened with (`--use-recalibrated` / `--no-recalibrated`) |
+| | `calibration`: `"calibration.sqlite"` / `"analysis.tsf"` / `"analysis.tdf"` | where the calibration the library applied is stored: the newest `calibration.sqlite` state with the option on, the analysis database with it off or without that file. Left out when the option is on and `calibration.sqlite` could not be read |
+| | `calibration_state_id` | the `Id` of the `calibration.sqlite` state applied, when one was |
 
 Other readers take the m/z values the source stores, apply nothing and
 record no step.

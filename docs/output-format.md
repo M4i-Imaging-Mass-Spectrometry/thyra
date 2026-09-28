@@ -1030,7 +1030,7 @@ Beside it, when the source format provides them:
 
 | Key | Contents |
 |-----|----------|
-| `format_specific` | Vendor metadata (imzML file mode and UUID; flexImaging areas and teaching points for rapiflex; `instrument_source_type` for Bruker tsf/tdf, Bruker's own code for what ionised the sample, recorded raw because its labels are not documented in the file; for Bruker tsf/tdf also `instrument_calibration`, the m/z calibration the run started with as the analysis database's `CalibrationInfo` states it, and `calibration`, the states of `calibration.sqlite` when the acquisition has one) |
+| `format_specific` | Vendor metadata (imzML file mode and UUID; flexImaging areas and teaching points for rapiflex; `instrument_source_type` for Bruker tsf/tdf, Bruker's own code for what ionised the sample, recorded raw because its labels are not documented in the file; for Bruker tsf/tdf also `instrument_calibration`, the m/z calibration the run started with as the analysis database's `CalibrationInfo` states it, and `calibration`, when the acquisition has a `calibration.sqlite`: how many states it holds and which one the conversion applied -- with `--no-recalibrated` none, so those keys are empty and the newest state is under `latest_calibration_*`) |
 | `acquisition_params` | Polarity, scan range, laser settings, timestamp and method name, in the vendor's spelling and unit |
 | `instrument_info` | Instrument model, serial, software version |
 | `raw_metadata` | Source metadata as read, for round-trip fidelity; for a Bruker acquisition with a `.mis` file, `mis_metadata` is that file as parsed |
