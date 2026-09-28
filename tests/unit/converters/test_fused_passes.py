@@ -217,6 +217,40 @@ class UnfusedStubReader(FusedStubReader):
     frame_scans = False
 
 
+#: When each pixel of ``PIXELS`` was acquired: the second row right to
+#: left, numbered as Bruker numbers frames, with a gap where another
+#: region's frame would be (design decision D26).
+ORDER = {0: 1, 1: 2, 2: 5, 3: 4}
+
+
+class _OrderedFrame(_Frame):
+    @property
+    def acquisition_order(self) -> int:
+        return ORDER[self._p]
+
+
+class OrderedStubReader(FusedStubReader):
+    """The same source, which knows when each pixel was acquired."""
+
+    @property
+    def has_acquisition_order(self) -> bool:
+        return True
+
+    def iter_spectra_with_acquisition_order(self) -> Generator:
+        for p, (x, y) in enumerate(PIXELS):
+            mzs, intensities = _summed(p)
+            yield (x, y, 0), ORDER[p], mzs, intensities
+
+    def iter_frame_scans(self) -> Generator:
+        self.frame_passes += 1
+        for p, (x, y) in enumerate(PIXELS):
+            yield _OrderedFrame(p, (x, y, 0))
+
+
+class UnfusedOrderedStubReader(OrderedStubReader):
+    frame_scans = False
+
+
 class IndexedStubReader(FusedStubReader):
     """The same source whose records hand their points over indexed."""
 
@@ -330,6 +364,29 @@ class TestFusedPasses:
         assert not hasattr(_Frame(0, (0, 0, 0)), "mobility_points_indexed")
         sdata = _read(_convert(FusedStubReader(), tmp_path / "flat_only.zarr"))
         assert "mobility_heatmap" in sdata.tables["stub_z0"].uns
+
+    def test_both_routes_give_every_table_the_acquisition_order(self, tmp_path):
+        # The records carry the order on the fused route and the ordered
+        # iterator on the other; the siblings copy the summed table's obs,
+        # so all three tables say the same thing either way.
+        a = _read(_convert(OrderedStubReader(), tmp_path / "fused.zarr"))
+        b = _read(_convert(UnfusedOrderedStubReader(), tmp_path / "unfused.zarr"))
+
+        assert set(a.tables) == {"stub_z0", "stub_z0_mobility", "stub_z0_msms"}
+        for sdata in (a, b):
+            for key in sdata.tables:
+                column = sdata.tables[key].obs["acquisition_order"]
+                assert column.dtype == np.int64
+                # Rows in grid order: (0, 0), (1, 0), (0, 1), (1, 1).
+                assert column.tolist() == [1, 2, 5, 4]
+        for key in a.tables:
+            np.testing.assert_array_equal(_dense(a.tables[key]), _dense(b.tables[key]))
+
+    def test_a_source_without_an_order_gives_no_table_the_column(self, tmp_path):
+        sdata = _read(_convert(FusedStubReader(), tmp_path / "fused.zarr"))
+
+        for table in sdata.tables.values():
+            assert "acquisition_order" not in table.obs.columns
 
     def test_the_marginals_are_exact_either_way(self, tmp_path):
         for reader, name in ((FusedStubReader(), "f"), (UnfusedStubReader(), "u")):

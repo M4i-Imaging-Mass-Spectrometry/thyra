@@ -368,6 +368,29 @@ class TestSolarixReader:
         with pytest.raises(RuntimeError, match="closed"):
             list(reader.iter_spectra())
 
+    def test_the_acquisition_order_is_the_spectra_id_as_stored(self, tmp_path):
+        # Ids out of raster order, with a gap and an empty scan: the order
+        # is the row's own Id, never a count of the spectra yielded. Id
+        # order was checked against the per-scan DateTime and the
+        # ImagingInfo.xml minutes on 50 real acquisitions (design decision
+        # D26).
+        spectra = [
+            {"id": 3, "x": 1240, "y": 167, "mzs": [500.0], "intensities": [1.0]},
+            {"id": 5, "x": 1239, "y": 166, "mzs": [300.0], "intensities": [2.0]},
+            {"id": 6, "x": 1241, "y": 166, "mzs": [], "intensities": []},
+            {"id": 9, "x": 1240, "y": 166, "mzs": [400.0], "intensities": [3.0]},
+        ]
+        d_dir = make_solarix_d(tmp_path, spectra=spectra)
+
+        with SolarixReader(d_dir) as reader:
+            assert reader.has_acquisition_order
+            ordered = [
+                (coords, order)
+                for coords, order, _, _ in reader.iter_spectra_with_acquisition_order()
+            ]
+
+        assert ordered == [((1, 1, 0), 3), ((0, 0, 0), 5), ((1, 0, 0), 9)]
+
     def test_scan_count_mismatch_warns(self, tmp_path, thyra_logs):
         d_dir = make_solarix_d(tmp_path, n_info_scans=99)
 

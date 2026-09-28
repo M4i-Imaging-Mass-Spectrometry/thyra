@@ -1237,7 +1237,7 @@
       "type": "object"
     }
   },
-  "$id": "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.9.0/msi_metadata.schema.json",
+  "$id": "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.10.0/msi_metadata.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "The versioned MSI metadata document.\n\n``sample`` and ``preparation`` cannot be auto-populated from raw\nfiles and default to empty; ``ms_analysis`` and ``provenance`` are\nwritten by the converter for every store; ``acquisition``,\n``calibration`` and ``alignment`` are each written when the reader\nreports at least one of their facts and are absent -- not empty --\notherwise.\n\nThe emitted JSON Schema carries ``$id`` and ``$schema`` so that the\ncommitted artifact names its own published address; they are added\nhere, on the root model, rather than pasted into the file, so the\nsync test that compares the file with ``model_json_schema()`` keeps\nholding.",
@@ -1303,7 +1303,7 @@
       "description": "What the sample is; user-supplied."
     },
     "schema_version": {
-      "default": "0.9.0",
+      "default": "0.10.0",
       "description": "Semantic version of the schema this document conforms to.",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
       "title": "Schema Version",

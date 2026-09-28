@@ -255,6 +255,13 @@ class TestCapabilityConventions:
             with pytest.raises(NotImplementedError):
                 next(iter(reader.iter_precursor_spectra()), None)
 
+    def test_acquisition_order_predicate_matches_the_iterator(self, reader):
+        if reader.has_acquisition_order:
+            next(iter(reader.iter_spectra_with_acquisition_order()), None)
+        else:
+            with pytest.raises(NotImplementedError):
+                next(iter(reader.iter_spectra_with_acquisition_order()), None)
+
     @pytest.mark.parametrize(
         "predicate",
         [
@@ -264,10 +271,56 @@ class TestCapabilityConventions:
             "has_frame_scans",
             "has_fragmentation",
             "has_precursor_spectra",
+            "has_acquisition_order",
         ],
     )
     def test_every_predicate_is_a_bool(self, reader, predicate):
         assert isinstance(getattr(reader, predicate), bool)
+
+
+class TestTheAcquisitionOrder:
+    """The order the spectra were acquired in, where the source says (D26).
+
+    Four readers here know it. PHI sums every pass over the raster into
+    each pixel, so every pixel was measured throughout the acquisition;
+    Rapiflex walks its raster, and what its position log's order means has
+    not been checked on a real acquisition. Waters knows it too and is
+    exempt from this file (its own suite covers the numbering).
+    """
+
+    ORDERED = {"bruker", "imzml", "mzpeak", "solarix"}
+
+    @pytest.mark.parametrize("format_name", sorted(CASES))
+    def test_exactly_the_ordered_readers_know_it(self, format_name, tmp_path):
+        instance = CASES[format_name](tmp_path)
+        try:
+            known = instance.has_acquisition_order
+        finally:
+            instance.close()
+        assert known is (format_name in self.ORDERED)
+
+    def test_it_is_iter_spectra_with_a_number_each(self, reader):
+        if not reader.has_acquisition_order:
+            pytest.skip("this reader does not know the order")
+        plain = list(reader.iter_spectra())
+        reader.reset()
+        ordered = list(reader.iter_spectra_with_acquisition_order())
+
+        assert len(ordered) == len(plain)
+        for (coords, order, mzs, intensities), expected in zip(ordered, plain):
+            assert coords == expected[0]
+            np.testing.assert_array_equal(mzs, expected[1])
+            np.testing.assert_array_equal(intensities, expected[2])
+            assert isinstance(order, (int, np.integer)) and order >= 0
+
+    def test_no_two_spectra_share_a_number(self, reader):
+        if not reader.has_acquisition_order:
+            pytest.skip("this reader does not know the order")
+        orders = [
+            order for _, order, _, _ in reader.iter_spectra_with_acquisition_order()
+        ]
+
+        assert len(set(orders)) == len(orders)
 
 
 class TestTheAppliedCalibration:

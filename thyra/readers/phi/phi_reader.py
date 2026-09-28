@@ -339,7 +339,10 @@ class PhiReader(BaseMSIReader):
     ]:
         """Iterate occupied pixels in raster order.
 
-        Pixels that recorded no ions are skipped entirely.
+        Pixels that recorded no ions are skipped entirely. Raster order is
+        all there is: each frame passes over the whole raster and a pixel
+        sums every frame, so every pixel was measured throughout the
+        acquisition and :attr:`has_acquisition_order` stays False.
 
         Yields:
             ``((x, y, z), mzs, intensities)`` with 0-based coordinates.

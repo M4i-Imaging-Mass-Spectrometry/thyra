@@ -695,6 +695,33 @@ class TestWatersReaderChunkedRaster:
 
     @patch("thyra.readers.waters.waters_reader.MassLynxLib")
     @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_scans_are_numbered_on_through_the_chunks(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        # Every chunk restarts MassLynx's scan count at 0, and the
+        # acquisition order carries on through them: the third chunk's
+        # first scan is scan 6 of the run. The second chunk's middle scan
+        # has no stage position, so it is skipped and keeps its number
+        # (design decision D26).
+        grid = _chunked_grid({0: 1, 1: 2, 2: 0})
+        grid.scan_map[(1, 1)] = _make_scan_info(has_pos=False)
+        reader, _ = _open_reader(
+            mock_ml_cls,
+            mock_build_grid,
+            mock_waters_data,
+            grid,
+            3,
+            types={0: FunctionType.MS, 1: FunctionType.MS, 2: FunctionType.LOCKMASS},
+        )
+
+        assert reader.has_acquisition_order
+        ordered = list(reader.iter_spectra_with_acquisition_order())
+        assert [order for _, order, _, _ in ordered] == [0, 1, 2, 3, 5, 6, 7, 8]
+        assert [c for c, _, _, _ in ordered] == [c for c, _, _ in reader.iter_spectra()]
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
     def test_a_level_two_chunk_is_not_a_fragmentation_schedule(
         self, mock_build_grid, mock_ml_cls, mock_waters_data
     ):

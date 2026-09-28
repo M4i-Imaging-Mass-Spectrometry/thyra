@@ -755,6 +755,46 @@ class MzPeakReader(BaseMSIReader):
             ``((x, y, z), mzs, intensities)`` with 0-based coordinates,
             ``z`` always 0, and both arrays float64.
         """
+        for coords, _, mzs, intensities in self._iter_spectra_with_order():
+            yield coords, mzs, intensities
+
+    @property
+    def has_acquisition_order(self) -> bool:
+        """Always: every spectrum carries its ``spectrum_index``."""
+        return True
+
+    def iter_spectra_with_acquisition_order(self) -> Generator[
+        Tuple[
+            Tuple[int, int, int],
+            int,
+            NDArray[np.float64],
+            NDArray[np.float64],
+        ],
+        None,
+        None,
+    ]:
+        """:meth:`iter_spectra` with each spectrum's ``spectrum_index``.
+
+        The index is the archive's own: the spectrum's 0-based position in
+        its spectrum list, as mzML numbers it, and the key the signal rows
+        are sorted by. Unpositioned spectra keep theirs, so the numbers can
+        have gaps.
+        """
+        yield from self._iter_spectra_with_order()
+
+    def _iter_spectra_with_order(
+        self,
+    ) -> Generator[
+        Tuple[
+            Tuple[int, int, int],
+            int,
+            NDArray[np.float64],
+            NDArray[np.float64],
+        ],
+        None,
+        None,
+    ]:
+        """The row-group walk behind both spectrum iterators, with indices."""
         # Per iteration, not per reader. Every conversion reads the source
         # twice (issue #226), and a counter carried across the passes made
         # the second pass report the sum of both -- 12 dropped points, then
@@ -794,7 +834,7 @@ class MzPeakReader(BaseMSIReader):
                         pending_index, pending_mz, pending_intensity, positioned
                     )
                     if emitted is not None:
-                        yield emitted
+                        yield emitted[0], pending_index, emitted[1], emitted[2]
                     pending_mz, pending_intensity = [], []
                 pending_index = index
                 pending_mz.append(mzs[start:stop])
@@ -805,7 +845,7 @@ class MzPeakReader(BaseMSIReader):
                 pending_index, pending_mz, pending_intensity, positioned
             )
             if emitted is not None:
-                yield emitted
+                yield emitted[0], pending_index, emitted[1], emitted[2]
 
         if self._dropped_points:
             logger.info(

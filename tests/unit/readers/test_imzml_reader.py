@@ -258,6 +258,32 @@ class TestImzMLReader:
         reader.close()
 
 
+class TestAcquisitionOrder:
+    """The order is each spectrum's position in the file's list (D26)."""
+
+    def test_it_is_the_list_position_counting_skipped_spectra(self, tmp_path):
+        # Written as a serpentine, with the second spectrum all below the
+        # threshold: it is not yielded but keeps its position, so the
+        # numbers are the mzML indices rather than a count of what was
+        # yielded, and the second row reads right to left.
+        path = tmp_path / "serpentine.imzML"
+        mzs = np.array([100.0, 200.0, 300.0])
+        with ImzMLWriter(str(path), mode="processed") as writer:
+            writer.addSpectrum(mzs, np.array([1.0, 2.0, 3.0]), (1, 1, 1))
+            writer.addSpectrum(mzs, np.array([0.1, 0.2, 0.3]), (2, 1, 1))
+            writer.addSpectrum(mzs, np.array([4.0, 5.0, 6.0]), (2, 2, 1))
+            writer.addSpectrum(mzs, np.array([7.0, 8.0, 9.0]), (1, 2, 1))
+
+        with ImzMLReader(path, intensity_threshold=0.5) as reader:
+            assert reader.has_acquisition_order
+            ordered = [
+                (coords, order)
+                for coords, order, _, _ in reader.iter_spectra_with_acquisition_order()
+            ]
+
+        assert ordered == [((0, 0, 0), 0), ((1, 1, 0), 2), ((0, 1, 0), 3)]
+
+
 class TestCrlfUnindentedImzML:
     """Unindented CRLF imzML (IONTOF SurfaceLab) must parse.
 

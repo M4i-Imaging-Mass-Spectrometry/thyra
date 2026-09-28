@@ -556,7 +556,11 @@ class RapiflexReader(BrukerBaseMSIReader):
     ]:
         """Iterate through spectra with coordinates.
 
-        Only yields spectra that have data (offset > 0).
+        Only yields spectra that have data (offset > 0), in the raster order
+        of the offset table. The ``_poslog.txt`` lines are timestamped and
+        may well be the acquisition order, but what that order means has
+        not been checked on a real acquisition, so
+        :attr:`has_acquisition_order` stays False.
 
         Yields:
             Tuple containing:

@@ -809,9 +809,46 @@ print("Columns:", list(msi_table.obs.columns))
 | `spatial_x`, `spatial_y` | float | Physical coordinates in micrometers |
 | `region` | categorical | SpatialData region key |
 | `region_number` | int | Acquisition region number |
+| `acquisition_order` | int64 | The order the pixels were acquired in, when the source records it (see below) |
 | `instance_key` | str | A copy of the index, which SpatialData uses to link each row to its pixel shape |
 
 The DataFrame index is `instance_id` (a string pixel identifier).
+
+### Acquisition order
+
+The rows follow the raster: left to right, top to bottom. The instrument need
+not have measured them in that order. A serpentine scan comes back along every
+second row, and a slide with several regions is measured one region after
+another. So a drift plotted against the row number is plotted against the
+raster, not against time. `acquisition_order` gives the time order:
+
+```python
+obs = msi_table.obs
+as_acquired = obs.sort_values("acquisition_order")
+```
+
+It is an `int64` that grows with acquisition time and differs from row to row.
+Where the source numbers its spectra, it is that number; otherwise it is the
+spectrum's position in the order the source lists them. It need not start at 0
+or run without gaps, so sort by it or use it to find a spectrum in the source,
+but do not use it as a row index.
+
+| Source | `acquisition_order` is |
+|--------|------------------------|
+| Bruker timsTOF (`.tsf`, `.tdf`) | `Frames.Id`, from 1, as the file stores it. A `--region` conversion keeps the region's own ids |
+| Bruker solariX | `Spectra.Id` in `peaks.sqlite` |
+| imzML | The spectrum's position in the file's spectrum list, from 0 (its mzML `index`). imzML does not say whether the writer listed spectra as they were acquired; the list is the only order the file has |
+| mzPeak | The spectrum's `spectrum_index` |
+| Waters | The scan's number in the run, from 0. MassLynx counts scans per function, and the count carries on through the functions a long raster is split into |
+| PHI | Absent. Each frame passes over the whole raster and a pixel's spectrum sums all of them, so every pixel was measured throughout the acquisition |
+| Bruker rapifleX | Absent. The reader walks the raster, not the acquisition's position log |
+
+A missing column means the order is unknown, not that it is the raster order.
+A position measured twice is one row holding the sum of both spectra, and its
+`acquisition_order` is the earlier one. The sibling tables (`_mobility`,
+`_msms`) carry the same column, row for row. Why the column looks like this,
+and what else was considered, is in
+[design decision D26](design-decisions.md#d26-the-acquisition-order-is-an-obs-column-when-the-source-has-one).
 
 ---
 
@@ -1099,7 +1136,7 @@ terms, and a schema a validator can hold it to.
 ```python
 block = msi_table.uns["msi_metadata"]
 
-print(block["schema_version"])                    # "0.9.0"
+print(block["schema_version"])                    # "0.10.0"
 print(block["ms_analysis"]["pixel_size_um"])      # {"x": 20.0, "y": 20.0}
 print(block["provenance"]["source_format"])       # "imzml"
 print(block.get("acquisition"))                   # see below; absent for imzML
