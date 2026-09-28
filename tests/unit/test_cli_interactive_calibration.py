@@ -161,6 +161,14 @@ class TestTheDisplay:
         assert len(active) == 1
         assert "State 3" in active[0]
 
+    def test_with_no_recalibrated_no_state_is_marked_as_used(self, tmp_path):
+        # Bruker's library then applies none of them, the newest included.
+        out = self._output(_make_d(tmp_path), use_recalibrated=False)
+        assert "will be used" not in out
+        assert "none of these states" in out
+        for state_id, _, when, source in STATES:
+            assert f"State {state_id}: {when} [{source}]" in out
+
     def test_nothing_is_printed_without_a_calibration_file(self, tmp_path):
         data_path = tmp_path / "bare.d"
         data_path.mkdir()

@@ -772,6 +772,84 @@ class TestCalibrationSection:
             "software_version": "6.1",
         }
 
+    def test_the_section_is_the_same_whichever_state_a_conversion_applied(self):
+        # With --no-recalibrated Bruker's library applies none of the
+        # states, so the reader names none as applied and reports the
+        # newest under latest_ names. The section describes the source,
+        # which still states the newest one as current.
+        newest = {
+            "calibration_id": 3,
+            "calibration_uuid": "recal-uuid-2",
+            "calibration_datetime": "2025-03-01T16:00:00.000+00:00",
+            "calibration_source": "DataAnalysis",
+            "calibration_software_version": "6.1",
+        }
+        file_facts = {
+            "num_calibration_versions": 3,
+            "recalibrated": True,
+            "original_calibration_datetime": "2025-01-01T10:00:00.000+00:00",
+        }
+        applied_newest = {**newest, **file_facts}
+        applied_none = {
+            **dict.fromkeys(newest),
+            **file_facts,
+            **{f"latest_{key}": value for key, value in newest.items()},
+        }
+
+        sections = [
+            self._calibration(
+                format_specific={
+                    "instrument_calibration": _BRUKER_INSTRUMENT_CALIBRATION,
+                    "calibration": states,
+                }
+            )
+            for states in (applied_newest, applied_none)
+        ]
+
+        assert sections[0] == sections[1]
+        assert sections[1].software == "DataAnalysis"
+        assert sections[1].calibration_datetime == "2025-03-01T16:00:00+00:00"
+
+    def test_a_lone_state_applied_or_not_leaves_the_run_calibration(self):
+        # One state is the lock-mass calibration written at acquisition,
+        # so the section states the analysis database's calibration either
+        # way; only the reader's record of what was applied differs.
+        applied_none = {
+            **dict.fromkeys(
+                (
+                    "calibration_id",
+                    "calibration_uuid",
+                    "calibration_datetime",
+                    "calibration_source",
+                    "calibration_software_version",
+                )
+            ),
+            "num_calibration_versions": 1,
+            "recalibrated": False,
+            "original_calibration_datetime": None,
+            "calibration_file_size": 110592,
+            "latest_calibration_id": 1,
+            "latest_calibration_uuid": _BRUKER_ONE_STATE["calibration_uuid"],
+            "latest_calibration_datetime": _BRUKER_ONE_STATE["calibration_datetime"],
+            "latest_calibration_source": _BRUKER_ONE_STATE["calibration_source"],
+            "latest_calibration_software_version": _BRUKER_ONE_STATE[
+                "calibration_software_version"
+            ],
+        }
+
+        sections = [
+            self._calibration(
+                format_specific={
+                    "instrument_calibration": _BRUKER_INSTRUMENT_CALIBRATION,
+                    "calibration": states,
+                }
+            )
+            for states in (_BRUKER_ONE_STATE, applied_none)
+        ]
+
+        assert sections[0] == sections[1]
+        assert sections[1].calibration_datetime == "2025-04-22T08:43:30+02:00"
+
     def test_phi_from_the_header_when_nothing_was_appended(self):
         calibration = self._calibration(
             raw_metadata={

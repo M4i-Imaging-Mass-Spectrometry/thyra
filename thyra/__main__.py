@@ -331,7 +331,14 @@ def _display_calibration_info(input: Path, use_recalibrated: bool) -> None:
             f"{'s' if n_recalibrations > 1 else ''} since acquisition"
         )
     for state in states:
-        active_marker = " (active/will be used)" if state["id"] == active_id else ""
+        # With --no-recalibrated, Bruker's library applies none of the
+        # states, the newest included: it takes the analysis database's
+        # own calibration instead.
+        active_marker = (
+            " (active/will be used)"
+            if use_recalibrated and state["id"] == active_id
+            else ""
+        )
         click.echo(
             f"  State {state['id']}: {state['datetime']} "
             f"[{state['source']}]{active_marker}"
@@ -340,7 +347,10 @@ def _display_calibration_info(input: Path, use_recalibrated: bool) -> None:
     if use_recalibrated:
         click.echo(f"\nUsing active calibration state (State {active_id})")
     else:
-        click.echo("\nUsing original calibration (--no-recalibrated flag set)")
+        click.echo(
+            "\nUsing original calibration (--no-recalibrated flag set): "
+            "none of these states"
+        )
 
     click.echo(
         "\nNote: this lists the states only; one cannot be chosen here. "

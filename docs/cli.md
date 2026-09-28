@@ -396,7 +396,7 @@ and is here because continuous-mode Bruker data is what usually needs it.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--use-recalibrated / --no-recalibrated` | enabled | Use recalibrated m/z state. timsTOF only |
+| `--use-recalibrated / --no-recalibrated` | enabled | Apply the newest calibration state in `calibration.sqlite`, TSF and TDF alike; off, the analysis database's own calibration. timsTOF only |
 | `--interactive-calibration` | off | Display available calibration states. timsTOF and solariX |
 | `--intensity-threshold FLOAT` | none | Minimum intensity filter. **Every format** |
 | `--tdf-spectrum {scan_sum,vendor_centroid}` | `scan_sum` | How a TDF (TIMS) frame's mobility scans collapse into one spectrum per pixel. Bruker TDF only |

@@ -303,28 +303,182 @@ class TestCalibrationMetadataIntegration:
             assert format_specific["calibration"] == cal_metadata
 
 
+#: A ``calibration.sqlite`` after one recalibration: the online lock-mass
+#: state timsControl writes as a MALDI run starts, and a later one that
+#: SCiLS Lab 2027a added, leaving the first in place. Each row is
+#: ``(Id, Key, DateTime, Source, CalibrationSoftwareVersion)``.
+TWO_STATES = [
+    (1, "lock-mass-key", "2025-01-01T12:00:00.250+01:00", "timsTOF", "4.1.12"),
+    (2, "alignment-key", "2025-02-01T09:30:00.000+01:00", "SCiLS Lab 2027a", "1.0"),
+]
+
+#: The keys that describe the state a conversion applies.
+APPLIED_STATE_KEYS = (
+    "calibration_id",
+    "calibration_uuid",
+    "calibration_datetime",
+    "calibration_source",
+    "calibration_software_version",
+)
+
+
+def _d_with_states(tmp_path: Path, states=TWO_STATES) -> Path:
+    """A ``.d`` whose calibration.sqlite holds ``states``, in the vendor's tables."""
+    data_path = tmp_path / "sample.d"
+    data_path.mkdir(parents=True)
+    conn = sqlite3.connect(data_path / "calibration.sqlite")
+    try:
+        conn.execute(
+            "CREATE TABLE CalibrationState "
+            "(Id INTEGER PRIMARY KEY, Key TEXT, DateTime TEXT, Source TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE CalibrationInfo "
+            "(CalibrationState INTEGER, KeyName TEXT, Value TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO CalibrationState VALUES (?, ?, ?, ?)",
+            [state[:4] for state in states],
+        )
+        conn.executemany(
+            "INSERT INTO CalibrationInfo VALUES (?, 'CalibrationSoftwareVersion', ?)",
+            [(state[0], state[4]) for state in states],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return data_path
+
+
+def _reader(data_path: Path, use_recalibrated_state: bool, file_type: str = "tdf"):
+    """A converting reader over ``data_path``, without the vendor library."""
+    reader = BrukerReader.__new__(BrukerReader)
+    reader.data_path = data_path
+    reader.use_recalibrated_state = use_recalibrated_state
+    reader.file_type = file_type
+    reader._metadata_only = False
+    reader._calibration_metadata = reader._read_calibration_metadata()
+    return reader
+
+
+class TestTheStateThatIsApplied:
+    """``format_specific["calibration"]`` names the state the library applies.
+
+    With ``use_recalibrated_state`` Bruker's library applies the newest
+    state; without it, none -- not the first one either. It then applies
+    the analysis database's own calibration. Opened that way, the
+    library's ``has_recalibrated_state`` answers 0 on a TDF whose file
+    holds one state, and a TSF whose only state is a DataAnalysis
+    recalibration reads exactly as its copy without the file does.
+    """
+
+    def test_with_the_option_on_it_is_the_newest_state(self, tmp_path):
+        metadata = _reader(_d_with_states(tmp_path), True)._calibration_metadata
+
+        state_id, key, when, source, version = TWO_STATES[-1]
+        assert metadata["calibration_id"] == state_id
+        assert metadata["calibration_uuid"] == key
+        assert metadata["calibration_datetime"] == when
+        assert metadata["calibration_source"] == source
+        assert metadata["calibration_software_version"] == version
+        # The newest state is the applied one, so it is not said twice.
+        assert not [name for name in metadata if name.startswith("latest_")]
+
+    def test_with_the_option_off_no_state_is_named_as_applied(self, tmp_path):
+        metadata = _reader(_d_with_states(tmp_path), False)._calibration_metadata
+
+        for name in APPLIED_STATE_KEYS:
+            assert metadata[name] is None, name
+        # The newest state is still what the source holds as current.
+        state_id, key, when, source, version = TWO_STATES[-1]
+        assert metadata["latest_calibration_id"] == state_id
+        assert metadata["latest_calibration_uuid"] == key
+        assert metadata["latest_calibration_datetime"] == when
+        assert metadata["latest_calibration_source"] == source
+        assert metadata["latest_calibration_software_version"] == version
+
+    def test_the_file_is_described_the_same_either_way(self, tmp_path):
+        data_path = _d_with_states(tmp_path)
+        on = _reader(data_path, True)._calibration_metadata
+        off = _reader(data_path, False)._calibration_metadata
+
+        for name in (
+            "num_calibration_versions",
+            "recalibrated",
+            "original_calibration_datetime",
+            "calibration_file_size",
+        ):
+            assert on[name] == off[name], name
+        # "recalibrated" still means "a later state exists".
+        assert off["recalibrated"] is True
+        assert off["num_calibration_versions"] == 2
+        assert off["original_calibration_datetime"] == TWO_STATES[0][2]
+
+    def test_a_lone_state_is_not_applied_with_the_option_off_either(self, tmp_path):
+        # The online lock-mass state alone: on a TSF the library applies it
+        # with the option on (a 1.5 ppm drift across the run disappears)
+        # and leaves the drift in with the option off.
+        data_path = _d_with_states(tmp_path, TWO_STATES[:1])
+        metadata = _reader(data_path, False)._calibration_metadata
+
+        assert metadata["calibration_id"] is None
+        assert metadata["latest_calibration_id"] == 1
+        assert metadata["recalibrated"] is False
+        assert metadata["original_calibration_datetime"] is None
+
+
 class TestTheAppliedCalibration:
     """What the conversion's ``m/z calibration`` step records for a timsTOF."""
 
-    def _reader(self, use_recalibrated_state, metadata_only=False):
-        reader = BrukerReader.__new__(BrukerReader)
-        reader.use_recalibrated_state = use_recalibrated_state
-        reader._metadata_only = metadata_only
-        return reader
+    def test_with_the_option_on_it_is_the_newest_state(self, tmp_path):
+        reader = _reader(_d_with_states(tmp_path), True)
+        assert reader.get_applied_mz_calibration() == {
+            "use_recalibrated_state": True,
+            "calibration": "calibration.sqlite",
+            "calibration_state_id": 2,
+        }
 
-    def test_the_option_the_library_was_opened_with_is_recorded(self):
-        # Bruker's library applies the calibration; what Thyra decides is
-        # this option, and what the library does with it differs by file
-        # type, so the option is what is recorded.
-        for option in (True, False):
-            assert self._reader(option).get_applied_mz_calibration() == {
-                "use_recalibrated_state": option
+    def test_with_the_option_off_it_is_the_analysis_database(self, tmp_path):
+        for file_type in ("tsf", "tdf"):
+            data_path = _d_with_states(tmp_path / file_type)
+            reader = _reader(data_path, False, file_type)
+            assert reader.get_applied_mz_calibration() == {
+                "use_recalibrated_state": False,
+                "calibration": f"analysis.{file_type}",
             }
 
+    def test_without_calibration_sqlite_it_is_the_analysis_database(self, tmp_path):
+        data_path = tmp_path / "bare.d"
+        data_path.mkdir()
+        for option in (True, False):
+            assert _reader(data_path, option, "tsf").get_applied_mz_calibration() == {
+                "use_recalibrated_state": option,
+                "calibration": "analysis.tsf",
+            }
+
+    def test_an_unreadable_file_leaves_which_state_unsaid(self, tmp_path):
+        data_path = tmp_path / "broken.d"
+        data_path.mkdir()
+        conn = sqlite3.connect(data_path / "calibration.sqlite")
+        conn.execute("CREATE TABLE DummyTable (id INTEGER)")
+        conn.commit()
+        conn.close()
+
+        # The library may still have read a state out of it.
+        assert _reader(data_path, True).get_applied_mz_calibration() == {
+            "use_recalibrated_state": True
+        }
+        # Without the option it applies none, whatever the file holds.
+        assert _reader(data_path, False).get_applied_mz_calibration() == {
+            "use_recalibrated_state": False,
+            "calibration": "analysis.tdf",
+        }
+
     def test_a_metadata_only_reader_converts_nothing_and_applies_nothing(self):
-        assert (
-            self._reader(True, metadata_only=True).get_applied_mz_calibration() is None
-        )
+        reader = BrukerReader.__new__(BrukerReader)
+        reader.use_recalibrated_state = True
+        reader._metadata_only = True
+        assert reader.get_applied_mz_calibration() is None
 
 
 class TestDefaultCalibrationBehavior:
