@@ -81,20 +81,17 @@ You should see `thyra, version 4.0.0` or a newer number. Thyra is installed.
 
 ## Already use Python?
 
-If you work in Python 3.12 or 3.13 (in Jupyter, for example), install Thyra
-into that environment instead. Then you can use it from Python as well as
-from the terminal:
+If you work in Python 3.12, 3.13 or 3.14 (in Jupyter, for example), install
+Thyra into that environment instead. Then you can use it from Python as well
+as from the terminal:
 
 ```bash
 pip install thyra
 ```
 
-Python 3.14 is not supported yet. On 3.14, pip reports that it cannot find
-Thyra.
-
 ??? advanced "Advanced: conda, virtual environments and installing from source"
-    Thyra installs with pip into any environment that runs Python 3.12 or
-    3.13. With conda:
+    Thyra installs with pip into any environment that runs Python 3.12, 3.13
+    or 3.14. With conda:
 
     ```bash
     conda create -n thyra python=3.13
