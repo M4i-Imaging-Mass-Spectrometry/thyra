@@ -2299,6 +2299,11 @@ A value with no unit is still read as micrometres, in both cases. Centimetre
 stays out of the unit table. `IMS:1000047` without `IMS:1000046` is not a
 pixel size.
 
+The imzML path makes no test. It does not read `IMS:1000046` under the name
+"pixel size" at all, with or without `IMS:1000047` beside it. The file gives
+no pixel size, the log says why at WARNING, and the conversion asks for
+`--pixel-size`.
+
 **Why.** The term changed its meaning. Until commit `421481e` of the imzML
 vocabulary (2017-09-07) `IMS:1000046` was named "pixel size" and gave the
 area of a pixel, and `IMS:1000047` was "image shape". Since then they are
@@ -2318,6 +2323,16 @@ length, and a lone term under the new name may still hold an area, so the
 name only says when to test. The test then says which vocabulary the file
 speaks. If it is a length and the file gives `IMS:1000047` as well, the pair
 is read as declared.
+
+**Why the imzML path refuses on the name alone.** That path asks for both
+terms, so a lone `IMS:1000046` never gave a pixel size there. One form got
+through: the old name with a number on `IMS:1000047`, read as two lengths.
+A file that says pixel size 10000 beside such a number was converted with a
+pixel of 10000 um by 10000 um. Refusing the old name closes that and changes
+nothing else: every real imzML at hand and every sampled public pair uses
+the current names. Testing against the grid there as well would let a file
+and its archive agree on the old form too. It is a larger change and was
+not needed to stop the wrong value.
 
 **Why a missing unit is still micrometres.** Three reasons.
 
@@ -2377,9 +2392,8 @@ is in one number read two ways, and that is what the test covers.
 - The pixel size of MTBLS12204 is 1.0 with no unit, and is stored as 1 um on
   both paths. Nothing in the file says whether that is a size or a
   placeholder.
-- The imzML path is unchanged. It wants both terms, so the old form gives no
-  pixel size there. It would read the old name beside a *numeric*
-  `IMS:1000047` as two lengths. No such file was found, and "image shape"
-  had no value type. Two tests marked as expected failures in
-  `tests/unit/metadata/extractors/test_imzml_old_pixel_size.py` hold the
-  case open.
+- The two paths differ on the old name. The mzPeak path tests the value, and
+  the imzML path refuses it. An old-form file with a count and an extent
+  needs `--pixel-size` as imzML and none as an archive.
+- A writer that keeps the old name and means a length is refused on the
+  imzML path. No such file was found.

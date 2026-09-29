@@ -33,6 +33,18 @@ UM_PER_UNIT = {
     "UO:0000018": 0.001,  # nanometer
 }
 
+# The name IMS:1000046 carried until imagingMS.obo commit 421481e of
+# 2017-09-07. Under that name the value is the AREA of a pixel, and
+# IMS:1000047 is "image shape", which is not a size at all. Files written
+# under the old vocabulary are still published.
+OLD_PIXEL_SIZE_NAME = "pixel size"
+
+
+def has_old_pixel_size_name(name: object) -> bool:
+    """Whether IMS:1000046 is spelled as it was when it gave an area."""
+    return isinstance(name, str) and name.strip().lower() == OLD_PIXEL_SIZE_NAME
+
+
 # Analyzer-component terms, in preference order. The first one found under a
 # <componentList><analyzer> is surfaced as ``instrument_info["analyzer"]``, so
 # on a hybrid that declares several analyzers the highest-resolution stage --
@@ -533,11 +545,20 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         nanometre pixel size as micrometres, 1000x too large, and
         ``convert_msi`` still returned ``True``. The unit survives on the
         ParamGroup path, so it is read from there and the value converted.
+
+        The name the file gave the term survives there too. Under its old
+        name the value is an area, so it is not read, see
+        :meth:`_is_old_pixel_size`.
         """
         if hasattr(self.parser, "imzmldict") and self.parser.imzmldict:
             # Check for pixel size parameters in the parsed dictionary
             x_size = self.parser.imzmldict.get("pixel size x")
             y_size = self.parser.imzmldict.get("pixel size y")
+
+            if x_size is not None and self._is_old_pixel_size(
+                self._pixel_size_raw_name(), x_size
+            ):
+                return None
 
             if x_size is not None and y_size is not None:
                 try:
@@ -581,6 +602,44 @@ class ImzMLMetadataExtractor(MetadataExtractor):
                 if accession in wanted and accession not in units:
                     units[accession] = unit_accession
         return units
+
+    def _pixel_size_raw_name(self) -> Optional[str]:
+        """The name the file itself gives IMS:1000046, or ``None``.
+
+        pyimzml renames the term to its current name while parsing, so
+        ``name`` always reads "pixel size (x)". ``raw_name`` is what the
+        document says. First declaration wins, as for the unit.
+        """
+        metadata = getattr(self.parser, "metadata", None)
+        scan_settings = getattr(metadata, "scan_settings", None)
+        if not isinstance(scan_settings, dict):
+            return None
+
+        for group in scan_settings.values():
+            for param in getattr(group, "cv_params", []):
+                if param[1] == ImzMLAccessions.PIXEL_SIZE_X:
+                    raw_name = param[3]
+                    return raw_name if isinstance(raw_name, str) else None
+        return None
+
+    def _is_old_pixel_size(self, name: object, value: object) -> bool:
+        """Whether IMS:1000046 is written under its name of before 2017.
+
+        Under that name the value is the area of a pixel. Read as a length
+        it is wrong by its own square root: 10000 for a 100 um pixel. So it
+        is not read, the log says why, and the conversion asks for
+        ``--pixel-size``.
+        """
+        if not has_old_pixel_size_name(name):
+            return False
+        logger.warning(
+            '%s names IMS:1000046 "pixel size", as the vocabulary did before '
+            "2017, when the value (%r) was the area of a pixel. It is not "
+            "read as a pixel size. Pass --pixel-size.",
+            Path(self.imzml_path).name,
+            value,
+        )
+        return True
 
     def _pixel_size_to_um(self, value: float, unit_accession: Optional[str]) -> float:
         """Convert a declared pixel size to micrometres, or refuse.
@@ -1170,11 +1229,15 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         The unit conversion happens outside the ``try`` so a refused unit
         propagates as loudly as it does on the fast path, while a merely
         unparseable document still degrades to "no pixel size".
+
+        IMS:1000046 under its old name is not read here either, see
+        :meth:`_is_old_pixel_size`.
         """
         x_size = None
         y_size = None
         x_unit = None
         y_unit = None
+        x_name = None
 
         try:
             if not hasattr(self.parser, "metadata") or not hasattr(
@@ -1196,12 +1259,16 @@ class ImzMLMetadataExtractor(MetadataExtractor):
                 if accession == ImzMLAccessions.PIXEL_SIZE_X:
                     x_size = float(cvparam.get("value", 0))
                     x_unit = cvparam.get("unitAccession")
+                    x_name = cvparam.get("name")
                 elif accession == ImzMLAccessions.PIXEL_SIZE_Y:
                     y_size = float(cvparam.get("value", 0))
                     y_unit = cvparam.get("unitAccession")
 
         except Exception as e:
             logger.warning(f"Failed to parse XML metadata for pixel size: {e}")
+            return None
+
+        if x_size is not None and self._is_old_pixel_size(x_name, x_size):
             return None
 
         if x_size is not None and y_size is not None:

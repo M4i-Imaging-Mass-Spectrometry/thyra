@@ -19,7 +19,7 @@ import numpy as np
 from ...core.base_extractor import MetadataExtractor
 from ..constants import ImzMLAccessions, SpectrumType
 from ..types import ComprehensiveMetadata, EssentialMetadata
-from .imzml_extractor import UM_PER_UNIT
+from .imzml_extractor import UM_PER_UNIT, has_old_pixel_size_name
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     # Imported for typing only. A runtime import here would be a cycle:
@@ -43,13 +43,6 @@ GRID_EXTENT_TERMS = {
     "IMS:1000042": "max_count_of_pixels_x",
     "IMS:1000043": "max_count_of_pixels_y",
 }
-
-#: The name IMS:1000046 carried until imagingMS.obo commit 421481e of
-#: 2017-09-07. Under that name the value is the AREA of a pixel, and
-#: IMS:1000047 is "image shape", which is not a size at all. Files written
-#: under the old vocabulary are still published, and the reference converter
-#: copies the parameter into the archive unchanged.
-OLD_PIXEL_SIZE_NAME = "pixel size"
 
 #: Per axis, the declared pixel count and the declared extent. A pixel size
 #: that is not a declared (x, y) pair is tested against these before it is
@@ -198,9 +191,12 @@ class MzPeakMetadataExtractor(MetadataExtractor):
 
     @staticmethod
     def _has_old_name(parameter: dict) -> bool:
-        """Whether IMS:1000046 is spelled as it was when it gave an area."""
-        name = parameter.get("name")
-        return isinstance(name, str) and name.strip().lower() == OLD_PIXEL_SIZE_NAME
+        """Whether IMS:1000046 is spelled as it was when it gave an area.
+
+        The reference converter copies the parameter into the archive
+        unchanged, name included.
+        """
+        return has_old_pixel_size_name(parameter.get("name"))
 
     def _declared_pair(self, x: dict, y: dict) -> Optional[Tuple[float, float]]:
         """Both axes as the file declares them, in micrometres.

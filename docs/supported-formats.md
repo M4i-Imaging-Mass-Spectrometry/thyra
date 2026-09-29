@@ -112,6 +112,12 @@ larger slide -- keeps the base of 1 and does not move. z is separate and rebases
 the smallest plane present, because z has no origin to preserve. Whatever was
 subtracted is recorded in `coordinate_systems.global.coordinate_offsets_px`.
 
+**Pixel size.** Read from `IMS:1000046` and `IMS:1000047`, and both have to be
+there. A value with no unit is read as micrometres. Until 2017 `IMS:1000046`
+was named "pixel size" and gave the *area* of a pixel. Under that name it is
+not read: the log says why, and the conversion asks for `--pixel-size`. See
+[imzML Parser Notes](imzml-parser-notes.md#ims1000046-was-an-area-until-2017).
+
 **Previewing reads the head, not the document.** An imzML states its raster,
 its pitch, its instrument and its spectrum count in the block before `<run>`,
 and `preview_msi` answers from there -- 0.4 ms whether the document is 29 MB or
