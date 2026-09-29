@@ -33,6 +33,7 @@ import pyarrow.parquet as pq
 # spelling so a reader that (wrongly) hardcodes them still sees valid input
 # and its bug shows up somewhere more informative than a missing file.
 DATA_MEMBER = "spectra_data.parquet"
+PEAKS_MEMBER = "spectra_peaks.parquet"
 METADATA_MEMBER = "spectra_metadata.parquet"
 SCANS_MEMBER = "spectra_metadata_scans.parquet"
 INDEX_MEMBER = "mzpeak_index.json"
@@ -71,13 +72,15 @@ class Spectrum:
 
 
 def _point_table(
-    spectra: Sequence[Spectrum],
+    spectra: Sequence[Optional[Spectrum]],
     null_pair_after: Optional[int] = None,
 ) -> pa.Table:
     """Build the point-layout signal table.
 
     Args:
-        spectra: Spectra in ``spectrum_index`` order.
+        spectra: Spectra in ``spectrum_index`` order. ``None`` stands for a
+            spectrum with no points in this member: it keeps its index and
+            writes no rows.
         null_pair_after: When given, insert a null pair (two rows whose m/z
             and intensity are both null) after this many real points of every
             spectrum, imitating the padding the reference converter writes
@@ -91,6 +94,8 @@ def _point_table(
     intensities: List[Optional[float]] = []
 
     for index, spectrum in enumerate(spectra):
+        if spectrum is None:
+            continue
         for position, (mz, intensity) in enumerate(
             zip(spectrum.mzs, spectrum.intensities)
         ):
@@ -120,12 +125,13 @@ def _point_table(
     return pa.table({"point": point})
 
 
-def _chunk_table(spectra: Sequence[Spectrum]) -> pa.Table:
+def _chunk_table(content: Sequence[Optional[Spectrum]]) -> pa.Table:
     """Build a chunked-layout signal table.
 
     Only the schema matters: this exists so a reader can be shown refusing the
     layout by name, and no test reads the values back.
     """
+    spectra = [spectrum for spectrum in content if spectrum is not None]
     chunk = pa.StructArray.from_arrays(
         [
             pa.array(range(len(spectra)), type=pa.uint64()),
@@ -153,18 +159,52 @@ def _chunk_table(spectra: Sequence[Spectrum]) -> pa.Table:
     return pa.table({"chunk": chunk})
 
 
+def _observed(
+    profile: Optional[Spectrum], peaks: Optional[Spectrum]
+) -> Optional[Spectrum]:
+    """The arrays a spectrum's summary columns describe, if it has any."""
+    for candidate in (profile, peaks):
+        if candidate is not None and candidate.mzs.size:
+            return candidate
+    return None
+
+
 def _metadata_table(
-    spectra: Sequence[Spectrum],
+    profile: Sequence[Optional[Spectrum]],
+    peaks: Sequence[Optional[Spectrum]],
     null_pair_after: Optional[int],
     spectrum_representation: str,
+    count_columns: Sequence[str],
 ) -> pa.Table:
     """Build the one-row-per-spectrum metadata table.
 
     ``number_of_data_points`` counts stored rows, padding included -- which is
     what the reference archive does, and the reason the reader has to correct
     it before reporting a peak count.
+
+    Each count is null where the spectrum has no rows in that member. The
+    reference converter does the same: on a centroid input every
+    ``number_of_data_points`` is null, and on a profile input every
+    ``number_of_peaks`` is.
     """
     padding = 0 if null_pair_after is None else 2
+    spectra = [_observed(a, b) for a, b in zip(profile, peaks)]
+    counts = {
+        "number_of_data_points": [
+            None if s is None else int(s.mzs.size) + padding for s in profile
+        ],
+        "number_of_peaks": [None if s is None else int(s.mzs.size) for s in peaks],
+    }
+    table = _summary_table(spectra, spectrum_representation)
+    for name in count_columns:
+        table = table.append_column(name, pa.array(counts[name], type=pa.uint64()))
+    return table
+
+
+def _summary_table(
+    spectra: Sequence[Optional[Spectrum]], spectrum_representation: str
+) -> pa.Table:
+    """Build the metadata columns that do not depend on the member."""
     return pa.table(
         {
             "index": pa.array(range(len(spectra)), type=pa.uint64()),
@@ -180,16 +220,16 @@ def _metadata_table(
                 [spectrum_representation] * len(spectra), type=pa.string()
             ),
             "lowest_observed_mz": pa.array(
-                [float(s.mzs.min()) for s in spectra], type=pa.float64()
+                [None if s is None else float(s.mzs.min()) for s in spectra],
+                type=pa.float64(),
             ),
             "highest_observed_mz": pa.array(
-                [float(s.mzs.max()) for s in spectra], type=pa.float64()
-            ),
-            "number_of_data_points": pa.array(
-                [int(s.mzs.size) + padding for s in spectra], type=pa.uint64()
+                [None if s is None else float(s.mzs.max()) for s in spectra],
+                type=pa.float64(),
             ),
             "total_ion_current": pa.array(
-                [float(s.intensities.sum()) for s in spectra], type=pa.float32()
+                [None if s is None else float(s.intensities.sum()) for s in spectra],
+                type=pa.float32(),
             ),
         }
     )
@@ -277,6 +317,7 @@ def _index_document(
     data_kind: str,
     column_mapping_key: Optional[str],
     index_metadata: Optional[Dict[str, Any]],
+    signal_members: Sequence[str] = (DATA_MEMBER,),
 ) -> Dict[str, Any]:
     """Spell out ``mzpeak_index.json``.
 
@@ -292,6 +333,8 @@ def _index_document(
         index_metadata: Contents of the index's ``metadata`` object. The
             reference imaging archive leaves this empty and puts everything
             in the Parquet footer; other archives populate both.
+        signal_members: Which signal members the archive holds. The
+            reference converter lists both, data member first.
     """
     scans_bindings = [
         {
@@ -328,14 +371,46 @@ def _index_document(
         item["parameters"] = []
         return item
 
+    kinds = {DATA_MEMBER: data_kind, PEAKS_MEMBER: "peaks"}
     return {
         "files": [
-            entry(DATA_MEMBER, data_kind, []),
+            *(entry(name, kinds[name], []) for name in signal_members),
             entry(METADATA_MEMBER, "metadata", []),
             entry(SCANS_MEMBER, "scans", scans_bindings),
         ],
         "metadata": dict(index_metadata) if index_metadata else {},
     }
+
+
+def _signal_plan(
+    spectra: Sequence[Spectrum],
+    signal: str,
+    centroids: Optional[Sequence[Optional[Spectrum]]],
+    empty_peer: bool,
+) -> Dict[str, List[Optional[Spectrum]]]:
+    """Decide which signal members to write and what each one holds.
+
+    Returns:
+        Member name to its per-spectrum content, data member first. A member
+        that is absent from the mapping is not written at all; one whose
+        entries are all ``None`` is written with zero rows.
+    """
+    nothing: List[Optional[Spectrum]] = [None] * len(spectra)
+    filled: List[Optional[Spectrum]] = [s if s.mzs.size else None for s in spectra]
+    if signal == "profile":
+        plan = {DATA_MEMBER: filled}
+        if empty_peer:
+            plan[PEAKS_MEMBER] = nothing
+    elif signal == "centroid":
+        plan = {DATA_MEMBER: nothing} if empty_peer else {}
+        plan[PEAKS_MEMBER] = filled
+    elif signal == "both":
+        if centroids is None or len(centroids) != len(spectra):
+            raise ValueError("signal='both' needs one centroids entry per spectrum")
+        plan = {DATA_MEMBER: filled, PEAKS_MEMBER: list(centroids)}
+    else:  # pragma: no cover - programming error in a test
+        raise ValueError(f"unknown signal {signal!r}")
+    return plan
 
 
 def build_mzpeak(
@@ -352,14 +427,20 @@ def build_mzpeak(
     column_mapping_key: Optional[str] = "column_mapping",
     index_metadata: Optional[Dict[str, Any]] = None,
     null_pair_after: Optional[int] = None,
-    spectrum_representation: str = "profile spectrum",
+    spectrum_representation: Optional[str] = None,
     footer_metadata: bool = True,
+    signal: str = "profile",
+    centroids: Optional[Sequence[Optional[Spectrum]]] = None,
+    empty_peer: bool = False,
+    declare_counts: bool = True,
+    file_contents: Optional[List[dict]] = None,
 ) -> Path:
     """Write one ``.mzpeak`` archive and return its path.
 
     Args:
         path: Destination file. Parent directories must exist.
-        spectra: Spectra, in the order they should be indexed.
+        spectra: Spectra, in the order they should be indexed. They carry
+            the positions, and the signal of the member ``signal`` names.
         pixel_size: ``(x, y)`` pixel size, or ``None`` to omit the terms and
             exercise the "pixel size not found" path.
         pixel_size_unit: Unit accession for the pixel size terms.
@@ -369,43 +450,74 @@ def build_mzpeak(
         row_group_size: Rows per Parquet row group. Set this below a
             spectrum's point count to force spectra across row-group
             boundaries.
-        layout: ``"point"`` or ``"chunk"``.
+        layout: ``"point"`` or ``"chunk"``, for the member ``signal``
+            fills. An empty peer is always written in the point layout.
         data_kind: Spelling for the signal member's ``data_kind``.
         column_mapping_key: Key carrying the CV bindings, or ``None``.
         index_metadata: Contents of the index ``metadata`` object.
         null_pair_after: Insert a null pair after this many points of each
-            spectrum.
-        spectrum_representation: Value for the per-spectrum column.
+            spectrum. Applies to the data member only: padding marks zero
+            runs removed from a profile spectrum.
+        spectrum_representation: Value for the per-spectrum column. Defaults
+            to the CV name matching ``signal``.
         footer_metadata: Whether to write the file-level JSON blobs into the
             metadata member's Parquet key-value footer. ``False`` leaves the
             index ``metadata`` object as the only source, which is how a
             reader that reads just one of the two gets caught.
+        signal: Where ``spectra`` are written. ``"profile"`` puts them in
+            the data member, ``"centroid"`` in the peaks member, and
+            ``"both"`` puts them in the data member and ``centroids`` in the
+            peaks member. A spectrum with no points writes no rows and
+            records a null count.
+        centroids: Peak lists for ``signal="both"``, one per spectrum, with
+            ``None`` for a spectrum that has no peak list.
+        empty_peer: Also write the member ``signal`` leaves unused, with
+            zero rows and an all-null count column. The reference converter
+            always does; a fixture without it has one signal member only.
+        declare_counts: Whether the metadata member carries the count
+            columns at all.
+        file_contents: Replaces ``file_description.contents``. The reference
+            converter's imaging archives do not always declare the
+            representation there, so this is how to leave it out.
 
     Returns:
         ``path``, for convenience.
     """
-    if layout == "point":
-        data_table = _point_table(spectra, null_pair_after)
-    elif layout == "chunk":
-        data_table = _chunk_table(spectra)
-    else:  # pragma: no cover - programming error in a test
+    if layout not in ("point", "chunk"):  # pragma: no cover - test error
         raise ValueError(f"unknown layout {layout!r}")
+
+    plan = _signal_plan(spectra, signal, centroids, empty_peer)
+    filled_member = PEAKS_MEMBER if signal == "centroid" else DATA_MEMBER
+    tables: Dict[str, pa.Table] = {}
+    for member, content in plan.items():
+        if layout == "chunk" and member == filled_member:
+            tables[member] = _chunk_table(content)
+        else:
+            padding = null_pair_after if member == DATA_MEMBER else None
+            tables[member] = _point_table(content, padding)
+
+    if spectrum_representation is None:
+        spectrum_representation = (
+            "centroid spectrum" if signal == "centroid" else "profile spectrum"
+        )
+    if file_contents is None:
+        file_contents = [
+            {
+                "name": spectrum_representation,
+                "accession": (
+                    "MS:1000127"
+                    if spectrum_representation == "centroid spectrum"
+                    else "MS:1000128"
+                ),
+                "value": None,
+                "unit": None,
+            }
+        ]
 
     scan_settings = _scan_settings(pixel_size, grid, pixel_size_unit)
     file_metadata = {
         "file_description": {
-            "contents": [
-                {
-                    "name": spectrum_representation,
-                    "accession": (
-                        "MS:1000127"
-                        if spectrum_representation == "centroid spectrum"
-                        else "MS:1000128"
-                    ),
-                    "value": None,
-                    "unit": None,
-                }
-            ],
+            "contents": file_contents,
             "source_files": [],
         },
         "scan_settings_list": scan_settings,
@@ -414,7 +526,18 @@ def build_mzpeak(
         "run": {"id": "fixture", "start_time": None},
     }
 
-    metadata_table = _metadata_table(spectra, null_pair_after, spectrum_representation)
+    count_columns = {
+        DATA_MEMBER: "number_of_data_points",
+        PEAKS_MEMBER: "number_of_peaks",
+    }
+    nothing: List[Optional[Spectrum]] = [None] * len(spectra)
+    metadata_table = _metadata_table(
+        plan.get(DATA_MEMBER, nothing),
+        plan.get(PEAKS_MEMBER, nothing),
+        null_pair_after,
+        spectrum_representation,
+        [count_columns[member] for member in plan] if declare_counts else [],
+    )
     if footer_metadata:
         metadata_table = metadata_table.replace_schema_metadata(
             {key: json.dumps(value) for key, value in file_metadata.items()}
@@ -423,7 +546,7 @@ def build_mzpeak(
     path = Path(path)
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as archive:
         for member, table, group_size in (
-            (DATA_MEMBER, data_table, row_group_size),
+            *((name, tables[name], row_group_size) for name in tables),
             (METADATA_MEMBER, metadata_table, None),
             (SCANS_MEMBER, _scans_table(spectra, include_positions), None),
         ):
@@ -442,6 +565,7 @@ def build_mzpeak(
                     data_kind,
                     column_mapping_key,
                     index_metadata,
+                    list(tables),
                 ),
                 indent=2,
             ),

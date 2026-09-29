@@ -152,6 +152,44 @@ class TestImzMLParity:
             _dense(candidate), _dense(reference), rtol=1e-12, atol=0
         )
 
+    def test_centroid_archive_matches(self, tmp_path):
+        """Centroid data in the peaks member converts as the imzML does.
+
+        The archive has the shape the reference converter gives a centroid
+        input: every point in the peaks member, a data member with zero
+        rows beside it, and a null ``number_of_data_points`` throughout.
+        """
+        spectra = grid_spectra(3, 2, n_points=6)
+
+        imzml = _write_imzml(tmp_path / "centroid.imzML", spectra)
+        mzpeak = build_mzpeak(
+            tmp_path / "centroid.mzpeak",
+            spectra,
+            signal="centroid",
+            empty_peer=True,
+        )
+        _assert_same_representation(imzml, mzpeak)
+
+        imzml_store = tmp_path / "centroid_imzml.zarr"
+        mzpeak_store = tmp_path / "centroid_mzpeak.zarr"
+        _convert(imzml, imzml_store)
+        _convert(mzpeak, mzpeak_store)
+
+        reference = _table(imzml_store)
+        candidate = _table(mzpeak_store)
+
+        assert candidate.n_obs == reference.n_obs == 6
+        np.testing.assert_array_equal(
+            candidate.var["mz"].to_numpy(), reference.var["mz"].to_numpy()
+        )
+        np.testing.assert_array_equal(
+            candidate.obs[["spatial_x", "spatial_y"]].to_numpy(),
+            reference.obs[["spatial_x", "spatial_y"]].to_numpy(),
+        )
+        np.testing.assert_allclose(
+            _dense(candidate), _dense(reference), rtol=1e-12, atol=0
+        )
+
     def test_sparse_acquisition_matches(self, tmp_path):
         """Missing pixels land in the same places from both formats.
 
