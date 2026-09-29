@@ -2271,3 +2271,129 @@ summed (D7), and their scans are numbered one function after the other rather
 than interleaved. Each such row takes the first function's number, which keeps
 the rows in time order as long as the first function visited all of them. No
 real file with two such functions converted was available.
+
+## D27. One pixel size in an mzPeak archive is tested before it is believed
+
+**Status:** Implemented (2026-09-29).
+
+**Decision.** The mzPeak extractor reads a pixel size in one of two ways.
+
+- **A declared pair.** `IMS:1000046` and `IMS:1000047` under their current
+  names are two lengths and are taken as written, each converted from its
+  unit. The declared extent is not held against them.
+- **One number.** `IMS:1000046` without `IMS:1000047`, or under the name
+  "pixel size", is tested against the declared pixel count (`IMS:1000042`,
+  `IMS:1000043`) and extent (`IMS:1000044`, `IMS:1000045`). It is a length if
+  value x count is the extent, and an area if sqrt(value) x count is the
+  extent, in which case the side of the pixel is sqrt(value). The tolerance
+  is 1% of the extent. Every axis that gives both a count and an extent has
+  to agree. The pixel is square.
+
+When the test cannot be made, or fits neither reading, the extractor returns
+no pixel size and logs the reason at WARNING. The conversion then asks for
+`--pixel-size`, as it does for the same file as imzML. An area that was read
+is logged at WARNING too, with the value in the file and the side taken from
+it.
+
+A value with no unit is still read as micrometres, in both cases. Centimetre
+stays out of the unit table. `IMS:1000047` without `IMS:1000046` is not a
+pixel size.
+
+The imzML path makes no test. It does not read `IMS:1000046` under the name
+"pixel size" at all, with or without `IMS:1000047` beside it. The file gives
+no pixel size, the log says why at WARNING, and the conversion asks for
+`--pixel-size`.
+
+**Why.** The term changed its meaning. Until commit `421481e` of the imzML
+vocabulary (2017-09-07) `IMS:1000046` was named "pixel size" and gave the
+area of a pixel, and `IMS:1000047` was "image shape". Since then they are
+"pixel size (x)" and "pixel size y", two lengths. Files of the old form are
+still published, and the reference mzPeak converter copies the parameter
+into `scan_settings_list` unchanged: name, value, and a null unit.
+
+Thyra 4.2.0 read a lone `IMS:1000046` as a length in micrometres and copied
+it to the other axis. An archive that says pixel size 10000, 5 pixels on x
+and extent 500 um came out with a pixel of 10000 um by 10000 um. The pixel
+is 100 um. `convert_msi` returned `True` and nothing was logged.
+
+**Why the numbers decide and not the name.** The name is what a writer
+typed. The count and the extent are a second statement of the same
+geometry, made by the same file. A writer may keep the old name and mean a
+length, and a lone term under the new name may still hold an area, so the
+name only says when to test. The test then says which vocabulary the file
+speaks. If it is a length and the file gives `IMS:1000047` as well, the pair
+is read as declared.
+
+**Why the imzML path refuses on the name alone.** That path asks for both
+terms, so a lone `IMS:1000046` never gave a pixel size there. One form got
+through: the old name with a number on `IMS:1000047`, read as two lengths.
+A file that says pixel size 10000 beside such a number was converted with a
+pixel of 10000 um by 10000 um. Refusing the old name closes that and changes
+nothing else: every real imzML at hand and every sampled public pair uses
+the current names. Testing against the grid there as well would let a file
+and its archive agree on the old form too. It is a larger change and was
+not needed to stop the wrong value.
+
+**Why a missing unit is still micrometres.** Three reasons.
+
+1. The imzML path reads it so. A file and the archive made from it should
+   give the same pixel size, and the converter adds no unit of its own.
+2. For one number, the test is also a test of the unit. The extent carries
+   micrometre in every old-form file that could be tested, so a value that
+   passes is a value in micrometres.
+3. For a declared pair, the public files agree where they can be tested.
+   See the table below.
+
+**Why centimetre is refused.** 31 public files declare the unit accession
+`UO:0000015`, centimetre, and name it "micrometer" in the same parameter. A
+factor of 10000 would be wrong for every one of them. Reading the number as
+written would trust a unit the file contradicts. An archive keeps the
+accession only, so Thyra cannot see the contradiction. The value is refused
+and the log names the unit.
+
+**What was measured.** Headers of public imzML files, read on 2026-09-29.
+479 of them give a pixel size.
+
+| Files | What they give | Result |
+|---|---|---|
+| 39 | `IMS:1000046` alone, named "pixel size", no unit, with count and extent | sqrt(value) x count is the extent exactly, in all 39. None is a length. Values 10000 and 100: pixels of 100 um and 10 um |
+| 31 | `IMS:1000046` alone, named "pixel size", unit `UO:0000015`, count but no extent | Cannot be tested |
+| 409 | Both terms | One file read per deposit, writer, unit and value (per contributing group for HuBMAP): 28 files that stand for 408. All 28 use the current names. One file could not be fetched |
+
+Four of those 28 files give the pair with no unit. They stand for 28 files
+in four MetaboLights deposits.
+
+| Deposit | Value | Test |
+|---|---|---|
+| MTBLS2639 | 25 | A length, against an extent in micrometres |
+| MTBLS12782 | 50 | A length, against an extent in micrometres |
+| MTBLS12204 | 1.0 | The extent equals the count and has no unit. Says nothing about the unit |
+| MTBLS2075 | 40 | No count and no extent |
+
+The reference converter (HUPO-PSI/mzPeak at `bb0f307`) was run on an imzML
+of the old form. The archive holds `"name": "pixel size", "value": 10000,
+"unit": null`. Thyra 4.2.0 stored 10000 by 10000 from it. This branch stores
+100 by 100.
+
+**The objection.** Refuse every pixel size that has no unit, or that the
+grid does not confirm, pairs included. That is the most cautious rule. It
+did not win because it would send every file of a whole writer family to
+`--pixel-size` for a number the file states twice, and it would make the
+archive stricter than the imzML it was made from. The error that was found
+is in one number read two ways, and that is what the test covers.
+
+**Known limits.**
+
+- One public file writes its extent as (count - 1) x size. A lone length in
+  such a file fails the test and the conversion asks for `--pixel-size`.
+- A pixel that is not square cannot be recovered from an area. Its two axes
+  disagree in the test, and no pixel size is taken.
+- A value within 2% of 1 passes both readings. They give the same side.
+- The pixel size of MTBLS12204 is 1.0 with no unit, and is stored as 1 um on
+  both paths. Nothing in the file says whether that is a size or a
+  placeholder.
+- The two paths differ on the old name. The mzPeak path tests the value, and
+  the imzML path refuses it. An old-form file with a count and an extent
+  needs `--pixel-size` as imzML and none as an archive.
+- A writer that keeps the old name and means a length is refused on the
+  imzML path. No such file was found.

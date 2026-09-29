@@ -257,6 +257,48 @@ The behaviour is pinned by
 assertions now state the correct conversion — including the refusal — rather
 than characterise the error.
 
+### `IMS:1000046` was an area until 2017
+
+Until commit `421481e` of the imzML vocabulary (2017-09-07) `IMS:1000046` was
+named "pixel size" and gave the **area** of a pixel, in an area unit.
+`IMS:1000047` was "image shape" and had no value type. Since that commit the
+two are "pixel size (x)" and "pixel size y", both lengths, and "image shape"
+is `IMS:1000058`.
+
+Public files still use the old form. In a header audit of public imzML
+files, 70 give `IMS:1000046` and no `IMS:1000047`, and all 70 name it "pixel
+size". 39 of them also give a pixel count and an extent. In all 39,
+sqrt(value) x count is the extent exactly: value 10000, count 174, extent
+17400 is a 100 um pixel. None of the 39 carries a unit. The other 31 declare
+`UO:0000015`, centimetre, and name it "micrometer".
+
+pyimzml renames the term while parsing. It warns `Accession IMS:1000046 found
+with incorrect name "pixel size"`, and puts the value in
+`imzmldict['pixel size x']`. The area is then a bare number under the name
+of a length. The name the file wrote survives as `raw_name`, the fourth
+field of the `cv_params` tuple.
+
+Both routes to a pixel size ask for both terms, so a file with the lone term
+gave none. One form got through: the old name with a number on
+`IMS:1000047`. It was read as two lengths, 10000 um by 10000 um for a 100 um
+pixel, and `convert_msi` returned `True`. No such file was found. 28 public
+files that give both terms were read, one per deposit and writer, standing
+for 408, and the four real files at hand. All use the current names.
+
+Thyra now reads `raw_name`, and does not read `IMS:1000046` under the name
+"pixel size". The file gives no pixel size, the log says why, and the
+conversion asks for `--pixel-size`. The preview does the same, because the
+header-only extractor shares `_extract_pixel_size_fast`.
+`_extract_pixel_size_from_xml` has the same guard. It is never reached on a
+real file: pyimzml 1.5.5 keeps no `root` on its `Metadata`, so the method
+returns at its first check.
+
+The mzPeak path goes further and tests the value against the pixel count and
+the extent, see
+[design decision D27](design-decisions.md#d27-one-pixel-size-in-an-mzpeak-archive-is-tested-before-it-is-believed).
+
+Pinned by `tests/unit/metadata/extractors/test_imzml_old_pixel_size.py`.
+
 ### `IMS:1000080` is never checked against the `.ibd` header
 
 The imzML specification puts the binary file's UUID in the first 16 bytes of
