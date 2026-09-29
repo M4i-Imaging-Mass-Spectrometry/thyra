@@ -21,11 +21,18 @@ draft prose:
   ``point: struct<spectrum_index: uint64, mz: double, intensity: float>``,
   one point per row, sorted by ``spectrum_index``. A chunked layout exists
   (top-level ``chunk`` instead of ``point``) and is out of scope.
+* Signal lives in two members, split by representation. Profile spectra go
+  in the ``data_arrays`` member and centroid spectra in the ``peaks``
+  member, always (specification, ``docs/schemas/spectra.md``). The reference
+  converter writes both members for every input and leaves the unused one
+  with zero rows. One member is read per archive; see
+  :meth:`MzPeakArchive.signal_kind`.
 * There is no spectrum -> row-group map in the container. The KV key
   ``spectrum_array_index`` sounds like one but describes which column holds
-  which CV array type. Spectra are located instead from
-  ``spectra_metadata.number_of_data_points`` (exact, O(n_spectra)) with
-  row-group statistics used to prune which groups to touch.
+  which CV array type. Per-spectrum sizes come instead from the metadata
+  member: ``number_of_data_points`` for the ``data_arrays`` member and
+  ``number_of_peaks`` for the ``peaks`` member. Each is null on a spectrum
+  the member does not hold.
 * File-level metadata lives in the Parquet key-value footer of the metadata
   member *and*, inconsistently, in the index's ``metadata`` object. The
   footer was populated on every reference archive; the index object was empty
@@ -88,6 +95,20 @@ IMS_POSITION_Y = "IMS:1000051"
 #: when the index carries no column mapping, which the schema permits.
 DEFAULT_POSITION_X_COLUMN = "opt_IMS_1000050_position_x"
 DEFAULT_POSITION_Y_COLUMN = "opt_IMS_1000051_position_y"
+
+#: ``data_kind`` of the member holding profile signal.
+PROFILE_KIND = "data_arrays"
+
+#: ``data_kind`` of the member holding centroid signal.
+CENTROID_KIND = "peaks"
+
+#: Metadata column recording how many points each spectrum has in a signal
+#: member. The specification requires the matching column for whichever
+#: member a writer fills.
+COUNT_COLUMNS = {
+    PROFILE_KIND: "number_of_data_points",
+    CENTROID_KIND: "number_of_peaks",
+}
 
 
 def _normalise_token(value: Any) -> str:
@@ -159,7 +180,8 @@ class MzPeakSpatialIndex(NamedTuple):
         raw_positions: ``(n, 2)`` array of the positions as written, before
             normalisation. Kept because coordinate bounds are reported in the
             file's own frame.
-        point_counts: Number of data points in each spectrum.
+        point_counts: Number of points each spectrum has in the signal
+            member that is read; 0 for a spectrum that member does not hold.
         offsets: The ``(x, y)`` minima subtracted to reach 0-based
             coordinates.
     """
@@ -196,6 +218,7 @@ class MzPeakArchive:
         self._spatial_index: Optional[MzPeakSpatialIndex] = None
         self._null_count: Optional[int] = None
         self._null_count_cached = False
+        self._signal_kind: Optional[str] = None
 
         if not zipfile.is_zipfile(self.path):
             raise ConversionRefused(
@@ -330,8 +353,106 @@ class MzPeakArchive:
                     return path
         return None
 
+    def _signal_rows(self, data_kind: str) -> Optional[int]:
+        """Rows a signal member holds, or ``None`` when it is absent."""
+        if self.entry("spectrum", data_kind) is None:
+            return None
+        return int(self.parquet("spectrum", data_kind).metadata.num_rows)
+
+    def signal_kind(self) -> str:
+        """Decide which signal member this archive is read from.
+
+        The profile member is read when it holds rows. The centroid member
+        is read when the profile member is empty or absent, which is how
+        the reference converter writes every centroid input.
+
+        An archive may fill both, for instance profile spectra with their
+        picked peaks. The profile member is read then and the centroid
+        member is left alone: adding the two would count the same signal
+        twice. A spectrum held only in the centroid member is not converted
+        in that case. The log gives the row count of each member.
+
+        Returns:
+            ``"data_arrays"`` or ``"peaks"``.
+
+        Raises:
+            ValueError: If the archive has neither member.
+        """
+        if self._signal_kind is not None:
+            return self._signal_kind
+
+        profile_rows = self._signal_rows(PROFILE_KIND)
+        centroid_rows = self._signal_rows(CENTROID_KIND)
+        if profile_rows is None and centroid_rows is None:
+            # Raises, naming the roles the archive does have.
+            self.require_entry("spectrum", PROFILE_KIND)
+
+        if profile_rows:
+            kind = PROFILE_KIND
+            if centroid_rows:
+                logger.warning(
+                    "%s holds signal in both members: %d rows of profile "
+                    "data and %d rows of centroid data. Reading the profile "
+                    "member only; the centroid member is not converted.",
+                    self.path.name,
+                    profile_rows,
+                    centroid_rows,
+                )
+        elif centroid_rows:
+            kind = CENTROID_KIND
+            logger.info(
+                "%s holds centroid data only; reading its peaks member",
+                self.path.name,
+            )
+        else:
+            # Nothing to read either way. Name a member that exists, so
+            # the refusal comes from the empty signal and not from here.
+            kind = PROFILE_KIND if profile_rows is not None else CENTROID_KIND
+
+        self._signal_kind = kind
+        return kind
+
+    def signal(self) -> Any:
+        """Open the signal member that :meth:`signal_kind` selected."""
+        return self.parquet("spectrum", self.signal_kind())
+
+    def holds_both_representations(self) -> bool:
+        """Whether the profile and the centroid member both hold rows."""
+        return bool(self._signal_rows(PROFILE_KIND)) and bool(
+            self._signal_rows(CENTROID_KIND)
+        )
+
+    def _read_point_counts(self) -> Tuple[NDArray[np.int64], NDArray[np.int64]]:
+        """Read each spectrum's index and its size in the member read.
+
+        A null count means the spectrum has no points in that member, so it
+        becomes 0. Filled before the conversion to numpy: a null in an
+        integer column would otherwise arrive as NaN and fail the cast.
+
+        Returns:
+            ``(spectrum_index, counts)``, in the metadata member's row order.
+
+        Raises:
+            ValueError: If the metadata member lacks the count column.
+        """
+        kind = self.signal_kind()
+        column = COUNT_COLUMNS[kind]
+        member = self.parquet("spectrum", "metadata")
+        if column not in member.schema_arrow.names:
+            raise ConversionRefused(
+                f"{self.path} is read from its '{kind}' member, but its "
+                f"spectrum metadata has no '{column}' column to size the "
+                f"spectra from."
+            )
+        metadata = member.read(columns=["index", column])
+        spectrum_index = np.asarray(metadata.column("index").to_numpy(), dtype=np.int64)
+        counts = np.asarray(
+            metadata.column(column).fill_null(0).to_numpy(), dtype=np.int64
+        )
+        return spectrum_index, counts
+
     def layout(self) -> str:
-        """Return the physical layout of the signal member.
+        """Return the physical layout of the signal member that is read.
 
         Returns:
             ``"point"`` or ``"chunk"``.
@@ -339,7 +460,7 @@ class MzPeakArchive:
         Raises:
             ValueError: If the member carries neither top-level column.
         """
-        fields = list(self.parquet("spectrum", "data_arrays").schema_arrow.names)
+        fields = list(self.signal().schema_arrow.names)
         if "point" in fields:
             return "point"
         if "chunk" in fields:
@@ -413,13 +534,7 @@ class MzPeakArchive:
         _, first = np.unique(source, return_index=True)
         source, xs, ys = source[first], xs[first], ys[first]
 
-        metadata = self.parquet("spectrum", "metadata").read(
-            columns=["index", "number_of_data_points"]
-        )
-        spectrum_index = np.asarray(metadata.column("index").to_numpy(), dtype=np.int64)
-        counts = np.asarray(
-            metadata.column("number_of_data_points").to_numpy(), dtype=np.int64
-        )
+        spectrum_index, counts = self._read_point_counts()
         order = np.argsort(spectrum_index, kind="stable")
         spectrum_index, counts = spectrum_index[order], counts[order]
 
@@ -460,8 +575,9 @@ class MzPeakArchive:
     def null_count(self) -> Optional[int]:
         """How many rows carry a null m/z, or ``None`` when unknowable.
 
-        Read from Parquet column statistics, so it costs a footer lookup
-        rather than a pass over the data.
+        Read from the Parquet column statistics of the signal member that
+        is read, so it costs a footer lookup rather than a pass over the
+        data.
 
         mzPeak compresses profile spectra by dropping interior runs of zero
         intensity and marking each gap with a *null pair*: two adjacent rows
@@ -484,7 +600,7 @@ class MzPeakArchive:
             return self._null_count
         self._null_count_cached = True
 
-        metadata = self.parquet("spectrum", "data_arrays").metadata
+        metadata = self.signal().metadata
         total = 0
         seen = False
         for group in range(metadata.num_row_groups):
@@ -558,10 +674,16 @@ class MzPeakReader(BaseMSIReader):
     validates what it depends on, so a drifted archive produces a named error
     rather than silently wrong pixels.
 
-    Data is processed-imzML-shaped: per-spectrum axes, no shared-axis
-    concept anywhere in the format. :attr:`has_shared_mass_axis` is therefore
-    always ``False`` and the resampling decision tree treats these files
-    exactly as it treats processed imzML.
+    Data is read as processed imzML is: one m/z per point, per-spectrum
+    axes. The specification's chunked layout can describe an axis by a grid
+    model instead ("Grid encoding", ``docs/layouts/chunked-layout.md``), but
+    this reader does not read the chunked layout.
+    :attr:`has_shared_mass_axis` is therefore always ``False`` and the
+    resampling decision tree treats these files exactly as it treats
+    processed imzML.
+
+    Profile and centroid archives are both read, each from its own member;
+    see :meth:`MzPeakArchive.signal_kind`.
     """
 
     def __init__(
@@ -663,10 +785,11 @@ class MzPeakReader(BaseMSIReader):
     def has_shared_mass_axis(self) -> bool:
         """Always ``False``.
 
-        mzPeak stores one m/z per point with no shared-axis or
-        calibration-model mechanism anywhere in the format, spec or reference
-        implementation. Claiming otherwise would make the converter read the
-        first spectrum's axis and apply it to every pixel.
+        The point layout, the only one this reader reads, stores one m/z
+        per point. The chunked layout's grid encoding describes an axis by
+        a model, and it is not read here. Claiming a shared axis would make
+        the converter read the first spectrum's axis and apply it to every
+        pixel.
         """
         return False
 
@@ -682,7 +805,7 @@ class MzPeakReader(BaseMSIReader):
         if self._common_axis is not None:
             return self._common_axis
 
-        data = self.archive.parquet("spectrum", "data_arrays")
+        data = self.archive.signal()
         # ``np.union1d`` per row group re-copied the entire axis every
         # group, which is O(unique) memory but quadratic work over the
         # archive. The shared accumulator's buffer capacity tracks the axis
@@ -803,7 +926,7 @@ class MzPeakReader(BaseMSIReader):
         # again without one.
         self._dropped_points = 0
 
-        data = self.archive.parquet("spectrum", "data_arrays")
+        data = self.archive.signal()
         positioned = {
             int(s): i for i, s in enumerate(self._require(self._spectrum_indices))
         }

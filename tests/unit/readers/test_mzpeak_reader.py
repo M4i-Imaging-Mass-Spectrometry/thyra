@@ -7,6 +7,10 @@ it -- see that module's docstring for why that separation matters.
 
 from __future__ import annotations
 
+import json
+import warnings
+import zipfile
+
 import numpy as np
 import pytest
 
@@ -175,7 +179,7 @@ class TestMassAxis:
     """The reader's view of the m/z axis."""
 
     def test_never_claims_a_shared_axis(self, simple_archive):
-        """mzPeak has no shared-axis concept anywhere in the format."""
+        """The point layout, the one Thyra reads, has an axis per spectrum."""
         with MzPeakReader(simple_archive) as reader:
             assert reader.has_shared_mass_axis is False
 
@@ -347,3 +351,291 @@ class TestRefusals:
         with MzPeakReader(simple_archive) as reader:
             assert reader.get_region_map() is None
             assert reader.get_region_info() is None
+
+
+def _peak_lists(spectra, keep=3):
+    """A shorter list per spectrum, on m/z values the profile never holds."""
+    return [
+        Spectrum(s.x, s.y, s.mzs[:keep] + 0.125, s.intensities[:keep] * 2.0)
+        for s in spectra
+    ]
+
+
+def _drop_signal_members(archive, tmp_path):
+    """Rewrite an archive's index so it names no signal member at all."""
+    stripped = tmp_path / f"stripped_{archive.name}"
+    with (
+        zipfile.ZipFile(archive) as source,
+        zipfile.ZipFile(stripped, "w", compression=zipfile.ZIP_STORED) as target,
+    ):
+        for name in source.namelist():
+            payload = source.read(name)
+            if name == "mzpeak_index.json":
+                index = json.loads(payload)
+                index["files"] = [
+                    entry
+                    for entry in index["files"]
+                    if entry["data_kind"] not in ("data_arrays", "peaks")
+                ]
+                payload = json.dumps(index).encode("utf-8")
+            target.writestr(name, payload)
+    return stripped
+
+
+class TestSignalMember:
+    """Profile data lives in one member and centroid data in another.
+
+    The specification puts profile spectra in the ``data_arrays`` member and
+    centroid spectra in the ``peaks`` member, always. The reference converter
+    writes both members for every input and leaves the unused one with zero
+    rows, so ``empty_peer=True`` is the shape a real archive has.
+    """
+
+    def test_profile_archive_is_read_from_the_data_member(self, tmp_path):
+        """An empty peaks member beside the data changes nothing."""
+        spectra = grid_spectra(3, 2, n_points=6)
+        archive = build_mzpeak(tmp_path / "profile.mzpeak", spectra, empty_peer=True)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with MzPeakReader(archive) as reader:
+                kind = reader.archive.signal_kind()
+                total = reader.get_total_peak_count()
+                emitted = list(reader.iter_spectra())
+
+        assert kind == "data_arrays"
+        assert len(emitted) == 6
+        assert total == sum(mzs.size for _, mzs, _ in emitted) == 36
+        for spectrum, (_, mzs, intensities) in zip(spectra, emitted):
+            np.testing.assert_array_equal(mzs, spectrum.mzs)
+            np.testing.assert_allclose(intensities, spectrum.intensities)
+
+    @pytest.mark.parametrize("empty_peer", [True, False], ids=["empty", "absent"])
+    def test_centroid_archive_is_read_from_the_peaks_member(self, tmp_path, empty_peer):
+        """The data member holds no rows, or is not there: read the peaks.
+
+        With the data member empty every ``number_of_data_points`` is null.
+        Read as the point count, that column failed a cast with a numpy
+        RuntimeWarning and the archive was then refused for holding no m/z
+        values. Warnings are errors here so the cast cannot come back.
+        """
+        spectra = grid_spectra(3, 2, n_points=6)
+        archive = build_mzpeak(
+            tmp_path / "centroid.mzpeak",
+            spectra,
+            signal="centroid",
+            empty_peer=empty_peer,
+        )
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with MzPeakReader(archive) as reader:
+                kind = reader.archive.signal_kind()
+                axis = reader.get_common_mass_axis()
+                total = reader.get_total_peak_count()
+                emitted = list(reader.iter_spectra())
+
+        assert kind == "peaks"
+        assert [coords for coords, _, _ in emitted] == [
+            (0, 0, 0),
+            (1, 0, 0),
+            (2, 0, 0),
+            (0, 1, 0),
+            (1, 1, 0),
+            (2, 1, 0),
+        ]
+        assert total == sum(mzs.size for _, mzs, _ in emitted) == 36
+        np.testing.assert_array_equal(axis, spectra[0].mzs)
+        for spectrum, (_, mzs, intensities) in zip(spectra, emitted):
+            np.testing.assert_array_equal(mzs, spectrum.mzs)
+            np.testing.assert_allclose(intensities, spectrum.intensities)
+
+    def test_centroid_archive_split_across_row_groups(self, tmp_path):
+        """The peaks member is cut into spectra the way the data member is."""
+        spectra = grid_spectra(2, 2, n_points=8)
+        archive = build_mzpeak(
+            tmp_path / "centroid_split.mzpeak",
+            spectra,
+            signal="centroid",
+            empty_peer=True,
+            row_group_size=3,
+        )
+
+        with MzPeakReader(archive) as reader:
+            emitted = list(reader.iter_spectra())
+
+        assert len(emitted) == 4
+        for spectrum, (_, mzs, _) in zip(spectra, emitted):
+            np.testing.assert_array_equal(mzs, spectrum.mzs)
+
+    def test_both_members_filled_reads_the_data_member_only(self, tmp_path, thyra_logs):
+        """Profile and picked peaks of the same spectra are not added up."""
+        spectra = grid_spectra(3, 2, n_points=6)
+        archive = build_mzpeak(
+            tmp_path / "both.mzpeak",
+            spectra,
+            signal="both",
+            centroids=_peak_lists(spectra),
+        )
+
+        with thyra_logs("thyra.readers.mzpeak.mzpeak_reader", "WARNING") as logs:
+            with MzPeakReader(archive) as reader:
+                kind = reader.archive.signal_kind()
+                axis = reader.get_common_mass_axis()
+                total = reader.get_total_peak_count()
+                emitted = list(reader.iter_spectra())
+
+        assert kind == "data_arrays"
+        assert total == sum(mzs.size for _, mzs, _ in emitted) == 36
+        # The peak lists sit 0.125 above the profile points, so one of their
+        # m/z values on the axis would mean the peaks member was read too.
+        np.testing.assert_array_equal(axis, spectra[0].mzs)
+        for spectrum, (_, mzs, intensities) in zip(spectra, emitted):
+            np.testing.assert_array_equal(mzs, spectrum.mzs)
+            np.testing.assert_allclose(intensities, spectrum.intensities)
+
+        said = [r.getMessage() for r in logs if "both members" in r.getMessage()]
+        assert len(said) == 1
+        assert "36 rows of profile data" in said[0]
+        assert "18 rows of centroid data" in said[0]
+        assert "Reading the profile member only" in said[0]
+
+    def test_single_member_archives_say_nothing_about_both(self, tmp_path, thyra_logs):
+        """The notice is for archives that fill both members, and only them."""
+        spectra = grid_spectra(2, 1)
+        archives = [
+            build_mzpeak(tmp_path / "p.mzpeak", spectra, empty_peer=True),
+            build_mzpeak(
+                tmp_path / "c.mzpeak", spectra, signal="centroid", empty_peer=True
+            ),
+        ]
+
+        with thyra_logs("thyra.readers.mzpeak.mzpeak_reader", "INFO") as logs:
+            for archive in archives:
+                with MzPeakReader(archive) as reader:
+                    list(reader.iter_spectra())
+
+        assert not [r for r in logs if "both members" in r.getMessage()]
+
+    def test_spectrum_held_only_in_the_peaks_member_is_not_converted(self, tmp_path):
+        """With both members filled, a null point count means no points.
+
+        The reference converter splits a run by representation: a profile
+        spectrum has a null ``number_of_peaks`` and a centroid one a null
+        ``number_of_data_points``. The data member is the one read, so the
+        centroid-only spectrum is not emitted, as an unacquired pixel is not.
+        """
+        spectra = [
+            Spectrum(1, 1, [100.0, 101.0, 102.0], [1.0, 2.0, 3.0]),
+            Spectrum(2, 1, [], []),
+            Spectrum(3, 1, [100.0, 101.0], [4.0, 5.0]),
+        ]
+        centroids = [None, Spectrum(2, 1, [150.0, 151.0], [9.0, 9.0]), None]
+        archive = build_mzpeak(
+            tmp_path / "split.mzpeak", spectra, signal="both", centroids=centroids
+        )
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with MzPeakReader(archive) as reader:
+                counts = reader.archive.spatial_index().point_counts
+                essential = reader.get_essential_metadata()
+                emitted = list(reader.iter_spectra())
+
+        np.testing.assert_array_equal(counts, [3, 0, 2])
+        assert [coords for coords, _, _ in emitted] == [(0, 0, 0), (2, 0, 0)]
+        assert essential.n_spectra == 3
+        assert essential.dimensions == (3, 1, 1)
+        assert essential.total_peaks == 5
+
+    def test_layout_is_read_from_the_member_that_holds_the_data(self, tmp_path):
+        """A chunked peaks member is refused though the data member is not."""
+        archive = build_mzpeak(
+            tmp_path / "chunked_peaks.mzpeak",
+            grid_spectra(2, 1),
+            signal="centroid",
+            empty_peer=True,
+            layout="chunk",
+        )
+
+        with pytest.raises(NotImplementedError, match="chunked layout"):
+            with MzPeakReader(archive) as reader:
+                reader.get_essential_metadata()
+
+    def test_padding_is_counted_in_the_member_that_is_read(self, tmp_path):
+        """Null pairs in the data member are not charged to a peaks read.
+
+        Both archives hold six real points per spectrum. The profile one
+        pads each spectrum with a null pair; the centroid one has no padding
+        to correct for, whatever its empty data member's statistics say.
+        """
+        spectra = grid_spectra(2, 1, n_points=6)
+        padded = build_mzpeak(
+            tmp_path / "padded.mzpeak", spectra, null_pair_after=3, empty_peer=True
+        )
+        centroid = build_mzpeak(
+            tmp_path / "centroid.mzpeak", spectra, signal="centroid", empty_peer=True
+        )
+
+        with MzPeakReader(padded) as reader:
+            assert reader.archive.null_count() == 4
+            assert reader.get_total_peak_count() == 12
+        with MzPeakReader(centroid) as reader:
+            assert not reader.archive.null_count()
+            assert reader.get_total_peak_count() == 12
+
+    def test_both_members_filled_corrects_for_the_data_member_padding(self, tmp_path):
+        """The padding correction follows the data member when both hold rows."""
+        spectra = grid_spectra(2, 1, n_points=6)
+        archive = build_mzpeak(
+            tmp_path / "both_padded.mzpeak",
+            spectra,
+            signal="both",
+            centroids=_peak_lists(spectra),
+            null_pair_after=3,
+        )
+
+        with MzPeakReader(archive) as reader:
+            total = reader.get_total_peak_count()
+            delivered = sum(mzs.size for _, mzs, _ in reader.iter_spectra())
+
+        assert total == delivered == 12
+
+    def test_missing_count_column_is_refused_by_name(self, tmp_path):
+        """The column that sizes the spectra is named when it is not there."""
+        archive = build_mzpeak(
+            tmp_path / "uncounted.mzpeak",
+            grid_spectra(2, 1),
+            signal="centroid",
+            empty_peer=True,
+            declare_counts=False,
+        )
+
+        with pytest.raises(ConversionRefused, match="no 'number_of_peaks' column"):
+            with MzPeakReader(archive) as reader:
+                reader.get_essential_metadata()
+
+    def test_two_empty_members_are_refused_for_holding_no_signal(self, tmp_path):
+        """No rows in either member is an empty archive, said plainly."""
+        spectra = [Spectrum(1, 1, [], []), Spectrum(2, 1, [], [])]
+        archive = build_mzpeak(
+            tmp_path / "empty.mzpeak",
+            spectra,
+            signal="both",
+            centroids=[None, None],
+        )
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with pytest.raises(ConversionRefused, match="yielded no m/z values"):
+                with MzPeakReader(archive) as reader:
+                    reader.get_common_mass_axis()
+
+    def test_archive_without_a_signal_member_is_refused(self, tmp_path):
+        """Neither member in the index: the refusal lists what is there."""
+        whole = build_mzpeak(tmp_path / "whole.mzpeak", grid_spectra(2, 1))
+        archive = _drop_signal_members(whole, tmp_path)
+
+        with pytest.raises(ConversionRefused, match="no 'spectrum/data_arrays'"):
+            with MzPeakReader(archive) as reader:
+                reader.get_essential_metadata()

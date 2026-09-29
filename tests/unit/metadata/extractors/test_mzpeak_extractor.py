@@ -237,3 +237,107 @@ class TestEssentialShape:
         """Provenance points at the file that was read."""
         archive = build_mzpeak(tmp_path / "source.mzpeak", grid_spectra(2, 2))
         assert _essential(archive).source_path == str(archive)
+
+
+#: What the reference converter writes into ``file_description.contents`` for
+#: an imaging input: the spectrum kind, and no representation term.
+MASS_SPECTRUM_ONLY = [
+    {
+        "name": "mass spectrum",
+        "accession": "MS:1000294",
+        "value": None,
+        "unit": None,
+    }
+]
+
+
+class TestSignalMember:
+    """Spectrum type and peak total follow the signal member that is read."""
+
+    def test_centroid_archive_as_the_reference_converter_writes_it(self, tmp_path):
+        """Read from the peaks member, so centroid, whatever else is said.
+
+        Measured on a reference-converter archive of a centroid imzML: the
+        file description names no representation, the column holds the
+        accession and every ``number_of_data_points`` is null.
+        """
+        spectra = grid_spectra(2, 2, n_points=5)
+        archive = build_mzpeak(
+            tmp_path / "centroid.mzpeak",
+            spectra,
+            signal="centroid",
+            empty_peer=True,
+            spectrum_representation="MS:1000127",
+            file_contents=MASS_SPECTRUM_ONLY,
+        )
+
+        essential = _essential(archive)
+
+        assert essential.spectrum_type == "centroid spectrum"
+        assert essential.total_peaks == 20
+        assert essential.n_spectra == 4
+
+    def test_profile_archive_as_the_reference_converter_writes_it(self, tmp_path):
+        """An empty peaks member does not make a profile archive centroid."""
+        archive = build_mzpeak(
+            tmp_path / "profile.mzpeak",
+            grid_spectra(2, 2, n_points=5),
+            empty_peer=True,
+        )
+
+        essential = _essential(archive)
+
+        assert essential.spectrum_type == "profile spectrum"
+        assert essential.total_peaks == 20
+
+    def test_both_members_filled_is_reported_as_profile(self, tmp_path):
+        """The data member is the one read, so its representation is reported.
+
+        The file description lists both terms, centroid first, as a run
+        holding both representations would. The count is the profile one,
+        not the two members added together.
+        """
+        spectra = grid_spectra(2, 2, n_points=5)
+        archive = build_mzpeak(
+            tmp_path / "both.mzpeak",
+            spectra,
+            signal="both",
+            centroids=[
+                Spectrum(s.x, s.y, s.mzs[:2], s.intensities[:2]) for s in spectra
+            ],
+            file_contents=[
+                {"name": "centroid spectrum", "accession": "MS:1000127"},
+                {"name": "profile spectrum", "accession": "MS:1000128"},
+            ],
+        )
+
+        essential = _essential(archive)
+
+        assert essential.spectrum_type == "profile spectrum"
+        assert essential.total_peaks == 20
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ("MS:1000127", "centroid spectrum"),
+            ("MS:1000128", "profile spectrum"),
+            ("centroid spectrum", "centroid spectrum"),
+            ("profile spectrum", "profile spectrum"),
+        ],
+    )
+    def test_representation_column_is_read_as_accession_or_name(
+        self, tmp_path, value, expected
+    ):
+        """The specification makes the column a CURIE; the name is accepted.
+
+        Only the data member exists here, so the archive's own declaration
+        decides, and the file description is silent.
+        """
+        archive = build_mzpeak(
+            tmp_path / "declared.mzpeak",
+            grid_spectra(2, 2),
+            spectrum_representation=value,
+            file_contents=MASS_SPECTRUM_ONLY,
+        )
+
+        assert _essential(archive).spectrum_type == expected

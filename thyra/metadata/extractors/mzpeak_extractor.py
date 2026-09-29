@@ -207,12 +207,30 @@ class MzPeakMetadataExtractor(MetadataExtractor):
         return float(value) * UM_PER_UNIT[unit]
 
     def _spectrum_type(self) -> Optional[str]:
-        """Spectrum representation, from the file description or the columns.
+        """Spectrum representation of the signal member that is read.
+
+        The member decides where it can. mzPeak puts every centroid
+        spectrum in the peaks member, so an archive read from there is
+        centroid. An archive that fills both members is read from the
+        profile one, so it is profile.
+
+        Otherwise the file's own declaration is used; see
+        :meth:`_declared_spectrum_type`.
+        """
+        if self.archive.signal_kind() == "peaks":
+            return SpectrumType.CENTROID
+        if self.archive.holds_both_representations():
+            return SpectrumType.PROFILE
+        return self._declared_spectrum_type()
+
+    def _declared_spectrum_type(self) -> Optional[str]:
+        """Spectrum representation as the archive declares it.
 
         ``file_description.contents`` carries MS:1000127/MS:1000128 for the
         run as a whole. When it does not, the per-spectrum
-        ``spectrum_representation`` column is consulted, which the reference
-        writer fills with the CV name.
+        ``spectrum_representation`` column is consulted. The reference
+        converter fills that column with the accession, and the CV name is
+        accepted too.
         """
         description = self.archive.file_level_metadata().get("file_description")
         if isinstance(description, dict):
@@ -236,14 +254,17 @@ class MzPeakMetadataExtractor(MetadataExtractor):
             for value in table.column("spectrum_representation").to_pylist()
             if value
         }
-        if SpectrumType.CENTROID in values:
+        if values & {SpectrumType.CENTROID, ImzMLAccessions.CENTROID_SPECTRUM.lower()}:
             return SpectrumType.CENTROID
-        if SpectrumType.PROFILE in values:
+        if values & {SpectrumType.PROFILE, ImzMLAccessions.PROFILE_SPECTRUM.lower()}:
             return SpectrumType.PROFILE
         return None
 
     def _total_peaks(self) -> int:
-        """Points that actually carry a value, across the whole archive.
+        """Points that actually carry a value, in the member that is read.
+
+        The declared counts follow the signal member: ``number_of_peaks``
+        for a centroid archive, ``number_of_data_points`` otherwise.
 
         ``number_of_data_points`` counts the null-pair padding too, so on the
         reference imaging archive it over-reports by 36%. The padding count

@@ -509,9 +509,33 @@ than converting to something plausible but wrong.
 thyra sample.mzpeak out.zarr
 ```
 
-Data is shaped like processed imzML: one m/z per point, per-spectrum axes, and
-no shared-axis concept anywhere in the format. The resampling decision tree
-therefore treats these files exactly as it treats processed imzML.
+Thyra reads the point layout: one m/z per point, and an axis per spectrum. The
+resampling decision tree therefore treats these files exactly as it treats
+processed imzML. The specification's chunked layout can describe an axis by a
+grid model instead. Thyra does not read that layout, so it never reports a
+shared mass axis for mzPeak.
+
+**Which member is read.** mzPeak keeps profile and centroid signal in two
+separate members. Thyra reads one of them per archive:
+
+| The archive holds | Member read | Spectrum type reported |
+|---|---|---|
+| profile data only | `data_arrays` (`spectra_data.parquet`) | as the archive declares |
+| centroid data only | `peaks` (`spectra_peaks.parquet`) | centroid |
+| both | `data_arrays` | profile |
+
+The member counts as empty when it has no rows or is not in the archive. The
+reference converter writes both members every time and leaves one with no
+rows.
+
+When both hold rows, the two are never added together, and the log says that
+the centroid member was left unread. A spectrum stored only in the centroid
+member of such an archive is not converted: its pixel is left out of the
+store, as an unacquired pixel is.
+
+Point counts come from the column that belongs to the member:
+`number_of_data_points` for `data_arrays`, `number_of_peaks` for `peaks`.
+The layout check and the padding correction below use the same member.
 
 Three things are refused rather than guessed at:
 
