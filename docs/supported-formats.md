@@ -552,6 +552,7 @@ Two behaviours worth knowing:
   the CLI falls back to `--pixel-size` exactly as it does for imzML. Terms are
   matched on accession rather than name, because the controlled vocabulary
   spells the two axes inconsistently.
+- **One pixel size is tested before it is used.** See the table below.
 - **Null-pair padding is dropped.** mzPeak compresses profile spectra by
   removing interior runs of zero intensity and marking each gap with two rows
   whose m/z *and* intensity are both null; the reference reader regenerates the
@@ -560,6 +561,27 @@ Two behaviours worth knowing:
   only add mass-axis channels that can never hold a value. Thyra omits them and
   logs how many it dropped. Recorded point counts include the padding, so peak
   totals are corrected against it.
+
+**Pixel size.** Until 2017 `IMS:1000046` was named "pixel size" and gave the
+*area* of a pixel. Files of that form are still published, and the reference
+converter copies the term into the archive unchanged. So Thyra reads:
+
+| The archive gives | Pixel size taken |
+|---|---|
+| `IMS:1000046` and `IMS:1000047` | both, as written |
+| `IMS:1000046` alone, or named "pixel size", and value x pixel count is the extent | the value, on both axes |
+| the same, and sqrt(value) x pixel count is the extent | sqrt(value), on both axes |
+| the same, with no pixel count or extent, or fitting neither | none: pass `--pixel-size` |
+| `IMS:1000047` alone | none: pass `--pixel-size` |
+
+The pixel count is `IMS:1000042`/`IMS:1000043` and the extent is
+`IMS:1000044`/`IMS:1000045`. The two sides may differ by 1%. The log says at
+WARNING when a value was read as an area and when no pixel size was taken.
+
+A value with no unit is read as micrometres. Millimetre, micrometre and
+nanometre are converted. Any other unit is refused, centimetre included: the
+public files that declare centimetre name it "micrometer" beside it. See
+[design decision D27](design-decisions.md#d27-one-pixel-size-in-an-mzpeak-archive-is-tested-before-it-is-believed).
 
 mzPeak carries no region or ROI identity of any kind, so `get_region_map()`
 returns `None`. Missing pixels are ordinary and are left missing rather than

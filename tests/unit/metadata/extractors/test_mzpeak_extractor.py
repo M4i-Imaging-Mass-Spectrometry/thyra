@@ -91,8 +91,12 @@ class TestPixelSize:
         )
         assert _essential(archive).pixel_size is None
 
-    def test_single_declared_axis_is_treated_as_square(self, tmp_path):
-        """A file declaring only IMS:1000046 describes a square pixel."""
+    def test_single_declared_axis_is_not_taken_on_trust(self, tmp_path):
+        """IMS:1000046 alone is a length or an area, by the file's age.
+
+        With no pixel count and extent to test it against, it is not read.
+        The cases that can be tested are in ``test_mzpeak_pixel_size.py``.
+        """
         archive = build_mzpeak(
             tmp_path / "oneaxis.mzpeak",
             grid_spectra(2, 2),
@@ -114,7 +118,7 @@ class TestPixelSize:
                 ]
             },
         )
-        assert _essential(archive).pixel_size == (12.5, 12.5)
+        assert _essential(archive).pixel_size is None
 
 
 class TestMetadataPlacement:

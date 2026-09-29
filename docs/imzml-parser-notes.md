@@ -226,6 +226,50 @@ Pinned by `tests/unit/readers/test_imzml_zero_based.py`, which converts a
 0-based file, a 1-based one and a cropped 1-based one -- the last being the
 file the rejected alternative would have moved.
 
+## `IMS:1000046` was an area until 2017
+
+Until commit `421481e` of the imzML vocabulary (2017-09-07) `IMS:1000046` was
+named "pixel size" and gave the **area** of a pixel, in an area unit.
+`IMS:1000047` was "image shape" and had no value type. Since that commit the
+two are "pixel size (x)" and "pixel size y", both lengths, and "image shape"
+is `IMS:1000058`.
+
+Public files still use the old form. In a header audit of public imzML
+files, 70 give `IMS:1000046` and no `IMS:1000047`, and all 70 name it "pixel
+size". 39 of them also give a pixel count and an extent. In all 39,
+sqrt(value) x count is the extent exactly: value 10000, count 174, extent
+17400 is a 100 um pixel. None of the 39 carries a unit. The other 31 declare
+`UO:0000015`, centimetre, and name it "micrometer".
+
+pyimzml renames the term while parsing. It warns `Accession IMS:1000046 found
+with incorrect name "pixel size"`, and puts the value in
+`imzmldict['pixel size x']`. The area is then a bare number under the name
+of a length.
+
+Thyra's imzML path gets **no code** for this, because both routes to a pixel
+size ask for both terms:
+
+- `_extract_pixel_size_fast` returns nothing unless `pixel size x` and
+  `pixel size y` are both present. A file of the old form has one, so the
+  conversion stops with "Pixel size not found in metadata" and asks for
+  `--pixel-size`.
+- `_extract_pixel_size_from_xml` has the same rule. It is also never reached
+  on a real file: pyimzml 1.5.5 keeps no `root` on its `Metadata`, so the
+  method returns at its first guard.
+
+One form would be misread by both: the old name beside a *numeric*
+`IMS:1000047`. It would be taken as two lengths. No such file was found. 28
+public files that give both terms were read, one per deposit and writer,
+standing for 408. All use the current names.
+
+The mzPeak path had no such guard. It read the lone term as a length and
+wrote 10000 um for a 100 um pixel. It now tests the value against the pixel
+count and the extent, see
+[design decision D27](design-decisions.md#d27-one-pixel-size-in-an-mzpeak-archive-is-tested-before-it-is-believed).
+
+Pinned by `tests/unit/metadata/extractors/test_imzml_old_pixel_size.py`. Its
+two expected failures are the misread form above.
+
 ## Fixed in Thyra, still true of pyimzml
 
 One finding was real enough to grow code: **`imzmldict` discards
