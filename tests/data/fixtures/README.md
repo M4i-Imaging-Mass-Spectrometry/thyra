@@ -79,6 +79,63 @@ intensity scaling that the fixture sidesteps by declaring a 100 ms
 accumulation time. All three files are marked binary by `.gitattributes:39`,
 the same guarantee `.gitattributes:15` gives the imzML corpus.
 
+## Pixel size test files
+
+Five more pairs, `pixel_size_*.imzML` and `.ibd`. Each holds the same
+synthetic acquisition: 3 by 2 pixels, each 50 um wide, six profile spectra on
+one shared m/z axis, declared as a meandering scan. Only the way the header
+states the pixel size differs. The five ways are the ones found in the
+headers of public imzML files.
+
+| Pair | What the header gives | True pixel size |
+|---|---|---|
+| `pixel_size_unit_declared` | `IMS:1000046` and `IMS:1000047`, value 50, unit micrometre, and the extent | 50 um |
+| `pixel_size_unit_absent` | both terms, value 50, no unit, and the extent | 50 um, the unit is not stated |
+| `pixel_size_area_old_name` | `IMS:1000046` alone, named "pixel size", value 2500, no unit, and the extent | 50 um, stated as the area of a pixel |
+| `pixel_size_area_old_name_no_extent` | the same without the extent | 50 um, and the file cannot show it |
+| `pixel_size_unit_contradiction` | `IMS:1000046` alone, named "pixel size", value 50, unit accession `UO:0000015` (centimetre), unit name "micrometer", no extent | 50 um, and the file cannot show it |
+
+The extent is `IMS:1000044` and `IMS:1000045`, 150 um by 100 um. Until 2017
+`IMS:1000046` was named "pixel size" and gave the area of a pixel, see
+[imzML Parser Notes](../../../docs/imzml-parser-notes.md#ims1000046-was-an-area-until-2017).
+
+`pixel_size_expected.json` records for each file what a reader or a converter
+can conclude from the header alone. `pixel_size_um` is 50 on both axes or
+null. `pixel_size_source` says how: `declared`, `unit_assumed` (the value is
+there, micrometre is assumed), `derived_from_area` (the square root of the
+value, because the square root times the pixel count is the extent), or
+`unknown` (the header does not settle it, a person has to give the size).
+
+What Thyra takes from each file is held by
+`tests/unit/metadata/extractors/test_pixel_size_fixtures.py`:
+
+| Pair | Read as imzML | Read from an mzPeak archive with the same terms |
+|---|---|---|
+| `pixel_size_unit_declared` | 50 um | 50 um |
+| `pixel_size_unit_absent` | 50 um | 50 um |
+| `pixel_size_area_old_name` | none, asks for `--pixel-size` | 50 um, logged as an area |
+| `pixel_size_area_old_name_no_extent` | none, asks for `--pixel-size` | none, asks for `--pixel-size` |
+| `pixel_size_unit_contradiction` | none, asks for `--pixel-size` | none |
+
+These files are written by pyimzml's `ImzMLWriter`, unlike the corpus above.
+The subject here is the geometry terms, so the rest of the file is as plain
+as a file can be. The run inside each file is named without the prefix, for
+example `area_old_name`. Every line ends in CRLF.
+
+The files are synthetic and carry no measured data. They can be used in the
+test suite of any other reader or converter, under the licence of this
+repository.
+
+Built by `build_pixel_size_fixtures.py`:
+
+```bash
+python tests/data/fixtures/build_pixel_size_fixtures.py
+```
+
+Reproducible byte for byte: the script fixes the UUID of each file and sets
+the line ends. The same guards as for the corpus above hold the committed
+bytes, in `TestCommittedBytes`.
+
 ## Three ways these files get destroyed
 
 The first two leave no mark on the worktree file that a reader would notice,

@@ -1,0 +1,278 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<mzML xmlns="http://psi.hupo.org/ms/mzml" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://psi.hupo.org/ms/mzml http://psidev.info/files/ms/mzML/xsd/mzML1.1.0_idx.xsd" version="1.1">
+  <cvList count="2">
+    <cv uri="http://psidev.cvs.sourceforge.net/*checkout*/psidev/psi/psi-ms/mzML/controlledVocabulary/psi-ms.obo" fullName="Proteomics Standards Initiative Mass Spectrometry Ontology" id="MS" version="3.65.0"/>
+    <cv uri="http://obo.cvs.sourceforge.net/*checkout*/obo/obo/ontology/phenotype/unit.obo" fullName="Unit Ontology" id="UO" version="12:10:2011"/>
+  </cvList>
+
+  <fileDescription>
+    <fileContent>
+      <cvParam cvRef="MS" accession="MS:1000579" name="MS1 spectrum" value=""/>
+      <cvParam cvRef="MS" accession="MS:1000128" name="profile spectrum" value=""/>
+      <cvParam cvRef="IMS" accession="IMS:1000030" name="continuous" value=""/>
+      <cvParam cvRef="IMS" accession="IMS:1000080" name="universally unique identifier" value="{8F539171-3663-4176-93BF-AC5897310C7C}"/>
+      <cvParam cvRef="IMS" accession="IMS:1000091" name="ibd SHA-1" value="F27A6CED9110A0F7D3C558BBD2D434A72CBABA8B"/>
+    </fileContent>
+  </fileDescription>
+
+  <referenceableParamGroupList count="4">
+    <referenceableParamGroup id="mzArray">
+      <cvParam cvRef="MS" accession="MS:1000576" name="no compression" value=""/>
+      <cvParam cvRef="MS" accession="MS:1000514" name="m/z array" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+      <cvParam cvRef="MS" accession="MS:1000523" name="64-bit float" value=""/>
+      <cvParam cvRef="IMS" accession="IMS:1000101" name="external data" value="true"/>
+    </referenceableParamGroup>
+    <referenceableParamGroup id="intensityArray">
+      <cvParam cvRef="MS" accession="MS:1000521" name="32-bit float" value=""/>
+      <cvParam cvRef="MS" accession="MS:1000515" name="intensity array" unitCvRef="MS" unitAccession="MS:1000131" unitName="number of detector counts"/>
+      <cvParam cvRef="MS" accession="MS:1000576" name="no compression" value=""/>
+      <cvParam cvRef="IMS" accession="IMS:1000101" name="external data" value="true"/>
+    </referenceableParamGroup>
+    <referenceableParamGroup id="scan1">
+      <cvParam cvRef="MS" accession="MS:1000093" name="increasing m/z scan"/>
+      <cvParam cvRef="MS" accession="MS:1000512" name="filter string" value=""/>
+    </referenceableParamGroup>
+    <referenceableParamGroup id="spectrum1">
+      <cvParam cvRef="MS" accession="MS:1000579" name="MS1 spectrum" value=""/>
+      <cvParam cvRef="MS" accession="MS:1000511" name="ms level" value="0"/>
+      <cvParam cvRef="MS" accession="MS:1000128" name="profile spectrum" value=""/>
+    </referenceableParamGroup>
+  </referenceableParamGroupList>
+
+  <softwareList count="1">
+    <software id="pyimzml" version="1.5.4">
+      <cvParam cvRef="MS" accession="MS:1000799" name="custom unreleased software tool" value="pyimzml exporter"/>
+    </software>
+  </softwareList>
+
+  <scanSettingsList count="1">
+    <scanSettings id="scanSettings1">
+      <cvParam cvRef="IMS" accession="IMS:1000401" name="top down"/>
+      <cvParam cvRef="IMS" accession="IMS:1000410" name="meandering"/>
+      <cvParam cvRef="IMS" accession="IMS:1000480" name="horizontal line scan"/>
+      <cvParam cvRef="IMS" accession="IMS:1000491" name="linescan left right"/>
+      <cvParam cvRef="IMS" accession="IMS:1000046" name="pixel size x" value="50"/>
+      <cvParam cvRef="IMS" accession="IMS:1000047" name="pixel size y" value="50"/>
+      <cvParam cvRef="IMS" accession="IMS:1000044" name="max dimension x" value="150" unitCvRef="UO" unitAccession="UO:0000017" unitName="micrometer"/>
+      <cvParam cvRef="IMS" accession="IMS:1000045" name="max dimension y" value="100" unitCvRef="UO" unitAccession="UO:0000017" unitName="micrometer"/>
+      <cvParam cvRef="IMS" accession="IMS:1000042" name="max count of pixels x" value="3"/>
+      <cvParam cvRef="IMS" accession="IMS:1000043" name="max count of pixels y" value="2"/>
+    </scanSettings>
+  </scanSettingsList>
+
+  <instrumentConfigurationList count="1">
+    <instrumentConfiguration id="IC1">
+    </instrumentConfiguration>
+  </instrumentConfigurationList>
+
+  <dataProcessingList count="1">
+    <dataProcessing id="export_from_pyimzml">
+      <processingMethod order="0" softwareRef="pyimzml">
+        <cvParam cvRef="MS" accession="MS:1000530" name="file format conversion" value="Output to imzML"/>
+      </processingMethod>
+    </dataProcessing>
+  </dataProcessingList>
+
+  <run defaultInstrumentConfigurationRef="IC1" id="unit_absent">
+    <spectrumList count="6" defaultDataProcessingRef="export_from_pyimzml">
+      <spectrum defaultArrayLength="0" id="spectrum=1" index="1">
+        <referenceableParamGroupRef ref="spectrum1"/>
+        <cvParam cvRef="MS" accession="MS:1000528" name="lowest observed m/z" value="183.8" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+        <cvParam cvRef="MS" accession="MS:1000527" name="highest observed m/z" value="184.38999999999947" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+        <cvParam cvRef="MS" accession="MS:1000504" name="base peak m/z" value="184.06999999999977" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+        <cvParam cvRef="MS" accession="MS:1000505" name="base peak intensity" value="1316.0" unitCvRef="MS" unitAccession="MS:1000131" unitName="number of counts"/>
+        <cvParam cvRef="MS" accession="MS:1000285" name="total ion current" value="9951.0"/>
+        <scanList count="1">
+          <cvParam accession="MS:1000795" cvRef="MS" name="no combination"/>
+          <scan instrumentConfigurationRef="instrumentConfiguration0">
+            <referenceableParamGroupRef ref="scan1"/>
+            <cvParam accession="IMS:1000050" cvRef="IMS" name="position x" value="1"/>
+            <cvParam accession="IMS:1000051" cvRef="IMS" name="position y" value="1"/>
+            <cvParam accession="IMS:1000052" cvRef="IMS" name="position z" value="1"/>
+          </scan>
+        </scanList>
+        <binaryDataArrayList count="2">
+          <binaryDataArray encodedLength="0">
+            <referenceableParamGroupRef ref="mzArray"/>
+            <cvParam accession="IMS:1000103" cvRef="IMS" name="external array length" value="60"/>
+            <cvParam accession="IMS:1000104" cvRef="IMS" name="external encoded length" value="480"/>
+            <cvParam accession="IMS:1000102" cvRef="IMS" name="external offset" value="16"/>
+            <binary/>
+          </binaryDataArray>
+          <binaryDataArray encodedLength="0">
+            <referenceableParamGroupRef ref="intensityArray"/>
+            <cvParam accession="IMS:1000103" cvRef="IMS" name="external array length" value="60"/>
+            <cvParam accession="IMS:1000104" cvRef="IMS" name="external encoded length" value="240"/>
+            <cvParam accession="IMS:1000102" cvRef="IMS" name="external offset" value="496"/>
+            <binary/>
+          </binaryDataArray>
+        </binaryDataArrayList>
+      </spectrum>
+      <spectrum defaultArrayLength="0" id="spectrum=2" index="2">
+        <referenceableParamGroupRef ref="spectrum1"/>
+        <cvParam cvRef="MS" accession="MS:1000528" name="lowest observed m/z" value="183.8" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+        <cvParam cvRef="MS" accession="MS:1000527" name="highest observed m/z" value="184.38999999999947" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+        <cvParam cvRef="MS" accession="MS:1000504" name="base peak m/z" value="184.06999999999977" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+        <cvParam cvRef="MS" accession="MS:1000505" name="base peak intensity" value="577.0" unitCvRef="MS" unitAccession="MS:1000131" unitName="number of counts"/>
+        <cvParam cvRef="MS" accession="MS:1000285" name="total ion current" value="4390.0"/>
+        <scanList count="1">
+          <cvParam accession="MS:1000795" cvRef="MS" name="no combination"/>
+          <scan instrumentConfigurationRef="instrumentConfiguration0">
+            <referenceableParamGroupRef ref="scan1"/>
+            <cvParam accession="IMS:1000050" cvRef="IMS" name="position x" value="2"/>
+            <cvParam accession="IMS:1000051" cvRef="IMS" name="position y" value="1"/>
+            <cvParam accession="IMS:1000052" cvRef="IMS" name="position z" value="1"/>
+          </scan>
+        </scanList>
+        <binaryDataArrayList count="2">
+          <binaryDataArray encodedLength="0">
+            <referenceableParamGroupRef ref="mzArray"/>
+            <cvParam accession="IMS:1000103" cvRef="IMS" name="external array length" value="60"/>
+            <cvParam accession="IMS:1000104" cvRef="IMS" name="external encoded length" value="480"/>
+            <cvParam accession="IMS:1000102" cvRef="IMS" name="external offset" value="16"/>
+            <binary/>
+          </binaryDataArray>
+          <binaryDataArray encodedLength="0">
+            <referenceableParamGroupRef ref="intensityArray"/>
+            <cvParam accession="IMS:1000103" cvRef="IMS" name="external array length" value="60"/>
+            <cvParam accession="IMS:1000104" cvRef="IMS" name="external encoded length" value="240"/>
+            <cvParam accession="IMS:1000102" cvRef="IMS" name="external offset" value="736"/>
+            <binary/>
+          </binaryDataArray>
+        </binaryDataArrayList>
+      </spectrum>
+      <spectrum defaultArrayLength="0" id="spectrum=3" index="3">
+        <referenceableParamGroupRef ref="spectrum1"/>
+        <cvParam cvRef="MS" accession="MS:1000528" name="lowest observed m/z" value="183.8" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+        <cvParam cvRef="MS" accession="MS:1000527" name="highest observed m/z" value="184.38999999999947" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+        <cvParam cvRef="MS" accession="MS:1000504" name="base peak m/z" value="184.06999999999977" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+        <cvParam cvRef="MS" accession="MS:1000505" name="base peak intensity" value="830.0" unitCvRef="MS" unitAccession="MS:1000131" unitName="number of counts"/>
+        <cvParam cvRef="MS" accession="MS:1000285" name="total ion current" value="6293.0"/>
+        <scanList count="1">
+          <cvParam accession="MS:1000795" cvRef="MS" name="no combination"/>
+          <scan instrumentConfigurationRef="instrumentConfiguration0">
+            <referenceableParamGroupRef ref="scan1"/>
+            <cvParam accession="IMS:1000050" cvRef="IMS" name="position x" value="3"/>
+            <cvParam accession="IMS:1000051" cvRef="IMS" name="position y" value="1"/>
+            <cvParam accession="IMS:1000052" cvRef="IMS" name="position z" value="1"/>
+          </scan>
+        </scanList>
+        <binaryDataArrayList count="2">
+          <binaryDataArray encodedLength="0">
+            <referenceableParamGroupRef ref="mzArray"/>
+            <cvParam accession="IMS:1000103" cvRef="IMS" name="external array length" value="60"/>
+            <cvParam accession="IMS:1000104" cvRef="IMS" name="external encoded length" value="480"/>
+            <cvParam accession="IMS:1000102" cvRef="IMS" name="external offset" value="16"/>
+            <binary/>
+          </binaryDataArray>
+          <binaryDataArray encodedLength="0">
+            <referenceableParamGroupRef ref="intensityArray"/>
+            <cvParam accession="IMS:1000103" cvRef="IMS" name="external array length" value="60"/>
+            <cvParam accession="IMS:1000104" cvRef="IMS" name="external encoded length" value="240"/>
+            <cvParam accession="IMS:1000102" cvRef="IMS" name="external offset" value="976"/>
+            <binary/>
+          </binaryDataArray>
+        </binaryDataArrayList>
+      </spectrum>
+      <spectrum defaultArrayLength="0" id="spectrum=4" index="4">
+        <referenceableParamGroupRef ref="spectrum1"/>
+        <cvParam cvRef="MS" accession="MS:1000528" name="lowest observed m/z" value="183.8" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+        <cvParam cvRef="MS" accession="MS:1000527" name="highest observed m/z" value="184.38999999999947" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+        <cvParam cvRef="MS" accession="MS:1000504" name="base peak m/z" value="184.06999999999977" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+        <cvParam cvRef="MS" accession="MS:1000505" name="base peak intensity" value="54.0" unitCvRef="MS" unitAccession="MS:1000131" unitName="number of counts"/>
+        <cvParam cvRef="MS" accession="MS:1000285" name="total ion current" value="461.0"/>
+        <scanList count="1">
+          <cvParam accession="MS:1000795" cvRef="MS" name="no combination"/>
+          <scan instrumentConfigurationRef="instrumentConfiguration0">
+            <referenceableParamGroupRef ref="scan1"/>
+            <cvParam accession="IMS:1000050" cvRef="IMS" name="position x" value="1"/>
+            <cvParam accession="IMS:1000051" cvRef="IMS" name="position y" value="2"/>
+            <cvParam accession="IMS:1000052" cvRef="IMS" name="position z" value="1"/>
+          </scan>
+        </scanList>
+        <binaryDataArrayList count="2">
+          <binaryDataArray encodedLength="0">
+            <referenceableParamGroupRef ref="mzArray"/>
+            <cvParam accession="IMS:1000103" cvRef="IMS" name="external array length" value="60"/>
+            <cvParam accession="IMS:1000104" cvRef="IMS" name="external encoded length" value="480"/>
+            <cvParam accession="IMS:1000102" cvRef="IMS" name="external offset" value="16"/>
+            <binary/>
+          </binaryDataArray>
+          <binaryDataArray encodedLength="0">
+            <referenceableParamGroupRef ref="intensityArray"/>
+            <cvParam accession="IMS:1000103" cvRef="IMS" name="external array length" value="60"/>
+            <cvParam accession="IMS:1000104" cvRef="IMS" name="external encoded length" value="240"/>
+            <cvParam accession="IMS:1000102" cvRef="IMS" name="external offset" value="1216"/>
+            <binary/>
+          </binaryDataArray>
+        </binaryDataArrayList>
+      </spectrum>
+      <spectrum defaultArrayLength="0" id="spectrum=5" index="5">
+        <referenceableParamGroupRef ref="spectrum1"/>
+        <cvParam cvRef="MS" accession="MS:1000528" name="lowest observed m/z" value="183.8" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+        <cvParam cvRef="MS" accession="MS:1000527" name="highest observed m/z" value="184.38999999999947" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+        <cvParam cvRef="MS" accession="MS:1000504" name="base peak m/z" value="184.06999999999977" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+        <cvParam cvRef="MS" accession="MS:1000505" name="base peak intensity" value="369.0" unitCvRef="MS" unitAccession="MS:1000131" unitName="number of counts"/>
+        <cvParam cvRef="MS" accession="MS:1000285" name="total ion current" value="2822.0"/>
+        <scanList count="1">
+          <cvParam accession="MS:1000795" cvRef="MS" name="no combination"/>
+          <scan instrumentConfigurationRef="instrumentConfiguration0">
+            <referenceableParamGroupRef ref="scan1"/>
+            <cvParam accession="IMS:1000050" cvRef="IMS" name="position x" value="2"/>
+            <cvParam accession="IMS:1000051" cvRef="IMS" name="position y" value="2"/>
+            <cvParam accession="IMS:1000052" cvRef="IMS" name="position z" value="1"/>
+          </scan>
+        </scanList>
+        <binaryDataArrayList count="2">
+          <binaryDataArray encodedLength="0">
+            <referenceableParamGroupRef ref="mzArray"/>
+            <cvParam accession="IMS:1000103" cvRef="IMS" name="external array length" value="60"/>
+            <cvParam accession="IMS:1000104" cvRef="IMS" name="external encoded length" value="480"/>
+            <cvParam accession="IMS:1000102" cvRef="IMS" name="external offset" value="16"/>
+            <binary/>
+          </binaryDataArray>
+          <binaryDataArray encodedLength="0">
+            <referenceableParamGroupRef ref="intensityArray"/>
+            <cvParam accession="IMS:1000103" cvRef="IMS" name="external array length" value="60"/>
+            <cvParam accession="IMS:1000104" cvRef="IMS" name="external encoded length" value="240"/>
+            <cvParam accession="IMS:1000102" cvRef="IMS" name="external offset" value="1456"/>
+            <binary/>
+          </binaryDataArray>
+        </binaryDataArrayList>
+      </spectrum>
+      <spectrum defaultArrayLength="0" id="spectrum=6" index="6">
+        <referenceableParamGroupRef ref="spectrum1"/>
+        <cvParam cvRef="MS" accession="MS:1000528" name="lowest observed m/z" value="183.8" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+        <cvParam cvRef="MS" accession="MS:1000527" name="highest observed m/z" value="184.38999999999947" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+        <cvParam cvRef="MS" accession="MS:1000504" name="base peak m/z" value="184.06999999999977" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+        <cvParam cvRef="MS" accession="MS:1000505" name="base peak intensity" value="1752.0" unitCvRef="MS" unitAccession="MS:1000131" unitName="number of counts"/>
+        <cvParam cvRef="MS" accession="MS:1000285" name="total ion current" value="13227.0"/>
+        <scanList count="1">
+          <cvParam accession="MS:1000795" cvRef="MS" name="no combination"/>
+          <scan instrumentConfigurationRef="instrumentConfiguration0">
+            <referenceableParamGroupRef ref="scan1"/>
+            <cvParam accession="IMS:1000050" cvRef="IMS" name="position x" value="3"/>
+            <cvParam accession="IMS:1000051" cvRef="IMS" name="position y" value="2"/>
+            <cvParam accession="IMS:1000052" cvRef="IMS" name="position z" value="1"/>
+          </scan>
+        </scanList>
+        <binaryDataArrayList count="2">
+          <binaryDataArray encodedLength="0">
+            <referenceableParamGroupRef ref="mzArray"/>
+            <cvParam accession="IMS:1000103" cvRef="IMS" name="external array length" value="60"/>
+            <cvParam accession="IMS:1000104" cvRef="IMS" name="external encoded length" value="480"/>
+            <cvParam accession="IMS:1000102" cvRef="IMS" name="external offset" value="16"/>
+            <binary/>
+          </binaryDataArray>
+          <binaryDataArray encodedLength="0">
+            <referenceableParamGroupRef ref="intensityArray"/>
+            <cvParam accession="IMS:1000103" cvRef="IMS" name="external array length" value="60"/>
+            <cvParam accession="IMS:1000104" cvRef="IMS" name="external encoded length" value="240"/>
+            <cvParam accession="IMS:1000102" cvRef="IMS" name="external offset" value="1696"/>
+            <binary/>
+          </binaryDataArray>
+        </binaryDataArrayList>
+      </spectrum>
+    </spectrumList>
+  </run>
+</mzML>
