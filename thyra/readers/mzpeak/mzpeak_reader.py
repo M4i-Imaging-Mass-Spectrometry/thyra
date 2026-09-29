@@ -17,10 +17,14 @@ draft prose:
   space spelling as an alias for the underscore one, falling through to an
   ``Other`` variant rather than erroring. This reader matches that tolerance:
   an unrecognised role is skipped, not fatal.
-* Signal data is one struct column
+* Signal data is one struct column, sorted by ``spectrum_index``. In the
+  point layout it is
   ``point: struct<spectrum_index: uint64, mz: double, intensity: float>``,
-  one point per row, sorted by ``spectrum_index``. A chunked layout exists
-  (top-level ``chunk`` instead of ``point``) and is out of scope.
+  one point per row. In the chunked layout it is ``chunk``, one run of
+  points per row, with the m/z values under the encoding the row names;
+  :mod:`.chunk_decoding` turns those rows back into points. The converter
+  that builds the public corpus (okohlbacher/mzPeakConverter) writes the
+  chunked layout unless told otherwise.
 * Signal lives in two members, split by representation. Profile spectra go
   in the ``data_arrays`` member and centroid spectra in the ``peaks``
   member, always (specification, ``docs/schemas/spectra.md``). The reference
@@ -69,6 +73,14 @@ from ...core.base_reader import BaseMSIReader
 from ...core.mass_axis import MassAxisAccumulator
 from ...core.registry import register_reader
 from ...errors import ConversionRefused
+from .chunk_decoding import (
+    ENCODING_GRID,
+    LOSSY_ENCODINGS,
+    decode_chunks,
+    describe_term,
+    validate_chunk_columns,
+    validate_encodings,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ...core.base_extractor import MetadataExtractor
@@ -101,6 +113,14 @@ PROFILE_KIND = "data_arrays"
 
 #: ``data_kind`` of the member holding centroid signal.
 CENTROID_KIND = "peaks"
+
+#: Points a batch of chunk rows is sized to hold. A row group of the chunked
+#: layout counts rows, and a row is a run of points, so one row group can
+#: hold the whole archive (60 million points in one, on a real file).
+CHUNK_BATCH_POINTS = 2_000_000
+
+#: Bounds on the rows of one batch, whatever the points per row.
+CHUNK_BATCH_ROWS = (16, 65536)
 
 #: Metadata column recording how many points each spectrum has in a signal
 #: member. The specification requires the matching column for whichever
@@ -219,6 +239,7 @@ class MzPeakArchive:
         self._null_count: Optional[int] = None
         self._null_count_cached = False
         self._signal_kind: Optional[str] = None
+        self._chunk_encodings: Optional[List[str]] = None
 
         if not zipfile.is_zipfile(self.path):
             raise ConversionRefused(
@@ -470,6 +491,52 @@ class MzPeakArchive:
             f"top-level 'point' or 'chunk' column, found {fields}."
         )
 
+    def chunk_columns(self) -> List[str]:
+        """Children of the ``chunk`` struct of the member that is read."""
+        chunk = self.signal().schema_arrow.field("chunk").type
+        return [chunk.field(i).name for i in range(chunk.num_fields)]
+
+    def _distinct(self, column: str) -> List[str]:
+        """Distinct values of one string child of the ``chunk`` struct."""
+        import pyarrow.compute as pc  # noqa: WPS433 - deliberate lazy import
+
+        table = self.signal().read(columns=[column])
+        values = table.column("chunk").combine_chunks()
+        if hasattr(values, "num_chunks"):
+            values = values.chunk(0)
+        for name in column.split(".")[1:]:
+            values = values.field(name)
+        return sorted(str(value or "") for value in pc.unique(values).to_pylist())
+
+    def chunk_encodings(self) -> List[str]:
+        """Chunk encodings the member that is read uses, as CV accessions.
+
+        Read from the ``chunk_encoding`` column alone, which is one short
+        string per row, so the whole member is covered before a conversion
+        starts. Empty for the point layout.
+
+        Raises:
+            ConversionRefused: If the member uses an encoding, a grid model
+                or an intensity transform that is not decoded.
+        """
+        if self._chunk_encodings is not None:
+            return self._chunk_encodings
+        if self.layout() != "chunk":
+            self._chunk_encodings = []
+            return self._chunk_encodings
+
+        names = self.chunk_columns()
+        validate_chunk_columns(names, str(self.path))
+        encodings = self._distinct("chunk.chunk_encoding")
+        grid_types: List[str] = []
+        if ENCODING_GRID in encodings and "mz_grid" in names:
+            # A row under another encoding has no grid, and no grid type.
+            found = self._distinct("chunk.mz_grid.grid_type")
+            grid_types = [grid_type for grid_type in found if grid_type]
+        validate_encodings(encodings, grid_types, names, str(self.path))
+        self._chunk_encodings = encodings
+        return encodings
+
     def position_columns(self) -> Optional[Tuple[str, str]]:
         """Resolve the scan columns holding the imaging positions.
 
@@ -573,7 +640,7 @@ class MzPeakArchive:
         return self._spatial_index
 
     def null_count(self) -> Optional[int]:
-        """How many rows carry a null m/z, or ``None`` when unknowable.
+        """How many points carry a null m/z, or ``None`` when unknowable.
 
         Read from the Parquet column statistics of the signal member that
         is read, so it costs a footer lookup rather than a pass over the
@@ -595,10 +662,15 @@ class MzPeakArchive:
         analysis. Reconstructing the pairs would therefore only add
         approximate channels to the common mass axis that can never hold a
         value, so the reader drops them and reports the count instead.
+
+        In the chunked layout the count is taken from the intensity list.
+        Padding is null there in every encoding, while the m/z of a chunk
+        may sit in a byte buffer that has no null to count.
         """
         if self._null_count_cached:
             return self._null_count
         self._null_count_cached = True
+        chunked = self.layout() == "chunk"
 
         metadata = self.signal().metadata
         total = 0
@@ -607,7 +679,10 @@ class MzPeakArchive:
             row_group = metadata.row_group(group)
             for column in range(row_group.num_columns):
                 chunk = row_group.column(column)
-                if not chunk.path_in_schema.endswith(".mz"):
+                path = chunk.path_in_schema
+                if chunked and not path.startswith("chunk.intensity."):
+                    continue
+                if not chunked and not path.endswith(".mz"):
                     continue
                 statistics = chunk.statistics
                 if statistics is None or statistics.null_count is None:
@@ -674,13 +749,15 @@ class MzPeakReader(BaseMSIReader):
     validates what it depends on, so a drifted archive produces a named error
     rather than silently wrong pixels.
 
+    Both layouts are read, and both come out as the same stream of
+    spectra. The chunked layout is decoded in :mod:`.chunk_decoding`, which
+    names the encodings it reads and refuses the rest.
+
     Data is read as processed imzML is: one m/z per point, per-spectrum
-    axes. The specification's chunked layout can describe an axis by a grid
-    model instead ("Grid encoding", ``docs/layouts/chunked-layout.md``), but
-    this reader does not read the chunked layout.
-    :attr:`has_shared_mass_axis` is therefore always ``False`` and the
+    axes. :attr:`has_shared_mass_axis` is always ``False`` and the
     resampling decision tree treats these files exactly as it treats
-    processed imzML.
+    processed imzML. That holds for the grid encoding too; see the
+    property.
 
     Profile and centroid archives are both read, each from its own member;
     see :meth:`MzPeakArchive.signal_kind`.
@@ -737,25 +814,19 @@ class MzPeakReader(BaseMSIReader):
         return self._archive
 
     def _validate_layout(self) -> None:
-        """Refuse layouts this reader cannot honestly read.
+        """Refuse what this reader cannot honestly read, before reading.
 
-        Two cases are refused with a named cause rather than allowed to fail
-        somewhere deeper: the chunked encoding, which is a different physical
-        layout entirely, and any archive whose scans carry no positions,
-        which is a non-imaging acquisition that Thyra has nothing to do with.
+        A chunked member is checked for the encodings it uses here, so an
+        encoding that is not decoded stops the conversion at the start and
+        not after the first pass.
 
         Raises:
-            NotImplementedError: If the archive uses the chunked layout.
-            ValueError: If the archive carries no spatial positions.
+            ConversionRefused: If the member has neither layout, or uses a
+                chunk encoding, grid model or intensity transform that is
+                not decoded.
         """
         assert self._archive is not None
-        if self._archive.layout() == "chunk":
-            raise NotImplementedError(
-                f"{self.data_path} uses the mzPeak chunked layout (top-level "
-                f"'chunk' column). Thyra reads only the point layout "
-                f"(top-level 'point' column). Re-export the archive without "
-                f"chunking to convert it."
-            )
+        self._archive.chunk_encodings()
 
     def _load_spatial_index(self) -> None:
         """Cache the archive's per-spectrum positions and point counts.
@@ -785,11 +856,15 @@ class MzPeakReader(BaseMSIReader):
     def has_shared_mass_axis(self) -> bool:
         """Always ``False``.
 
-        The point layout, the only one this reader reads, stores one m/z
-        per point. The chunked layout's grid encoding describes an axis by
-        a model, and it is not read here. Claiming a shared axis would make
-        the converter read the first spectrum's axis and apply it to every
-        pixel.
+        A shared axis means every spectrum holds the same m/z values, so
+        the converter reads the first spectrum's axis and applies it to
+        every pixel. No mzPeak layout states that.
+
+        The grid encoding comes closest. It gives each chunk the model that
+        turns a grid index into m/z, but a spectrum still lists the indices
+        it holds, and two spectra on one grid may hold different ones.
+        Knowing that they do not takes a pass over every index, which is
+        the pass a shared axis exists to save.
         """
         return False
 
@@ -806,6 +881,18 @@ class MzPeakReader(BaseMSIReader):
             return self._common_axis
 
         data = self.archive.signal()
+        lossy = [e for e in self.archive.chunk_encodings() if e in LOSSY_ENCODINGS]
+        if lossy:
+            # Measured on a centroid image: 331,701 distinct m/z in the
+            # point layout, 48,116,750 under MS-Numpress.
+            logger.warning(
+                "%s stores m/z under %s, which gives one m/z back a little "
+                "differently from pixel to pixel. The axis of every distinct "
+                "m/z is therefore far longer than the source's. Convert with "
+                "resampling to avoid that.",
+                self.data_path.name,
+                ", ".join(describe_term(e) for e in lossy),
+            )
         # ``np.union1d`` per row group re-copied the entire axis every
         # group, which is O(unique) memory but quadratic work over the
         # archive. The shared accumulator's buffer capacity tracks the axis
@@ -821,13 +908,10 @@ class MzPeakReader(BaseMSIReader):
         # many. Saying "after 3 of 12" about row groups would be a wrong
         # denominator rather than a missing one.
         accumulator = MassAxisAccumulator(max_length=self.max_mass_axis_length)
-        for group in range(data.metadata.num_row_groups):
-            table = data.read_row_group(group, columns=["point"])
-            mzs = self._point_field(table, "mz")
+        for mzs in self._iter_mz_blocks(data):
             # Null-pair padding carries no intensity; excluded so the
             # axis holds only channels that can actually take a value.
             accumulator.add(mzs[~np.isnan(mzs)])
-            mzs = None
 
         try:
             axis = accumulator.finish()
@@ -847,6 +931,66 @@ class MzPeakReader(BaseMSIReader):
         self._common_axis = axis.astype(np.float64, copy=False)
         return self._common_axis
 
+    def _chunk_rows_per_batch(self, data: Any) -> int:
+        """Rows of the chunked member to decode at a time.
+
+        Sized from the archive's own average, so that a batch holds about
+        :data:`CHUNK_BATCH_POINTS` points whether a row is a handful of
+        centroids or a long stretch of a profile spectrum.
+        """
+        low, high = CHUNK_BATCH_ROWS
+        rows = int(data.metadata.num_rows)
+        points = int(self._require(self._point_counts).sum())
+        if rows == 0 or points == 0:
+            return high
+        return int(min(max(CHUNK_BATCH_POINTS * rows // points, low), high))
+
+    def _iter_chunk_blocks(self, data: Any) -> Generator[
+        Tuple[NDArray[np.int64], NDArray[np.float64], NDArray[np.float64]],
+        None,
+        None,
+    ]:
+        """Decode the chunked member, a batch of rows at a time."""
+        batches = data.iter_batches(
+            batch_size=self._chunk_rows_per_batch(data), columns=["chunk"]
+        )
+        for batch in batches:
+            if batch.num_rows == 0:
+                continue
+            decoded = decode_chunks(batch.column(0), str(self.data_path))
+            yield decoded.spectrum_index, decoded.mz, decoded.intensity
+
+    def _iter_mz_blocks(self, data: Any) -> Generator[NDArray[Any], None, None]:
+        """Yield the m/z of the member that is read, in stored order."""
+        if self.archive.layout() == "chunk":
+            for _, mzs, _ in self._iter_chunk_blocks(data):
+                yield mzs
+            return
+        for group in range(data.metadata.num_row_groups):
+            table = data.read_row_group(group, columns=["point"])
+            yield self._point_field(table, "mz")
+
+    def _iter_blocks(
+        self, data: Any
+    ) -> Generator[Tuple[NDArray[np.int64], NDArray[Any], NDArray[Any]], None, None]:
+        """Yield the member that is read as runs of points, in stored order.
+
+        Both layouts come out alike: the ``spectrum_index``, m/z and
+        intensity of each point, with ``NaN`` m/z on padding.
+        """
+        if self.archive.layout() == "chunk":
+            yield from self._iter_chunk_blocks(data)
+            return
+        for group in range(data.metadata.num_row_groups):
+            table = data.read_row_group(group, columns=["point"])
+            if table.num_rows == 0:
+                continue
+            yield (
+                self._point_field(table, "spectrum_index").astype(np.int64, copy=False),
+                self._point_field(table, "mz"),
+                self._point_field(table, "intensity"),
+            )
+
     @staticmethod
     def _point_field(table: Any, field: str) -> NDArray[Any]:
         """Pull one child out of the ``point`` struct column as numpy."""
@@ -864,15 +1008,13 @@ class MzPeakReader(BaseMSIReader):
     ]:
         """Yield every positioned spectrum in ``spectrum_index`` order.
 
-        Reads one row group at a time and cuts it into spectra in memory, so
+        Reads one block at a time and cuts it into spectra in memory, so
         the cost is one pass over the archive regardless of spectrum count.
-        Row groups split spectra at their boundaries, so a spectrum's points
-        are carried across iterations and emitted only once the next
-        ``spectrum_index`` appears -- which is why the emit happens on
-        transition rather than per row group.
-
-        Row groups define the read granularity; a second batching layer on
-        top would only fragment them, which is why no batch size is taken.
+        A block is a row group of the point layout, or a batch of decoded
+        rows of the chunked layout. Blocks split spectra at their
+        boundaries, so a spectrum's points are carried across iterations
+        and emitted only once the next ``spectrum_index`` appears -- which
+        is why the emit happens on transition rather than per block.
 
         Yields:
             ``((x, y, z), mzs, intensities)`` with 0-based coordinates,
@@ -917,7 +1059,7 @@ class MzPeakReader(BaseMSIReader):
         None,
         None,
     ]:
-        """The row-group walk behind both spectrum iterators, with indices."""
+        """The block walk behind both spectrum iterators, with indices."""
         # Per iteration, not per reader. Every conversion reads the source
         # twice (issue #226), and a counter carried across the passes made
         # the second pass report the sum of both -- 12 dropped points, then
@@ -935,16 +1077,9 @@ class MzPeakReader(BaseMSIReader):
         pending_mz: List[NDArray[Any]] = []
         pending_intensity: List[NDArray[Any]] = []
 
-        for group in range(data.metadata.num_row_groups):
-            table = data.read_row_group(group, columns=["point"])
-            if table.num_rows == 0:
+        for indices, mzs, intensities in self._iter_blocks(data):
+            if indices.size == 0:
                 continue
-            indices = self._point_field(table, "spectrum_index").astype(
-                np.int64, copy=False
-            )
-            mzs = self._point_field(table, "mz")
-            intensities = self._point_field(table, "intensity")
-
             # Cut at every change of spectrum_index. The column is sorted, so
             # a change is a boundary and nothing needs grouping.
             cuts = np.flatnonzero(np.diff(indices)) + 1

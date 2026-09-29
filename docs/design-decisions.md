@@ -2397,3 +2397,166 @@ is in one number read two ways, and that is what the test covers.
   needs `--pixel-size` as imzML and none as an archive.
 - A writer that keeps the old name and means a length is refused on the
   imzML path. No such file was found.
+
+## D28. The chunked mzPeak layout is decoded into the same spectra
+
+**Status:** Implemented (2026-09-29).
+
+**Decision.** The mzPeak reader reads the chunked layout. It decodes the
+chunks into the stream of spectra the point layout gives, so nothing after
+the reader knows which layout the archive had.
+
+- **Four chunk encodings are decoded**: no compression (`MS:1000576`), delta
+  encoding (`MS:1003089`), MS-Numpress linear prediction (`MS:1002312`) and
+  grid encoding (`MS:1003826`) with the linear (`MS:1003824`) or the square
+  root (`MS:1003825`) model.
+- **The rest is refused by its CV term**, before a spectrum is read: any
+  other chunk encoding, any other grid model, intensities stored under a
+  transform, and chunks cut along another axis than m/z.
+- **The intensity list says how many points a chunk holds.** Every decoder
+  is held to that count, and a chunk that decodes to another is refused.
+- **The first and last m/z of a chunk are its bounds.** `mz_chunk_start` and
+  `mz_chunk_end` replace the two decoded ends where they lie within 1e-5 of
+  them.
+- **No shared mass axis is reported**, for the grid encoding either.
+- **The store names the encodings** it was read from, in
+  `format_specific.chunk_encodings`.
+
+The member that is read is chosen as before: `data_arrays` when it holds
+rows, else `peaks`. The layout is that member's.
+
+**Why read the layout.** `mzpeak-convert` 0.14.0 writes it unless told
+otherwise, and that converter builds the public example archives. Asking it
+for the point layout is not a way around: for centroid m/z on a fixed-point
+lattice it still writes a chunked `peaks` member, beside a `data_arrays`
+member in the point layout.
+
+**Why four encodings at once.** The converter chooses the encoding from the
+values, so one encoding would read one kind of input.
+
+| Input | Encoding written by default |
+|---|---|
+| m/z that are ordinary floating point numbers (two real images, one profile and one centroid) | MS-Numpress linear, every chunk |
+| profile m/z on a fixed-point lattice | delta encoding |
+| centroid m/z on a fixed-point lattice | grid encoding, linear model |
+
+Delta encoding alone would have left out both real images.
+
+**Why MS-Numpress is decoded here.** The reference reader decodes it with
+`pynumpress`, a compiled package. The byte format is short and published
+(Teleman et al., Mol Cell Proteomics 2014, 13, 1537). Decoding it in numpy
+costs speed, and it spares every install a compiled dependency for one
+encoding of an experimental format.
+
+A residual in the buffer is a half byte that says how many half bytes
+follow, so the place of one is known only from the one before. The decoder
+gives every half byte the place the next residual would have, and finds the
+places that are reached by doubling the stride. The values are whole
+numbers until the last division, so two running sums give them exactly.
+
+**Why the intensity list decides the count.** The list is plain in every
+encoding, so its length needs no decoding. Delta encoding needs the count.
+A chunk normally leaves its first value to `mz_chunk_start`. A chunk that
+begins with a null keeps the null in the list, and then the list is one
+longer. The reference decoder tells the two apart by looking at the second
+value, and reads a chunk that opens with a null pair one value too long.
+The count gives the right answer in both cases.
+
+**Why the bounds replace the decoded ends.** A lossy encoding returns the
+first peak of a spectrum a little off. The archive declares the m/z range
+of each spectrum from the exact values, and the resampled axis is built on
+that range. A first peak decoded 1e-7 below the axis was left out of the
+store. On a grid-encoded archive of 20 pixels, one pixel lost a peak of
+intensity 512 that way before this rule.
+
+The bounds are the source's own numbers. In 1,127,540 chunks of five
+archives the first and last m/z of the point layout were equal to the two
+bounds, to the bit. In all 45,525 spectra the declared lowest and highest
+m/z were equal to the first and last bound.
+
+**Why no shared axis.** A shared axis means every spectrum holds the same
+m/z values. The grid encoding gives each chunk a model, and a spectrum
+still lists the grid indices it holds. The converter fits one model per
+spectrum:
+
+| Input, 20 spectra | Grid models in the archive |
+|---|---|
+| processed centroid imzML | 20 |
+| continuous centroid imzML | 1 |
+
+One model for the whole archive came about only where the spectra held the
+same m/z already. To know that they do, every index has to be read. That is
+the pass a shared axis exists to save, so nothing would be gained. The
+default conversion resamples and takes its axis from the declared range,
+with no pass over the data in either case.
+
+**What was measured.** `mzpeak-convert` 0.14.0 (commit `0ed311e`) converted
+each input twice, in the chunked and in the point layout, on 2026-09-29.
+Grid-encoded inputs were given `--no-mz-lattice` for the point layout.
+Both archives were read and compared point by point.
+
+| Input | Encoding | Points | Largest m/z difference |
+|---|---|---|---|
+| centroid image, 12,737 pixels | `MS:1002312` | 60,149,625 | 2.3e-7 |
+| profile image, 16,384 pixels | `MS:1002312` | 36,371,295 | 8.0e-7, or 0.11 ppm |
+| the same, with `--no-numpress` | `MS:1003089` | 36,371,295 | 7.1e-15 |
+| synthetic profile, lattice m/z | `MS:1003089` | 5,048 | 0 |
+| synthetic centroid, lattice m/z | `MS:1003826` | 5,594 | 9.4e-8 |
+| synthetic continuous centroid | `MS:1003826` | 8,000 | 9.4e-8 |
+
+Pixels, order, point counts and intensities were the same in all six.
+
+None of these archives holds padding. The reference writer's own sample
+does, in both layouts (HUPO-PSI/mzPeak at `bb0f307`, delta encoding). Its
+chunked member decodes to 217,710 points, 39,968 of them padding. The
+padding sits at the same points as in the point layout, and every m/z is
+equal. The sample is not an image, so only its signal member was read.
+
+The stores, converted with the command line's defaults:
+
+| Input | Encoding | Store against the point layout's |
+|---|---|---|
+| profile image | delta | every array the same |
+| synthetic centroid | grid | every array the same |
+| centroid image | MS-Numpress | 287 of 60,149,625 entries in a neighbouring bin |
+| profile image | MS-Numpress | one entry more among 24,267,357 |
+
+In the two MS-Numpress stores the total ion current image was the same in
+every pixel. The average spectrum differed in 10 of 460,495 channels and
+in 34 of 708,847.
+
+Three archives in the point layout convert to the same stores as before
+this change.
+
+Constructed archives cover the rest. A chunked archive and its point twin
+convert to identical stores in each of the four encodings, with padding,
+and for the centroid member.
+
+Conversion time, chunked against point: 116 s against 21 s for the centroid
+image, 74 s against 15 s for the profile image, 21 s against 16 s with delta
+encoding. MS-Numpress decodes at about 2 million points per second.
+
+**The objection.** Refuse the lossy encodings: a store should hold the
+numbers of the instrument. It did not win because the loss is made when the
+archive is written. Refusing the archive does not bring the numbers back, and
+it leaves the default output of the converter unread. The largest error
+measured is 0.11 ppm, and the store says which encoding it came from.
+
+**Known limits.**
+
+- The archives were made here, with the converter that builds the public
+  examples. No published example archive has been read yet.
+- Without resampling, a lossy archive gives a mass axis far longer than its
+  point twin's. The centroid image has 331,701 distinct m/z in the point
+  layout and 48,116,750 under MS-Numpress. The profile image has 1,122,721,
+  against 1,147,161 under delta encoding and 18,731,686 under MS-Numpress.
+  The reader warns of it. Resampling, the default, is not affected.
+- The square root model and the encoding without compression were read from
+  constructed archives only. The converter wrote neither for these inputs.
+- A writer may give the edges of the interval it cut at as the bounds of a
+  chunk. Such bounds lie far from the decoded ends and are not used, so a
+  lossy archive of that kind can still lose a peak at the edge of the axis.
+  No such archive was found.
+- Vendor grid models are refused. The converter writes them for timsTOF
+  input.
+- Archives of the older prototype, mzML2mzPeak, are not read.

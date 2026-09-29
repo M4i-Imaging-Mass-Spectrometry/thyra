@@ -479,13 +479,19 @@ class MzPeakMetadataExtractor(MetadataExtractor):
             if isinstance(entries, list)
             else []
         )
-        return {
+        facts = {
             "container_version": metadata.get("version"),
             "layout": self.archive.layout(),
             "members": members,
             "run": metadata.get("run"),
             "sample_list": metadata.get("sample_list"),
         }
+        # Kept because two of the encodings are lossy: the m/z of such a
+        # store are the archive's to within the encoding, not to the bit.
+        encodings = self.archive.chunk_encodings()
+        if encodings:
+            facts["chunk_encodings"] = encodings
+        return facts
 
     def _acquisition_params(self) -> Dict[str, Any]:
         """Scan-settings terms, including the declared grid extent."""

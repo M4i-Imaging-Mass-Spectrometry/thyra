@@ -15,7 +15,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from tests.fixtures.mzpeak_builder import build_mzpeak, grid_spectra
+from tests.fixtures.mzpeak_builder import (
+    DELTA,
+    GRID,
+    NUMPRESS_LINEAR,
+    PLAIN,
+    build_mzpeak,
+    grid_spectra,
+)
 from thyra.convert import convert_msi
 
 spatialdata = pytest.importorskip("spatialdata", reason="SpatialData not installed")
@@ -98,6 +105,192 @@ def _dense(table):
     """Densify X for comparison; the fixtures are deliberately tiny."""
     matrix = table.X
     return matrix.toarray() if hasattr(matrix, "toarray") else np.asarray(matrix)
+
+
+#: What the store of a chunked archive and the store of its point twin may
+#: differ in: the record of the layout, the name of the file that was read,
+#: and the time of the conversion. Nothing else.
+LAYOUT_RECORDS = ("layout", "chunk_encodings", "source_path", "conversion_timestamp")
+
+
+def _flatten(document, prefix=""):
+    """Give every leaf of a nested document its dotted path."""
+    if isinstance(document, dict):
+        for key, value in document.items():
+            yield from _flatten(value, f"{prefix}.{key}")
+    else:
+        yield prefix, document
+
+
+def _store_contents(store: Path):
+    """Every array and every attribute of a store, by path."""
+    import zarr
+
+    arrays, attributes = {}, {}
+
+    def visit(group, prefix):
+        attributes.update(_flatten(dict(group.attrs), prefix))
+        for name, member in sorted(group.members()):
+            path = f"{prefix}/{name}"
+            if isinstance(member, zarr.Group):
+                visit(member, path)
+            else:
+                attributes.update(_flatten(dict(member.attrs), path))
+                arrays[path] = np.asarray(member[...])
+
+    visit(zarr.open_group(str(store), mode="r"), "")
+    return arrays, attributes
+
+
+def _without_layout_records(contents):
+    """Leave out what :data:`LAYOUT_RECORDS` names, and what hangs from it."""
+    return {
+        path: value
+        for path, value in contents.items()
+        if not set(path.replace("/", ".").split(".")) & set(LAYOUT_RECORDS)
+    }
+
+
+def _assert_identical_stores(candidate: Path, reference: Path) -> None:
+    """Two stores hold the same arrays and attributes, to the bit."""
+    arrays, attributes = map(_without_layout_records, _store_contents(candidate))
+    twin_arrays, twin_attributes = map(
+        _without_layout_records, _store_contents(reference)
+    )
+
+    assert sorted(arrays) == sorted(twin_arrays)
+    for path, values in arrays.items():
+        expected = twin_arrays[path]
+        assert values.dtype == expected.dtype, path
+        assert values.shape == expected.shape, path
+        equal_nan = values.dtype.kind == "f"
+        assert np.array_equal(values, expected, equal_nan=equal_nan), path
+    assert attributes == twin_attributes
+
+
+class TestChunkedTwin:
+    """A chunked archive and its point twin convert to identical stores.
+
+    The twin holds the same spectra in the point layout, so everything the
+    point layout is known to convert to, the chunked layout is held to:
+    every array of the store and every attribute, compared whole.
+    """
+
+    @pytest.mark.parametrize("encoding", [PLAIN, DELTA, NUMPRESS_LINEAR, GRID])
+    @pytest.mark.parametrize(
+        "resampling_config",
+        [
+            pytest.param(None, id="native-axis"),
+            pytest.param(
+                {"method": "nearest_neighbor", "target_bins": 64},
+                id="resampled",
+            ),
+        ],
+    )
+    def test_stores_are_identical(self, tmp_path, encoding, resampling_config):
+        """Profile data, a missing pixel, three points to a chunk."""
+        spectra = grid_spectra(3, 3, n_points=7, skip=[(2, 2)])
+        twin = build_mzpeak(tmp_path / "point.mzpeak", spectra)
+        archive = build_mzpeak(
+            tmp_path / "chunked.mzpeak",
+            spectra,
+            layout="chunk",
+            chunk_encoding=encoding,
+            chunk_points=3,
+        )
+
+        _convert(twin, tmp_path / "point.zarr", resampling_config)
+        _convert(archive, tmp_path / "chunked.zarr", resampling_config)
+
+        _assert_identical_stores(tmp_path / "chunked.zarr", tmp_path / "point.zarr")
+        table = _table(tmp_path / "chunked.zarr")
+        assert table.n_obs == 8
+        assert _dense(table).sum() == sum(s.intensities.sum() for s in spectra)
+
+    @pytest.mark.parametrize("encoding", [PLAIN, DELTA, NUMPRESS_LINEAR, GRID])
+    def test_centroid_stores_are_identical(self, tmp_path, encoding):
+        """The shape the converter gives centroid input, in both layouts."""
+        spectra = grid_spectra(3, 2, n_points=6)
+        options = {"signal": "centroid", "empty_peer": True}
+        twin = build_mzpeak(tmp_path / "point.mzpeak", spectra, **options)
+        archive = build_mzpeak(
+            tmp_path / "chunked.mzpeak",
+            spectra,
+            layout="chunk",
+            chunk_encoding=encoding,
+            **options,
+        )
+
+        _convert(twin, tmp_path / "point.zarr")
+        _convert(archive, tmp_path / "chunked.zarr")
+
+        _assert_identical_stores(tmp_path / "chunked.zarr", tmp_path / "point.zarr")
+
+    @pytest.mark.parametrize("encoding", [PLAIN, DELTA, NUMPRESS_LINEAR])
+    def test_padded_stores_are_identical(self, tmp_path, encoding):
+        """Null pairs leave the store as they leave the point layout's."""
+        spectra = grid_spectra(3, 2, n_points=6)
+        twin = build_mzpeak(tmp_path / "point.mzpeak", spectra, null_pair_after=3)
+        archive = build_mzpeak(
+            tmp_path / "chunked.mzpeak",
+            spectra,
+            null_pair_after=3,
+            layout="chunk",
+            chunk_encoding=encoding,
+            chunk_points=4,
+        )
+
+        _convert(twin, tmp_path / "point.zarr")
+        _convert(archive, tmp_path / "chunked.zarr")
+
+        _assert_identical_stores(tmp_path / "chunked.zarr", tmp_path / "point.zarr")
+        assert _table(tmp_path / "chunked.zarr").n_vars == 6
+
+    def test_no_peak_is_lost_at_the_edge_of_the_axis(self, tmp_path):
+        """A lossy archive keeps the first and last peak of every spectrum.
+
+        MS-Numpress gives an m/z back a little off. The resampled axis runs
+        from the lowest to the highest m/z the archive declares, and those
+        are exact, so a first peak decoded below the axis would be dropped
+        and its pixel would lose that intensity.
+        """
+        spectra = grid_spectra(3, 2, n_points=6)
+        for spectrum in spectra:
+            spectrum.mzs += 0.1234567
+        twin = build_mzpeak(tmp_path / "point.mzpeak", spectra)
+        archive = build_mzpeak(
+            tmp_path / "chunked.mzpeak",
+            spectra,
+            layout="chunk",
+            chunk_encoding=NUMPRESS_LINEAR,
+            numpress_fixed_point=1e5,
+        )
+        resampling = {"method": "nearest_neighbor", "target_bins": 64}
+
+        _convert(twin, tmp_path / "point.zarr", resampling)
+        _convert(archive, tmp_path / "chunked.zarr", resampling)
+
+        expected = np.array([s.intensities.sum() for s in spectra])
+        np.testing.assert_array_equal(
+            _dense(_table(tmp_path / "point.zarr")).sum(axis=1), expected
+        )
+        np.testing.assert_array_equal(
+            _dense(_table(tmp_path / "chunked.zarr")).sum(axis=1), expected
+        )
+
+    def test_the_comparison_sees_a_changed_value(self, tmp_path):
+        """The check above is only worth what it can catch."""
+        spectra = grid_spectra(2, 2, n_points=5)
+        moved = grid_spectra(2, 2, n_points=5)
+        moved[3].intensities[4] += 1.0
+        build_mzpeak(tmp_path / "point.mzpeak", spectra)
+        build_mzpeak(tmp_path / "chunked.mzpeak", moved, layout="chunk")
+
+        _convert(tmp_path / "point.mzpeak", tmp_path / "point.zarr")
+        _convert(tmp_path / "chunked.mzpeak", tmp_path / "chunked.zarr")
+
+        with pytest.raises(AssertionError):
+            _assert_identical_stores(tmp_path / "chunked.zarr", tmp_path / "point.zarr")
 
 
 class TestImzMLParity:
@@ -332,3 +525,44 @@ def test_reference_archive_converts(tmp_path):
     values = _dense(table)
     assert np.isfinite(values).all()
     assert np.isfinite(table.var["mz"].to_numpy()).all()
+
+
+@pytest.mark.skipif(
+    not (
+        os.environ.get("THYRA_MZPEAK_CHUNKED_ARCHIVE")
+        and os.environ.get("THYRA_MZPEAK_POINT_ARCHIVE")
+    ),
+    reason=(
+        "Set THYRA_MZPEAK_CHUNKED_ARCHIVE and THYRA_MZPEAK_POINT_ARCHIVE to "
+        "one input converted by mzpeak-convert in both layouts to compare "
+        "them"
+    ),
+)
+def test_converter_archive_reads_as_its_point_twin():
+    """Read one input as the converter wrote it in each layout.
+
+    ``mzpeak-convert <input> -o chunked.mzpeak`` and
+    ``mzpeak-convert <input> --layout point --no-mz-lattice -o point.mzpeak``
+    give the pair. Pixels, order and intensities must agree to the bit. The
+    m/z must agree to ``THYRA_MZPEAK_TWIN_TOLERANCE`` (default 1e-6): two of
+    the chunk encodings are lossy, and the converter's own bound for them
+    is 1e-6.
+    """
+    from thyra.readers.mzpeak import MzPeakReader
+
+    tolerance = float(os.environ.get("THYRA_MZPEAK_TWIN_TOLERANCE", "1e-6"))
+    with MzPeakReader(Path(os.environ["THYRA_MZPEAK_POINT_ARCHIVE"])) as reader:
+        expected = reader.iter_spectra_with_acquisition_order()
+        with MzPeakReader(Path(os.environ["THYRA_MZPEAK_CHUNKED_ARCHIVE"])) as other:
+            assert other.archive.layout() == "chunk"
+            assert other.n_spectra == reader.n_spectra
+            compared = 0
+            for ours, theirs in zip(
+                other.iter_spectra_with_acquisition_order(), expected, strict=True
+            ):
+                assert ours[0] == theirs[0]
+                assert ours[1] == theirs[1]
+                np.testing.assert_array_equal(ours[3], theirs[3])
+                np.testing.assert_allclose(ours[2], theirs[2], rtol=0, atol=tolerance)
+                compared += 1
+    assert compared > 0

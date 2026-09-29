@@ -515,11 +515,48 @@ than converting to something plausible but wrong.
 thyra sample.mzpeak out.zarr
 ```
 
-Thyra reads the point layout: one m/z per point, and an axis per spectrum. The
-resampling decision tree therefore treats these files exactly as it treats
-processed imzML. The specification's chunked layout can describe an axis by a
-grid model instead. Thyra does not read that layout, so it never reports a
+Thyra reads both layouts of the signal members. The point layout holds one
+point per row. The chunked layout holds a run of points per row, and it is what
+`mzpeak-convert` writes unless it is given `--layout point`. Both come out of
+the reader as the same spectra, so nothing after the reader differs.
+
+Every spectrum has its own axis. The resampling decision tree therefore treats
+these files exactly as it treats processed imzML, and Thyra never reports a
 shared mass axis for mzPeak.
+
+**Chunk encodings.** A chunk names how its m/z values are stored. Thyra decodes
+four encodings:
+
+| Term | Encoding | m/z against the point layout |
+|---|---|---|
+| `MS:1000576` | no compression | the same |
+| `MS:1003089` | delta encoding | within 7e-15 |
+| `MS:1002312` | MS-Numpress linear prediction | within 8e-7 (lossy) |
+| `MS:1003826` | grid encoding, model `MS:1003824` (linear) or `MS:1003825` (square root) | within 1e-7 (lossy) |
+
+The last column was measured on archives that `mzpeak-convert` 0.14.0 wrote
+from one input in both layouts. Intensities, pixels and point counts were the
+same in every case.
+
+The first and last m/z of each chunk are exact in every encoding. The chunk
+states them as plain numbers, and Thyra takes them from there.
+
+The store names the encodings it was read from, in
+`format_specific.chunk_encodings`.
+
+Two things follow from a lossy encoding:
+
+- **Convert with resampling**, which is the default. Without it the mass axis
+  holds every distinct m/z. A lossy encoding returns one m/z a little
+  differently from pixel to pixel, so that axis grows far beyond the point
+  layout's: 48 million values against 332 thousand, on one centroid image.
+  The log warns of it.
+- **A few points land in the neighbouring bin.** On a centroid image of 60
+  million points, 287 did. The total ion current of every pixel was the same.
+
+MS-Numpress decodes at about 2 million points per second, delta encoding at
+about 19 million. See
+[design decision D28](design-decisions.md#d28-the-chunked-mzpeak-layout-is-decoded-into-the-same-spectra).
 
 **Which member is read.** mzPeak keeps profile and centroid signal in two
 separate members. Thyra reads one of them per archive:
@@ -541,12 +578,19 @@ store, as an unacquired pixel is.
 
 Point counts come from the column that belongs to the member:
 `number_of_data_points` for `data_arrays`, `number_of_peaks` for `peaks`.
-The layout check and the padding correction below use the same member.
+The layout and the padding correction below are those of the same member. The
+two members of one archive may differ in layout.
 
-Three things are refused rather than guessed at:
+These are refused rather than guessed at, before any spectrum is read:
 
-- The **chunked layout** (`chunk` instead of `point` in the signal member) is a
-  different physical encoding and raises `NotImplementedError` naming the file.
+- **A chunk encoding that is not in the table above.** The message gives the
+  CV term. The same holds for a grid model other than the two named there,
+  such as a vendor's.
+- **Intensities stored under a transform**: MS-Numpress short logged float
+  (`MS:1002314`) or positive integer (`MS:1002313`).
+- **Chunks cut along another axis than m/z.**
+- **A chunk whose m/z and intensity counts differ.** This one is found while
+  reading.
 - **Non-imaging archives** are rejected. Positions are optional in mzPeak --
   the reference converter only writes them when it happens to see imaging
   input -- and an archive without them has no pixels for Thyra to place.
@@ -566,7 +610,8 @@ Two behaviours worth knowing:
   extrapolations that carry zero intensity, so in a sparse matrix they would
   only add mass-axis channels that can never hold a value. Thyra omits them and
   logs how many it dropped. Recorded point counts include the padding, so peak
-  totals are corrected against it.
+  totals are corrected against it. The chunked layout marks padding the same
+  way. MS-Numpress has no null, so there a stored m/z of 0 is padding.
 
 **Pixel size.** Until 2017 `IMS:1000046` was named "pixel size" and gave the
 *area* of a pixel. Files of that form are still published, and the reference
