@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v4.3.1 (2026-09-30)
+
+### Bug Fixes
+
+- **readers**: Leave out an mzPeak scan that has no position
+  ([#423](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/423),
+  [`f9f49a9`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f9f49a938cdf64af279d752241ae36c2f784947c))
+
+
 ## v4.3.0 (2026-09-30)
 
 ### Bug Fixes
