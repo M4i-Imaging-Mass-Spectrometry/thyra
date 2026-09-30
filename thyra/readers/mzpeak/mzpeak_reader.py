@@ -53,6 +53,8 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
+import tempfile
 import zipfile
 from pathlib import Path
 from typing import (
@@ -108,6 +110,11 @@ IMS_POSITION_Y = "IMS:1000051"
 DEFAULT_POSITION_X_COLUMN = "opt_IMS_1000050_position_x"
 DEFAULT_POSITION_Y_COLUMN = "opt_IMS_1000051_position_y"
 
+#: Base of the positions when the archive does not declare one in
+#: ``imaging.coordinate_base``: the imzML convention, which every archive
+#: seen so far follows.
+SPEC_BASE = 1
+
 #: ``data_kind`` of the member holding profile signal.
 PROFILE_KIND = "data_arrays"
 
@@ -121,6 +128,16 @@ CHUNK_BATCH_POINTS = 2_000_000
 
 #: Bounds on the rows of one batch, whatever the points per row.
 CHUNK_BATCH_ROWS = (16, 65536)
+
+#: Image formats the optical image loader reads.
+OPTICAL_IMAGE_SUFFIXES = (".tif", ".tiff", ".jpg", ".jpeg", ".png", ".bmp")
+
+#: Metadata column giving each spectrum's MS level.
+MS_LEVEL_COLUMN = "ms_level"
+
+#: Scans column holding an ion mobility value, which this reader does not
+#: convert.
+ION_MOBILITY_COLUMN = "ion_mobility_value"
 
 #: Metadata column recording how many points each spectrum has in a signal
 #: member. The specification requires the matching column for whichever
@@ -212,6 +229,36 @@ def _positions(column: Any) -> Tuple[NDArray[np.int64], NDArray[np.bool_]]:
     return values.astype(np.int64), present
 
 
+def _whole(value: Any) -> Optional[int]:
+    """``value`` as an int when it is a whole number and not a bool."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return int(value)
+
+
+def _parse_region(
+    region: Any,
+) -> Optional[Tuple[int, Optional[str], int, List[int]]]:
+    """One ``bruker_maldi.regions`` entry, or ``None`` when it is incomplete."""
+    if not isinstance(region, dict):
+        return None
+    number = _whole(region.get("region_number"))
+    frames = _whole(region.get("frames"))
+    box: List[int] = []
+    for key in ("x_index", "y_index"):
+        span = region.get(key)
+        if not isinstance(span, list) or len(span) != 2:
+            return None
+        ends = [_whole(end) for end in span]
+        if ends[0] is None or ends[1] is None:
+            return None
+        box.extend([ends[0], ends[1]])
+    if number is None or frames is None:
+        return None
+    name = region.get("name")
+    return number, name if isinstance(name, str) and name else None, frames, box
+
+
 class MzPeakSpatialIndex(NamedTuple):
     """Everything about the archive that is one value per spectrum.
 
@@ -228,8 +275,12 @@ class MzPeakSpatialIndex(NamedTuple):
             file's own frame.
         point_counts: Number of points each spectrum has in the signal
             member that is read; 0 for a spectrum that member does not hold.
-        offsets: The ``(x, y)`` minima subtracted to reach 0-based
-            coordinates.
+        offsets: Where index 0 sits in the source's own frame: the base
+            subtracted, plus any ``imaging.position_offset`` the writer
+            took out.
+        complete: Whether every spectrum the archive lists is kept. When
+            one is left out (no position, or an MSn spectrum beside MS1),
+            the axis, the mass range and the peak count skip it too.
     """
 
     spectrum_indices: NDArray[np.int64]
@@ -237,6 +288,7 @@ class MzPeakSpatialIndex(NamedTuple):
     raw_positions: NDArray[np.int64]
     point_counts: NDArray[np.int64]
     offsets: Tuple[int, int]
+    complete: bool = True
 
 
 class MzPeakArchive:
@@ -334,6 +386,16 @@ class MzPeakArchive:
             )
             roles.setdefault(key, entry)
         return roles
+
+    @property
+    def members(self) -> frozenset:
+        """Names of every member in the ZIP."""
+        return frozenset(self._members)
+
+    def open_member(self, name: str) -> Any:
+        """Open one member for reading, as a binary file object."""
+        assert self._zip is not None
+        return self._zip.open(name)
 
     def entry(self, entity_type: str, data_kind: str) -> Optional[dict]:
         """Return the index entry for a role, or ``None`` when absent."""
@@ -469,15 +531,18 @@ class MzPeakArchive:
             self._signal_rows(CENTROID_KIND)
         )
 
-    def _read_point_counts(self) -> Tuple[NDArray[np.int64], NDArray[np.int64]]:
-        """Read each spectrum's index and its size in the member read.
+    def _read_point_counts(
+        self,
+    ) -> Tuple[NDArray[np.int64], NDArray[np.int64], NDArray[np.int64]]:
+        """Read each spectrum's index, its size in the member read, and its level.
 
         A null count means the spectrum has no points in that member, so it
         becomes 0. Filled before the conversion to numpy: a null in an
         integer column would otherwise arrive as NaN and fail the cast.
 
         Returns:
-            ``(spectrum_index, counts)``, in the metadata member's row order.
+            ``(spectrum_index, counts, ms_levels)``, in the metadata
+            member's row order. A level the archive does not give is 0.
 
         Raises:
             ValueError: If the metadata member lacks the count column.
@@ -485,18 +550,59 @@ class MzPeakArchive:
         kind = self.signal_kind()
         column = COUNT_COLUMNS[kind]
         member = self.parquet("spectrum", "metadata")
-        if column not in member.schema_arrow.names:
+        names = member.schema_arrow.names
+        if column not in names:
             raise ConversionRefused(
                 f"{self.path} is read from its '{kind}' member, but its "
                 f"spectrum metadata has no '{column}' column to size the "
                 f"spectra from."
             )
-        metadata = member.read(columns=["index", column])
+        has_levels = MS_LEVEL_COLUMN in names
+        metadata = member.read(
+            columns=["index", column] + ([MS_LEVEL_COLUMN] if has_levels else [])
+        )
         spectrum_index = np.asarray(metadata.column("index").to_numpy(), dtype=np.int64)
         counts = np.asarray(
             metadata.column(column).fill_null(0).to_numpy(), dtype=np.int64
         )
-        return spectrum_index, counts
+        levels = (
+            np.asarray(
+                metadata.column(MS_LEVEL_COLUMN).fill_null(0).to_numpy(),
+                dtype=np.int64,
+            )
+            if has_levels
+            else np.zeros(spectrum_index.size, dtype=np.int64)
+        )
+        return spectrum_index, counts, levels
+
+    def _first_level_only(self, levels: NDArray[np.int64]) -> NDArray[np.bool_]:
+        """Which placed spectra to keep: all but MSn, when MS1 is placed too.
+
+        Spectra that share a pixel are summed into it. An MS2 spectrum
+        summed with the MS1 spectrum of its pixel makes a spectrum the
+        instrument never measured, so when MS1 spectra are placed, spectra
+        of level 2 and up are left out, and the log says how many. Level 0
+        means the source stated none (mzpeak-convert writes 0 then); such
+        spectra are kept. Without a placed MS1 spectrum all are kept.
+        """
+        higher = levels >= 2
+        if not (levels == 1).any() or not higher.any():
+            return np.ones(levels.size, dtype=bool)
+        first = ~higher
+        other = levels[higher]
+        logger.warning(
+            "%s places %d MS1 spectra and %d MSn spectra (%s). The MSn "
+            "spectra are left out: summed into the same pixels, they would "
+            "give spectra the instrument never measured.",
+            self.path.name,
+            int((levels == 1).sum()),
+            int(other.size),
+            ", ".join(
+                f"level {level}: {count}"
+                for level, count in zip(*np.unique(other, return_counts=True))
+            ),
+        )
+        return first
 
     def layout(self) -> str:
         """Return the physical layout of the signal member that is read.
@@ -618,9 +724,9 @@ class MzPeakArchive:
             )
         x_column, y_column = columns
 
-        scans = self.parquet("spectrum", "scans").read(
-            columns=["source_index", x_column, y_column]
-        )
+        scans_member = self.parquet("spectrum", "scans")
+        scans = scans_member.read(columns=["source_index", x_column, y_column])
+        self._report_ion_mobility(scans_member)
         source = np.asarray(scans.column("source_index").to_numpy(), dtype=np.int64)
         xs, has_x = _positions(scans.column(x_column))
         ys, has_y = _positions(scans.column(y_column))
@@ -653,9 +759,14 @@ class MzPeakArchive:
         _, first = np.unique(source, return_index=True)
         source, xs, ys, placed = source[first], xs[first], ys[first], placed[first]
 
-        spectrum_index, counts = self._read_point_counts()
+        spectrum_index, counts, levels = self._read_point_counts()
         order = np.argsort(spectrum_index, kind="stable")
-        spectrum_index, counts = spectrum_index[order], counts[order]
+        spectrum_index, counts, levels = (
+            spectrum_index[order],
+            counts[order],
+            levels[order],
+        )
+        n_listed = int(spectrum_index.size)
 
         # A spectrum with no scan row has no pixel, so it is dropped rather
         # than placed at the origin.
@@ -669,7 +780,11 @@ class MzPeakArchive:
                 keep.size,
                 self.path.name,
             )
-        spectrum_index, counts = spectrum_index[keep], counts[keep]
+        spectrum_index, counts, levels = (
+            spectrum_index[keep],
+            counts[keep],
+            levels[keep],
+        )
         rows = np.array([lookup[int(s)] for s in spectrum_index], dtype=np.int64)
 
         # A spectrum whose scan has no position belongs to no pixel. It is
@@ -684,30 +799,139 @@ class MzPeakArchive:
                 on_pixel.size,
                 self.path.name,
             )
-        spectrum_index, counts, rows = (
+        spectrum_index, counts, rows, levels = (
             spectrum_index[on_pixel],
             counts[on_pixel],
             rows[on_pixel],
+            levels[on_pixel],
         )
         if spectrum_index.size == 0:
             raise ConversionRefused(f"{self.path} contains no positioned spectra.")
 
-        raw = np.stack([xs[rows], ys[rows]], axis=1)
+        # After the position filter, so that an MS1 scan on no pixel, a
+        # survey scan for one, cannot cost the placed spectra their place.
+        first = self._first_level_only(levels)
+        spectrum_index, counts, rows = (
+            spectrum_index[first],
+            counts[first],
+            rows[first],
+        )
+        complete = spectrum_index.size == n_listed
 
-        # Positions are 1-based in the reference archives, but the format
-        # promises nothing, so normalise on the observed minimum rather than
-        # subtracting a constant.
-        offsets = (int(raw[:, 0].min()), int(raw[:, 1].min()))
-        coordinates = raw - np.array(offsets, dtype=np.int64)
+        raw = np.stack([xs[rows], ys[rows]], axis=1)
+        self._report_shared_pixels(raw)
+        bases = self._position_bases(raw)
+        coordinates = raw - np.array(bases, dtype=np.int64)
+        shift = self._position_offset()
 
         self._spatial_index = MzPeakSpatialIndex(
             spectrum_indices=spectrum_index,
             coordinates=coordinates,
             raw_positions=raw,
             point_counts=counts,
-            offsets=offsets,
+            offsets=(bases[0] + shift[0], bases[1] + shift[1]),
+            complete=complete,
         )
         return self._spatial_index
+
+    def _report_shared_pixels(self, raw: NDArray[np.int64]) -> None:
+        """Warn when several spectra sit on one pixel; they are summed there."""
+        pixels = np.unique(raw, axis=0).shape[0]
+        if pixels < raw.shape[0]:
+            logger.warning(
+                "%s places %d spectra on %d pixels, so some pixels hold more "
+                "than one spectrum. Those are summed into one row of the "
+                "store.",
+                self.path.name,
+                raw.shape[0],
+                pixels,
+            )
+
+    def _report_ion_mobility(self, scans: Any) -> None:
+        """Say so when the archive carries ion mobility, which is not read.
+
+        Either as a value per scan or as an array beside m/z in the signal
+        member.
+        """
+        struct = self.signal().schema_arrow.field(self.layout()).type
+        arrays = [struct.field(i).name for i in range(struct.num_fields)]
+        mobility = [name for name in arrays if "mobility" in name.lower()]
+        if mobility:
+            logger.warning(
+                "%s holds ion mobility arrays (%s). Thyra reads m/z and "
+                "intensity only, so the store holds no ion mobility.",
+                self.path.name,
+                ", ".join(mobility),
+            )
+        if ION_MOBILITY_COLUMN not in scans.schema_arrow.names:
+            return
+        column = scans.read(columns=[ION_MOBILITY_COLUMN]).column(0)
+        with_value = len(column) - column.null_count
+        if with_value:
+            logger.warning(
+                "%d of %d scans in %s give an ion mobility value. Thyra "
+                "reads m/z and intensity only, so the store holds no ion "
+                "mobility.",
+                with_value,
+                len(column),
+                self.path.name,
+            )
+
+    def _imaging_metadata(self) -> Dict[str, Any]:
+        """The archive's ``imaging`` block, or an empty one."""
+        imaging = self.file_level_metadata().get("imaging")
+        return imaging if isinstance(imaging, dict) else {}
+
+    def _position_bases(self, raw: NDArray[np.int64]) -> Tuple[int, int]:
+        """The ``(x, y)`` positions that become index 0, as D14 rules for imzML.
+
+        The base is the one the archive declares in
+        ``imaging.coordinate_base``, 1 when it declares none, or the
+        smallest position when that is lower. So a cropped image keeps its
+        place, and lands on the grid its imzML lands on. Rebasing on the
+        smallest position instead moved it to the corner and cut the grid
+        to its bounding box.
+        """
+        declared = self._imaging_metadata().get("coordinate_base")
+        if not isinstance(declared, int) or isinstance(declared, bool):
+            declared = SPEC_BASE
+        smallest = (int(raw[:, 0].min()), int(raw[:, 1].min()))
+        bases = (min(smallest[0], declared), min(smallest[1], declared))
+        if bases != (declared, declared):
+            logger.info(
+                "%s declares its positions start at %d, but the smallest is "
+                "x=%d, y=%d. Rebasing on that, so no row or column is lost.",
+                self.path.name,
+                declared,
+                smallest[0],
+                smallest[1],
+            )
+        return bases
+
+    def _position_offset(self) -> Tuple[int, int]:
+        """How far the archive shifted its positions, ``(0, 0)`` if not at all.
+
+        A writer may shift positions to start at the base and keep the
+        shift in ``imaging.position_offset``: mzpeak-convert 0.16.0 does so
+        for Bruker raster indices. Adding it back puts the image in the
+        frame of the instrument's raster, where a conversion of the same
+        run from its ``.d`` puts it.
+        """
+        offset = self._imaging_metadata().get("position_offset")
+        if not isinstance(offset, dict):
+            return (0, 0)
+        values = (offset.get("x", 0), offset.get("y", 0))
+        if not all(
+            isinstance(value, int) and not isinstance(value, bool) for value in values
+        ):
+            logger.warning(
+                "%s gives a position_offset that is not two whole numbers "
+                "(%r); it is not applied.",
+                self.path.name,
+                offset,
+            )
+            return (0, 0)
+        return (int(values[0]), int(values[1]))
 
     def null_count(self) -> Optional[int]:
         """How many points carry a null m/z, or ``None`` when unknowable.
@@ -848,6 +1072,14 @@ class MzPeakReader(BaseMSIReader):
             **kwargs: Accepted and ignored, for signature parity with the
                 other readers.
         """
+        if kwargs.get("region") is not None:
+            # Accepted and ignored before, which converted every region of
+            # an archive that now reports several.
+            raise ConversionRefused(
+                f"Selecting a region (--region {kwargs['region']}) is not "
+                f"supported for mzPeak archives. Convert the whole archive; "
+                f"obs['region_number'] tells the regions apart."
+            )
         super().__init__(data_path, intensity_threshold=intensity_threshold, **kwargs)
         self._archive: Optional[MzPeakArchive] = None
         self._coordinates: Optional[NDArray[np.int64]] = None
@@ -855,6 +1087,13 @@ class MzPeakReader(BaseMSIReader):
         self._spectrum_indices: Optional[NDArray[np.int64]] = None
         self._offsets: Optional[Tuple[int, int]] = None
         self._common_axis: Optional[NDArray[np.float64]] = None
+        #: Folder the embedded images are copied to, made on first use.
+        self._image_dir: Optional[Path] = None
+        self._image_paths: Optional[List[Path]] = None
+        self._regions_read = False
+        self._region_cache: Optional[
+            Tuple[Dict[Tuple[int, int], int], List[Dict[str, Any]]]
+        ] = None
         self._announced = False
         #: Null-pair padding points dropped by the iteration in
         #: progress; ``iter_spectra`` clears it as it starts.
@@ -1031,7 +1270,16 @@ class MzPeakReader(BaseMSIReader):
             yield decoded.spectrum_index, decoded.mz, decoded.intensity
 
     def _iter_mz_blocks(self, data: Any) -> Generator[NDArray[Any], None, None]:
-        """Yield the m/z of the member that is read, in stored order."""
+        """Yield the m/z of the member that is read, in stored order.
+
+        Only the m/z of spectra that are converted: one left out, on no
+        pixel or of another MS level, would add channels no pixel fills.
+        """
+        if not self.archive.spatial_index().complete:
+            kept = self._require(self._spectrum_indices)
+            for indices, mzs, _ in self._iter_blocks(data):
+                yield mzs[np.isin(indices, kept, assume_unique=False)]
+            return
         if self.archive.layout() == "chunk":
             for _, mzs, _ in self._iter_chunk_blocks(data):
                 yield mzs
@@ -1252,17 +1500,202 @@ class MzPeakReader(BaseMSIReader):
         """
         return self.get_essential_metadata().total_peaks
 
-    def get_region_map(self) -> Optional[dict]:
-        """Always ``None``.
+    def get_region_map(self) -> Optional[Dict[Tuple[int, int], int]]:
+        """Each pixel's acquisition region, or ``None`` for one region.
 
-        mzPeak has no region or ROI concept: there is no column, no CV
-        binding and no index field carrying acquisition-region identity. It
-        is one of the gaps the working group has been asked to close.
+        mzPeak has no region column. A Bruker archive from mzpeak-convert
+        lists its regions under ``bruker_maldi.regions``; see
+        :meth:`_regions`.
         """
-        return None
+        regions = self._regions()
+        return regions[0] if regions is not None else None
+
+    def get_region_info(self) -> Optional[list]:
+        """Region number, spectrum count and box of each region.
+
+        The same keys, box frame and order as the timsTOF reader gives for
+        the ``.d`` the archive was made from. ``None`` for one region.
+        """
+        regions = self._regions()
+        return regions[1] if regions is not None else None
+
+    def _regions(
+        self,
+    ) -> Optional[Tuple[Dict[Tuple[int, int], int], List[Dict[str, Any]]]]:
+        """Read the regions of a Bruker archive, when they place every pixel.
+
+        Each region is listed with the raster indices it spans and its
+        frame count, but no scan names its region. A pixel is given the
+        region whose box holds it, and that is only trusted when every
+        pixel falls in exactly one box and each region holds as many
+        pixels as it lists frames. Otherwise the regions are not read and
+        a warning says why.
+        """
+        if self._regions_read:
+            return self._region_cache
+        self._regions_read = True
+        listed = self._listed_regions()
+        if len(listed) <= 1:
+            return None
+
+        coordinates = self._require(self._coordinates)
+        offsets = self._require_offsets()
+        assigned = np.full(coordinates.shape[0], -1, dtype=np.int64)
+        overlaps = 0
+        info: List[Dict[str, Any]] = []
+        for number, name, frames, box in listed:
+            x_lo, x_hi = box[0] - offsets[0], box[1] - offsets[0]
+            y_lo, y_hi = box[2] - offsets[1], box[3] - offsets[1]
+            inside = (
+                (coordinates[:, 0] >= x_lo)
+                & (coordinates[:, 0] <= x_hi)
+                & (coordinates[:, 1] >= y_lo)
+                & (coordinates[:, 1] <= y_hi)
+            )
+            overlaps += int((inside & (assigned >= 0)).sum())
+            assigned[inside] = number
+            entry: Dict[str, Any] = {
+                "region_number": number,
+                "n_spectra": frames,
+                "bounds": (int(x_lo), int(y_lo), int(x_hi), int(y_hi)),
+            }
+            if name:
+                entry["name"] = name
+            info.append(entry)
+
+        counts = {n: int((assigned == n).sum()) for n, _, _, _ in listed}
+        mismatched = [n for n, _, frames, _ in listed if counts[n] != frames]
+        unplaced = int((assigned < 0).sum())
+        if overlaps or unplaced or mismatched:
+            logger.warning(
+                "%s lists %d acquisition regions, but their boxes do not "
+                "place each pixel once (%d pixels in two boxes, %d in none, "
+                "pixel counts that differ from the listed frames in regions "
+                "%s). All pixels are stored as one region.",
+                self.data_path.name,
+                len(listed),
+                overlaps,
+                unplaced,
+                mismatched or "none",
+            )
+            return None
+
+        region_map = {
+            (int(x), int(y)): int(n)
+            for (x, y), n in zip(coordinates.tolist(), assigned.tolist())
+        }
+        info.sort(key=lambda entry: (-entry["n_spectra"], entry["region_number"]))
+        self._region_cache = (region_map, info)
+        return self._region_cache
+
+    def _listed_regions(self) -> List[Tuple[int, Optional[str], int, List[int]]]:
+        """``(number, name, frames, [x_lo, x_hi, y_lo, y_hi])`` per listed region.
+
+        The box is in raw raster indices, as mzpeak-convert writes it. A
+        region that does not give all of these is skipped with a warning,
+        and then no region is read at all, since the rest cannot be checked
+        against the pixels.
+        """
+        block = self.archive.file_level_metadata().get("bruker_maldi")
+        regions = block.get("regions") if isinstance(block, dict) else None
+        if not isinstance(regions, list):
+            return []
+        listed = []
+        for region in regions:
+            parsed = _parse_region(region)
+            if parsed is None:
+                logger.warning(
+                    "%s lists a region without a number, a frame count and "
+                    "its x and y index ranges (%r); regions are not read.",
+                    self.data_path.name,
+                    region,
+                )
+                return []
+            listed.append(parsed)
+        return listed
+
+    def _require_offsets(self) -> Tuple[int, int]:
+        """The spatial index's offsets, once it is loaded."""
+        _ = self.archive
+        if self._offsets is None:
+            raise RuntimeError("mzPeak spatial index not loaded; access .archive first")
+        return self._offsets
+
+    def get_optical_image_paths(self) -> List[Path]:
+        """The optical images the archive embeds, extracted to files.
+
+        mzpeak-convert stores an image as an ``image`` member, verbatim.
+        The optical image loader reads files, so each one is copied to a
+        folder of this reader's own, which :meth:`close` removes. A member
+        in a format the loader does not read is skipped with a warning.
+
+        The images are not aligned to the pixels. The archive gives an
+        affine for each, but the ones seen so far are marked
+        ``assumed_full_extent``: the image stretched over the whole
+        acquisition, which is no registration. It is kept, with the rest
+        of the ``imaging`` block, in the store's raw metadata.
+        """
+        if self._image_paths is None:
+            self._image_paths = self._extract_images()
+        return list(self._image_paths)
+
+    def _image_members(self) -> List[str]:
+        """Names of the members the index lists as images, in index order."""
+        entries = self.archive.index.get("files")
+        names = []
+        for entry in entries if isinstance(entries, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            if _normalise_token(entry.get("entity_type")) != "image":
+                continue
+            name = entry.get("name")
+            if isinstance(name, str) and name in self.archive.members:
+                names.append(name)
+        return names
+
+    def _extract_images(self) -> List[Path]:
+        """Copy every readable image member out of the archive."""
+        members = self._image_members()
+        if not members:
+            return []
+        paths: List[Path] = []
+        for name in members:
+            suffix = Path(name).suffix.lower()
+            if suffix not in OPTICAL_IMAGE_SUFFIXES:
+                logger.warning(
+                    "%s embeds the image %s, in a format the optical image "
+                    "loader does not read; it is not carried over.",
+                    self.data_path.name,
+                    name,
+                )
+                continue
+            if self._image_dir is None:
+                self._image_dir = Path(tempfile.mkdtemp(prefix="thyra-mzpeak-images-"))
+            # The base name only: a member name is a path inside the ZIP
+            # and must not choose where on this disk the copy goes.
+            target = self._image_dir / Path(name).name
+            stem, number = target.stem, 1
+            while target.exists():
+                target = self._image_dir / f"{stem}_{number}{suffix}"
+                number += 1
+            with self.archive.open_member(name) as source, target.open("wb") as sink:
+                shutil.copyfileobj(source, sink)
+            paths.append(target)
+        if paths:
+            logger.info(
+                "%s embeds %d optical image(s); they are carried over without "
+                "an alignment to the pixels.",
+                self.data_path.name,
+                len(paths),
+            )
+        return paths
 
     def close(self) -> None:
-        """Close the archive."""
+        """Close the archive and remove the extracted images."""
         if self._archive is not None:
             self._archive.close()
             self._archive = None
+        if self._image_dir is not None:
+            shutil.rmtree(self._image_dir, ignore_errors=True)
+            self._image_dir = None
+            self._image_paths = None

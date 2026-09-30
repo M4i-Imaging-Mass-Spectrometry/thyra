@@ -649,6 +649,9 @@ def build_mzpeak(
     chunk_points: int = 4,
     grid_type: str = LINEAR_GRID,
     numpress_fixed_point: Optional[float] = None,
+    file_metadata: Optional[Dict[str, Any]] = None,
+    ms_levels: Optional[Sequence[int]] = None,
+    ion_mobility: Optional[Sequence[Optional[float]]] = None,
 ) -> Path:
     """Write one ``.mzpeak`` archive and return its path.
 
@@ -702,6 +705,13 @@ def build_mzpeak(
             power of two, which gives the fixture's m/z back to the bit. A
             scale such as 1e5 gives them back a little off, as a real
             archive does.
+        file_metadata: File-level blocks written over the defaults, such
+            as ``imaging``, ``bruker_maldi``, ``run`` or
+            ``instrument_configuration_list``, spelled as mzpeak-convert
+            writes them.
+        ms_levels: MS level of each spectrum. All 1 by default.
+        ion_mobility: Ion mobility value of each scan, ``None`` for none.
+            Without it the scans member has no such column.
 
     Returns:
         ``path``, for convenience.
@@ -745,7 +755,7 @@ def build_mzpeak(
         ]
 
     scan_settings = _scan_settings(pixel_size, grid, pixel_size_unit)
-    file_metadata = {
+    footer = {
         "file_description": {
             "contents": file_contents,
             "source_files": [],
@@ -754,6 +764,7 @@ def build_mzpeak(
         "instrument_configuration_list": [],
         "software_list": [],
         "run": {"id": "fixture", "start_time": None},
+        **(file_metadata or {}),
     }
 
     count_columns = {
@@ -768,9 +779,20 @@ def build_mzpeak(
         spectrum_representation,
         [count_columns[member] for member in plan] if declare_counts else [],
     )
+    if ms_levels is not None:
+        metadata_table = metadata_table.set_column(
+            metadata_table.schema.get_field_index("ms_level"),
+            "ms_level",
+            pa.array(list(ms_levels), type=pa.uint8()),
+        )
     if footer_metadata:
         metadata_table = metadata_table.replace_schema_metadata(
-            {key: json.dumps(value) for key, value in file_metadata.items()}
+            {key: json.dumps(value) for key, value in footer.items()}
+        )
+    scans_table = _scans_table(spectra, include_positions)
+    if ion_mobility is not None:
+        scans_table = scans_table.append_column(
+            "ion_mobility_value", pa.array(list(ion_mobility), type=pa.float64())
         )
 
     path = Path(path)
@@ -778,7 +800,7 @@ def build_mzpeak(
         for member, table, group_size in (
             *((name, tables[name], row_group_size) for name in tables),
             (METADATA_MEMBER, metadata_table, None),
-            (SCANS_MEMBER, _scans_table(spectra, include_positions), None),
+            (SCANS_MEMBER, scans_table, None),
         ):
             sink = pa.BufferOutputStream()
             kwargs: Dict[str, Any] = {"write_statistics": True}

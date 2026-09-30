@@ -531,12 +531,18 @@ four encodings:
 |---|---|---|
 | `MS:1000576` | no compression | the same |
 | `MS:1003089` | delta encoding | within 7e-15 |
-| `MS:1002312` | MS-Numpress linear prediction | within 8e-7 (lossy) |
+| `MS:1002312` | MS-Numpress linear prediction | within 7e-7, 0.005 ppm (lossy) |
 | `MS:1003826` | grid encoding, model `MS:1003824` (linear) or `MS:1003825` (square root) | within 1e-7 (lossy) |
 
 The last column was measured on archives that `mzpeak-convert` 0.14.0 wrote
 from one input in both layouts. Intensities, pixels and point counts were the
 same in every case.
+
+**Converter versions read.** Archives written by `mzpeak-convert` 0.12.0 (the
+eight public examples), 0.14.0 and 0.16.0 have been converted. From 0.16.0,
+archives made from imzML and from a Bruker TSF run were read. Its Waters and
+timsTOF TDF lanes were not tried. By default the TDF lane stores m/z on a
+vendor grid Thyra refuses; `--no-ims-compact` stores the m/z themselves.
 
 The first and last m/z of each chunk are exact in every encoding. The chunk
 states them as plain numbers, and Thyra takes them from there.
@@ -641,9 +647,41 @@ nanometre are converted. Any other unit is refused, centimetre included: the
 public files that declare centimetre name it "micrometer" beside it. See
 [design decision D27](design-decisions.md#d27-one-pixel-size-in-an-mzpeak-archive-is-tested-before-it-is-believed).
 
-mzPeak carries no region or ROI identity of any kind, so `get_region_map()`
-returns `None`. Missing pixels are ordinary and are left missing rather than
-densified.
+Missing pixels are ordinary and are left missing rather than densified.
+
+**Read as its source is read.** Where an archive states what its source file
+states, the store comes out as the store of that file. See
+[design decision D29](design-decisions.md#d29-an-mzpeak-archive-converts-to-the-store-of-its-source).
+
+- **Where the image sits.** Positions count from the base in
+  `imaging.coordinate_base`, 1 when none is given, as imzML positions do. A
+  cropped image keeps its place on the grid. When a writer shifted the
+  positions and kept the shift in `imaging.position_offset`, as
+  `mzpeak-convert` does for a Bruker run, the shift is added back into
+  `coordinate_offsets_px`.
+- **The instrument.** The instrument configurations are read as in imzML. An
+  Orbitrap or FT-ICR analyzer or model picks its own mass axis, and a timsTOF
+  model is known by its name.
+- **Regions.** mzPeak has no region column. A Bruker archive lists its
+  regions under `bruker_maldi.regions`, each with a box of raster indices and
+  a frame count. Each pixel is given the region whose box holds it, when the
+  boxes place every pixel once and the counts match. Otherwise the log says
+  why and the store has one region. `--region` is refused for mzPeak: the
+  whole archive is converted, and `obs["region_number"]` tells the regions
+  apart.
+- **MSn spectra are left out** when MS1 spectra sit on the pixels too, and
+  the log counts them. Summed into the MS1 pixels, they would give spectra
+  the instrument never measured. A spectrum with no stated level is kept. A
+  spectrum that is left out, for this reason or for having no position, adds
+  nothing to the mass axis or the mass range either.
+- **Several spectra on one pixel** are summed into one row. The log says how
+  many spectra sit on how many pixels.
+- **Ion mobility is not read.** When scans carry a mobility value or the
+  signal member a mobility array, the log says so.
+- **Embedded images** are carried into the store as optical images, without
+  an alignment to the pixels. The affine the archive gives is kept in the raw
+  metadata. In every archive seen so far it stretches the image over the
+  whole acquisition, which is not a registration.
 
 ---
 

@@ -107,15 +107,15 @@ catch-all default. This table is the actual observed behaviour of that chain:
 | timsTOF, profile high-density | timsTOF | `nearest_neighbor` | `reflector_tof` |
 | Rapiflex, profile | Rapiflex MALDI-TOF | `tic_preserving` | `constant` |
 | Bruker MALDI-TOF | Rapiflex MALDI-TOF | `tic_preserving` | `constant` |
-| imzML declaring an FT-ICR analyzer or model | FT-ICR | `nearest_neighbor` | `fticr` |
+| imzML or mzPeak declaring an FT-ICR analyzer or model | FT-ICR | `nearest_neighbor` | `fticr` |
 | solariX `.d` (native, peaks.sqlite) | FT-ICR | `nearest_neighbor` | `fticr` |
-| imzML declaring an Orbitrap analyzer or model | Orbitrap | `nearest_neighbor` | `orbitrap` |
+| imzML or mzPeak declaring an Orbitrap analyzer or model | Orbitrap | `nearest_neighbor` | `orbitrap` |
 | PHI SmartSoft-TOF `.raw` | PHI SmartSoft-TOF (ToF-SIMS) | `nearest_neighbor` | `tof` |
 | Waters MassLynx `.raw`, profile trace (the SELECT SERIES MRT default) | Waters MassLynx (profile trace) | `tic_preserving` | `linear_tof` |
 | Waters MassLynx `.raw`, SELECT SERIES MRT vendor centroid | Waters SELECT SERIES MRT (vendor centroid) | `nearest_neighbor` | `tof` |
 | Waters MassLynx `.raw`, vendor centroid or undeclared, other instruments | Waters MassLynx | `nearest_neighbor` | `reflector_tof` |
 | unknown vendor, profile (any density) | Unknown (default) | `nearest_neighbor` | `constant` |
-| unknown, centroid | ImzML Centroid | `nearest_neighbor` | `reflector_tof` |
+| unknown, centroid | Centroid, instrument unknown | `nearest_neighbor` | `reflector_tof` |
 | no usable metadata | Unknown (default) | `nearest_neighbor` | `constant` |
 
 !!! note "Why PHI needs its own row"

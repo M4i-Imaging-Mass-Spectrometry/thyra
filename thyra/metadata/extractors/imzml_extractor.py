@@ -159,6 +159,138 @@ def _family_from_model_text(text: str) -> Optional[str]:
     return None
 
 
+def instrument_info_from_configurations(configs: List[Any]) -> Dict[str, Any]:
+    """Instrument model, serial number, analyzer and family of a run.
+
+    ``configs`` are instrument configurations shaped as pyimzml parses
+    them: each has ``param_by_accession`` and ``param_by_name`` dicts, a
+    valueless term reads as ``True``, and ``components`` lists objects with
+    a ``type`` and their own ``param_by_accession``. The imzML extractor
+    passes pyimzml's own; the mzPeak extractor builds the same shape from
+    the archive's JSON.
+
+    Returns:
+        ``instrument_model``, ``instrument_serial_number``, ``analyzer`` and
+        ``instrument_type``, each only when the configurations state it.
+    """
+    info: Dict[str, Any] = {}
+    if not configs:
+        return info
+
+    model = _instrument_model(configs)
+    if model:
+        info["instrument_model"] = model
+
+    serial = _config_param(configs, "MS:1000529")
+    if isinstance(serial, str) and serial.strip():
+        info["instrument_serial_number"] = serial.strip()
+
+    analyzer_accession = _analyzer_accession(configs)
+    if analyzer_accession is not None:
+        info["analyzer"] = ONTOLOGY.terms[analyzer_accession][0]
+
+    family = _analyzer_family(configs, analyzer_accession, model)
+    if family is not None:
+        info["instrument_type"] = family
+
+    return info
+
+
+def _config_param(configs: List[Any], accession: str) -> Any:
+    """The first value any configuration declares for ``accession``."""
+    for config in configs:
+        params = getattr(config, "param_by_accession", None)
+        if isinstance(params, dict) and accession in params:
+            return params[accession]
+    return None
+
+
+def _instrument_model(configs: List[Any]) -> Optional[str]:
+    """The declared instrument model, from the shape the exporter chose.
+
+    Vendors write the model two ways: generic ``MS:1000031 instrument
+    model`` carrying the name as free text, or the model's own child term
+    as a valueless flag (``MS:1001549 solariX``, ``MS:1003124 timsTOF
+    fleX``).  The explicit value wins; a known model accession resolves
+    through the shipped ontology table; and a term newer than the table is
+    still usable when its *name* identifies a family.
+    """
+    value = _config_param(configs, "MS:1000031")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+
+    for config in configs:
+        params = getattr(config, "param_by_accession", None)
+        if not isinstance(params, dict):
+            continue
+        for accession in params:
+            if accession in _MODEL_FAMILIES:
+                return ONTOLOGY.terms[accession][0]
+
+    for config in configs:
+        params = getattr(config, "param_by_name", None)
+        if not isinstance(params, dict):
+            continue
+        for name, value in params.items():
+            if (
+                isinstance(name, str)
+                and value is True
+                and _family_from_model_text(name) is not None
+            ):
+                return name
+
+    return None
+
+
+def _analyzer_accession(configs: List[Any]) -> Optional[str]:
+    """The highest-priority analyzer term declared on any componentList."""
+    declared: set = set()
+    for config in configs:
+        for component in getattr(config, "components", None) or []:
+            if getattr(component, "type", None) != "analyzer":
+                continue
+            params = getattr(component, "param_by_accession", None)
+            if isinstance(params, dict):
+                declared.update(params)
+
+    for accession in _ANALYZER_ACCESSIONS:
+        if accession in declared:
+            return accession
+    return None
+
+
+def _analyzer_family(
+    configs: List[Any],
+    analyzer_accession: Optional[str],
+    model: Optional[str],
+) -> Optional[str]:
+    """Resolve the axis family, preferring the analyzer declaration.
+
+    The analyzer cvParam states the physics outright, so it outranks the
+    model term, which outranks a substring match on free-form model text.
+    A file that declares none of the three resolves to ``None``.
+    """
+    if analyzer_accession in _ANALYZER_FAMILIES:
+        return _ANALYZER_FAMILIES[analyzer_accession]
+    if analyzer_accession is not None:
+        # A recognised analyzer outside the family table (TOF, ion trap)
+        # is a real declaration; do not second-guess it from the model.
+        return None
+
+    for config in configs:
+        params = getattr(config, "param_by_accession", None)
+        if not isinstance(params, dict):
+            continue
+        for accession in params:
+            family = _MODEL_FAMILIES.get(accession)
+            if family is not None:
+                return family
+
+    if model is not None:
+        return _family_from_model_text(model)
+    return None
+
+
 class ImzMLMetadataExtractor(MetadataExtractor):
     """ImzML-specific metadata extractor with optimized two-phase extraction."""
 
@@ -824,29 +956,12 @@ class ImzMLMetadataExtractor(MetadataExtractor):
           chain matches on (``"FT-ICR"`` / ``"Orbitrap"``), when the analyzer
           or the model resolves to a family the chain distinguishes.  Absent
           otherwise: an unstated analyzer stays unstated.
+
+        The rules live in :func:`instrument_info_from_configurations`, which
+        the mzPeak extractor calls too, so an archive and the imzML it was
+        made from resolve to the same instrument.
         """
-        info: Dict[str, Any] = {}
-        configs = self._instrument_configurations()
-        if not configs:
-            return info
-
-        model = self._instrument_model(configs)
-        if model:
-            info["instrument_model"] = model
-
-        serial = self._config_param(configs, "MS:1000529")
-        if isinstance(serial, str) and serial.strip():
-            info["instrument_serial_number"] = serial.strip()
-
-        analyzer_accession = self._analyzer_accession(configs)
-        if analyzer_accession is not None:
-            info["analyzer"] = ONTOLOGY.terms[analyzer_accession][0]
-
-        family = self._analyzer_family(configs, analyzer_accession, model)
-        if family is not None:
-            info["instrument_type"] = family
-
-        return info
+        return instrument_info_from_configurations(self._instrument_configurations())
 
     def _instrument_configurations(self) -> List[Any]:
         """The parsed instrumentConfiguration ParamGroups, in document order."""
@@ -855,100 +970,6 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         if not isinstance(configs, dict):
             return []
         return list(configs.values())
-
-    @staticmethod
-    def _config_param(configs: List[Any], accession: str) -> Any:
-        """The first value any configuration declares for ``accession``."""
-        for config in configs:
-            params = getattr(config, "param_by_accession", None)
-            if isinstance(params, dict) and accession in params:
-                return params[accession]
-        return None
-
-    def _instrument_model(self, configs: List[Any]) -> Optional[str]:
-        """The declared instrument model, from the shape the exporter chose.
-
-        Vendors write the model two ways: generic ``MS:1000031 instrument
-        model`` carrying the name as free text, or the model's own child term
-        as a valueless flag (``MS:1001549 solariX``, ``MS:1003124 timsTOF
-        fleX``).  The explicit value wins; a known model accession resolves
-        through the shipped ontology table; and a term newer than the table is
-        still usable when its *name* identifies a family.
-        """
-        value = self._config_param(configs, "MS:1000031")
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-
-        for config in configs:
-            params = getattr(config, "param_by_accession", None)
-            if not isinstance(params, dict):
-                continue
-            for accession in params:
-                if accession in _MODEL_FAMILIES:
-                    return ONTOLOGY.terms[accession][0]
-
-        for config in configs:
-            params = getattr(config, "param_by_name", None)
-            if not isinstance(params, dict):
-                continue
-            for name, value in params.items():
-                if (
-                    isinstance(name, str)
-                    and value is True
-                    and _family_from_model_text(name) is not None
-                ):
-                    return name
-
-        return None
-
-    @staticmethod
-    def _analyzer_accession(configs: List[Any]) -> Optional[str]:
-        """The highest-priority analyzer term declared on any componentList."""
-        declared: set = set()
-        for config in configs:
-            for component in getattr(config, "components", None) or []:
-                if getattr(component, "type", None) != "analyzer":
-                    continue
-                params = getattr(component, "param_by_accession", None)
-                if isinstance(params, dict):
-                    declared.update(params)
-
-        for accession in _ANALYZER_ACCESSIONS:
-            if accession in declared:
-                return accession
-        return None
-
-    def _analyzer_family(
-        self,
-        configs: List[Any],
-        analyzer_accession: Optional[str],
-        model: Optional[str],
-    ) -> Optional[str]:
-        """Resolve the axis family, preferring the analyzer declaration.
-
-        The analyzer cvParam states the physics outright, so it outranks the
-        model term, which outranks a substring match on free-form model text.
-        A file that declares none of the three resolves to ``None``.
-        """
-        if analyzer_accession in _ANALYZER_FAMILIES:
-            return _ANALYZER_FAMILIES[analyzer_accession]
-        if analyzer_accession is not None:
-            # A recognised analyzer outside the family table (TOF, ion trap)
-            # is a real declaration; do not second-guess it from the model.
-            return None
-
-        for config in configs:
-            params = getattr(config, "param_by_accession", None)
-            if not isinstance(params, dict):
-                continue
-            for accession in params:
-                family = _MODEL_FAMILIES.get(accession)
-                if family is not None:
-                    return family
-
-        if model is not None:
-            return _family_from_model_text(model)
-        return None
 
     def _extract_raw_metadata(self) -> Dict[str, Any]:
         """Extract raw metadata from imzmldict and spectrum cvParams."""

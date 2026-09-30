@@ -12,14 +12,20 @@ from __future__ import annotations
 import logging
 import math
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
 from ...core.base_extractor import MetadataExtractor
 from ..constants import ImzMLAccessions, SpectrumType
+from ..ontology.cache import ONTOLOGY
 from ..types import ComprehensiveMetadata, EssentialMetadata
-from .imzml_extractor import UM_PER_UNIT, has_old_pixel_size_name
+from .imzml_extractor import (
+    UM_PER_UNIT,
+    has_old_pixel_size_name,
+    instrument_info_from_configurations,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     # Imported for typing only. A runtime import here would be a cycle:
@@ -84,10 +90,11 @@ class MzPeakMetadataExtractor(MetadataExtractor):
         coordinates = index.coordinates
         raw = index.raw_positions
 
-        # Grid is sized from what the file actually contains. mzPeak also
-        # declares IMS:1000042/43, but a declared extent that disagrees with
-        # the positions would silently pad or clip the output, so the
-        # declaration is kept as provenance only.
+        # Grid is sized from what the file actually contains, from index 0
+        # (the base, as D14 sets it for imzML) to the largest position.
+        # mzPeak also declares IMS:1000042/43, but a declared extent that
+        # disagrees with the positions would silently pad or clip the
+        # output, so the declaration is kept as provenance only.
         dimensions = (
             int(coordinates[:, 0].max()) + 1,
             int(coordinates[:, 1].max()) + 1,
@@ -123,12 +130,20 @@ class MzPeakMetadataExtractor(MetadataExtractor):
         data: the metadata member has one row per spectrum, so this is a
         9-row read on a 36k-point file and stays a one-row-per-spectrum read
         at any scale.
+
+        A spectrum that is not converted (on no pixel, or an MSn spectrum
+        beside MS1) does not widen the range.
         """
         table = self.archive.parquet("spectrum", "metadata").read(
-            columns=["lowest_observed_mz", "highest_observed_mz"]
+            columns=["index", "lowest_observed_mz", "highest_observed_mz"]
         )
         low = np.asarray(table.column("lowest_observed_mz").to_numpy(), dtype=float)
         high = np.asarray(table.column("highest_observed_mz").to_numpy(), dtype=float)
+        index = self.archive.spatial_index()
+        if not index.complete:
+            rows = np.asarray(table.column("index").to_numpy(), dtype=np.int64)
+            kept = np.isin(rows, index.spectrum_indices)
+            low, high = low[kept], high[kept]
         low = low[np.isfinite(low)]
         high = high[np.isfinite(high)]
         if low.size == 0 or high.size == 0:
@@ -174,7 +189,12 @@ class MzPeakMetadataExtractor(MetadataExtractor):
         x = parameters.get(ImzMLAccessions.PIXEL_SIZE_X)
         y = parameters.get(ImzMLAccessions.PIXEL_SIZE_Y)
         if x is None and y is None:
-            logger.info("Pixel size not found in metadata of %s", self.data_path.name)
+            logger.info(
+                "%s states no pixel size: its scan settings hold neither %s " "nor %s.",
+                self.data_path.name,
+                ImzMLAccessions.PIXEL_SIZE_X,
+                ImzMLAccessions.PIXEL_SIZE_Y,
+            )
             return None
         if x is not None and y is not None and not self._has_old_name(x):
             return self._declared_pair(x, y)
@@ -446,6 +466,11 @@ class MzPeakMetadataExtractor(MetadataExtractor):
         nulls = self.archive.null_count()
         if not nulls:
             return declared
+        if not index.complete:
+            # The padding count covers the whole member and cannot be split
+            # by spectrum, so with spectra left out the count keeps its
+            # padding: an upper bound rather than a figure too low.
+            return declared
         return max(0, declared - int(nulls))
 
     # ------------------------------------------------------------------
@@ -507,11 +532,74 @@ class MzPeakMetadataExtractor(MetadataExtractor):
         }
 
     def _instrument_info(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
-        """Instrument and software lists, as the archive records them."""
-        return {
-            "instrument_configuration_list": metadata.get(
-                "instrument_configuration_list"
-            ),
-            "software_list": metadata.get("software_list"),
-            "data_processing_method_list": metadata.get("data_processing_method_list"),
-        }
+        """The instrument as the imzML route reads it, and the raw lists.
+
+        Model, serial number, analyzer and family are resolved by the
+        function the imzML extractor uses, so an archive converts on the
+        same mass axis as the imzML it was made from. The family is what
+        picks the axis: without it an Orbitrap archive was binned as an
+        unknown instrument.
+        """
+        configurations = metadata.get("instrument_configuration_list")
+        info = instrument_info_from_configurations(
+            _as_parsed_configurations(configurations)
+        )
+        info.update(
+            {
+                "instrument_configuration_list": configurations,
+                "software_list": metadata.get("software_list"),
+                "data_processing_method_list": metadata.get(
+                    "data_processing_method_list"
+                ),
+            }
+        )
+        return info
+
+
+def _as_parsed_parameters(parameters: Any) -> SimpleNamespace:
+    """One mzPeak parameter list in the shape pyimzml gives a ParamGroup.
+
+    As pyimzml does, a term without a value reads as ``True`` and a known
+    accession is named by the ontology, not by the name the writer gave.
+    """
+    by_accession: Dict[str, Any] = {}
+    by_name: Dict[str, Any] = {}
+    for parameter in parameters if isinstance(parameters, list) else []:
+        if not isinstance(parameter, dict):
+            continue
+        value = parameter.get("value")
+        value = True if value is None else value
+        accession = parameter.get("accession")
+        name = parameter.get("name")
+        if isinstance(accession, str) and accession:
+            by_accession.setdefault(accession, value)
+            known = ONTOLOGY.terms.get(accession)
+            if known:
+                name = known[0]
+        if isinstance(name, str) and name:
+            by_name.setdefault(name, value)
+    return SimpleNamespace(param_by_accession=by_accession, param_by_name=by_name)
+
+
+def _as_parsed_configurations(configurations: Any) -> List[SimpleNamespace]:
+    """The archive's instrument configurations, shaped as pyimzml parses them.
+
+    See :func:`~.imzml_extractor.instrument_info_from_configurations`.
+    mzPeak writes a component's kind as ``component_type`` ("analyzer",
+    "ionsource", "detector"); pyimzml calls it ``type``.
+    """
+    parsed: List[SimpleNamespace] = []
+    for configuration in configurations if isinstance(configurations, list) else []:
+        if not isinstance(configuration, dict):
+            continue
+        group = _as_parsed_parameters(configuration.get("parameters"))
+        components = []
+        for component in configuration.get("components") or []:
+            if not isinstance(component, dict):
+                continue
+            parsed_component = _as_parsed_parameters(component.get("parameters"))
+            parsed_component.type = component.get("component_type")
+            components.append(parsed_component)
+        group.components = components
+        parsed.append(group)
+    return parsed
