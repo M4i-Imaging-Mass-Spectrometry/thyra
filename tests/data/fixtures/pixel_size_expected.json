@@ -1,0 +1,31 @@
+{
+  "unit_declared": {
+    "pixel_size_um": [
+      50,
+      50
+    ],
+    "pixel_size_source": "declared"
+  },
+  "unit_absent": {
+    "pixel_size_um": [
+      50,
+      50
+    ],
+    "pixel_size_source": "unit_assumed"
+  },
+  "area_old_name": {
+    "pixel_size_um": [
+      50,
+      50
+    ],
+    "pixel_size_source": "derived_from_area"
+  },
+  "area_old_name_no_extent": {
+    "pixel_size_um": null,
+    "pixel_size_source": "unknown"
+  },
+  "unit_contradiction": {
+    "pixel_size_um": null,
+    "pixel_size_source": "unknown"
+  }
+}

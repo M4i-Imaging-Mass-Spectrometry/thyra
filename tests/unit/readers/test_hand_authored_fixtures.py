@@ -59,6 +59,19 @@ STEMS = [
 # TestTwoPrecisionTerms.
 READABLE_STEMS = [stem for stem in STEMS if stem != "two_precision_terms"]
 
+# The five pixel size test files sit in the same directory and need the same
+# guards on their bytes, but they are written by pyimzml, so the tests of the
+# hand-authored shapes leave them alone. They are read in
+# tests/unit/metadata/extractors/test_pixel_size_fixtures.py.
+PIXEL_SIZE_STEMS = [
+    "pixel_size_unit_declared",
+    "pixel_size_unit_absent",
+    "pixel_size_area_old_name",
+    "pixel_size_area_old_name_no_extent",
+    "pixel_size_unit_contradiction",
+]
+COMMITTED_STEMS = STEMS + PIXEL_SIZE_STEMS
+
 # Measured on the committed bytes. iontof_sparse.imzML is the only fixture
 # terminated with CRLF, and every one of its line breaks is one.
 IONTOF_CRLF_COUNT = 174
@@ -756,7 +769,7 @@ class TestCommittedBytes:
         assert blob.count(b"\r\n") == IONTOF_CRLF_COUNT
         assert blob.count(b"\n") == blob.count(b"\r\n")
 
-    @pytest.mark.parametrize("stem", STEMS)
+    @pytest.mark.parametrize("stem", COMMITTED_STEMS)
     @pytest.mark.parametrize("suffix", ["imzML", "ibd"])
     def test_blob_is_byte_identical_to_the_worktree(self, stem, suffix):
         """Nothing in the checkout/staging round trip may touch a fixture byte."""
@@ -765,7 +778,7 @@ class TestCommittedBytes:
 
         assert blob == (REPO_ROOT / repo_path).read_bytes()
 
-    @pytest.mark.parametrize("stem", STEMS)
+    @pytest.mark.parametrize("stem", COMMITTED_STEMS)
     def test_imzml_is_exempt_from_eol_normalisation(self, stem):
         """The exemption itself, so deleting it fails here and not somewhere subtle."""
         attributes = _git(
@@ -774,7 +787,7 @@ class TestCommittedBytes:
 
         assert attributes.strip().endswith("text: unset")
 
-    @pytest.mark.parametrize("stem", STEMS)
+    @pytest.mark.parametrize("stem", COMMITTED_STEMS)
     def test_ibd_is_marked_binary(self, stem):
         """.ibd files carry packed float64; a text heuristic must never see them."""
         attributes = _git(
@@ -784,17 +797,17 @@ class TestCommittedBytes:
         assert attributes.strip().endswith("binary: set")
 
     def test_the_corpus_is_actually_tracked(self):
-        """All eight files are in the index, not merely present in the checkout."""
+        """Every file is in the index, not merely present in the checkout."""
         tracked = _git("ls-files", "tests/data/fixtures").split()
         expected: List[str] = [
             f"tests/data/fixtures/{stem}.{suffix}"
-            for stem in STEMS
+            for stem in COMMITTED_STEMS
             for suffix in ("imzML", "ibd")
         ]
 
         assert set(expected) <= set(tracked)
 
-    @pytest.mark.parametrize("stem", STEMS)
+    @pytest.mark.parametrize("stem", COMMITTED_STEMS)
     @pytest.mark.parametrize("suffix", ["imzML", "ibd"])
     def test_gitignore_still_admits_the_corpus(self, stem, suffix):
         """``*.imzML`` and ``*.ibd`` ignore every such file; the negations admit these.

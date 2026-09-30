@@ -299,6 +299,35 @@ the extent, see
 
 Pinned by `tests/unit/metadata/extractors/test_imzml_old_pixel_size.py`.
 
+### How public files state the pixel size
+
+The headers of the 479 public imzML files of that audit that state a pixel
+size were read again on 2026-09-29, for the unit. They come from two
+repositories and 15 deposits, and 380 of them from one writer. So the table
+says which forms occur, not how common each is.
+
+| The header gives | Files | Deposits | Thyra takes |
+|---|---|---|---|
+| both terms, unit micrometre | 381 | 9 | the values |
+| both terms, no unit | 28 | 4 | the values, as micrometres |
+| `IMS:1000046` alone, named "pixel size", no unit | 39 | 4 | none, and asks for `--pixel-size` |
+| `IMS:1000046` alone, named "pixel size", unit accession `UO:0000015`, unit name "micrometer" | 31 | 1 | none, and asks for `--pixel-size` |
+
+67 of the 479 give no unit. Reading a value without a unit as micrometres is
+an assumption. The file does not confirm it.
+
+`UO:0000015` is the centimetre. In the 31 files the accession and the name of
+the unit disagree, and nothing else in the header settles which one is meant.
+
+Five synthetic test files hold these forms, one per row and one more for the
+area without an extent. Each is the same acquisition of 3 by 2 pixels of
+50 um. They are in
+[`tests/data/fixtures/`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/tree/main/tests/data/fixtures#pixel-size-test-files),
+with the script that writes them. From each of them Thyra takes 50 um or no
+pixel size, on the imzML path and on the mzPeak path.
+
+Pinned by `tests/unit/metadata/extractors/test_pixel_size_fixtures.py`.
+
 ### `IMS:1000080` is never checked against the `.ibd` header
 
 The imzML specification puts the binary file's UUID in the first 16 bytes of
@@ -365,3 +394,8 @@ parser and a writer from one codebase agree on each other's mistakes.
 
 Read that directory's README before editing any of them; two of the ways they
 break are invisible to the test suite.
+
+The same directory holds the five pixel size test files, see
+[How public files state the pixel size](#how-public-files-state-the-pixel-size).
+Those are written by pyimzml, because their subject is the geometry terms and
+nothing else.
