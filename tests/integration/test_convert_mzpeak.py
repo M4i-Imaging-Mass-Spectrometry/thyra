@@ -20,6 +20,7 @@ from tests.fixtures.mzpeak_builder import (
     GRID,
     NUMPRESS_LINEAR,
     PLAIN,
+    Spectrum,
     build_mzpeak,
     grid_spectra,
 )
@@ -493,6 +494,35 @@ class TestConversion:
         assert np.isfinite(values).all()
         assert np.isfinite(table.var["mz"].to_numpy()).all()
         assert table.n_vars == 6
+
+    def test_a_scan_on_no_pixel_does_not_change_the_store(self, tmp_path):
+        """An archive with a scan that has no position converts as without it.
+
+        Such a scan once set the origin of the grid: the store held one pixel,
+        every positioned spectrum was skipped, and the conversion reported
+        success.
+        """
+        placed = grid_spectra(3, 2, n_points=6)
+        scan = Spectrum(None, None, placed[0].mzs, np.full(6, 999.0))
+        twin = build_mzpeak(tmp_path / "twin.mzpeak", placed)
+        archive = build_mzpeak(
+            tmp_path / "scan.mzpeak", placed[:4] + [scan] + placed[4:]
+        )
+        _convert(twin, tmp_path / "twin.zarr")
+        _convert(archive, tmp_path / "scan.zarr")
+
+        expected, table = _table(tmp_path / "twin.zarr"), _table(tmp_path / "scan.zarr")
+        assert table.shape == expected.shape == (6, 6)
+        np.testing.assert_array_equal(_dense(table), _dense(expected))
+        for column in ("x", "y"):
+            np.testing.assert_array_equal(
+                table.obs[column].to_numpy(), expected.obs[column].to_numpy()
+            )
+        # The scan keeps its place in the spectrum list, so the two pixels
+        # after it are one further on.
+        np.testing.assert_array_equal(
+            table.obs["acquisition_order"].to_numpy(), [0, 1, 2, 3, 5, 6]
+        )
 
 
 @pytest.mark.skipif(

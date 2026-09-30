@@ -72,21 +72,22 @@ class Spectrum:
 
     Attributes:
         x: Position along x, in the file's own (typically 1-based) frame.
-        y: Position along y.
+            ``None`` is written as a null: a scan that belongs to no pixel.
+        y: Position along y, or ``None``.
         mzs: m/z values, ascending.
         intensities: Intensity values, same length as ``mzs``.
     """
 
     def __init__(
         self,
-        x: int,
-        y: int,
+        x: Optional[int],
+        y: Optional[int],
         mzs: Sequence[float],
         intensities: Sequence[float],
     ):
         """Store one spectrum's coordinates and arrays."""
-        self.x = int(x)
-        self.y = int(y)
+        self.x = None if x is None else int(x)
+        self.y = None if y is None else int(y)
         self.mzs = np.asarray(mzs, dtype=np.float64)
         self.intensities = np.asarray(intensities, dtype=np.float64)
         if self.mzs.size != self.intensities.size:
