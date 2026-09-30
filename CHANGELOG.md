@@ -2,6 +2,43 @@
 
 <!-- version list -->
 
+## v4.3.0 (2026-09-30)
+
+### Bug Fixes
+
+- **bruker**: Name the calibration state a conversion applied
+  ([#414](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/414),
+  [`c367dfe`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/c367dfe3dff07b4ad3306ec6fd3c8999ffd14526))
+
+- **metadata**: Do not read the area of a pixel as its size (mzPeak, imzML)
+  ([#418](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/418),
+  [`5818c56`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/5818c56373c2afef231e797ce3c9a0512fb1ece5))
+
+- **readers**: Read centroid mzPeak archives from the peaks member
+  ([#417](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/417),
+  [`9a3ece3`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/9a3ece34dfcb2f659bf14d7a25d5dda045042ac5))
+
+### Features
+
+- **converters**: Write each row's acquisition order into obs (schema 0.10.0)
+  ([#415](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/415),
+  [`4ade6cb`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/4ade6cb3c98b38a0d8351d63d056cf1b5b50d7df))
+
+- **readers**: Read the chunked layout of mzPeak archives
+  ([#420](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/420),
+  [`b02ebbb`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/b02ebbb058136782ae6c5b35fc265c417d1f66f0))
+
+### Testing
+
+- **imzml**: Add five pixel size test files, one per form public files use
+  ([#419](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/419),
+  [`ca6508c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/ca6508c7c19bb5cd219ea0dcc288a65125610b8e))
+
+- **readers**: Hold the conformance net to the registry's module table
+  ([#416](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/416),
+  [`c06be13`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/c06be13b203189dee42e103ef4f0b4106b6fbcfe))
+
+
 ## v4.2.0 (2026-09-28)
 
 ### Features
