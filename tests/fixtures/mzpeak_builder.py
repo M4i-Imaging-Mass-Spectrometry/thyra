@@ -14,15 +14,19 @@ it would pass while real archives failed.
 
 The shapes here were measured against the reference implementation
 (HUPO-PSI/mzPeak @ 502c3a4) and its shipped sample archives, not inferred
-from the draft prose.
+from the draft prose. The chunked layout was measured against archives
+written by mzpeak-convert 0.14.0 (okohlbacher/mzPeakConverter @ 0ed311e),
+and its encoders follow the specification's own text
+(``docs/layouts/chunked-layout.md`` @ ecc8062).
 """
 
 from __future__ import annotations
 
 import json
+import struct
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pyarrow as pa
@@ -43,6 +47,24 @@ POSITION_Y_COLUMN = "opt_IMS_1000051_position_y"
 
 #: Micrometre unit accession, as the reference archive declares it.
 UNIT_MICROMETRE = "UO:0000017"
+
+#: Chunk encodings, by the accession a row names in ``chunk_encoding``.
+PLAIN = "MS:1000576"
+DELTA = "MS:1003089"
+NUMPRESS_LINEAR = "MS:1002312"
+GRID = "MS:1003826"
+
+#: Grid models.
+LINEAR_GRID = "MS:1003824"
+SQUARE_ROOT_GRID = "MS:1003825"
+
+#: Intercept, slope and scale of the grid the fixtures are written on. The
+#: slope is a power of two, so every m/z with at most ten binary places
+#: comes back from its index to the bit.
+GRID_PARAMETERS = (0.0, 2.0**-10, 1.0)
+
+#: A stored point: its m/z and intensity, both ``None`` on padding.
+Point = Tuple[Optional[float], Optional[float]]
 
 
 class Spectrum:
@@ -125,36 +147,224 @@ def _point_table(
     return pa.table({"point": point})
 
 
-def _chunk_table(content: Sequence[Optional[Spectrum]]) -> pa.Table:
-    """Build a chunked-layout signal table.
+def _stored_points(spectrum: Spectrum, null_pair_after: Optional[int]) -> List[Point]:
+    """One spectrum's points as they are stored, padding included."""
+    points: List[Point] = []
+    for position, (mz, intensity) in enumerate(zip(spectrum.mzs, spectrum.intensities)):
+        points.append((float(mz), float(intensity)))
+        if null_pair_after is not None and position == null_pair_after - 1:
+            points += [(None, None), (None, None)]
+    return points
 
-    Only the schema matters: this exists so a reader can be shown refusing the
-    layout by name, and no test reads the values back.
+
+def delta_encode(values: Sequence[Optional[float]]) -> List[Optional[float]]:
+    """Delta-encode with nulls, as the specification's example does.
+
+    The first value is left out unless it is null. A value after a null is
+    written as it is.
     """
-    spectra = [spectrum for spectrum in content if spectrum is not None]
-    chunk = pa.StructArray.from_arrays(
-        [
-            pa.array(range(len(spectra)), type=pa.uint64()),
-            pa.array([float(s.mzs[0]) for s in spectra], type=pa.float64()),
-            pa.array([float(s.mzs[-1]) for s in spectra], type=pa.float64()),
-            pa.array(
-                [[float(v) for v in s.mzs] for s in spectra],
-                type=pa.large_list(pa.float64()),
-            ),
-            pa.array(["basic" for _ in spectra], type=pa.string()),
-            pa.array(
-                [[float(v) for v in s.intensities] for s in spectra],
-                type=pa.large_list(pa.float32()),
-            ),
-        ],
-        fields=[
-            pa.field("spectrum_index", pa.uint64()),
-            pa.field("mz_chunk_start", pa.float64()),
-            pa.field("mz_chunk_end", pa.float64()),
-            pa.field("mz_chunk_values", pa.large_list(pa.float64())),
-            pa.field("chunk_encoding", pa.string()),
-            pa.field("intensity", pa.large_list(pa.float32())),
-        ],
+    encoded: List[Optional[float]] = []
+    last = values[0]
+    if last is None:
+        encoded.append(None)
+    for value in values[1:]:
+        if value is None or last is None:
+            encoded.append(value)
+        else:
+            encoded.append(value - last)
+        last = value
+    return encoded
+
+
+def _half_bytes_of(residual: int) -> List[int]:
+    """One MS-Numpress residual: a count, then the half bytes it keeps.
+
+    The count is how many of the eight half bytes are left out at the top:
+    zeros for a value that fits, ones (count plus 8) for a negative one.
+    """
+    pattern = residual & 0xFFFFFFFF
+    digits = [(pattern >> (4 * place)) & 0xF for place in range(8)]
+    top = digits[7]
+    if top not in (0x0, 0xF):
+        return [0, *digits]
+    kept = 8
+    while kept > 0 and digits[kept - 1] == top:
+        kept -= 1
+    if top == 0xF and kept == 0:
+        # Minus one keeps one half byte; the count cannot say eight ones.
+        kept = 1
+    left_out = 8 - kept
+    return [left_out + (8 if top == 0xF else 0), *digits[:kept]]
+
+
+def numpress_linear_encode(
+    values: Sequence[float], fixed_point: Optional[float] = None
+) -> bytes:
+    """Encode values with MS-Numpress linear prediction.
+
+    Written from the published description (Teleman et al., Mol Cell
+    Proteomics 2014, 13, 1537): the scale as a big-endian double, the first
+    two values as little-endian 32-bit integers, then for each further
+    value what the prediction ``2 a - b`` missed.
+
+    Args:
+        values: The values to encode.
+        fixed_point: The scale. Defaults to the largest power of two that
+            keeps every value and every residual inside 31 bits, so that
+            values with few binary places come back to the bit.
+    """
+
+    def scaled_by(scale: float) -> Tuple[List[int], List[int]]:
+        whole = [int(value * scale + 0.5) for value in values]
+        missed = [
+            whole[place] - (2 * whole[place - 1] - whole[place - 2])
+            for place in range(2, len(whole))
+        ]
+        return whole, missed
+
+    if fixed_point is None:
+        largest = max([abs(v) for v in values] + [1.0])
+        fixed_point = 2.0 ** int(np.floor(np.log2(0x7FFFFFFF / largest)))
+        while any(abs(r) > 0x7FFFFFFF for r in scaled_by(fixed_point)[1]):
+            fixed_point /= 2.0
+    encoded = bytearray(struct.pack(">d", fixed_point))
+    scaled, residuals = scaled_by(fixed_point)
+    for value in scaled[:2]:
+        encoded += struct.pack("<I", value)
+    halves: List[int] = []
+    for residual in residuals:
+        halves += _half_bytes_of(residual)
+    if len(halves) % 2:
+        halves.append(0)
+    for high, low in zip(halves[0::2], halves[1::2]):
+        encoded.append((high << 4) | low)
+    return bytes(encoded)
+
+
+def grid_indices(
+    values: Sequence[float], grid_type: str, parameters: Sequence[float]
+) -> List[int]:
+    """Grid indices of m/z values, each as the step from the one before."""
+    intercept, slope, scale = parameters
+    scaled = np.asarray(values, dtype=np.float64) * scale
+    if grid_type == SQUARE_ROOT_GRID:
+        scaled = np.sqrt(scaled)
+    indices = np.floor((scaled - intercept) / slope + 0.5).astype(np.int64)
+    return [int(v) for v in np.diff(indices, prepend=0)]
+
+
+def _chunk_row(
+    index: int,
+    points: Sequence[Point],
+    encoding: str,
+    grid_type: str,
+    fixed_point: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Write one chunk row, spelled out column by column."""
+    mzs = [mz for mz, _ in points]
+    real = [mz for mz in mzs if mz is not None]
+    row: Dict[str, Any] = {
+        "spectrum_index": index,
+        # Both bounds are zero on a chunk that holds padding alone.
+        "mz_chunk_start": real[0] if real else 0.0,
+        "mz_chunk_end": real[-1] if real else 0.0,
+        "mz_chunk_values": None,
+        "chunk_encoding": encoding,
+        "intensity": [intensity for _, intensity in points],
+        "mz_numpress_linear_bytes": None,
+        "mz_grid": None,
+    }
+    if encoding == PLAIN:
+        row["mz_chunk_values"] = mzs[1:]
+    elif encoding == DELTA:
+        row["mz_chunk_values"] = delta_encode(mzs)
+    elif encoding == NUMPRESS_LINEAR:
+        # MS-Numpress has no null; the reference writer stores zero.
+        filled = [0.0 if mz is None else mz for mz in mzs]
+        row["mz_numpress_linear_bytes"] = list(
+            numpress_linear_encode(filled, fixed_point)
+        )
+    elif encoding == GRID:
+        if len(real) != len(mzs):
+            raise ValueError("a grid has no null; do not pad a grid fixture")
+        row["mz_grid"] = {
+            "grid_type": grid_type,
+            "parameters": list(GRID_PARAMETERS),
+            "indices": grid_indices(mzs, grid_type, GRID_PARAMETERS),
+        }
+    else:
+        # An encoding the builder cannot write is still named in the row,
+        # so that a reader can be shown refusing it.
+        row["mz_chunk_values"] = mzs[1:]
+    return row
+
+
+def chunk_table(
+    content: Sequence[Optional[Spectrum]],
+    null_pair_after: Optional[int] = None,
+    encoding: Union[str, Sequence[str]] = DELTA,
+    chunk_points: int = 4,
+    grid_type: str = LINEAR_GRID,
+    fixed_point: Optional[float] = None,
+) -> pa.Table:
+    """Build the chunked-layout signal table.
+
+    Args:
+        content: Spectra in ``spectrum_index`` order, ``None`` for one with
+            no points in this member.
+        null_pair_after: As for the point layout.
+        encoding: Accession written into ``chunk_encoding``. A sequence is
+            dealt out row by row, for a member that mixes encodings.
+        chunk_points: Stored points per row. The specification lets a
+            writer cut where it likes, as long as the chunks ascend.
+        grid_type: Grid model of a grid-encoded row.
+        fixed_point: Scale of an MS-Numpress row; see
+            :func:`numpress_linear_encode`.
+
+    Returns:
+        A table with the single struct column ``chunk``. It carries the
+        byte column and the grid column only when a row needs them, which
+        is what the converter does.
+    """
+    encodings = [encoding] if isinstance(encoding, str) else list(encoding)
+    rows: List[Dict[str, Any]] = []
+    for index, spectrum in enumerate(content):
+        if spectrum is None:
+            continue
+        points = _stored_points(spectrum, null_pair_after)
+        for start in range(0, len(points), chunk_points):
+            rows.append(
+                _chunk_row(
+                    index,
+                    points[start : start + chunk_points],
+                    encodings[len(rows) % len(encodings)],
+                    grid_type,
+                    fixed_point,
+                )
+            )
+
+    fields = [
+        pa.field("spectrum_index", pa.uint64()),
+        pa.field("mz_chunk_start", pa.float64()),
+        pa.field("mz_chunk_end", pa.float64()),
+        pa.field("mz_chunk_values", pa.large_list(pa.float64())),
+        pa.field("chunk_encoding", pa.string()),
+        pa.field("intensity", pa.large_list(pa.float32())),
+    ]
+    if NUMPRESS_LINEAR in encodings:
+        fields.append(pa.field("mz_numpress_linear_bytes", pa.large_list(pa.uint8())))
+    if GRID in encodings:
+        grid = pa.struct(
+            [
+                pa.field("grid_type", pa.large_string()),
+                pa.field("parameters", pa.large_list(pa.float64())),
+                pa.field("indices", pa.large_list(pa.uint32())),
+            ]
+        )
+        fields.append(pa.field("mz_grid", grid))
+    chunk = pa.array(
+        [{field.name: row[field.name] for field in fields} for row in rows],
+        type=pa.struct(fields),
     )
     return pa.table({"chunk": chunk})
 
@@ -434,6 +644,10 @@ def build_mzpeak(
     empty_peer: bool = False,
     declare_counts: bool = True,
     file_contents: Optional[List[dict]] = None,
+    chunk_encoding: Union[str, Sequence[str]] = DELTA,
+    chunk_points: int = 4,
+    grid_type: str = LINEAR_GRID,
+    numpress_fixed_point: Optional[float] = None,
 ) -> Path:
     """Write one ``.mzpeak`` archive and return its path.
 
@@ -479,6 +693,14 @@ def build_mzpeak(
         file_contents: Replaces ``file_description.contents``. The reference
             converter's imaging archives do not always declare the
             representation there, so this is how to leave it out.
+        chunk_encoding: For ``layout="chunk"``, the accession of the
+            encoding the m/z are stored under, or one per row to mix them.
+        chunk_points: For ``layout="chunk"``, stored points per row.
+        grid_type: For the grid encoding, the accession of the model.
+        numpress_fixed_point: For MS-Numpress, the scale. The default is a
+            power of two, which gives the fixture's m/z back to the bit. A
+            scale such as 1e5 gives them back a little off, as a real
+            archive does.
 
     Returns:
         ``path``, for convenience.
@@ -490,10 +712,17 @@ def build_mzpeak(
     filled_member = PEAKS_MEMBER if signal == "centroid" else DATA_MEMBER
     tables: Dict[str, pa.Table] = {}
     for member, content in plan.items():
+        padding = null_pair_after if member == DATA_MEMBER else None
         if layout == "chunk" and member == filled_member:
-            tables[member] = _chunk_table(content)
+            tables[member] = chunk_table(
+                content,
+                padding,
+                chunk_encoding,
+                chunk_points,
+                grid_type,
+                numpress_fixed_point,
+            )
         else:
-            padding = null_pair_after if member == DATA_MEMBER else None
             tables[member] = _point_table(content, padding)
 
     if spectrum_representation is None:

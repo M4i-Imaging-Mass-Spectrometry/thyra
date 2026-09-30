@@ -14,9 +14,21 @@ import zipfile
 import numpy as np
 import pytest
 
-from tests.fixtures.mzpeak_builder import Spectrum, build_mzpeak, grid_spectra
+from tests.fixtures.mzpeak_builder import (
+    DELTA,
+    GRID,
+    NUMPRESS_LINEAR,
+    PLAIN,
+    SQUARE_ROOT_GRID,
+    Spectrum,
+    build_mzpeak,
+    grid_spectra,
+)
 from thyra.errors import ConversionRefused
-from thyra.readers.mzpeak import MzPeakReader
+from thyra.readers.mzpeak import MzPeakReader, mzpeak_reader
+
+#: Every chunk encoding the reader decodes.
+ENCODINGS = [PLAIN, DELTA, NUMPRESS_LINEAR, GRID]
 
 
 @pytest.fixture
@@ -179,9 +191,29 @@ class TestMassAxis:
     """The reader's view of the m/z axis."""
 
     def test_never_claims_a_shared_axis(self, simple_archive):
-        """The point layout, the one Thyra reads, has an axis per spectrum."""
+        """The point layout has an axis per spectrum."""
         with MzPeakReader(simple_archive) as reader:
             assert reader.has_shared_mass_axis is False
+
+    def test_one_grid_for_every_spectrum_is_not_a_shared_axis(self, tmp_path):
+        """A grid says where a point may lie, not which points a pixel has.
+
+        Every row of this archive carries the same grid model, and every
+        spectrum the same m/z. The reader still reports no shared axis:
+        it would take a pass over every index to know the second part.
+        """
+        archive = build_mzpeak(
+            tmp_path / "grid.mzpeak",
+            grid_spectra(2, 2),
+            layout="chunk",
+            chunk_encoding=GRID,
+        )
+
+        with MzPeakReader(archive) as reader:
+            assert reader.has_shared_mass_axis is False
+            axis = reader.get_common_mass_axis()
+
+        np.testing.assert_array_equal(axis, 100.0 + 0.5 * np.arange(8))
 
     def test_common_axis_is_the_sorted_union(self, tmp_path):
         """Per-spectrum axes combine into one ascending, deduplicated axis."""
@@ -320,13 +352,49 @@ class TestIndexTolerance:
 class TestRefusals:
     """Layouts and acquisitions the reader will not pretend to handle."""
 
-    def test_chunked_layout_is_refused_by_name(self, tmp_path):
-        """The chunked encoding is a different layout, not a variant."""
+    def test_chunk_encoding_that_is_not_decoded_is_refused_by_name(self, tmp_path):
+        """The refusal gives the term, and comes before any spectrum."""
         archive = build_mzpeak(
-            tmp_path / "chunked.mzpeak", grid_spectra(2, 1), layout="chunk"
+            tmp_path / "slof.mzpeak",
+            grid_spectra(2, 1),
+            layout="chunk",
+            chunk_encoding="MS:1002314",
         )
 
-        with pytest.raises(NotImplementedError, match="chunked layout"):
+        with pytest.raises(ConversionRefused) as refusal:
+            with MzPeakReader(archive) as reader:
+                reader.get_essential_metadata()
+
+        message = str(refusal.value)
+        assert "MS:1002314 (MS-Numpress short logged float compression)" in message
+        assert "slof.mzpeak" in message
+
+    def test_one_refused_row_among_many_is_enough(self, tmp_path):
+        """Every row is checked at the start, not the first batch alone."""
+        spectra = grid_spectra(3, 3, n_points=8)
+        rows = 9 * 2
+        archive = build_mzpeak(
+            tmp_path / "late.mzpeak",
+            spectra,
+            layout="chunk",
+            chunk_encoding=[DELTA] * (rows - 1) + ["MS:4000000"],
+        )
+
+        with pytest.raises(ConversionRefused, match="chunk encoding MS:4000000,"):
+            with MzPeakReader(archive) as reader:
+                reader.get_essential_metadata()
+
+    def test_grid_model_that_is_not_decoded_is_refused_by_name(self, tmp_path):
+        """The open models are decoded; a vendor's model is named and left."""
+        archive = build_mzpeak(
+            tmp_path / "vendor_grid.mzpeak",
+            grid_spectra(2, 1),
+            layout="chunk",
+            chunk_encoding=GRID,
+            grid_type="MS:9999002",
+        )
+
+        with pytest.raises(ConversionRefused, match=r"grid of type MS:9999002 \("):
             with MzPeakReader(archive) as reader:
                 reader.get_essential_metadata()
 
@@ -549,18 +617,31 @@ class TestSignalMember:
         assert essential.total_peaks == 5
 
     def test_layout_is_read_from_the_member_that_holds_the_data(self, tmp_path):
-        """A chunked peaks member is refused though the data member is not."""
+        """A chunked peaks member beside an empty point-layout data member.
+
+        The converter writes this pair when it is asked for the point layout
+        and finds centroid m/z on a lattice: the peaks member is chunked all
+        the same.
+        """
+        spectra = grid_spectra(2, 1)
         archive = build_mzpeak(
             tmp_path / "chunked_peaks.mzpeak",
-            grid_spectra(2, 1),
+            spectra,
             signal="centroid",
             empty_peer=True,
             layout="chunk",
+            chunk_encoding=GRID,
         )
 
-        with pytest.raises(NotImplementedError, match="chunked layout"):
-            with MzPeakReader(archive) as reader:
-                reader.get_essential_metadata()
+        with MzPeakReader(archive) as reader:
+            assert reader.archive.layout() == "chunk"
+            assert reader.get_essential_metadata().spectrum_type == "centroid spectrum"
+            emitted = list(reader.iter_spectra())
+
+        assert [coords for coords, _, _ in emitted] == [(0, 0, 0), (1, 0, 0)]
+        for (_, mzs, intensities), spectrum in zip(emitted, spectra):
+            np.testing.assert_array_equal(mzs, spectrum.mzs)
+            np.testing.assert_array_equal(intensities, spectrum.intensities)
 
     def test_padding_is_counted_in_the_member_that_is_read(self, tmp_path):
         """Null pairs in the data member are not charged to a peaks read.
@@ -615,7 +696,10 @@ class TestSignalMember:
             with MzPeakReader(archive) as reader:
                 reader.get_essential_metadata()
 
-    def test_two_empty_members_are_refused_for_holding_no_signal(self, tmp_path):
+    @pytest.mark.parametrize("layout", ["point", "chunk"])
+    def test_two_empty_members_are_refused_for_holding_no_signal(
+        self, tmp_path, layout
+    ):
         """No rows in either member is an empty archive, said plainly."""
         spectra = [Spectrum(1, 1, [], []), Spectrum(2, 1, [], [])]
         archive = build_mzpeak(
@@ -623,6 +707,7 @@ class TestSignalMember:
             spectra,
             signal="both",
             centroids=[None, None],
+            layout=layout,
         )
 
         with warnings.catch_warnings():
@@ -639,3 +724,289 @@ class TestSignalMember:
         with pytest.raises(ConversionRefused, match="no 'spectrum/data_arrays'"):
             with MzPeakReader(archive) as reader:
                 reader.get_essential_metadata()
+
+
+def _read(archive):
+    """Everything a conversion takes from a reader, in one pass each."""
+    with MzPeakReader(archive) as reader:
+        essential = reader.get_essential_metadata()
+        return {
+            "axis": reader.get_common_mass_axis(),
+            "spectra": list(reader.iter_spectra_with_acquisition_order()),
+            "n_spectra": essential.n_spectra,
+            "total_peaks": essential.total_peaks,
+            "mass_range": essential.mass_range,
+            "spectrum_type": essential.spectrum_type,
+            "dimensions": essential.dimensions,
+        }
+
+
+def _assert_same_reading(candidate, reference):
+    """Two archives gave the reader the same data, to the bit."""
+    for key in ("n_spectra", "total_peaks", "mass_range", "spectrum_type"):
+        assert candidate[key] == reference[key], key
+    assert candidate["dimensions"] == reference["dimensions"]
+    np.testing.assert_array_equal(candidate["axis"], reference["axis"])
+    assert len(candidate["spectra"]) == len(reference["spectra"])
+    for ours, theirs in zip(candidate["spectra"], reference["spectra"]):
+        assert ours[0] == theirs[0]
+        assert ours[1] == theirs[1]
+        np.testing.assert_array_equal(ours[2], theirs[2])
+        np.testing.assert_array_equal(ours[3], theirs[3])
+        assert ours[2].dtype == np.float64
+        assert ours[3].dtype == np.float64
+
+
+class TestChunkedLayout:
+    """A chunked archive reads as its point twin does.
+
+    The twin is the same spectra written in the point layout, so whatever
+    the point layout is known to give, the chunked one is held to.
+    """
+
+    @pytest.mark.parametrize("encoding", ENCODINGS)
+    @pytest.mark.parametrize("chunk_points", [1, 3, 100])
+    def test_reads_as_the_point_twin(self, tmp_path, encoding, chunk_points):
+        """Pixels, order, m/z, intensities, axis and counts all agree."""
+        spectra = grid_spectra(3, 2, n_points=7, skip=[(2, 1)])
+        twin = build_mzpeak(tmp_path / "point.mzpeak", spectra)
+        archive = build_mzpeak(
+            tmp_path / "chunked.mzpeak",
+            spectra,
+            layout="chunk",
+            chunk_encoding=encoding,
+            chunk_points=chunk_points,
+        )
+
+        _assert_same_reading(_read(archive), _read(twin))
+
+    def test_square_root_grid_reads_as_the_point_twin(self, tmp_path):
+        """The second open grid model."""
+        spectra = [
+            Spectrum(x, 1, [(10.0 + k / 4.0) ** 2 for k in range(x, x + 6)], range(6))
+            for x in (1, 2, 3)
+        ]
+        twin = build_mzpeak(tmp_path / "point.mzpeak", spectra)
+        archive = build_mzpeak(
+            tmp_path / "chunked.mzpeak",
+            spectra,
+            layout="chunk",
+            chunk_encoding=GRID,
+            grid_type=SQUARE_ROOT_GRID,
+        )
+
+        _assert_same_reading(_read(archive), _read(twin))
+
+    def test_mixed_encodings_read_as_the_point_twin(self, tmp_path):
+        """A member may change encoding from one row to the next."""
+        spectra = grid_spectra(3, 2, n_points=9)
+        twin = build_mzpeak(tmp_path / "point.mzpeak", spectra)
+        archive = build_mzpeak(
+            tmp_path / "chunked.mzpeak",
+            spectra,
+            layout="chunk",
+            chunk_encoding=ENCODINGS,
+            chunk_points=2,
+        )
+
+        with MzPeakReader(archive) as reader:
+            assert reader.archive.chunk_encodings() == sorted(ENCODINGS)
+        _assert_same_reading(_read(archive), _read(twin))
+
+    @pytest.mark.parametrize("encoding", ENCODINGS)
+    @pytest.mark.parametrize("signal", ["centroid", "both"])
+    def test_member_choice_holds_for_chunked_members(self, tmp_path, encoding, signal):
+        """Peaks when the data member is empty; the data member otherwise."""
+        spectra = grid_spectra(2, 2, n_points=6)
+        centroids = [Spectrum(s.x, s.y, s.mzs[:2], s.intensities[:2]) for s in spectra]
+        options = {
+            "signal": signal,
+            "empty_peer": signal == "centroid",
+            "centroids": centroids if signal == "both" else None,
+        }
+        twin = build_mzpeak(tmp_path / "point.mzpeak", spectra, **options)
+        archive = build_mzpeak(
+            tmp_path / "chunked.mzpeak",
+            spectra,
+            layout="chunk",
+            chunk_encoding=encoding,
+            **options,
+        )
+
+        _assert_same_reading(_read(archive), _read(twin))
+
+    @pytest.mark.parametrize("encoding", ENCODINGS)
+    @pytest.mark.parametrize("rows", [1, 2, 5])
+    def test_batch_size_does_not_change_the_result(
+        self, tmp_path, monkeypatch, encoding, rows
+    ):
+        """Spectra cut by a batch boundary are joined, not doubled."""
+        spectra = grid_spectra(3, 2, n_points=8)
+        archive = build_mzpeak(
+            tmp_path / "chunked.mzpeak",
+            spectra,
+            layout="chunk",
+            chunk_encoding=encoding,
+            chunk_points=3,
+        )
+        whole = _read(archive)
+
+        monkeypatch.setattr(mzpeak_reader, "CHUNK_BATCH_ROWS", (rows, rows))
+
+        _assert_same_reading(_read(archive), whole)
+
+    @pytest.mark.parametrize("row_group_size", [1, 2, 7])
+    def test_row_group_size_does_not_change_the_result(self, tmp_path, row_group_size):
+        """Nor are those cut by a row group of the archive."""
+        spectra = grid_spectra(3, 2, n_points=8)
+        whole = build_mzpeak(
+            tmp_path / "whole.mzpeak", spectra, layout="chunk", chunk_points=3
+        )
+        split = build_mzpeak(
+            tmp_path / "split.mzpeak",
+            spectra,
+            layout="chunk",
+            chunk_points=3,
+            row_group_size=row_group_size,
+        )
+
+        _assert_same_reading(_read(split), _read(whole))
+
+    def test_batches_are_sized_by_points(self, tmp_path):
+        """Long rows make small batches; the bounds hold either way."""
+        spectra = grid_spectra(2, 2, n_points=8)
+        archive = build_mzpeak(
+            tmp_path / "chunked.mzpeak", spectra, layout="chunk", chunk_points=4
+        )
+
+        with MzPeakReader(archive) as reader:
+            data = reader.archive.signal()
+            low, high = mzpeak_reader.CHUNK_BATCH_ROWS
+            assert reader._chunk_rows_per_batch(data) == high
+            reader._point_counts = reader._point_counts * 10**9
+            assert reader._chunk_rows_per_batch(data) == low
+
+    @pytest.mark.parametrize("encoding", [PLAIN, DELTA, NUMPRESS_LINEAR])
+    @pytest.mark.parametrize("chunk_points", [1, 2, 3, 4, 5, 100])
+    def test_padding_reads_as_the_point_twin(self, tmp_path, encoding, chunk_points):
+        """Null pairs are dropped and counted as the point layout's are."""
+        spectra = grid_spectra(2, 2, n_points=6)
+        twin = build_mzpeak(tmp_path / "point.mzpeak", spectra, null_pair_after=3)
+        archive = build_mzpeak(
+            tmp_path / "chunked.mzpeak",
+            spectra,
+            null_pair_after=3,
+            layout="chunk",
+            chunk_encoding=encoding,
+            chunk_points=chunk_points,
+        )
+
+        with MzPeakReader(twin) as reader:
+            list(reader.iter_spectra())
+            expected = reader._dropped_points
+            assert reader.archive.null_count() == expected == 8
+        with MzPeakReader(archive) as reader:
+            list(reader.iter_spectra())
+            assert reader._dropped_points == expected
+            assert reader.archive.null_count() == expected
+        _assert_same_reading(_read(archive), _read(twin))
+
+    def test_lossy_m_z_stay_inside_the_declared_range(self, tmp_path):
+        """The ends of every spectrum are exact, so the range holds them.
+
+        The scale makes every decoded m/z a little off, as MS-Numpress does
+        on real data. The declared range comes from the exact values, and
+        the resampled axis is built on it.
+        """
+        spectra = [
+            Spectrum(
+                x,
+                1,
+                [100.1234567 + 0.3 * x, 250.7654321, 399.9876543 - 0.3 * x],
+                [5, 6, 7],
+            )
+            for x in (1, 2, 3)
+        ]
+        scaled = np.concatenate([s.mzs for s in spectra]) * 1e5
+        assert not np.any(scaled == np.round(scaled)), "the fixture is not lossy"
+        archive = build_mzpeak(
+            tmp_path / "lossy.mzpeak",
+            spectra,
+            layout="chunk",
+            chunk_encoding=NUMPRESS_LINEAR,
+            numpress_fixed_point=1e5,
+        )
+
+        with MzPeakReader(archive) as reader:
+            low, high = reader.get_essential_metadata().mass_range
+            emitted = list(reader.iter_spectra())
+
+        assert low == min(s.mzs[0] for s in spectra)
+        assert high == max(s.mzs[-1] for s in spectra)
+        for (_, mzs, _), spectrum in zip(emitted, spectra):
+            assert mzs[0] == spectrum.mzs[0]
+            assert mzs[-1] == spectrum.mzs[-1]
+            assert mzs[1] != spectrum.mzs[1]
+            assert mzs[1] == pytest.approx(spectrum.mzs[1], abs=1e-5)
+            assert low <= mzs.min() and mzs.max() <= high
+
+    @pytest.mark.parametrize(
+        ("encoding", "warned"),
+        [(PLAIN, False), (DELTA, False), (NUMPRESS_LINEAR, True), (GRID, True)],
+    )
+    def test_the_axis_of_every_m_z_warns_on_a_lossy_archive(
+        self, tmp_path, thyra_logs, encoding, warned
+    ):
+        """Without resampling a lossy archive gives a very long axis."""
+        archive = build_mzpeak(
+            tmp_path / "chunked.mzpeak",
+            grid_spectra(2, 1),
+            layout="chunk",
+            chunk_encoding=encoding,
+        )
+
+        with MzPeakReader(archive) as reader:
+            reader.get_essential_metadata()
+            with thyra_logs("thyra.readers.mzpeak.mzpeak_reader", "WARNING") as logs:
+                reader.get_common_mass_axis()
+
+        messages = [record.getMessage() for record in logs]
+        assert [encoding in message for message in messages] == [True] * warned
+        assert all("resampling" in message for message in messages)
+
+    def test_the_store_is_told_which_encodings_it_came_from(self, tmp_path):
+        """Two of them are lossy, so the record is worth keeping."""
+        spectra = grid_spectra(2, 1)
+        twin = build_mzpeak(tmp_path / "point.mzpeak", spectra)
+        archive = build_mzpeak(
+            tmp_path / "chunked.mzpeak",
+            spectra,
+            layout="chunk",
+            chunk_encoding=NUMPRESS_LINEAR,
+        )
+
+        with MzPeakReader(archive) as reader:
+            chunked = reader.get_comprehensive_metadata().format_specific
+        with MzPeakReader(twin) as reader:
+            point = reader.get_comprehensive_metadata().format_specific
+
+        assert chunked["layout"] == "chunk"
+        assert chunked["chunk_encodings"] == [NUMPRESS_LINEAR]
+        assert point["layout"] == "point"
+        assert "chunk_encodings" not in point
+
+    def test_intensity_filter_applies_to_chunked_archives(self, tmp_path):
+        """The threshold is the reader's, whatever the layout."""
+        spectra = grid_spectra(2, 1, n_points=6)
+        twin = build_mzpeak(tmp_path / "point.mzpeak", spectra)
+        archive = build_mzpeak(tmp_path / "chunked.mzpeak", spectra, layout="chunk")
+
+        with MzPeakReader(twin, intensity_threshold=4.0) as reader:
+            expected = list(reader.iter_spectra())
+        with MzPeakReader(archive, intensity_threshold=4.0) as reader:
+            emitted = list(reader.iter_spectra())
+
+        assert len(emitted) == len(expected) == 2
+        for ours, theirs in zip(emitted, expected):
+            np.testing.assert_array_equal(ours[1], theirs[1])
+            np.testing.assert_array_equal(ours[2], theirs[2])
