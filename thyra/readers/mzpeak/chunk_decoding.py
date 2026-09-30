@@ -79,6 +79,17 @@ REFUSED_TERMS: Dict[str, str] = {
     "MS:9999002": "timsTOF m/z grid of the reference implementation",
 }
 
+#: Grid models the default timsTOF (TDF) lane of mzpeak-convert writes.
+TIMSTOF_GRID_TYPES = ("MS:9999001", "MS:9999002")
+
+#: What a refusal of those models adds: the option of that converter that
+#: writes the m/z themselves (checked against the help of 0.16.0).
+TIMSTOF_GRID_HINT = (
+    " mzpeak-convert writes this model for a timsTOF .d by default. Convert "
+    "the .d again with --no-ims-compact to store m/z Thyra reads, or "
+    "convert the .d with Thyra directly."
+)
+
 #: Transforms of the intensity array, by the column that holds them.
 INTENSITY_TRANSFORMS: Dict[str, str] = {
     "intensity_numpress_slof_bytes": "MS:1002314",
@@ -208,10 +219,11 @@ def validate_encodings(
         return
     for grid_type in grid_types:
         if grid_type not in DECODED_GRID_TYPES:
+            hint = TIMSTOF_GRID_HINT if grid_type in TIMSTOF_GRID_TYPES else ""
             raise ConversionRefused(
                 f"{source} stores m/z on a grid of type "
                 f"{describe_term(grid_type)}, which Thyra does not decode. "
-                f"It decodes {_decoded(DECODED_GRID_TYPES)}."
+                f"It decodes {_decoded(DECODED_GRID_TYPES)}.{hint}"
             )
 
 

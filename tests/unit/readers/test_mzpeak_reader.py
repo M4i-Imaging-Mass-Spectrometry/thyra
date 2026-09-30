@@ -133,8 +133,13 @@ class TestIteration:
 
         assert coords == [(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0)]
 
-    def test_offset_positions_are_normalised(self, tmp_path):
-        """A file whose positions start at 5 still converts to a 0-based grid."""
+    def test_a_cropped_image_keeps_its_place(self, tmp_path):
+        """Positions starting at 5 stay at 5, as they do from imzML (D14).
+
+        Rebasing on the smallest position moved a cropped image to the
+        corner, so the archive and the imzML it was made from gave two
+        different grids.
+        """
         spectra = [
             Spectrum(5, 9, [100.0, 101.0], [1.0, 2.0]),
             Spectrum(6, 9, [100.0, 101.0], [3.0, 4.0]),
@@ -146,8 +151,9 @@ class TestIteration:
             coords = [c for c, _, _ in reader.iter_spectra()]
             essential = reader.get_essential_metadata()
 
-        assert coords == [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
-        assert essential.coordinate_offsets == (5, 9, 0)
+        assert coords == [(4, 8, 0), (5, 8, 0), (4, 9, 0)]
+        assert essential.coordinate_offsets == (1, 1, 0)
+        assert essential.dimensions == (6, 10, 1)
 
     def test_missing_pixels_are_left_missing(self, tmp_path):
         """A sparse acquisition yields only acquired pixels.
@@ -284,8 +290,9 @@ class TestScansWithoutAPosition:
         with MzPeakReader(archive) as reader:
             essential = reader.get_essential_metadata()
 
-        assert essential.coordinate_offsets == (5, 9, 0)
-        assert essential.dimensions == (2, 2, 1)
+        # Read as 0, the null would have made the file 0-based.
+        assert essential.coordinate_offsets == (1, 1, 0)
+        assert essential.dimensions == (6, 10, 1)
         assert essential.n_spectra == 3
 
     def test_the_acquisition_order_keeps_the_gap(self, tmp_path):

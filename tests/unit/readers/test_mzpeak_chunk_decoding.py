@@ -627,6 +627,21 @@ class TestRefusals:
         with pytest.raises(ConversionRefused, match=r"grid of type MS:9999002 \("):
             decode_chunks(chunk, SOURCE)
 
+    def test_the_timstof_model_names_the_option_that_avoids_it(self):
+        """mzpeak-convert writes it for a timsTOF .d unless told not to."""
+        chunk = _chunk(TestRows.SPECTRA, encoding=GRID, grid_type="MS:9999002")
+
+        with pytest.raises(ConversionRefused, match="--no-ims-compact"):
+            decode_chunks(chunk, SOURCE)
+
+    def test_another_model_names_no_option(self):
+        """The hint belongs to the converter's timsTOF lane only."""
+        chunk = _chunk(TestRows.SPECTRA, encoding=GRID, grid_type="MS:1003822")
+
+        with pytest.raises(ConversionRefused) as refused:
+            decode_chunks(chunk, SOURCE)
+        assert "--no-ims-compact" not in str(refused.value)
+
     def test_an_intensity_array_under_a_transform(self):
         """The column name is the sign; the term is named with it."""
         chunk = _chunk(TestRows.SPECTRA, encoding=DELTA)

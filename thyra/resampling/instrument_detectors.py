@@ -146,16 +146,19 @@ class InstrumentDetector(ABC):
 
 
 class CentroidImzMLDetector(InstrumentDetector):
-    """Detector for centroid ImzML data.
+    """Detector for centroid data from an instrument not identified.
 
     Centroid data has discrete peaks and benefits from nearest-neighbor
     resampling with reflector TOF axis spacing (constant relative resolution).
+
+    Any format reaches it, not only imzML, so the name it logs does not
+    name a format. The class keeps its name because it is exported.
     """
 
     @property
     def name(self) -> str:
         """Return detector name."""
-        return "ImzML Centroid"
+        return "Centroid, instrument unknown"
 
     def matches(self, characteristics: DataCharacteristics) -> bool:
         """Check if data is centroid spectrum type."""

@@ -358,9 +358,12 @@ def _determine_pixel_size(
     essential_metadata = reader.get_essential_metadata()
 
     if essential_metadata.pixel_size is None:
-        logger.error("Pixel size not found in metadata")
-        logger.error("Use --pixel-size parameter (e.g., --pixel-size 25)")
-        raise ConversionRefused("Pixel size not found in metadata")
+        # Said once: the refusal is logged where it is caught. Logging it
+        # here as well printed the same line twice.
+        raise ConversionRefused(
+            "Pixel size not found in metadata. Pass it with --pixel-size "
+            "(for example --pixel-size 25)."
+        )
 
     final_pixel_size = essential_metadata.pixel_size[0]  # Use X size
     logger.info(f"Detected pixel size: {final_pixel_size:.1f} um")

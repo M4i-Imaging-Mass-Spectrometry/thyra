@@ -2425,8 +2425,9 @@ the reader knows which layout the archive had.
 The member that is read is chosen as before: `data_arrays` when it holds
 rows, else `peaks`. The layout is that member's.
 
-**Why read the layout.** `mzpeak-convert` 0.14.0 writes it unless told
-otherwise, and that converter builds the public example archives. Asking it
+**Why read the layout.** `mzpeak-convert` writes it unless told otherwise
+(0.14.0 and 0.16.0 were checked). All eight public example archives use it,
+under MS-Numpress; they were written by its 0.12.0. Asking the converter
 for the point layout is not a way around: for centroid m/z on a fixed-point
 lattice it still writes a chunked `peaks` member, beside a `data_arrays`
 member in the point layout.
@@ -2497,14 +2498,19 @@ Both archives were read and compared point by point.
 
 | Input | Encoding | Points | Largest m/z difference |
 |---|---|---|---|
-| centroid image, 12,737 pixels | `MS:1002312` | 60,149,625 | 2.3e-7 |
-| profile image, 16,384 pixels | `MS:1002312` | 36,371,295 | 8.0e-7, or 0.11 ppm |
+| centroid image, 12,737 pixels | `MS:1002312` | 60,149,625 | 2.3e-7, or 0.0002 ppm |
+| profile image, 16,384 pixels | `MS:1002312` | 36,371,295 | 6.6e-7, or 0.005 ppm |
 | the same, with `--no-numpress` | `MS:1003089` | 36,371,295 | 7.1e-15 |
 | synthetic profile, lattice m/z | `MS:1003089` | 5,048 | 0 |
 | synthetic centroid, lattice m/z | `MS:1003826` | 5,594 | 9.4e-8 |
 | synthetic continuous centroid | `MS:1003826` | 8,000 | 9.4e-8 |
 
 Pixels, order, point counts and intensities were the same in all six.
+
+The two real images were measured again on 2026-09-30, through the reader
+as it now decodes, with the ends of each chunk taken from its bounds. The
+largest relative difference is given beside the largest in Da. An earlier
+version of this page gave 8.0e-7 and 0.11 ppm for the profile image.
 
 None of these archives holds padding. The reference writer's own sample
 does, in both layouts (HUPO-PSI/mzPeak at `bb0f307`, delta encoding). Its
@@ -2540,12 +2546,13 @@ encoding. MS-Numpress decodes at about 2 million points per second.
 numbers of the instrument. It did not win because the loss is made when the
 archive is written. Refusing the archive does not bring the numbers back, and
 it leaves the default output of the converter unread. The largest error
-measured is 0.11 ppm, and the store says which encoding it came from.
+measured is 0.005 ppm, and the store says which encoding it came from.
 
 **Known limits.**
 
-- The archives were made here, with the converter that builds the public
-  examples. No published example archive has been read yet.
+- The archives in the tables were made here. The eight published example
+  archives were read later and compared with their source imzML files; the
+  results are on issue #422.
 - Without resampling, a lossy archive gives a mass axis far longer than its
   point twin's. The centroid image has 331,701 distinct m/z in the point
   layout and 48,116,750 under MS-Numpress. The profile image has 1,122,721,
@@ -2560,3 +2567,80 @@ measured is 0.11 ppm, and the store says which encoding it came from.
 - Vendor grid models are refused. The converter writes them for timsTOF
   input.
 - Archives of the older prototype, mzML2mzPeak, are not read.
+
+---
+
+## D29. An mzPeak archive converts to the store of its source
+
+**Status:** Implemented (2026-09-30), issue #422.
+
+**Decision.** Where an archive states the same fact as the file it was made
+from, Thyra reads it the way it reads that file. Five facts:
+
+- **Where the image sits.** Positions are rebased on the base the archive
+  declares in `imaging.coordinate_base` (1 when it declares none), or on the
+  smallest position when that is lower. That is D14's rule for imzML, so a
+  cropped image keeps its place. A writer's shift, `imaging.position_offset`,
+  is added back into `coordinate_offsets_px`.
+- **The instrument.** The instrument configurations are resolved by the
+  function the imzML extractor uses. The analyzer or model picks the mass
+  axis, and `msi_metadata` names the model.
+- **Regions.** The regions under `bruker_maldi.regions` are read when their
+  boxes place every pixel exactly once and each region holds as many pixels
+  as it lists frames. Otherwise the log says why and the store has one
+  region.
+- **MS levels.** When MS1 spectra sit on the pixels, spectra of level 2 and
+  up are left out, and the log counts them. Level 0, which mzpeak-convert
+  writes when the source states no level, is kept. A spectrum left out adds
+  nothing to the mass axis or the mass range.
+- **Embedded images** are carried into the store, unaligned.
+
+**Why.** The eight public example archives were converted beside their
+source imzML files, and one archive from a Bruker TSF run beside the `.d`.
+The spectra agreed; the stores did not.
+
+| Example | Before | After, and from its source |
+|---|---|---|
+| glioma, positions x 675 to 735 | 61 x 83 grid, x from 0 | 735 x 259 grid, x from 674 |
+| chilli | 85 x 50 grid | 92 x 70 grid |
+| Bruker TSF run | offset (1, 1) | offset (669, 109) |
+| mouse bladder, LTQ Orbitrap | instrument unknown, constant axis | Orbitrap axis |
+| DESI, Exactive | instrument unknown, reflector TOF axis | Orbitrap axis, 504,040 bins |
+
+After the change, all six public imaging datasets land on the grid of their
+imzML, pixel for pixel. The Bruker archive gives the grid and offset of the
+`.d`: 169 x 200 at (669, 109).
+
+**The objection.** An archive is its own format. Rebasing on the smallest
+position, as before, gives the smallest grid, and a reader of mzPeak owes
+imzML nothing. It did not win because the archive states the same base as
+the imzML, and the imaging profile's own converter writes it. A store that
+changes shape with the container turns one acquisition into two, and every
+pixel coordinate a user wrote down against one no longer fits the other.
+
+**Why regions are held to their boxes.** No scan names its region; the
+archive lists each region's box of raster indices and its frame count. A box
+says where a region is, not that every pixel in it belongs to it. Two
+irregular regions can share a box. The count check is what makes a box an
+answer.
+
+**Why MS2 is left out.** A pixel's spectra are summed into one row. An MS2
+spectrum summed into its pixel's MS1 spectrum is a spectrum the instrument
+never measured. A store made from mzPeak has no table for MS2 spectra, so
+leaving them out loses nothing that the store could hold.
+
+**Why the images are not aligned.** Each image comes with an affine from
+image pixels to MS pixels. In every public example it is marked
+`assumed_full_extent`: the image stretched over the whole acquisition. That
+is a guess about the frame, not a registration. The affine stays in the
+store's raw metadata.
+
+**Known limits.**
+
+- No archive with two regions exists. The region rule is tested on
+  constructed archives.
+- The Waters and timsTOF TDF lanes of mzpeak-convert 0.16.0 were not tried.
+- The chilli archive declares profile spectra and holds them in the centroid
+  member. It is read as centroid, since the member decides (see
+  [Supported Formats](supported-formats.md#mzpeak-experimental)); its imzML is
+  read as profile.
