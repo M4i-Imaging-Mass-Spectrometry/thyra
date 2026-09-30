@@ -186,6 +186,32 @@ def _lazy_pyarrow() -> Tuple[Any, Any]:
     return pyarrow, pq
 
 
+def _positions(column: Any) -> Tuple[NDArray[np.int64], NDArray[np.bool_]]:
+    """Read one position column, keeping apart the scans that have none.
+
+    A null is a scan that belongs to no pixel. Cast straight to an integer
+    it becomes the smallest one there is, and the minimum of the column
+    would then put the origin of the grid at that scan.
+
+    Args:
+        column: The position column of the scans member, as pyarrow reads it.
+
+    Returns:
+        The positions as integers, 0 where there is none, and a mask that is
+        ``True`` where the scan has a position.
+    """
+    if column.null_count == len(column):
+        # Nothing to fill, and a column of the null type cannot be filled.
+        return np.zeros(len(column), dtype=np.int64), np.zeros(len(column), dtype=bool)
+    present = np.asarray(column.is_valid().to_numpy(), dtype=bool)
+    values = np.asarray(column.fill_null(0).to_numpy())
+    if values.dtype.kind == "f":
+        finite = np.isfinite(values)
+        present = present & finite
+        values = np.where(finite, values, 0)
+    return values.astype(np.int64), present
+
+
 class MzPeakSpatialIndex(NamedTuple):
     """Everything about the archive that is one value per spectrum.
 
@@ -572,9 +598,13 @@ class MzPeakArchive:
         (``scan_index``) and nothing promises the two members are ordered
         alike.
 
+        A spectrum whose scan has a null position belongs to no pixel and is
+        left out, as a spectrum with no scan row is.
+
         Raises:
-            ValueError: If the archive is not an imaging acquisition, or
-                carries no positioned spectra.
+            ConversionRefused: If the archive is not an imaging acquisition,
+                carries no positioned spectra, or gives a scan one position
+                without the other.
         """
         if self._spatial_index is not None:
             return self._spatial_index
@@ -592,14 +622,36 @@ class MzPeakArchive:
             columns=["source_index", x_column, y_column]
         )
         source = np.asarray(scans.column("source_index").to_numpy(), dtype=np.int64)
-        xs = np.asarray(scans.column(x_column).to_numpy(), dtype=np.int64)
-        ys = np.asarray(scans.column(y_column).to_numpy(), dtype=np.int64)
+        xs, has_x = _positions(scans.column(x_column))
+        ys, has_y = _positions(scans.column(y_column))
+
+        # The imaging profile sets both positions of a scan or neither. A
+        # scan that belongs to no pixel, a calibration scan for instance, has
+        # both null. One without the other places the scan nowhere.
+        half = has_x != has_y
+        if half.any():
+            raise ConversionRefused(
+                f"{self.path} gives {int(half.sum())} of {half.size} scans one "
+                f"position but not the other ({IMS_POSITION_X} without "
+                f"{IMS_POSITION_Y}, or the reverse). A scan on a pixel has "
+                f"both, and a scan on no pixel has neither."
+            )
+        placed = has_x & has_y
 
         # One spectrum may own several scans; imaging acquisitions write one.
         # Keeping the first per spectrum means a multi-scan file resolves to a
-        # single pixel rather than silently overwriting itself.
+        # single pixel rather than silently overwriting itself. A scan with a
+        # position goes before one without, so a spectrum is only unplaced
+        # when none of its scans is on a pixel.
+        first_placed = np.argsort(~placed, kind="stable")
+        source, xs, ys, placed = (
+            source[first_placed],
+            xs[first_placed],
+            ys[first_placed],
+            placed[first_placed],
+        )
         _, first = np.unique(source, return_index=True)
-        source, xs, ys = source[first], xs[first], ys[first]
+        source, xs, ys, placed = source[first], xs[first], ys[first], placed[first]
 
         spectrum_index, counts = self._read_point_counts()
         order = np.argsort(spectrum_index, kind="stable")
@@ -618,10 +670,28 @@ class MzPeakArchive:
                 self.path.name,
             )
         spectrum_index, counts = spectrum_index[keep], counts[keep]
+        rows = np.array([lookup[int(s)] for s in spectrum_index], dtype=np.int64)
+
+        # A spectrum whose scan has no position belongs to no pixel. It is
+        # left out as an unacquired pixel is, and must not reach the minimum
+        # below, where it would set the origin of the grid.
+        on_pixel = placed[rows]
+        if not on_pixel.all():
+            logger.warning(
+                "%d of %d spectra in %s have no position and belong to no "
+                "pixel; they are left out",
+                int((~on_pixel).sum()),
+                on_pixel.size,
+                self.path.name,
+            )
+        spectrum_index, counts, rows = (
+            spectrum_index[on_pixel],
+            counts[on_pixel],
+            rows[on_pixel],
+        )
         if spectrum_index.size == 0:
             raise ConversionRefused(f"{self.path} contains no positioned spectra.")
 
-        rows = np.array([lookup[int(s)] for s in spectrum_index], dtype=np.int64)
         raw = np.stack([xs[rows], ys[rows]], axis=1)
 
         # Positions are 1-based in the reference archives, but the format

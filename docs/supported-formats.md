@@ -594,6 +594,8 @@ These are refused rather than guessed at, before any spectrum is read:
 - **Non-imaging archives** are rejected. Positions are optional in mzPeak --
   the reference converter only writes them when it happens to see imaging
   input -- and an archive without them has no pixels for Thyra to place.
+- **A scan with one position and not the other.** A scan on a pixel has both
+  `IMS:1000050` and `IMS:1000051`, and a scan on no pixel has neither.
 - **Unrecognised layouts** fail with the schema they actually carry.
 
 Two behaviours worth knowing:
@@ -603,6 +605,11 @@ Two behaviours worth knowing:
   matched on accession rather than name, because the controlled vocabulary
   spells the two axes inconsistently.
 - **One pixel size is tested before it is used.** See the table below.
+- **A scan with no position is left out.** The imaging profile gives a scan
+  that belongs to no pixel, a calibration scan for instance, a null in both
+  position columns. Thyra skips its spectrum, as it skips an unacquired pixel,
+  and logs how many it left out. The grid is built from the scans that have a
+  position.
 - **Null-pair padding is dropped.** mzPeak compresses profile spectra by
   removing interior runs of zero intensity and marking each gap with two rows
   whose m/z *and* intensity are both null; the reference reader regenerates the

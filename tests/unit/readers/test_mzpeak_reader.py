@@ -19,6 +19,9 @@ from tests.fixtures.mzpeak_builder import (
     GRID,
     NUMPRESS_LINEAR,
     PLAIN,
+    POSITION_X_COLUMN,
+    POSITION_Y_COLUMN,
+    SCANS_MEMBER,
     SQUARE_ROOT_GRID,
     Spectrum,
     build_mzpeak,
@@ -185,6 +188,197 @@ class TestIteration:
             ((1, 1, 0), 2),
             ((0, 1, 0), 3),
         ]
+
+
+def _calibration_scan(n_points=8):
+    """A spectrum with no position: a scan that belongs to no pixel."""
+    mzs = 100.0 + np.arange(n_points, dtype=np.float64) * 0.5
+    return Spectrum(None, None, mzs, np.full(n_points, 999.0))
+
+
+def _with_scans(archive, tmp_path, rows):
+    """Rewrite an archive's scans member from ``(source_index, x, y)`` rows.
+
+    The builder writes one scan per spectrum. A spectrum with several scans
+    has to be written here.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    table = pa.table(
+        {
+            "source_index": pa.array([r[0] for r in rows], type=pa.uint64()),
+            "scan_index": pa.array(range(len(rows)), type=pa.uint64()),
+            "scan_start_time": pa.array([0.0] * len(rows), type=pa.float32()),
+            POSITION_X_COLUMN: pa.array([r[1] for r in rows], type=pa.uint32()),
+            POSITION_Y_COLUMN: pa.array([r[2] for r in rows], type=pa.uint32()),
+        }
+    )
+    sink = pa.BufferOutputStream()
+    pq.write_table(table, sink)
+    rewritten = tmp_path / f"scans_{archive.name}"
+    with (
+        zipfile.ZipFile(archive) as source,
+        zipfile.ZipFile(rewritten, "w", compression=zipfile.ZIP_STORED) as target,
+    ):
+        for name in source.namelist():
+            payload = source.read(name)
+            if name == SCANS_MEMBER:
+                payload = sink.getvalue().to_pybytes()
+            target.writestr(name, payload)
+    return rewritten
+
+
+class TestScansWithoutAPosition:
+    """A scan on no pixel is left out, and must not move the grid.
+
+    The imaging profile gives a scan that belongs to no pixel, a calibration
+    scan for instance, a null in both position columns. Read as an integer
+    a null is the smallest one there is, and the grid's origin went there.
+    """
+
+    LAYOUTS = [("point", DELTA)] + [("chunk", encoding) for encoding in ENCODINGS]
+
+    @pytest.mark.parametrize(("layout", "encoding"), LAYOUTS)
+    def test_the_scan_is_left_out_and_the_others_are_read(
+        self, tmp_path, layout, encoding
+    ):
+        """The positioned spectra arrive as they do without the scan."""
+        placed = grid_spectra(3, 2)
+        twin = build_mzpeak(
+            tmp_path / "twin.mzpeak", placed, layout=layout, chunk_encoding=encoding
+        )
+        archive = build_mzpeak(
+            tmp_path / "scan.mzpeak",
+            placed[:2] + [_calibration_scan()] + placed[2:],
+            layout=layout,
+            chunk_encoding=encoding,
+        )
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with MzPeakReader(archive) as reader:
+                emitted = list(reader.iter_spectra())
+        with MzPeakReader(twin) as reader:
+            expected = list(reader.iter_spectra())
+
+        assert len(emitted) == len(expected) == 6
+        for (coords, mzs, intensities), (coords_e, mzs_e, intensities_e) in zip(
+            emitted, expected
+        ):
+            assert coords == coords_e
+            np.testing.assert_array_equal(mzs, mzs_e)
+            np.testing.assert_array_equal(intensities, intensities_e)
+
+    def test_the_grid_is_the_one_of_the_positioned_spectra(self, tmp_path):
+        """Origin, extent and count ignore the scan on no pixel."""
+        placed = [
+            Spectrum(5, 9, [100.0, 101.0], [1.0, 2.0]),
+            Spectrum(6, 9, [100.0, 101.0], [3.0, 4.0]),
+            Spectrum(5, 10, [100.0, 101.0], [5.0, 6.0]),
+        ]
+        archive = build_mzpeak(
+            tmp_path / "offset.mzpeak", [_calibration_scan(2)] + placed
+        )
+
+        with MzPeakReader(archive) as reader:
+            essential = reader.get_essential_metadata()
+
+        assert essential.coordinate_offsets == (5, 9, 0)
+        assert essential.dimensions == (2, 2, 1)
+        assert essential.n_spectra == 3
+
+    def test_the_acquisition_order_keeps_the_gap(self, tmp_path):
+        """The scan keeps its place in the spectrum list; the rest keep theirs."""
+        placed = grid_spectra(2, 1)
+        archive = build_mzpeak(
+            tmp_path / "gap.mzpeak", [placed[0], _calibration_scan(), placed[1]]
+        )
+
+        with MzPeakReader(archive) as reader:
+            ordered = [
+                (coords, order)
+                for coords, order, _, _ in reader.iter_spectra_with_acquisition_order()
+            ]
+
+        assert ordered == [((0, 0, 0), 0), ((1, 0, 0), 2)]
+
+    def test_the_log_counts_what_was_left_out(self, tmp_path, thyra_logs):
+        """One line says how many spectra are on no pixel."""
+        placed = grid_spectra(2, 2)
+        archive = build_mzpeak(
+            tmp_path / "two.mzpeak",
+            [_calibration_scan()] + placed + [_calibration_scan()],
+        )
+
+        with thyra_logs("thyra.readers.mzpeak.mzpeak_reader", "WARNING") as logs:
+            with MzPeakReader(archive) as reader:
+                reader.get_essential_metadata()
+
+        assert any(
+            "2 of 6 spectra" in message and "have no position" in message
+            for message in logs.messages
+        )
+
+    @pytest.mark.parametrize(("x", "y"), [(3, None), (None, 3)])
+    def test_one_position_without_the_other_is_refused(self, tmp_path, x, y):
+        """Half a position places a scan nowhere, and is not guessed at."""
+        mzs = [100.0, 101.0]
+        archive = build_mzpeak(
+            tmp_path / "half.mzpeak",
+            grid_spectra(2, 1) + [Spectrum(x, y, mzs, [1.0, 2.0])],
+        )
+
+        with pytest.raises(ConversionRefused, match="one position but not the other"):
+            with MzPeakReader(archive) as reader:
+                reader.get_essential_metadata()
+
+    def test_an_archive_with_no_scan_on_a_pixel_is_refused(self, tmp_path):
+        """Position columns that hold nothing give no image."""
+        archive = build_mzpeak(
+            tmp_path / "none.mzpeak", [_calibration_scan(), _calibration_scan()]
+        )
+
+        with pytest.raises(ConversionRefused, match="contains no positioned spectra"):
+            with MzPeakReader(archive) as reader:
+                reader.get_essential_metadata()
+
+    @pytest.mark.parametrize(
+        ("values", "arrow_type", "expected", "present"),
+        [
+            ([1, None, 3], "uint32", [1, 0, 3], [True, False, True]),
+            ([None, None], "null", [0, 0], [False, False]),
+            ([1.0, float("nan"), None], "float64", [1, 0, 0], [True, False, False]),
+            ([], "uint32", [], []),
+        ],
+    )
+    def test_a_position_column_is_read_with_its_gaps(
+        self, values, arrow_type, expected, present
+    ):
+        """Nulls, a column of the null type and a float NaN all mean no position."""
+        import pyarrow as pa
+
+        column = pa.chunked_array([pa.array(values, type=getattr(pa, arrow_type)())])
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            positions, has_position = mzpeak_reader._positions(column)
+
+        assert positions.tolist() == expected
+        assert positions.dtype == np.int64
+        assert has_position.tolist() == present
+
+    def test_a_spectrum_is_placed_by_its_scan_that_has_a_position(self, tmp_path):
+        """A first scan on no pixel does not unplace the spectrum."""
+        built = build_mzpeak(tmp_path / "multi.mzpeak", grid_spectra(2, 1))
+        archive = _with_scans(
+            built, tmp_path, [(0, None, None), (0, 1, 1), (1, 2, 1), (1, None, None)]
+        )
+
+        with MzPeakReader(archive) as reader:
+            coords = [c for c, _, _ in reader.iter_spectra()]
+
+        assert coords == [(0, 0, 0), (1, 0, 0)]
 
 
 class TestMassAxis:
