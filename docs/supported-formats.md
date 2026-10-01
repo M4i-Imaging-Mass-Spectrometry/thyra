@@ -602,6 +602,9 @@ These are refused rather than guessed at, before any spectrum is read:
   input -- and an archive without them has no pixels for Thyra to place.
 - **A scan with one position and not the other.** A scan on a pixel has both
   `IMS:1000050` and `IMS:1000051`, and a scan on no pixel has neither.
+- **Spectra on more than one plane.** Thyra reads one plane of an mzPeak
+  archive. So position z (`IMS:1000052`) may take one value, and is stated
+  for every spectrum on a pixel or for none.
 - **Unrecognised layouts** fail with the schema they actually carry.
 
 Two behaviours worth knowing:
@@ -658,7 +661,9 @@ states, the store comes out as the store of that file. See
   cropped image keeps its place on the grid. When a writer shifted the
   positions and kept the shift in `imaging.position_offset`, as
   `mzpeak-convert` does for a Bruker run, the shift is added back into
-  `coordinate_offsets_px`.
+  `coordinate_offsets_px`. Position z, which `mzpeak-convert` writes when
+  its source states z, is the z offset; an archive without it records 0
+  ([D30](design-decisions.md#d30-a-z-the-source-does-not-state-is-recorded-as-0)).
 - **The instrument.** The instrument configurations are read as in imzML. An
   Orbitrap or FT-ICR analyzer or model picks its own mass axis, and a timsTOF
   model is known by its name.
@@ -681,7 +686,12 @@ states, the store comes out as the store of that file. See
 - **Embedded images** are carried into the store as optical images, without
   an alignment to the pixels. The affine the archive gives is kept in the raw
   metadata. In every archive seen so far it stretches the image over the
-  whole acquisition, which is not a registration.
+  whole acquisition, which is not a registration. An image is named after
+  its member, `<dataset_id>_optical_image_0000` for `images/image_0000.svs`,
+  and the store records that member as its source. The media type the
+  archive declares picks the decoder, so a slide scanner's TIFF named `.svs`
+  is read as a TIFF. A format other than TIFF, JPEG, PNG and BMP is left out
+  with a warning.
 
 ---
 
@@ -703,5 +713,6 @@ Optional overrides that are worth implementing when the format allows it:
 | `has_acquisition_order` / `iter_spectra_with_acquisition_order` | `obs["acquisition_order"]`, the order the pixels were acquired in |
 | `get_optical_image_paths` | optical images carried into the output |
 | `get_primary_optical_image_path` | says which of them the alignment is stated against |
+| `get_optical_image_label` | names an image the reader copied out of a container |
 
 See [Contributing](contributing.md).

@@ -32,11 +32,13 @@ from pathlib import Path
 import anndata
 import numpy as np
 import pytest
+from pyimzml.ImzMLWriter import ImzMLWriter
 
 from thyra.converters.spatialdata.streaming_converter import (
     StreamingSpatialDataConverter,
 )
 from thyra.readers.imzml import ImzMLReader
+from thyra.utils.imzml_coordinate_base import states_z
 
 _TABLE_KEY = "imzml_z0"
 _OUT_OF_GRID_LOGGER = "thyra.converters.spatialdata.streaming_converter"
@@ -192,6 +194,74 @@ class TestTheGridIsSizedFromTheSameBase:
 
         assert offsets["zero"][:2] == (0, 0)
         assert offsets["one"][:2] == (1, 1)
+
+
+def _write_imzml(path: Path, coordinates) -> Path:
+    """A small imzML; pyimzml writes position z only for a 3-tuple."""
+    mzs = np.linspace(100.0, 200.0, 5)
+    with ImzMLWriter(str(path), mode="processed") as writer:
+        for number, coords in enumerate(coordinates):
+            writer.addSpectrum(mzs, np.full(5, 10.0 + number), coords)
+    return path
+
+
+def _offsets(path: Path):
+    reader = ImzMLReader(path)
+    try:
+        coords = [c for c, _mzs, _its in reader.iter_spectra()]
+        return reader.get_essential_metadata(), coords
+    finally:
+        reader.close()
+
+
+class TestAZTheFileDoesNotStateIsRecordedAsZero:
+    """pyimzml gives a spectrum without z the z of 1; the store records 0.
+
+    That 1 is pyimzml's, not the file's, and every format without z records
+    0 (D30). A z the file states is recorded as before. The spectra sit on
+    index 0 of z either way.
+    """
+
+    def test_no_z_stated(self, tmp_path):
+        """DESI and the two 3 x 3 public examples are written this way."""
+        path = _write_imzml(tmp_path / "noz.imzML", [(1, 1), (2, 1), (1, 2)])
+
+        essential, coords = _offsets(path)
+
+        assert essential.coordinate_offsets == (1, 1, 0)
+        assert {z for _x, _y, z in coords} == {0}
+        assert essential.dimensions == (2, 2, 1)
+
+    def test_z_stated_as_one(self, tmp_path):
+        """The glioma example states z = 1 on every spectrum."""
+        path = _write_imzml(tmp_path / "z1.imzML", [(1, 1, 1), (2, 1, 1)])
+
+        essential, coords = _offsets(path)
+
+        assert essential.coordinate_offsets == (1, 1, 1)
+        assert {z for _x, _y, z in coords} == {0}
+
+    def test_a_single_plane_further_up_keeps_its_z(self, tmp_path):
+        path = _write_imzml(tmp_path / "z4.imzML", [(1, 1, 4), (2, 1, 4)])
+
+        essential, coords = _offsets(path)
+
+        assert essential.coordinate_offsets == (1, 1, 4)
+        assert {z for _x, _y, z in coords} == {0}
+
+    def test_two_planes_keep_the_smallest(self, tmp_path):
+        path = _write_imzml(tmp_path / "z12.imzML", [(1, 1, 1), (1, 1, 2)])
+
+        essential, coords = _offsets(path)
+
+        assert essential.coordinate_offsets == (1, 1, 1)
+        assert essential.dimensions == (1, 1, 2)
+        assert sorted(z for _x, _y, z in coords) == [0, 1]
+
+    def test_a_file_that_cannot_be_read_again_keeps_what_was_subtracted(self, tmp_path):
+        """The first spectrum is read again only when every z is 1."""
+        assert states_z([1, 1], tmp_path / "missing.imzML") is True
+        assert states_z([1, 2], tmp_path / "missing.imzML") is True
 
 
 class TestTheStoreKeepsEveryPixel:

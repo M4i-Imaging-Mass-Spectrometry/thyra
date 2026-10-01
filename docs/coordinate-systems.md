@@ -69,7 +69,7 @@ zarr.attrs["coordinate_systems"] = {
 | ``convention_version`` | Schema version; bump when the shape of this attr changes. Currently ``1``. |
 | ``produced_by`` | ``"thyra/<version>"`` for Thyra-produced zarrs. |
 | ``raster_to_global_affine`` | Explicit 3x3 row-major affine from TIC raster indices to ``"global"`` -- the same mapping the TIC element's transform expresses, duplicated here so a consumer that reads only attrs still gets the full placement. A pure pixel-size scale in the micrometer variant; the optical alignment matrix in the pixel variant. Purely additive (``convention_version`` stays 1, same reasoning as the z fields below). |
-| ``coordinate_offsets_px`` | The source's raw acquisition-index offsets ``[x, y, z]``, which 0-based normalisation otherwise erases. **Only present when the reader reports them.** |
+| ``coordinate_offsets_px`` | The source's raw acquisition-index offsets ``[x, y, z]``, which 0-based normalisation otherwise erases. z is 0 when the source states no z. **Only present when the reader reports them.** |
 | ``stage_offset_um`` | ``coordinate_offsets_px`` times the pixel size: where the raster origin sat, in micrometers, relative to the source's index origin. **Only written when ``unit="micrometer"``**, so it cannot be misread in the optical-pixel variant. |
 | ``z_spacing_um`` | Micrometers between consecutive slices. **Only present on multi-slice volumes.** Always an absolute micrometer distance, even when ``unit="pixel"``: the optical affine governs only x and y, while z is always scaled directly. |
 | ``z_spacing_source`` | Where ``z_spacing_um`` came from. **Only present on multi-slice volumes.** |

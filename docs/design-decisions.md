@@ -2644,3 +2644,49 @@ store's raw metadata.
   member. It is read as centroid, since the member decides (see
   [Supported Formats](supported-formats.md#mzpeak-experimental)); its imzML is
   read as profile.
+
+---
+
+## D30. A z the source does not state is recorded as 0
+
+**Status:** Implemented (2026-10-01), issue #425.
+
+**Decision.** `coordinate_offsets_px` gives the source's own coordinate of
+index 0 on each axis. On z that is the smallest z the source states, and 0
+when it states none. Every vendor reader that records offsets already
+recorded 0 on z, its format having none. Two routes change:
+
+- **imzML.** pyimzml gives a spectrum without `IMS:1000052` the z of 1. That
+  1 is still subtracted, so the spectra sit on plane 0, but the store
+  records 0. A z the file states is recorded as before (D14). When every z
+  is 1, the first spectrum is read again to tell a stated 1 from pyimzml's.
+- **mzPeak.** The reader reads position z, which mzpeak-convert writes when
+  its source states z. One plane records its z. Spectra on several planes
+  are refused, and so are spectra that state z beside spectra that do not:
+  Thyra reads one plane of an mzPeak archive. Before, the column went unread
+  and every plane became one.
+
+**Why.** The public examples gave the same 2D data two z offsets: 1 from the
+imzML and 0 from the archive. The 1 was pyimzml's, not the file's. The store
+defines the field as the offsets that normalisation erases, and here it
+erased nothing the file holds.
+
+| Example | z stated by | Before: imzML / archive | After: imzML / archive |
+|---|---|---|---|
+| DESI, both 3 x 3 examples | neither | 1 / 0 | 0 / 0 |
+| glioma, archive from 0.16.0 | both | 1 / 0 | 1 / 1 |
+| glioma, archive from 0.12.0 | the imzML only | 1 / 0 | 1 / 0 |
+| Bruker TSF run, archive from 0.16.0 | neither (`.d` / archive) | 0 / 0 | 0 / 0 |
+
+**The objection.** Leave imzML alone, and record 1 for an archive without z:
+the base mzPeak declares for its positions. Only mzPeak stores would change.
+It did not win: the archive made from a Bruker run would then record 1
+where its `.d` records 0, and that 1 would again be a value nobody stated.
+
+**Known limits.**
+
+- The glioma archive from 0.12.0 still records 0 against its imzML's 1. That
+  converter dropped the z column; 0.16.0 writes it.
+- An imzML that cannot be read a second time keeps the subtracted 1.
+- No mzPeak archive with more than one plane was found, so the refusal is
+  tested on constructed archives.

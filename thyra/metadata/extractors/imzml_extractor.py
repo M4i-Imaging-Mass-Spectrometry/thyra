@@ -10,7 +10,7 @@ from pyimzml.ImzMLParser import ImzMLParser
 
 from ...core.base_extractor import MetadataExtractor
 from ...errors import ConversionRefused
-from ...utils.imzml_coordinate_base import coordinate_bases
+from ...utils.imzml_coordinate_base import coordinate_bases, recorded_offsets
 from ...utils.pyimzml_direct import read_spectrum_mzs_only
 from ..constants import (
     BinaryDataType,
@@ -352,8 +352,11 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             # store can say where its origin came from: the converter
             # writes it to coordinate_systems.global.coordinate_offsets_px.
             # (1, 1, 1) for an ordinary 1-based file, (0, 0, ...) for a
-            # 0-based one -- see _coordinate_bases() (issue #244).
-            coordinate_offsets=self._coordinate_bases(coords),
+            # 0-based one -- see _coordinate_bases() (issue #244). z is 0
+            # when the file states none (D30).
+            coordinate_offsets=recorded_offsets(
+                self._coordinate_bases(coords), coords[:, 2], self.imzml_path
+            ),
             spectrum_type=spectrum_type,
         )
 

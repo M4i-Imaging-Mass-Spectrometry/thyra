@@ -22,6 +22,7 @@ from tests.fixtures.mzpeak_builder import (
     build_mzpeak,
     grid_spectra,
 )
+from thyra.core.base_reader import OpticalImageLabel
 from thyra.errors import ConversionRefused
 from thyra.readers.mzpeak import MzPeakReader
 from thyra.resampling.data_characteristics import DataCharacteristics
@@ -272,6 +273,95 @@ class TestWhereTheImageSits:
 
         assert essential.coordinate_offsets == (1, 1, 0)
         assert any("position_offset" in r.getMessage() for r in records)
+
+
+class TestPositionZ:
+    """The plane an archive states is its z offset; none stated is 0 (D30).
+
+    mzpeak-convert 0.16.0 writes a z column when its source imzML states z,
+    and none when it does not. The imzML route records the same.
+    """
+
+    def _offsets(self, archive):
+        with MzPeakReader(archive) as reader:
+            coords = [c for c, _, _ in reader.iter_spectra()]
+            essential = reader.get_essential_metadata()
+        assert {z for _, _, z in coords} == {0}
+        assert essential.dimensions[2] == 1
+        return essential.coordinate_offsets
+
+    def test_a_stated_plane_is_the_z_offset(self, tmp_path):
+        """As the glioma archive from 0.16.0 and its imzML both say."""
+        archive = build_mzpeak(
+            tmp_path / "z1.mzpeak", grid_spectra(2, 2), position_z=[1, 1, 1, 1]
+        )
+
+        assert self._offsets(archive) == (1, 1, 1)
+
+    def test_a_plane_other_than_one_is_kept(self, tmp_path):
+        """One plane of a series keeps its place in it."""
+        archive = build_mzpeak(
+            tmp_path / "z3.mzpeak", grid_spectra(2, 2), position_z=[3, 3, 3, 3]
+        )
+
+        assert self._offsets(archive) == (1, 1, 3)
+
+    def test_an_archive_without_z_records_zero(self, tmp_path):
+        """As DESI and the examples do: neither they nor their imzML state z."""
+        archive = build_mzpeak(tmp_path / "noz.mzpeak", grid_spectra(2, 2))
+
+        assert self._offsets(archive) == (1, 1, 0)
+
+    def test_the_column_is_found_by_its_conventional_name(self, tmp_path):
+        """An index without bindings still names it the way 0.12.0 did."""
+        archive = build_mzpeak(
+            tmp_path / "noname.mzpeak",
+            grid_spectra(2, 2),
+            column_mapping_key=None,
+            position_z=[1, 1, 1, 1],
+            position_z_column="opt_IMS_1000052_position_z",
+        )
+
+        assert self._offsets(archive) == (1, 1, 1)
+
+    def test_a_column_of_nulls_states_no_plane(self, tmp_path):
+        """A column a writer always adds, empty when the source had no z."""
+        archive = build_mzpeak(
+            tmp_path / "nullz.mzpeak",
+            grid_spectra(2, 2),
+            position_z=[None, None, None, None],
+        )
+
+        assert self._offsets(archive) == (1, 1, 0)
+
+    def test_a_scan_on_no_pixel_needs_no_plane(self, tmp_path):
+        """Only the spectra on a pixel are asked for one."""
+        spectra = grid_spectra(2, 2) + [Spectrum(None, None, [100.0], [1.0])]
+        archive = build_mzpeak(
+            tmp_path / "offpixel.mzpeak", spectra, position_z=[1, 1, 1, 1, None]
+        )
+
+        assert self._offsets(archive) == (1, 1, 1)
+
+    def test_a_plane_stated_for_some_spectra_only_is_refused(self, tmp_path):
+        """A spectrum on a pixel either has a plane or none of them does."""
+        archive = build_mzpeak(
+            tmp_path / "somez.mzpeak", grid_spectra(2, 2), position_z=[1, 1, None, 1]
+        )
+
+        with pytest.raises(ConversionRefused, match="3 of 4 spectra"):
+            with MzPeakReader(archive) as reader:
+                reader.get_essential_metadata()
+
+    def test_two_planes_are_refused(self, tmp_path):
+        """Before, the z column went unread and both planes became one."""
+        archive = build_mzpeak(
+            tmp_path / "twoz.mzpeak", grid_spectra(2, 2), position_z=[1, 1, 2, 2]
+        )
+
+        with pytest.raises(ConversionRefused, match="2 planes"):
+            with MzPeakReader(archive) as reader:
+                reader.get_essential_metadata()
 
 
 def _region(number, frames, x_index, y_index, name=None):
@@ -540,6 +630,18 @@ def _with_images(archive, members):
     return archive
 
 
+def _described(members):
+    """``imaging.images`` naming each member's media type, as 0.12.0 writes it."""
+    return {
+        "imaging": {
+            "images": [
+                {"archive_path": name, "media_type": media_type, "role": "optical"}
+                for name, media_type in members.items()
+            ]
+        }
+    }
+
+
 class TestEmbeddedImages:
     """Images the archive embeds reach the optical image loader."""
 
@@ -560,6 +662,109 @@ class TestEmbeddedImages:
 
         assert not path.exists()
         assert not path.parent.exists()
+        assert reader.get_optical_image_label(path) is None
+
+    def test_a_tiff_under_another_name_is_read_as_a_tiff(self, tmp_path):
+        """The glioma example embeds an Aperio slide scan as ``.svs``.
+
+        The archive declares it ``image/tiff``; the loader picks its decoder
+        by suffix, so the copy is a ``.tif``. The store still records the
+        member it came from.
+        """
+        payload = b"II*\x00 stands in for a slide scan"
+        member = "images/image_0000.svs"
+        archive = _with_images(
+            build_mzpeak(
+                tmp_path / "svs.mzpeak",
+                grid_spectra(2, 2),
+                file_metadata=_described({member: "image/tiff"}),
+            ),
+            {member: payload},
+        )
+
+        with MzPeakReader(archive) as reader:
+            (path,) = reader.get_optical_image_paths()
+            label = reader.get_optical_image_label(path)
+            content = path.read_bytes()
+
+        assert path.name == "image_0000.tif"
+        assert content == payload
+        assert label == OpticalImageLabel("image_0000", member)
+
+    def test_the_declared_media_type_decides(self, tmp_path):
+        """A member without an image suffix is read as what it is declared."""
+        archive = _with_images(
+            build_mzpeak(
+                tmp_path / "declared.mzpeak",
+                grid_spectra(2, 2),
+                file_metadata=_described({"images/scan.bin": "image/png"}),
+            ),
+            {"images/scan.bin": b"\x89PNG\r\n\x1a\n"},
+        )
+
+        with MzPeakReader(archive) as reader:
+            names = [path.name for path in reader.get_optical_image_paths()]
+
+        assert names == ["scan.png"]
+
+    def test_a_declared_format_the_loader_does_not_read_is_skipped(
+        self, tmp_path, thyra_logs
+    ):
+        """The log names the member and the type it is declared as."""
+        member = "images/overlay.svg"
+        archive = _with_images(
+            build_mzpeak(
+                tmp_path / "svg_declared.mzpeak",
+                grid_spectra(2, 2),
+                file_metadata=_described({member: "image/svg+xml"}),
+            ),
+            {member: b"<svg/>"},
+        )
+
+        with thyra_logs("thyra.readers.mzpeak", logging.WARNING) as records:
+            with MzPeakReader(archive) as reader:
+                assert reader.get_optical_image_paths() == []
+
+        assert any(
+            member in r.getMessage() and "image/svg+xml" in r.getMessage()
+            for r in records
+        )
+
+    def test_each_image_is_named_after_its_member(self, tmp_path):
+        """Not the high resolution scan and the derived image of a vendor folder."""
+        members = {
+            "images/image_0000.png": b"first",
+            "images/image_0001.png": b"second",
+        }
+        archive = _with_images(
+            build_mzpeak(tmp_path / "two.mzpeak", grid_spectra(2, 2)), members
+        )
+
+        with MzPeakReader(archive) as reader:
+            labels = [
+                reader.get_optical_image_label(path)
+                for path in reader.get_optical_image_paths()
+            ]
+
+        assert labels == [
+            OpticalImageLabel("image_0000", "images/image_0000.png"),
+            OpticalImageLabel("image_0001", "images/image_0001.png"),
+        ]
+
+    def test_names_that_differ_only_in_case_stay_apart(self, tmp_path):
+        """The store lowercases an element name, so two must not meet there."""
+        members = {"images/Scan.png": b"upper", "images/scan.png": b"lower"}
+        archive = _with_images(
+            build_mzpeak(tmp_path / "case.mzpeak", grid_spectra(2, 2)), members
+        )
+
+        with MzPeakReader(archive) as reader:
+            paths = reader.get_optical_image_paths()
+            names = [reader.get_optical_image_label(path).name for path in paths]
+            contents = [path.read_bytes() for path in paths]
+
+        assert len({name.lower() for name in names}) == 2
+        assert contents == [b"upper", b"lower"]
 
     def test_images_of_one_name_in_two_folders_are_both_kept(self, tmp_path):
         """A folder inside the archive is dropped, so names can meet."""

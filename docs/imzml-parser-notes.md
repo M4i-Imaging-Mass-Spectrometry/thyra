@@ -222,6 +222,13 @@ Whatever is subtracted is reported as
 `coordinate_systems.global.coordinate_offsets_px`, so a store can say where its
 origin came from. Before this the imzML extractor set no offsets at all.
 
+One exception, on z. pyimzml gives a spectrum without `IMS:1000052` the z of
+1. That 1 is subtracted, so the spectra sit on plane 0, but the store records
+a z offset of 0, as every format without z does
+([D30](design-decisions.md#d30-a-z-the-source-does-not-state-is-recorded-as-0)).
+When every z is 1, the first spectrum is read again to tell a stated 1 from
+pyimzml's.
+
 Pinned by `tests/unit/readers/test_imzml_zero_based.py`, which converts a
 0-based file, a 1-based one and a cropped 1-based one -- the last being the
 file the rejected alternative would have moved.
