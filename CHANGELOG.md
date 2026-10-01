@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v4.3.2 (2026-10-01)
+
+### Bug Fixes
+
+- **readers**: Convert an mzPeak archive to the store of its source
+  ([#424](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/424),
+  [`e652f90`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/e652f90482ff94844b1a1bb50ec6ae4f646e055c))
+
+
 ## v4.3.1 (2026-09-30)
 
 ### Bug Fixes
