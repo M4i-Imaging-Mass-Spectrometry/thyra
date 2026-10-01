@@ -35,6 +35,7 @@ from thyra.converters.spatialdata.optical_image import (
     OpticalImages,
     StreamedOpticalImage,
 )
+from thyra.core.base_reader import OpticalImageLabel
 
 #: One Area, in optical-photo pixels: (100, 200) to (500, 600).
 AREA = {"name": "Area0", "p1": (100, 200), "p2": (500, 600)}
@@ -171,6 +172,55 @@ def test_the_root_attr_names_the_file_and_the_alignment_element(
         "alignment_element": "ds_optical_highres",
         "elements": {"ds_optical_highres": {"source_file": IMAGE_FILE}},
     }
+
+
+class _LabellingReader(_StubReader):
+    """A reader that copied its images out of a container and named them."""
+
+    def __init__(self, labels: Dict[Path, Optional[OpticalImageLabel]]) -> None:
+        super().__init__(list(labels), areas=[])
+        self._labels = labels
+
+    def get_optical_image_label(self, path: Path) -> Optional[OpticalImageLabel]:
+        return self._labels.get(path)
+
+
+def test_a_labelled_image_is_named_by_its_label(tmp_path: Path) -> None:
+    """Not by the ``_0000`` / ``_0001`` rule, which reads vendor folders.
+
+    mzpeak-convert numbers its members ``image_0000``, ``image_0001``: the
+    rule called them the high resolution scan and the derived image.
+    """
+    rng = np.random.default_rng(3)
+    labels: Dict[Path, Optional[OpticalImageLabel]] = {}
+    for number, member in enumerate(("images/image_0000.svs", "images/image_0001.tif")):
+        path = tmp_path / f"image_000{number}.tif"
+        tifffile.imwrite(str(path), rng.integers(0, 256, (8, 8, 3), dtype=np.uint8))
+        labels[path] = OpticalImageLabel(path.stem, member)
+    optical = _optical(tmp_path, _LabellingReader(labels))
+    optical.compute_alignment()
+    images: Dict[str, Any] = {}
+    optical.add_images(images)
+
+    assert list(images) == ["ds_optical_image_0000", "ds_optical_image_0001"]
+    assert optical.root_attr() == {
+        "alignment_element": None,
+        "elements": {
+            "ds_optical_image_0000": {"source_file": "images/image_0000.svs"},
+            "ds_optical_image_0001": {"source_file": "images/image_0001.tif"},
+        },
+    }
+
+
+def test_an_unlabelled_image_keeps_the_vendor_rule(tmp_path: Path, tiff: Path) -> None:
+    """A reader that gives no label for a path leaves it to the file name."""
+    optical = _optical(tmp_path, _LabellingReader({tiff: None}))
+    optical.compute_alignment()
+    images: Dict[str, Any] = {}
+    optical.add_images(images)
+
+    assert list(images) == ["ds_optical_highres"]
+    assert optical.sources == {"ds_optical_highres": IMAGE_FILE}
 
 
 def test_the_alignment_image_is_an_identity_when_the_msi_moved_to_it(

@@ -52,7 +52,16 @@ for all seven readers at once, so the next change to it is a visible one.
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, Generator, List, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Dict,
+    Generator,
+    List,
+    NamedTuple,
+    Optional,
+    Tuple,
+    Union,
+)
 
 import numpy as np
 from numpy.typing import NDArray
@@ -68,6 +77,22 @@ if TYPE_CHECKING:
 from .mass_axis import validate_max_mass_axis_length
 
 logger = logging.getLogger(__name__)
+
+
+class OpticalImageLabel(NamedTuple):
+    """What a store calls an optical image whose file name is not the source's.
+
+    A reader that copies images out of a container hands the converter files
+    it named itself. Their names say nothing, and the name rule written for
+    vendor folders (``_0000`` is the high resolution scan) would read meaning
+    into them.
+    """
+
+    name: str
+    """The element name after ``<dataset_id>_optical_``."""
+
+    source_file: str
+    """What the store records the element came from."""
 
 
 class BaseMSIReader(ABC):
@@ -166,6 +191,22 @@ class BaseMSIReader(ABC):
         Returns:
             Path to the designated image, or None if the format does not
             designate one or the designated file is not present.
+        """
+        return None
+
+    def get_optical_image_label(self, path: Path) -> Optional[OpticalImageLabel]:
+        """Name an optical image this reader copied out of its source.
+
+        Default implementation returns None: the file is the source's own,
+        and its name is what the store is named after. Override alongside
+        :meth:`get_optical_image_paths` when the reader names the files.
+
+        Args:
+            path: One of the paths :meth:`get_optical_image_paths` returned.
+
+        Returns:
+            The element name and the source file to record, or None to name
+            the element after the file.
         """
         return None
 

@@ -126,7 +126,7 @@ from ._chunking import image_chunks
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ...alignment.teaching_points import RegionMapping
-    from ...core.base_reader import BaseMSIReader
+    from ...core.base_reader import BaseMSIReader, OpticalImageLabel
 
 logger = logging.getLogger(__name__)
 
@@ -944,6 +944,11 @@ def _calc_optical_scale_factors(
     return factors
 
 
+def _clean_stem(stem: str) -> str:
+    """A file stem made fit for an element name: lowercase, at most 30 long."""
+    return stem.lower().replace(" ", "_").replace("-", "_")[:30]
+
+
 class OpticalImages:
     """The optical images of one conversion: alignment, declaration, streaming.
 
@@ -1459,9 +1464,11 @@ class OpticalImages:
             images: The store's images, to add the placeholder to
         """
         # Generate a clean name for the image layer
-        image_name = self._element_name(image_path)
+        label = self._reader_label(image_path)
+        image_name = self._element_name(image_path, label)
+        source_file = label.source_file if label is not None else image_path.name
 
-        logger.info(f"Loading optical image: {image_path.name} as '{image_name}'")
+        logger.info(f"Loading optical image: {source_file} as '{image_name}'")
 
         # Only the page header is read here. The pixels never enter this
         # process whole: the element is declared to SpatialData as a lazy
@@ -1584,8 +1591,10 @@ class OpticalImages:
         # rewrites the stem (_0000 -> highres, and a stem over 30
         # characters is truncated), and the alignment image is only
         # distinguishable by its transform, and only when the alignment
-        # was applied. Recorded here, written by the root attrs.
-        self._sources[image_name] = image_path.name
+        # was applied. Recorded here, written by the root attrs. For an
+        # image a reader copied out of a container, the member it came
+        # from, not the copy.
+        self._sources[image_name] = source_file
         if is_primary:
             self._alignment_element = image_name
 
@@ -1688,18 +1697,39 @@ class OpticalImages:
             "global": {**systems["global"], "reference_element": None},
         }
 
-    def _element_name(self, image_path: Path) -> str:
+    def _reader_label(self, image_path: Path) -> Optional[OpticalImageLabel]:
+        """The reader's name for an image it copied out of its source.
+
+        Asked for with ``getattr`` for the reason
+        :meth:`_adopt_reader_primary_optical` gives: a reader here need not
+        inherit from ``BaseMSIReader``.
+        """
+        resolve = getattr(self.reader, "get_optical_image_label", None)
+        if not callable(resolve):
+            return None
+        label: Optional[OpticalImageLabel] = resolve(image_path)
+        return label
+
+    def _element_name(
+        self, image_path: Path, label: Optional[OpticalImageLabel] = None
+    ) -> str:
         """Generate a clean name for an optical image layer.
 
         The suffix is dropped, so the same acquisition exported as a .tif or
-        a .jpg lands under the same element name.
+        a .jpg lands under the same element name. The ``_0000`` / ``_0001``
+        rule is for files named by the acquisition software; an image a
+        reader copied out of a container is named by the reader's label.
 
         Args:
             image_path: Path to the optical image
+            label: The reader's name for the image, if it gave one.
 
         Returns:
             Clean name for the image layer (e.g., 'optical_0000', 'optical_deriv')
         """
+        if label is not None:
+            return f"{self.dataset_id}_optical_{_clean_stem(label.name)}"
+
         stem = image_path.stem.lower()
 
         # Extract meaningful suffix from filename
@@ -1710,11 +1740,7 @@ class OpticalImages:
         elif "deriv" in stem:
             suffix = "overview"
         else:
-            # Use stem with special chars replaced
-            suffix = stem.replace(" ", "_").replace("-", "_")
-            # Truncate if too long
-            if len(suffix) > 30:
-                suffix = suffix[:30]
+            suffix = _clean_stem(stem)
 
         return f"{self.dataset_id}_optical_{suffix}"
 

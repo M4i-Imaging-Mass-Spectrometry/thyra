@@ -44,6 +44,8 @@ INDEX_MEMBER = "mzpeak_index.json"
 
 POSITION_X_COLUMN = "opt_IMS_1000050_position_x"
 POSITION_Y_COLUMN = "opt_IMS_1000051_position_y"
+#: How mzpeak-convert 0.16.0 names the position z column.
+POSITION_Z_COLUMN = "position_z"
 
 #: Micrometre unit accession, as the reference archive declares it.
 UNIT_MICROMETRE = "UO:0000017"
@@ -529,6 +531,7 @@ def _index_document(
     column_mapping_key: Optional[str],
     index_metadata: Optional[Dict[str, Any]],
     signal_members: Sequence[str] = (DATA_MEMBER,),
+    position_z_column: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Spell out ``mzpeak_index.json``.
 
@@ -546,6 +549,8 @@ def _index_document(
             in the Parquet footer; other archives populate both.
         signal_members: Which signal members the archive holds. The
             reference converter lists both, data member first.
+        position_z_column: The scans column holding position z, bound to
+            IMS:1000052 like the other two, or ``None`` for no such column.
     """
     scans_bindings = [
         {
@@ -570,6 +575,15 @@ def _index_document(
                 "unit": None,
             },
         ]
+    if position_z_column is not None:
+        scans_bindings.append(
+            {
+                "name": "position z",
+                "path": position_z_column,
+                "accession": "IMS:1000052",
+                "unit": None,
+            }
+        )
 
     def entry(name: str, kind: str, bindings: List[dict]) -> Dict[str, Any]:
         item: Dict[str, Any] = {
@@ -652,6 +666,8 @@ def build_mzpeak(
     file_metadata: Optional[Dict[str, Any]] = None,
     ms_levels: Optional[Sequence[int]] = None,
     ion_mobility: Optional[Sequence[Optional[float]]] = None,
+    position_z: Optional[Sequence[Optional[int]]] = None,
+    position_z_column: str = POSITION_Z_COLUMN,
 ) -> Path:
     """Write one ``.mzpeak`` archive and return its path.
 
@@ -712,6 +728,11 @@ def build_mzpeak(
         ms_levels: MS level of each spectrum. All 1 by default.
         ion_mobility: Ion mobility value of each scan, ``None`` for none.
             Without it the scans member has no such column.
+        position_z: Position z of each scan, ``None`` for a null. Without
+            it the scans member has no z column, as mzpeak-convert writes
+            for a source that states no z.
+        position_z_column: Name of that column. It is bound to IMS:1000052
+            in the index whenever the index carries bindings.
 
     Returns:
         ``path``, for convenience.
@@ -794,6 +815,10 @@ def build_mzpeak(
         scans_table = scans_table.append_column(
             "ion_mobility_value", pa.array(list(ion_mobility), type=pa.float64())
         )
+    if position_z is not None:
+        scans_table = scans_table.append_column(
+            position_z_column, pa.array(list(position_z), type=pa.uint32())
+        )
 
     path = Path(path)
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as archive:
@@ -818,6 +843,7 @@ def build_mzpeak(
                     column_mapping_key,
                     index_metadata,
                     list(tables),
+                    position_z_column if position_z is not None else None,
                 ),
                 indent=2,
             ),

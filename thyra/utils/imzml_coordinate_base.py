@@ -38,11 +38,18 @@ radius than the defect it fixes.
 
 Whatever is subtracted is recorded: the imzML extractor reports it as
 ``EssentialMetadata.coordinate_offsets``, which the converter writes to
-``coordinate_systems.global.coordinate_offsets_px``.
+``coordinate_systems.global.coordinate_offsets_px``. One exception: a z
+the file does not state. pyimzml gives such a spectrum z = 1, and that 1 is
+subtracted, but the store records 0, as every format without z does (D30).
 """
 
 import logging
+from pathlib import Path
 from typing import Iterable, Optional, Sequence, Tuple
+from xml.etree import ElementTree  # nosec B405
+
+import numpy as np
+from numpy.typing import ArrayLike
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +57,12 @@ logger = logging.getLogger(__name__)
 #: smallest coordinate is larger than this is a cropped acquisition, not a
 #: different convention, so it keeps this base.
 SPEC_BASE = 1
+
+#: Position z. A spectrum may leave it out, and pyimzml then gives it z = 1.
+POSITION_Z_ACCESSION = "IMS:1000052"
+
+#: mzML's XML namespace, spelled the way pyimzml spells it.
+_MZML_NS = "{http://psi.hupo.org/ms/mzml}"
 
 
 def coordinate_bases(
@@ -100,3 +113,74 @@ def coordinate_bases(
         )
 
     return x_base, y_base, int(min_z)
+
+
+def recorded_offsets(
+    bases: Tuple[int, int, int], z_values: ArrayLike, imzml_path: Path
+) -> Tuple[int, int, int]:
+    """The offsets a store records for this file.
+
+    The bases :func:`coordinate_bases` subtracts, except for a z the file
+    does not state: that one is recorded as 0, as every format without z
+    records it (D30). pyimzml's stand-in of 1 is subtracted all the same,
+    so the spectra still sit on index 0 of z.
+
+    Args:
+        bases: What :func:`coordinate_bases` returned for the file.
+        z_values: The z of every spectrum, as pyimzml reports it.
+        imzml_path: Path to the imzML file, read again only when the z
+            values cannot tell.
+
+    Returns:
+        ``(x, y, z)`` for ``EssentialMetadata.coordinate_offsets``.
+    """
+    x_base, y_base, z_base = bases
+    return (x_base, y_base, z_base if states_z(z_values, imzml_path) else 0)
+
+
+def states_z(z_values: ArrayLike, imzml_path: Path) -> bool:
+    """Whether the file states position z, or pyimzml stood in for it.
+
+    pyimzml gives a spectrum without ``IMS:1000052`` the z of 1, so z values
+    that are all 1 belong to a file that states z = 1 or to one that states
+    none. Any other z settles it. Otherwise the first spectrum's scan
+    decides, read again the way pyimzml read it; a writer states z for
+    every spectrum or for none.
+
+    Args:
+        z_values: The z of every spectrum, as pyimzml reports it.
+        imzml_path: Path to the imzML file.
+
+    Returns:
+        False only when the first spectrum states no z and no z differs
+        from 1. A file that cannot be read again counts as stating z, so
+        its offsets stay what was subtracted.
+    """
+    if np.any(np.asarray(z_values, dtype=np.int64) != 1):
+        return True
+    stated = _first_spectrum_states_z(imzml_path)
+    return True if stated is None else stated
+
+
+def _first_spectrum_states_z(imzml_path: Path) -> Optional[bool]:
+    """Whether the first spectrum's scan carries position z.
+
+    Costs the header and one spectrum, however large the file is.
+
+    Returns:
+        None when the document cannot be read this way.
+    """
+    try:
+        events = ElementTree.iterparse(str(imzml_path), events=("end",))  # nosec B314
+        for _event, elem in events:
+            if elem.tag != _MZML_NS + "spectrum":
+                continue
+            scan = elem.find(f"{_MZML_NS}scanList/{_MZML_NS}scan")
+            if scan is None:
+                return False
+            node = scan.find(f'{_MZML_NS}cvParam[@accession="{POSITION_Z_ACCESSION}"]')
+            return node is not None
+    except (ElementTree.ParseError, OSError) as e:
+        logger.debug(f"Could not read the first spectrum of {imzml_path}: {e}")
+        return None
+    return False

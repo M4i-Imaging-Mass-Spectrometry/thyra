@@ -65,13 +65,14 @@ from typing import (
     List,
     NamedTuple,
     Optional,
+    Set,
     Tuple,
 )
 
 import numpy as np
 from numpy.typing import NDArray
 
-from ...core.base_reader import BaseMSIReader
+from ...core.base_reader import BaseMSIReader, OpticalImageLabel
 from ...core.mass_axis import MassAxisAccumulator
 from ...core.registry import register_reader
 from ...errors import ConversionRefused
@@ -104,11 +105,13 @@ ZIP_MAGIC = b"PK\x03\x04"
 # one axis and misses the other.
 IMS_POSITION_X = "IMS:1000050"
 IMS_POSITION_Y = "IMS:1000051"
+IMS_POSITION_Z = "IMS:1000052"
 
 #: Conventional column names for the position terms. Used only as a fallback
 #: when the index carries no column mapping, which the schema permits.
 DEFAULT_POSITION_X_COLUMN = "opt_IMS_1000050_position_x"
 DEFAULT_POSITION_Y_COLUMN = "opt_IMS_1000051_position_y"
+DEFAULT_POSITION_Z_COLUMN = "opt_IMS_1000052_position_z"
 
 #: Base of the positions when the archive does not declare one in
 #: ``imaging.coordinate_base``: the imzML convention, which every archive
@@ -131,6 +134,17 @@ CHUNK_BATCH_ROWS = (16, 65536)
 
 #: Image formats the optical image loader reads.
 OPTICAL_IMAGE_SUFFIXES = (".tif", ".tiff", ".jpg", ".jpeg", ".png", ".bmp")
+
+#: The suffix an embedded image is copied out under, by the media type the
+#: archive declares for it. The loader picks its decoder by suffix, and a
+#: slide scanner's TIFF is a TIFF under a name of its own: the glioma example
+#: embeds an Aperio ``.svs`` declared ``image/tiff``.
+MEDIA_TYPE_SUFFIXES = {
+    "image/tiff": ".tif",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/bmp": ".bmp",
+}
 
 #: Metadata column giving each spectrum's MS level.
 MS_LEVEL_COLUMN = "ms_level"
@@ -281,6 +295,8 @@ class MzPeakSpatialIndex(NamedTuple):
         complete: Whether every spectrum the archive lists is kept. When
             one is left out (no position, or an MSn spectrum beside MS1),
             the axis, the mass range and the peak count skip it too.
+        z_offset: The position z the archive states for its one plane, 0
+            when it states none (D30).
     """
 
     spectrum_indices: NDArray[np.int64]
@@ -289,6 +305,7 @@ class MzPeakSpatialIndex(NamedTuple):
     point_counts: NDArray[np.int64]
     offsets: Tuple[int, int]
     complete: bool = True
+    z_offset: int = 0
 
 
 class MzPeakArchive:
@@ -696,6 +713,25 @@ class MzPeakArchive:
             return None
         return (x_column, y_column)
 
+    def position_z_column(self) -> Optional[str]:
+        """Resolve the scan column holding position z, the way x and y are.
+
+        mzpeak-convert writes one when its source states z (an imzML with
+        ``IMS:1000052`` on its spectra) and none otherwise.
+
+        Returns:
+            The column name, or ``None`` when the archive has none.
+        """
+        entry = self.entry("spectrum", "scans")
+        if entry is None:
+            return None
+        names = set(self.parquet("spectrum", "scans").schema_arrow.names)
+        z_column = (
+            self.column_for_accession(entry, IMS_POSITION_Z)
+            or DEFAULT_POSITION_Z_COLUMN
+        )
+        return z_column if z_column in names else None
+
     def spatial_index(self) -> MzPeakSpatialIndex:
         """Read positions and per-spectrum point counts.
 
@@ -723,9 +759,14 @@ class MzPeakArchive:
                 f"position columns. Thyra converts imaging acquisitions only."
             )
         x_column, y_column = columns
+        z_column = self.position_z_column()
 
         scans_member = self.parquet("spectrum", "scans")
-        scans = scans_member.read(columns=["source_index", x_column, y_column])
+        scans = scans_member.read(
+            columns=[
+                name for name in ("source_index", x_column, y_column, z_column) if name
+            ]
+        )
         self._report_ion_mobility(scans_member)
         source = np.asarray(scans.column("source_index").to_numpy(), dtype=np.int64)
         xs, has_x = _positions(scans.column(x_column))
@@ -743,6 +784,10 @@ class MzPeakArchive:
                 f"both, and a scan on no pixel has neither."
             )
         placed = has_x & has_y
+        # Which row of the scans member each entry came from, carried through
+        # the reordering below so that position z can be read for the scans
+        # that end up on a pixel.
+        scan_row = np.arange(source.size, dtype=np.int64)
 
         # One spectrum may own several scans; imaging acquisitions write one.
         # Keeping the first per spectrum means a multi-scan file resolves to a
@@ -750,14 +795,21 @@ class MzPeakArchive:
         # position goes before one without, so a spectrum is only unplaced
         # when none of its scans is on a pixel.
         first_placed = np.argsort(~placed, kind="stable")
-        source, xs, ys, placed = (
+        source, xs, ys, placed, scan_row = (
             source[first_placed],
             xs[first_placed],
             ys[first_placed],
             placed[first_placed],
+            scan_row[first_placed],
         )
         _, first = np.unique(source, return_index=True)
-        source, xs, ys, placed = source[first], xs[first], ys[first], placed[first]
+        source, xs, ys, placed, scan_row = (
+            source[first],
+            xs[first],
+            ys[first],
+            placed[first],
+            scan_row[first],
+        )
 
         spectrum_index, counts, levels = self._read_point_counts()
         order = np.argsort(spectrum_index, kind="stable")
@@ -819,6 +871,7 @@ class MzPeakArchive:
         complete = spectrum_index.size == n_listed
 
         raw = np.stack([xs[rows], ys[rows]], axis=1)
+        z_offset = self._z_offset(scans, z_column, scan_row[rows])
         self._report_shared_pixels(raw)
         bases = self._position_bases(raw)
         coordinates = raw - np.array(bases, dtype=np.int64)
@@ -831,8 +884,51 @@ class MzPeakArchive:
             point_counts=counts,
             offsets=(bases[0] + shift[0], bases[1] + shift[1]),
             complete=complete,
+            z_offset=z_offset,
         )
         return self._spatial_index
+
+    def _z_offset(
+        self, scans: Any, z_column: Optional[str], placed_rows: NDArray[np.int64]
+    ) -> int:
+        """The position z of the archive's plane, 0 when it states none.
+
+        Recorded as the z offset, the way D14 records the smallest z of an
+        imzML. An archive without z records 0, as every format without z
+        does (D30). The spectra on a pixel all sit on index 0 of z either
+        way: this reader yields one plane.
+
+        Args:
+            scans: The scans member as read, with the z column when there is
+                one.
+            z_column: The column holding position z, or ``None``.
+            placed_rows: The rows of ``scans`` whose spectra are on a pixel.
+
+        Raises:
+            ConversionRefused: If some of those spectra state z and the
+                others do not, or if they state more than one z. Spectra on
+                several planes would otherwise be summed into one.
+        """
+        if z_column is None:
+            return 0
+        zs, has_z = _positions(scans.column(z_column))
+        zs, has_z = zs[placed_rows], has_z[placed_rows]
+        if not has_z.any():
+            return 0
+        if not has_z.all():
+            raise ConversionRefused(
+                f"{self.path} gives {int(has_z.sum())} of {has_z.size} spectra "
+                f"on a pixel a position z ({IMS_POSITION_Z}) and the others "
+                f"none. A plane is stated for every spectrum or for none."
+            )
+        planes = np.unique(zs)
+        if planes.size > 1:
+            raise ConversionRefused(
+                f"{self.path} places its spectra on {planes.size} planes "
+                f"(position z from {int(planes[0])} to {int(planes[-1])}). "
+                f"Thyra reads one plane of an mzPeak archive."
+            )
+        return int(planes[0])
 
     def _report_shared_pixels(self, raw: NDArray[np.int64]) -> None:
         """Warn when several spectra sit on one pixel; they are summed there."""
@@ -877,7 +973,7 @@ class MzPeakArchive:
                 self.path.name,
             )
 
-    def _imaging_metadata(self) -> Dict[str, Any]:
+    def imaging_metadata(self) -> Dict[str, Any]:
         """The archive's ``imaging`` block, or an empty one."""
         imaging = self.file_level_metadata().get("imaging")
         return imaging if isinstance(imaging, dict) else {}
@@ -892,7 +988,7 @@ class MzPeakArchive:
         smallest position instead moved it to the corner and cut the grid
         to its bounding box.
         """
-        declared = self._imaging_metadata().get("coordinate_base")
+        declared = self.imaging_metadata().get("coordinate_base")
         if not isinstance(declared, int) or isinstance(declared, bool):
             declared = SPEC_BASE
         smallest = (int(raw[:, 0].min()), int(raw[:, 1].min()))
@@ -917,7 +1013,7 @@ class MzPeakArchive:
         frame of the instrument's raster, where a conversion of the same
         run from its ``.d`` puts it.
         """
-        offset = self._imaging_metadata().get("position_offset")
+        offset = self.imaging_metadata().get("position_offset")
         if not isinstance(offset, dict):
             return (0, 0)
         values = (offset.get("x", 0), offset.get("y", 0))
@@ -1090,6 +1186,8 @@ class MzPeakReader(BaseMSIReader):
         #: Folder the embedded images are copied to, made on first use.
         self._image_dir: Optional[Path] = None
         self._image_paths: Optional[List[Path]] = None
+        #: What the store calls each copied image, by the copy's path.
+        self._image_labels: Dict[Path, OpticalImageLabel] = {}
         self._regions_read = False
         self._region_cache: Optional[
             Tuple[Dict[Tuple[int, int], int], List[Dict[str, Any]]]
@@ -1626,8 +1724,10 @@ class MzPeakReader(BaseMSIReader):
 
         mzpeak-convert stores an image as an ``image`` member, verbatim.
         The optical image loader reads files, so each one is copied to a
-        folder of this reader's own, which :meth:`close` removes. A member
-        in a format the loader does not read is skipped with a warning.
+        folder of this reader's own, which :meth:`close` removes. The copy
+        takes the suffix of the media type the archive declares, so a slide
+        scanner's TIFF is read as the TIFF it is. A member in a format the
+        loader does not read is skipped with a warning.
 
         The images are not aligned to the pixels. The archive gives an
         affine for each, but the ones seen so far are marked
@@ -1638,6 +1738,16 @@ class MzPeakReader(BaseMSIReader):
         if self._image_paths is None:
             self._image_paths = self._extract_images()
         return list(self._image_paths)
+
+    def get_optical_image_label(self, path: Path) -> Optional[OpticalImageLabel]:
+        """Name a copied image after its member, not by the vendor rule.
+
+        mzpeak-convert numbers its members ``images/image_0000.<ext>``, and
+        the rule for vendor folders would call the first one the high
+        resolution scan and the second the derived image, whatever they
+        show.
+        """
+        return self._image_labels.get(Path(path))
 
     def _image_members(self) -> List[str]:
         """Names of the members the index lists as images, in index order."""
@@ -1653,34 +1763,70 @@ class MzPeakReader(BaseMSIReader):
                 names.append(name)
         return names
 
+    def _image_media_types(self) -> Dict[str, str]:
+        """The media type the archive declares for each image member.
+
+        From ``imaging.images``, where each entry names its member in
+        ``archive_path``.
+        """
+        entries = self.archive.imaging_metadata().get("images")
+        media_types: Dict[str, str] = {}
+        for entry in entries if isinstance(entries, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            path, media_type = entry.get("archive_path"), entry.get("media_type")
+            if isinstance(path, str) and isinstance(media_type, str):
+                media_types[path] = media_type.strip().lower()
+        return media_types
+
+    @staticmethod
+    def _copy_suffix(name: str, media_type: Optional[str]) -> Optional[str]:
+        """The suffix the loader reads a member under, or ``None`` for none.
+
+        The declared media type decides, so a TIFF named ``.svs`` is read as
+        a TIFF. Without one, the member's own suffix does.
+        """
+        if media_type in MEDIA_TYPE_SUFFIXES:
+            return MEDIA_TYPE_SUFFIXES[media_type]
+        suffix = Path(name).suffix.lower()
+        return suffix if suffix in OPTICAL_IMAGE_SUFFIXES else None
+
     def _extract_images(self) -> List[Path]:
         """Copy every readable image member out of the archive."""
         members = self._image_members()
         if not members:
             return []
+        media_types = self._image_media_types()
         paths: List[Path] = []
+        taken: Set[str] = set()
         for name in members:
-            suffix = Path(name).suffix.lower()
-            if suffix not in OPTICAL_IMAGE_SUFFIXES:
+            suffix = self._copy_suffix(name, media_types.get(name))
+            if suffix is None:
                 logger.warning(
-                    "%s embeds the image %s, in a format the optical image "
-                    "loader does not read; it is not carried over.",
+                    "%s embeds the image %s (%s), in a format the optical "
+                    "image loader does not read; it is not carried over.",
                     self.data_path.name,
                     name,
+                    media_types.get(name, "no media type declared"),
                 )
                 continue
             if self._image_dir is None:
                 self._image_dir = Path(tempfile.mkdtemp(prefix="thyra-mzpeak-images-"))
             # The base name only: a member name is a path inside the ZIP
-            # and must not choose where on this disk the copy goes.
-            target = self._image_dir / Path(name).name
-            stem, number = target.stem, 1
-            while target.exists():
-                target = self._image_dir / f"{stem}_{number}{suffix}"
+            # and must not choose where on this disk the copy goes. Unique
+            # whatever the case, because the store names the element after
+            # it, lowercased.
+            stem = candidate = Path(name).stem
+            number = 1
+            while candidate.lower() in taken:
+                candidate = f"{stem}_{number}"
                 number += 1
+            taken.add(candidate.lower())
+            target = self._image_dir / f"{candidate}{suffix}"
             with self.archive.open_member(name) as source, target.open("wb") as sink:
                 shutil.copyfileobj(source, sink)
             paths.append(target)
+            self._image_labels[target] = OpticalImageLabel(candidate, name)
         if paths:
             logger.info(
                 "%s embeds %d optical image(s); they are carried over without "
@@ -1699,3 +1845,4 @@ class MzPeakReader(BaseMSIReader):
             shutil.rmtree(self._image_dir, ignore_errors=True)
             self._image_dir = None
             self._image_paths = None
+            self._image_labels = {}

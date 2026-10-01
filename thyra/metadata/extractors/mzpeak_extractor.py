@@ -118,7 +118,7 @@ class MzPeakMetadataExtractor(MetadataExtractor):
             n_spectra=n_spectra,
             total_peaks=total_peaks,
             source_path=str(self.data_path),
-            coordinate_offsets=(index.offsets[0], index.offsets[1], 0),
+            coordinate_offsets=(index.offsets[0], index.offsets[1], index.z_offset),
             spectrum_type=self._spectrum_type(),
         )
 
