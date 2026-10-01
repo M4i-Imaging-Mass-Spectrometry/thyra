@@ -1,0 +1,2196 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Convert imaging mass spectrometry data from Bruker, Waters, PHI and imzML into the open SpatialData format">
+      
+      
+      
+        <link rel="canonical" href="https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/migration-4.0/">
+      
+      
+        <link rel="prev" href="../solarix-notes/">
+      
+      
+        <link rel="next" href="../changelog/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/favicon.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Migrating to 4.0 - Thyra</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#migrating-to-400" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Thyra" class="md-header__button md-logo" aria-label="Thyra" data-md-component="logo">
+      
+  <img src="../assets/thyra-logomark.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Thyra
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Migrating to 4.0
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/M4i-Imaging-Mass-Spectrometry/thyra" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    M4i-Imaging-Mass-Spectrometry/thyra
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../install/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Get started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../which-files/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../technical-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Technical reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="./" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Project
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Thyra" class="md-nav__button md-logo" aria-label="Thyra" data-md-component="logo">
+      
+  <img src="../assets/thyra-logomark.svg" alt="logo">
+
+    </a>
+    Thyra
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/M4i-Imaging-Mass-Spectrometry/thyra" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    M4i-Imaging-Mass-Spectrometry/thyra
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Get started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Get started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Your first conversion
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../look-at-the-result/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Look at the result
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorial
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Glossary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../which-files/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Which files can I convert?
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Change how Thyra converts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../describe-your-data/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Describe and share your data
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../explore-the-output/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Explore the result in Python
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Technical reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Technical reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../technical-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Technical reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../supported-formats/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Supported formats
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command-line options
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../resampling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resampling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../output-format/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Output format
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coordinate-systems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coordinate systems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../metadata-schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metadata schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../writing-the-metadata-document/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Writing the metadata document
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../design-decisions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design decisions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_11" id="__nav_4_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Format notes
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Format notes
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../imzml-parser-notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    imzML
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../phi-tofsims-notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PHI ToF-SIMS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solarix-notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bruker solariX
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Project
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migrating to 4.0
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migrating to 4.0
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-changed-at-a-glance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What changed, at a glance
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-a-sibling-table-that-cannot-be-built-now-fails-the-conversion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. A sibling table that cannot be built now fails the conversion
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-one-convention-for-declining-a-capability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. One convention for declining a capability
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-batch_size-is-gone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. batch_size is gone
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-essentialmetadata-loses-two-fields-and-two-keys-leave-the-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. EssentialMetadata loses two fields, and two keys leave the store
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-converts-stages-take-a-typed-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. convert()'s stages take a typed state
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-a-previews-mass-range-can-be-unknown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. A preview's mass range can be unknown
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-an-imzml-that-declares-no-spectra-is-refused-by-name" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. An imzML that declares no spectra is refused by name
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#if-you-are-coming-from-further-back-than-3233" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        If you are coming from further back than 3.23.3
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../code-of-conduct/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Code of conduct
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-changed-at-a-glance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What changed, at a glance
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-a-sibling-table-that-cannot-be-built-now-fails-the-conversion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. A sibling table that cannot be built now fails the conversion
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-one-convention-for-declining-a-capability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. One convention for declining a capability
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-batch_size-is-gone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. batch_size is gone
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-essentialmetadata-loses-two-fields-and-two-keys-leave-the-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. EssentialMetadata loses two fields, and two keys leave the store
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-converts-stages-take-a-typed-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. convert()'s stages take a typed state
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-a-previews-mass-range-can-be-unknown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. A preview's mass range can be unknown
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-an-imzml-that-declares-no-spectra-is-refused-by-name" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. An imzML that declares no spectra is refused by name
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#if-you-are-coming-from-further-back-than-3233" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        If you are coming from further back than 3.23.3
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href=".." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="./" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Project
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="migrating-to-400">Migrating to 4.0.0<a class="headerlink" href="#migrating-to-400" title="Permanent link">&para;</a></h1>
+<p>This page covers upgrading from <strong>3.23.3 to 4.0.0</strong>. For a pin older than
+3.23.3, read <a href="#if-you-are-coming-from-further-back-than-3233">If you are coming from further back</a>
+at the bottom first: it is the part most likely to catch you out.</p>
+<p>4.0.0 is a major release because seven changes break a published API. <strong>None of
+them changes the tables a conversion writes.</strong> Convert the same file with
+3.23.3 and with 4.0.0 and the matrices, the <code>var</code> and the <code>obs</code> come out the
+same; two keys leave the metadata, one failure mode that used to be a log line
+is now a failure, and one that used to be a numpy error now names the file.
+Everything else in the release is a fix, a docs change or a performance change.</p>
+<p>If you only call <code>thyra convert</code> from the command line, almost nothing here
+applies: no flag was removed or renamed in this release. Item 7 is the one you
+may notice, and only on a file that never converted — what it prints is now a
+sentence rather than a traceback.</p>
+<h2 id="what-changed-at-a-glance">What changed, at a glance<a class="headerlink" href="#what-changed-at-a-glance" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Change</th>
+<th>You are affected if you</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>A sibling table that cannot be built now fails the conversion</td>
+<td>convert sources that write a <code>_mobility</code> or <code>_msms</code> table</td>
+</tr>
+<tr>
+<td>2</td>
+<td>One convention for declining a capability</td>
+<td>subclass <code>BaseMSIReader</code>, or probe readers with <code>getattr</code></td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>batch_size</code> is gone</td>
+<td>pass <code>batch_size</code> to any reader</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>EssentialMetadata</code> loses two fields, and two keys leave the store</td>
+<td>implement the reader ABC, or read <code>estimated_memory_gb</code> from a store</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>convert()</code>'s stages take a typed state</td>
+<td>subclass <code>BaseMSIConverter</code> or call its stage methods</td>
+</tr>
+<tr>
+<td>6</td>
+<td>A preview's mass range can be unknown</td>
+<td>read <code>MsiPreview.mz_range</code>, or build an <code>EssentialMetadata</code> yourself</td>
+</tr>
+<tr>
+<td>7</td>
+<td>An imzML that declares no spectra is refused by name</td>
+<td>catch <code>IndexError</code> around an imzML read</td>
+</tr>
+</tbody>
+</table>
+<p>Only item 4 changes what is written to disk.</p>
+<hr />
+<h2 id="1-a-sibling-table-that-cannot-be-built-now-fails-the-conversion">1. A sibling table that cannot be built now fails the conversion<a class="headerlink" href="#1-a-sibling-table-that-cannot-be-built-now-fails-the-conversion" title="Permanent link">&para;</a></h2>
+<p><strong>Affects:</strong> anyone converting a source that writes a <code>_mobility</code> or <code>_msms</code>
+sibling table, and anyone treating <code>convert()</code>'s return value as the only
+success signal.</p>
+<p>The two sibling-table builders were wrapped in <code>except Exception</code>, so a
+failure inside one became an ERROR line and <code>convert()</code> still returned True.
+That was not "a store without the sibling, still complete", because the summed
+table names its siblings in <code>uns</code> <em>before</em> they are built — at
+<code>mobility_axis["resolved_table"]</code> and
+<code>msi_metadata.ms_analysis.ion_mobility.resolved_table</code>, and at
+<code>msms_schedule["resolved_table"]</code> and <code>...fragmentation.resolved_table</code>. The
+store was written pointing at an element nobody wrote, and nothing downstream
+checks that the pointer resolves — not the schema, not <code>thyra validate</code>.</p>
+<p>A failure in a sibling builder now propagates and the conversion fails.
+Nothing is on disk at that point, so the cost is a conversion you have to
+re-run rather than a store that lies to you.</p>
+<p><strong>What to do:</strong> if you were relying on a conversion completing despite a
+sibling failing, you will now see the traceback that was being swallowed.
+Treat it as a bug report — that is what it always was.</p>
+<p><strong>Not the same as a builder declining.</strong> A builder is still allowed to say
+"no table here" by returning <code>None</code> (an empty feature listing, a var count
+over the ceiling). That is a decision, not a failure, the conversion still
+succeeds, and as of this release the name is taken back out of every table
+that carried it, so a declined sibling leaves nothing pointing at it.</p>
+<h2 id="2-one-convention-for-declining-a-capability">2. One convention for declining a capability<a class="headerlink" href="#2-one-convention-for-declining-a-capability" title="Permanent link">&para;</a></h2>
+<p><strong>Affects:</strong> anyone who has written a <code>BaseMSIReader</code> subclass, or who probes
+readers with <code>getattr</code>/<code>hasattr</code>.</p>
+<p><code>BaseMSIReader</code> answered "unsupported" three different ways. There is now one
+rule for every optional capability:</p>
+<ul>
+<li>a <code>has_*</code> predicate gates the capability;</li>
+<li>when it is False, a <strong>getter</strong> describing the capability returns <code>None</code>;</li>
+<li>when it is False, an <strong>iterator</strong> producing data raises <code>NotImplementedError</code>.</li>
+</ul>
+<p>Two consequences for callers:</p>
+<ul>
+<li><code>has_fragmentation</code> is new, and derives from <code>get_fragmentation()</code> by
+  default — a reader that implements the getter and forgets the predicate
+  keeps the capability rather than silently losing it.</li>
+<li><code>has_fragmentation</code> and <code>has_precursor_spectra</code> are <strong>two capabilities, not
+  synonyms</strong>. Describing the fragmentation and being able to separate a
+  pixel's precursors are different things: Waters reports a schedule it cannot
+  demultiplex, and an MS1 TDF reports a schedule with no windows. Both are
+  <code>has_fragmentation</code> True and <code>has_precursor_spectra</code> False.</li>
+</ul>
+<p><strong>What to do:</strong> custom readers should follow the three-part rule. Callers can
+drop defensive probing — <code>getattr(reader, "has_ion_mobility", False)</code> and
+<code>callable(getattr(reader, "iter_precursor_spectra", None))</code> were guarding
+against attributes the ABC already guarantees, and direct attribute access is
+correct now.</p>
+<h2 id="3-batch_size-is-gone">3. <code>batch_size</code> is gone<a class="headerlink" href="#3-batch_size-is-gone" title="Permanent link">&para;</a></h2>
+<p><strong>Affects:</strong> anyone passing <code>batch_size</code> to a reader.</p>
+<p>It was declared by sixteen <code>iter_*</code> methods across nine modules and referenced
+by two, neither of which used it to change anything: mzPeak logged that it was
+ignoring it, and imzML chose between two code paths that walked the same flat
+range and called the same per-spectrum function. Verified on a real fixture
+before the branch was deleted — <code>single(batch_size=1)</code>, <code>batch(1000)</code> and the
+default all produced the same result.</p>
+<p><strong>What to do:</strong> delete the argument. There is no replacement because it never
+selected anything.</p>
+<ul>
+<li>On the <code>iter_*</code> methods this is a plain removal. None of them takes
+  <code>**kwargs</code>, so <code>reader.iter_spectra(batch_size=10)</code> already raises a
+  <code>TypeError</code> naming the argument — Python's own error is loud and specific
+  and no wrapper improves on it.</li>
+<li><code>ImzMLReader.__init__</code> is refused explicitly instead, because it forwards
+  <code>**kwargs</code> and would otherwise accept <code>batch_size=50</code> silently. There is
+  also a type guard on the positional form: <code>ImzMLReader(path, 50)</code> would have
+  slid into <code>cache_coordinates=50</code> — truthy, and wrong.</li>
+</ul>
+<h2 id="4-essentialmetadata-loses-two-fields-and-two-keys-leave-the-store">4. <code>EssentialMetadata</code> loses two fields, and two keys leave the store<a class="headerlink" href="#4-essentialmetadata-loses-two-fields-and-two-keys-leave-the-store" title="Permanent link">&para;</a></h2>
+<p><strong>Affects:</strong> readers and extractors implementing the ABC, and any consumer
+reading <code>estimated_memory_gb</code> out of a store.</p>
+<ul>
+<li><code>peak_counts_per_pixel</code> and <code>get_peak_counts_per_pixel</code> built the CSR
+  <code>indptr</code> in a single pass. CSR was retired in 3.22 (design decision D10) and
+  nothing has read either since — the method was declared on the reader ABC,
+  implemented by six readers and computed by four extractors, all of it
+  feeding nothing.</li>
+<li><code>estimated_memory_gb</code> fed the size threshold that chose between the
+  in-memory and streaming converters. D11 deleted that router. The number went
+  on being computed, logged and written into every store since — twice, under
+  <code>essential_metadata</code> and again under <code>processing_stats</code> — while meaning
+  nothing, and not even meaning the same thing per extractor: Bruker and imzML
+  estimated a dense footprint, the other four <code>total_peaks * 16</code> bytes.</li>
+</ul>
+<p><strong>This one changes what is stored.</strong> <code>essential_metadata.estimated_memory_gb</code>
+and <code>processing_stats.estimated_memory_gb</code> are no longer written. A consumer
+reading either must tolerate its absence. Nothing was reading it for a reason
+— it was not a meaningful number — but code that indexes it directly will
+raise.</p>
+<p><strong>What to do:</strong> two real uses were kept, each moved to where it belongs:</p>
+<ul>
+<li>PHI derives <code>n_spectra</code> and <code>total_peaks</code> from per-pixel counts, because a
+  PHI file is a stream of ion events. That is now
+  <code>PhiReader.occupied_channel_counts()</code> — PHI's own API rather than a contract
+  every reader has to answer.</li>
+<li>Waters counts occupied pixels rather than scans. Only the zero/non-zero test
+  survived, so the int32 accumulator became a boolean occupancy bitmap.</li>
+</ul>
+<h2 id="5-converts-stages-take-a-typed-state">5. <code>convert()</code>'s stages take a typed state<a class="headerlink" href="#5-converts-stages-take-a-typed-state" title="Permanent link">&para;</a></h2>
+<p><strong>Affects:</strong> anyone subclassing <code>BaseMSIConverter</code> or calling its stage methods
+directly.</p>
+<p>The four stages of <code>BaseMSIConverter.convert()</code> handed each other an untyped
+dictionary. Nothing declared what a stage required or produced, the twelve keys
+in use could only be learned by grepping for bracket literals, and no checker
+could verify any of it in a package shipping the <code>Typing :: Typed</code> classifier.</p>
+<p><code>ConversionState</code> is that dictionary's keys, typed, threaded through the same
+four calls. The parameter is renamed <code>data_structures</code> -&gt; <code>state</code>.</p>
+<p><strong>There is no behaviour change here</strong> — it is a signature and an attribute
+access change. Two notes:</p>
+<ul>
+<li>Optional fields are now <code>None</code> rather than absent. The <code>region_*</code>
+  accumulators exist only for a dataset with a region map, and the dict said so
+  by not having the key, so some call sites used <code>state["region_row_count"]</code>
+  and others <code>state.get("region_total_intensity")</code>. They are <code>None</code> now, once,
+  for everyone.</li>
+<li><code>mode</code> (<code>"3d_volume"</code> / <code>"2d_slices"</code>) is dropped. It restated
+  <code>self.handle_3d</code>, which every stage already has — read that instead.</li>
+</ul>
+<h2 id="6-a-previews-mass-range-can-be-unknown">6. A preview's mass range can be unknown<a class="headerlink" href="#6-a-previews-mass-range-can-be-unknown" title="Permanent link">&para;</a></h2>
+<p><strong>Affects:</strong> anyone reading <code>MsiPreview.mz_range</code>, and anyone building an
+<code>EssentialMetadata</code> by hand.</p>
+<p><code>preview_msi</code> no longer parses an imzML's spectrum list or decodes its <code>.ibd</code>;
+it answers from the head of the document instead (issue #360, with the
+measurements in <code>docs/supported-formats.md</code>). The one thing a head cannot
+always state is the mass range: an imzML written without the observed-m/z
+cvParams (<code>MS:1000528</code> / <code>MS:1000527</code>) records its extrema nowhere but in the
+binary, and IONTOF SurfaceLab writes none.</p>
+<p>So <code>MsiPreview.mz_range</code> is <code>Optional[Tuple[float, float]]</code>, and <code>None</code> means
+"not read" rather than "empty". It is deliberately not filled in from the first
+spectrum: that was measured 28 Da narrow on a real file — a range narrow enough
+to be believed and wrong enough to mislead.</p>
+<p><code>EssentialMetadata</code> gains <code>mass_range_known</code>, which is the distinction
+<code>n_spectra_counted</code> already draws for a count (issue #240). When it is False,
+<code>mass_range</code> is <code>(0.0, 0.0)</code> meaning "not read", which is not a range any
+acquisition has.</p>
+<p><strong>This one does not change what is stored</strong>, despite adding a field to
+<code>EssentialMetadata</code>. <code>uns["essential_metadata"]</code> is written from an explicit
+five-key dict rather than from the dataclass, so a new field does not reach a
+store.</p>
+<p><strong>What to do:</strong> handle <code>None</code> where you format <code>mz_range</code>, as you already have
+to for <code>n_pixels</code>. A custom extractor needs no change — <code>mass_range_known</code>
+defaults to True, which is what every path that reads a range for real should
+report.</p>
+<h2 id="7-an-imzml-that-declares-no-spectra-is-refused-by-name">7. An imzML that declares no spectra is refused by name<a class="headerlink" href="#7-an-imzml-that-declares-no-spectra-is-refused-by-name" title="Permanent link">&para;</a></h2>
+<p><strong>Affects:</strong> anyone catching <code>IndexError</code> around an imzML read.</p>
+<p>An imzML whose <code>&lt;spectrumList&gt;</code> holds no <code>&lt;spectrum&gt;</code> elements used to fail
+with <code>IndexError: too many indices for array: array is 1-dimensional, but 2
+were indexed</code>, logged as "Failed to initialize ImzML parser". That came out of
+pyimzml's constructor, which ends by taking the z extent off the coordinates it
+collected, and an empty coordinate list makes that a 1-D array. It named
+neither the file nor the reason, and a preview reported it as the whole account
+of the file.</p>
+<p>Such a file is now refused before the parser is built, with a <code>ConversionRefused</code>
+naming the file, the term and what is missing.</p>
+<p><strong>What to do:</strong> nothing, unless you were catching <code>IndexError</code> specifically.
+<code>ConversionRefused</code> subclasses <code>ValueError</code>, so <code>except ConversionRefused</code>,
+<code>except ValueError</code> and <code>except Exception</code> all keep working and gain the
+message. <code>IndexError</code> was never an outcome Thyra documented or intended.</p>
+<hr />
+<h2 id="if-you-are-coming-from-further-back-than-3233">If you are coming from further back than 3.23.3<a class="headerlink" href="#if-you-are-coming-from-further-back-than-3233" title="Permanent link">&para;</a></h2>
+<p>The <code>!</code> markers on this release are not the whole migration story for an older
+pin. At least one hard removal shipped earlier as a <strong>minor</strong>: 3.22.0 dropped
+<code>--sparse-format</code> and the <code>sparse_format</code> keyword (design decision D10), and
+passing the keyword now raises. CSC is the only layout written.</p>
+<p>If you are upgrading across several minors, read <code>docs/design-decisions.md</code>
+rather than the breaking-change markers alone.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../solarix-notes/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Bruker solariX">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Bruker solariX
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../changelog/" class="md-footer__link md-footer__link--next" aria-label="Next: Changelog">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Changelog
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["content.code.copy", "content.code.annotate", "content.tabs.link", "content.tooltips", "navigation.footer", "navigation.indexes", "navigation.path", "navigation.tabs", "navigation.sections", "navigation.top", "navigation.instant", "navigation.instant.progress", "search.highlight", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

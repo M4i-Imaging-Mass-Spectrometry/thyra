@@ -1,0 +1,1067 @@
+{
+  "$defs": {
+    "Acquisition": {
+      "additionalProperties": false,
+      "description": "When the acquisition was run and with what laser settings.\n\nEvery field is optional and left unset when the source does not\nreport it, so an absent field means \"not reported\", never \"none\".\nThe values are normalised: one timestamp format, one unit per\nquantity, where the raw ``uns[\"acquisition_params\"]`` dict keeps the\nvendor's own spelling and unit next to this block.",
+      "properties": {
+        "acquisition_datetime": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "When the acquisition started, as an ISO 8601 date and time (YYYY-MM-DDThh:mm:ss, optionally with fractional seconds). Carries a UTC offset when the source records one and none when it does not; no time zone is ever assumed.",
+          "title": "Acquisition Datetime"
+        },
+        "laser_frequency_hz": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "IMS:1006000",
+            "name": "repetition rate"
+          },
+          "default": null,
+          "description": "Laser repetition rate in hertz.",
+          "title": "Laser Frequency Hz"
+        },
+        "laser_power_percent": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Laser power as the percentage of the laser's range that the vendor's acquisition software shows, e.g. 70.0.",
+          "title": "Laser Power Percent"
+        },
+        "method_file": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "File name of the acquisition method the run was recorded with, e.g. 'imaging_pos.m' or 'neg_FastDDA.EXP'. The name only, never a path.",
+          "title": "Method File"
+        },
+        "shots_per_pixel": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "IMS:1006001",
+            "name": "laser shots per spectrum"
+          },
+          "default": null,
+          "description": "Laser shots summed into one pixel's spectrum.",
+          "title": "Shots Per Pixel"
+        }
+      },
+      "title": "Acquisition",
+      "type": "object"
+    },
+    "Fragmentation": {
+      "additionalProperties": false,
+      "description": "Whether, and how, the acquisition fragmented its ions.\n\nAn MS/MS imaging run measures fragments, so the m/z axis of the table\nmeans fragment m/z. Nothing about the axis says so, which is why this\nblock exists: without it an MS/MS store is indistinguishable from an\nMS1 one.\n\nThe MSI table sums a frame that isolated several precursors into one\nspectrum. ``merges_precursors`` says when that has happened, so a\nconsumer knows the spectrum is a chimera rather than discovering it\nfrom the peaks, and ``resolved_table`` names the sibling table that\nholds those precursors split apart when one was written.",
+      "properties": {
+        "constant_across_pixels": {
+          "default": true,
+          "description": "Whether every pixel was fragmented on the same schedule. A scheduled method makes it so; a data-dependent one does not, and then the windows below are not a global precursor axis.",
+          "title": "Constant Across Pixels",
+          "type": "boolean"
+        },
+        "dissociation_term": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OntologyTerm"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "PSI-MS dissociation method, e.g. MS:1000133 (CID)."
+        },
+        "merges_precursors": {
+          "default": false,
+          "description": "Whether one stored spectrum sums fragments of more than one precursor, so its peaks cannot be attributed to a single one.",
+          "title": "Merges Precursors",
+          "type": "boolean"
+        },
+        "ms_level": {
+          "cv": {
+            "accession": "MS:1000511",
+            "name": "ms level"
+          },
+          "description": "MS level of the stored spectra: 1 for a survey scan.",
+          "minimum": 1,
+          "title": "Ms Level",
+          "type": "integer"
+        },
+        "present": {
+          "description": "True when the stored spectra are fragment spectra.",
+          "title": "Present",
+          "type": "boolean"
+        },
+        "resolved_table": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Element key of the demultiplexed sibling table (pixels x (precursor, fragment)) written beside this summed table, when one was.",
+          "title": "Resolved Table"
+        },
+        "windows": {
+          "description": "The precursor schedule, empty when none was reported.",
+          "items": {
+            "$ref": "#/$defs/IsolationWindow"
+          },
+          "title": "Windows",
+          "type": "array"
+        }
+      },
+      "required": [
+        "present",
+        "ms_level"
+      ],
+      "title": "Fragmentation",
+      "type": "object"
+    },
+    "IonMobility": {
+      "additionalProperties": false,
+      "description": "Whether, and how, the acquisition separated ions by mobility.\n\nWritten so a consumer can tell a spectrum that was *summed over* a\nmobility ramp (Bruker TDF, TIMS engaged) from one that never had a\nmobility dimension (TSF, imzML, most other sources).  The MSI table\nThyra writes collapses the ramp; the fields here describe what was\ncollapsed.  Mobility is a spectral coordinate, never a spatial one,\nso nothing about it appears in the store's coordinate systems.",
+      "properties": {
+        "grid": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MobilityGrid"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The common mobility grid the resolved table was binned onto, when it was built from per-pixel mobility values."
+        },
+        "num_scans": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Mobility scans per frame (the TIMS ramp length); the largest when frames differ.",
+          "title": "Num Scans"
+        },
+        "present": {
+          "description": "True when the source carries a mobility dimension, e.g. a Bruker TDF acquisition with TIMS engaged.",
+          "title": "Present",
+          "type": "boolean"
+        },
+        "range_lower": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Lower bound of the acquired mobility range.",
+          "title": "Range Lower"
+        },
+        "range_upper": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Upper bound of the acquired mobility range.",
+          "title": "Range Upper"
+        },
+        "resolved_table": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Element key of the mobility-resolved sibling table (pixels x (m/z, mobility)) written beside this summed table, when one was.",
+          "title": "Resolved Table"
+        },
+        "separation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "MS:1002892",
+            "name": "ion mobility attribute"
+          },
+          "default": null,
+          "description": "The mobility quantity the instrument records, e.g. 'inverse reduced ion mobility' (TIMS) or 'ion mobility drift time'.",
+          "title": "Separation"
+        },
+        "separation_term": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OntologyTerm"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "PSI-MS term for the quantity: MS:1002815 (inverse reduced ion mobility) or MS:1002476 (ion mobility drift time)."
+        },
+        "unit_term": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OntologyTerm"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Unit of range_lower and range_upper, e.g. MS:1002814 volt-second per square centimeter for 1/K0."
+        }
+      },
+      "required": [
+        "present"
+      ],
+      "title": "IonMobility",
+      "type": "object"
+    },
+    "IsolationWindow": {
+      "additionalProperties": false,
+      "description": "One precursor isolation, named the way mzPeak names it.\n\nThe window spans ``[target - lower_offset, target + upper_offset]``.\nOffsets rather than a single width is mzPeak's shape (and mzML's);\na source reporting one full width has it halved into two equal\noffsets, which is the reading every mzML writer for those\ninstruments takes.",
+      "properties": {
+        "collision_energy": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "MS:1000045",
+            "name": "collision energy"
+          },
+          "default": null,
+          "description": "Collision energy in electronvolts (UO:0000266).",
+          "title": "Collision Energy"
+        },
+        "lower_offset": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "MS:1000828",
+            "name": "isolation window lower offset"
+          },
+          "default": null,
+          "description": "How far below the target the window reaches, in m/z.",
+          "title": "Lower Offset"
+        },
+        "scan_begin": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "First mobility scan this window occupies, when the source separates its windows along the mobility ramp (Bruker PASEF).",
+          "title": "Scan Begin"
+        },
+        "scan_end": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "One past the last mobility scan this window occupies.",
+          "title": "Scan End"
+        },
+        "target": {
+          "cv": {
+            "accession": "MS:1000827",
+            "name": "isolation window target m/z"
+          },
+          "description": "Isolation window target m/z.",
+          "exclusiveMinimum": 0,
+          "title": "Target",
+          "type": "number"
+        },
+        "upper_offset": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "MS:1000829",
+            "name": "isolation window upper offset"
+          },
+          "default": null,
+          "description": "How far above the target the window reaches, in m/z.",
+          "title": "Upper Offset"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "title": "IsolationWindow",
+      "type": "object"
+    },
+    "MSAnalysis": {
+      "additionalProperties": false,
+      "description": "How the data was acquired (METASPACE ``MS_Analysis``).\n\n``pixel_size_um`` is the one field that is always known at\nconversion time (conversion refuses to run without a pixel size),\nso it is the one required field of the section.",
+      "properties": {
+        "analyzer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "MS:1000443",
+            "name": "mass analyzer type"
+          },
+          "default": null,
+          "description": "E.g. 'TOF', 'Orbitrap', 'FTICR'.",
+          "title": "Analyzer"
+        },
+        "analyzer_term": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OntologyTerm"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "PSI-MS mass analyzer type term."
+        },
+        "detector_resolving_power": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResolvingPower"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "MS:1000800",
+            "name": "mass resolving power"
+          },
+          "default": null,
+          "description": "Resolving power at a reference m/z."
+        },
+        "fragmentation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fragmentation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Whether the stored spectra are fragment spectra and, if so, of which precursors; unset when the source does not say."
+        },
+        "instrument_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "MS:1000031",
+            "name": "instrument model"
+          },
+          "default": null,
+          "description": "Instrument model as reported by the source.",
+          "title": "Instrument Model"
+        },
+        "ion_mobility": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IonMobility"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Whether the source separated ions by mobility and, if so, over what range; the MSI table is summed over that dimension."
+        },
+        "ionisation_source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "MS:1000008",
+            "name": "ionization type"
+          },
+          "default": null,
+          "description": "E.g. 'MALDI', 'DESI', 'SIMS'.",
+          "title": "Ionisation Source"
+        },
+        "ionisation_source_term": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OntologyTerm"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "PSI-MS ionisation type term."
+        },
+        "manufacturer": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "MS:1001269",
+            "name": "instrument vendor"
+          },
+          "default": null,
+          "description": "Who built the instrument, in the source's own words, e.g. 'Bruker' or 'Waters'. Not normalised to a canonical list: vendors rename and merge, and the source's spelling is the fact it stated.",
+          "title": "Manufacturer"
+        },
+        "pixel_size_um": {
+          "$ref": "#/$defs/PixelSizeUm"
+        },
+        "polarity": {
+          "anyOf": [
+            {
+              "enum": [
+                "positive",
+                "negative"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "MS:1000465",
+            "name": "scan polarity"
+          },
+          "default": null,
+          "description": "Ion polarity mode.",
+          "title": "Polarity"
+        },
+        "polarity_term": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OntologyTerm"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "PSI-MS scan polarity term (MS:1000130 / MS:1000129)."
+        },
+        "serial_number": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "MS:1000529",
+            "name": "instrument serial number"
+          },
+          "default": null,
+          "description": "Serial number of the instrument that ran the acquisition. Identifies one physical machine, which is what makes it worth recording: calibration and detector response are properties of the machine, not of the model.",
+          "title": "Serial Number"
+        }
+      },
+      "required": [
+        "pixel_size_um"
+      ],
+      "title": "MSAnalysis",
+      "type": "object"
+    },
+    "MobilityGrid": {
+      "additionalProperties": false,
+      "description": "The common mobility grid a mobility-resolved table was binned onto.\n\nDescribes the channels of a grid table (pixels x (m/z, mobility)\nbuilt from per-pixel mobility sources): the law the channel edges\nfollow, the range they span and how many there are. Absent until\nsuch a table is written; the store's ``uns[\"mobility_heatmap\"]`` uses\nthe same channel count and edges so the two align by index.",
+      "properties": {
+        "law": {
+          "description": "How channel edges are spaced across the range, e.g. 'linear' (equal width in the axis unit).",
+          "minLength": 1,
+          "title": "Law",
+          "type": "string"
+        },
+        "lower": {
+          "description": "Lower edge of the first channel.",
+          "title": "Lower",
+          "type": "number"
+        },
+        "n_channels": {
+          "description": "Number of mobility channels.",
+          "minimum": 1,
+          "title": "N Channels",
+          "type": "integer"
+        },
+        "upper": {
+          "description": "Upper edge of the last channel.",
+          "title": "Upper",
+          "type": "number"
+        }
+      },
+      "required": [
+        "law",
+        "lower",
+        "upper",
+        "n_channels"
+      ],
+      "title": "MobilityGrid",
+      "type": "object"
+    },
+    "OntologyTerm": {
+      "additionalProperties": false,
+      "description": "A controlled-vocabulary reference: CURIE accession plus label.",
+      "properties": {
+        "accession": {
+          "description": "CURIE identifier, e.g. 'MS:1000075', 'NCBITaxon:10090', 'UBERON:0002107' or 'CHEBI:90695'.",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*:\\S+$",
+          "title": "Accession",
+          "type": "string"
+        },
+        "name": {
+          "description": "The term's primary label in its ontology.",
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "accession",
+        "name"
+      ],
+      "title": "OntologyTerm",
+      "type": "object"
+    },
+    "PixelSizeUm": {
+      "additionalProperties": false,
+      "description": "In-plane raster pitch in micrometres.",
+      "properties": {
+        "x": {
+          "cv": {
+            "accession": "IMS:1000046",
+            "name": "pixel size (x)"
+          },
+          "description": "Pixel size along x in micrometres.",
+          "exclusiveMinimum": 0,
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "cv": {
+            "accession": "IMS:1000047",
+            "name": "pixel size y"
+          },
+          "description": "Pixel size along y in micrometres.",
+          "exclusiveMinimum": 0,
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "title": "PixelSizeUm",
+      "type": "object"
+    },
+    "ProcessingStep": {
+      "additionalProperties": false,
+      "description": "One processing action between the raw data and this store.\n\nModeled on mzQC provenance: an ordered list of steps, each naming\nthe software that performed it and the parameters it ran with.  The\nconverter records its own steps (conversion, mass axis resampling);\ndownstream tools append theirs (normalisation, peak picking,\nannotation) when they modify the store.",
+      "properties": {
+        "name": {
+          "description": "What was done, e.g. 'conversion', 'mass axis resampling', 'normalisation', 'peak picking', 'annotation'.",
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "parameters": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "description": "The parameters the step ran with.",
+          "title": "Parameters",
+          "type": "object"
+        },
+        "software": {
+          "$ref": "#/$defs/SoftwareRef",
+          "description": "The software that did it."
+        }
+      },
+      "required": [
+        "name",
+        "software"
+      ],
+      "title": "ProcessingStep",
+      "type": "object"
+    },
+    "Provenance": {
+      "additionalProperties": false,
+      "description": "Who wrote the block and from what.\n\nDeliberately small: the store's ``uns[\"essential_metadata\"]`` and\nroot attributes already record dimensions, mass range, spectrum\ntype and conversion timestamp.  This section records only what is\nneeded to interpret the *metadata block itself*, and contains no\ntimestamps so that two conversions of the same input produce an\nidentical block (the uns parity tests rely on this).",
+      "properties": {
+        "pixel_size_source": {
+          "anyOf": [
+            {
+              "enum": [
+                "default",
+                "manual",
+                "automatic"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How the pixel size was determined: read from the source metadata ('automatic'), supplied by the user ('manual'), or the 1.0 um fallback ('default').",
+          "title": "Pixel Size Source"
+        },
+        "source_format": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Detected input format, e.g. 'imzml', 'bruker', 'phi'.",
+          "title": "Source Format"
+        },
+        "source_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Where the source data was read from. A block inside a store carries the path it was converted from; a standalone document carries the source's name only, because a document is written to be sent somewhere the path means nothing.",
+          "title": "Source Path"
+        },
+        "thyra_version": {
+          "description": "Thyra version that wrote the block.",
+          "minLength": 1,
+          "title": "Thyra Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "thyra_version"
+      ],
+      "title": "Provenance",
+      "type": "object"
+    },
+    "ResolvingPower": {
+      "additionalProperties": false,
+      "description": "Mass resolving power quoted at a reference m/z.",
+      "properties": {
+        "at_mz": {
+          "description": "The m/z the value is quoted at.",
+          "exclusiveMinimum": 0,
+          "title": "At Mz",
+          "type": "number"
+        },
+        "value": {
+          "description": "Resolving power (FWHM definition).",
+          "exclusiveMinimum": 0,
+          "title": "Value",
+          "type": "number"
+        }
+      },
+      "required": [
+        "value",
+        "at_mz"
+      ],
+      "title": "ResolvingPower",
+      "type": "object"
+    },
+    "SampleInformation": {
+      "additionalProperties": false,
+      "description": "What the sample is (METASPACE ``Sample_Information``).",
+      "properties": {
+        "condition": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "E.g. 'wildtype', 'diseased'.",
+          "title": "Condition"
+        },
+        "organism": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Species, e.g. 'Mus musculus'.",
+          "title": "Organism"
+        },
+        "organism_part": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Organ or organism part, e.g. 'liver'.",
+          "title": "Organism Part"
+        },
+        "organism_part_term": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OntologyTerm"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "UBERON term for the organism part."
+        },
+        "organism_term": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OntologyTerm"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "NCBITaxon term for the organism."
+        },
+        "sample_growth_conditions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "E.g. intervention or treatment.",
+          "title": "Sample Growth Conditions"
+        }
+      },
+      "title": "SampleInformation",
+      "type": "object"
+    },
+    "SamplePreparation": {
+      "additionalProperties": false,
+      "description": "How the sample was prepared (METASPACE ``Sample_Preparation``).",
+      "properties": {
+        "matrix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "MALDI matrix, e.g. '2,5-dihydroxybenzoic acid (DHB)'. 'none' for matrix-free techniques (DESI, SIMS).",
+          "title": "Matrix"
+        },
+        "matrix_application": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Matrix application device or protocol.",
+          "title": "Matrix Application"
+        },
+        "matrix_term": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OntologyTerm"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "CHEBI term for the matrix compound."
+        },
+        "sample_stabilisation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Preservation method, e.g. 'fresh frozen'.",
+          "title": "Sample Stabilisation"
+        },
+        "solvent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Solvent used.",
+          "title": "Solvent"
+        },
+        "tissue_modification": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Chemical modification, e.g. 'derivatised'.",
+          "title": "Tissue Modification"
+        }
+      },
+      "title": "SamplePreparation",
+      "type": "object"
+    },
+    "SoftwareRef": {
+      "additionalProperties": false,
+      "description": "A software agent, the way mzQC records analysis software.",
+      "properties": {
+        "name": {
+          "description": "Software name, e.g. 'thyra'.",
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "uri": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Homepage or repository URL.",
+          "title": "Uri"
+        },
+        "version": {
+          "description": "Software version.",
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "title": "SoftwareRef",
+      "type": "object"
+    }
+  },
+  "$id": "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.7.0/msi_metadata.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The versioned MSI metadata document.\n\n``sample`` and ``preparation`` cannot be auto-populated from raw\nfiles and default to empty; ``ms_analysis`` and ``provenance`` are\nwritten by the converter for every store; ``acquisition`` is written\nwhen the reader reports at least one of its facts and is absent --\nnot empty -- otherwise.\n\nThe emitted JSON Schema carries ``$id`` and ``$schema`` so that the\ncommitted artifact names its own published address; they are added\nhere, on the root model, rather than pasted into the file, so the\nsync test that compares the file with ``model_json_schema()`` keeps\nholding.",
+  "properties": {
+    "acquisition": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Acquisition"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "When the acquisition was run and with what laser settings; auto-populated from the vendor metadata where a reader has the facts, absent when it has none of them."
+    },
+    "ms_analysis": {
+      "$ref": "#/$defs/MSAnalysis",
+      "description": "How the data was acquired; auto-populated where possible."
+    },
+    "preparation": {
+      "$ref": "#/$defs/SamplePreparation",
+      "description": "How the sample was prepared; user-supplied."
+    },
+    "processing": {
+      "description": "Ordered processing history, oldest first (mzQC-style).",
+      "items": {
+        "$ref": "#/$defs/ProcessingStep"
+      },
+      "title": "Processing",
+      "type": "array"
+    },
+    "provenance": {
+      "$ref": "#/$defs/Provenance",
+      "description": "Who wrote this block and from what source."
+    },
+    "sample": {
+      "$ref": "#/$defs/SampleInformation",
+      "description": "What the sample is; user-supplied."
+    },
+    "schema_version": {
+      "default": "0.7.0",
+      "description": "Semantic version of the schema this document conforms to.",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ms_analysis",
+    "provenance"
+  ],
+  "title": "MSIMetadata",
+  "type": "object"
+}
