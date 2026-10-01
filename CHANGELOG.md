@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v4.3.3 (2026-10-01)
+
+### Bug Fixes
+
+- **readers**: Read mzPeak images by media type; record z only as stated
+  ([#426](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/426),
+  [`aa5ab70`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/aa5ab709729f1ac772e2aaff5dad3cb4ae9cfada))
+
+
 ## v4.3.2 (2026-10-01)
 
 ### Bug Fixes
