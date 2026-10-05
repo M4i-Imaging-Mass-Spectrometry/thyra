@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v4.3.4 (2026-10-05)
+
+### Bug Fixes
+
+- **alignment**: Place FlexImaging spots on their raster lattice
+  ([#430](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/430),
+  [`f0a0144`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f0a01443136e789cb62fcd21ada93584b614f52d))
+
+
 ## v4.3.3 (2026-10-01)
 
 ### Bug Fixes
