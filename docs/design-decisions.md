@@ -2690,3 +2690,54 @@ where its `.d` records 0, and that 1 would again be a value nobody stated.
 - An imzML that cannot be read a second time keeps the subtracted 1.
 - No mzPeak archive with more than one plane was found, so the refusal is
   tested on constructed archives.
+
+## D31. FlexImaging spots are placed on their lattice, not on the drawn Area
+
+**Status:** Implemented (2026-10-05), issue #428.
+
+**Decision.** A Bruker MALDI run is placed on its FlexImaging photo by one
+affine. The teaching points map the photo to the stage. The spots sit on a
+lattice one raster step apart, through the `.mis` reference point. The
+raster node on that point is the one that puts every measured spot inside
+its own Area, and of those the one that leaves the fewest unmeasured nodes
+inside the Areas. The same affine places the TIC image, the pixel polygons,
+the crop window and `raster_to_global_affine`.
+
+A TIC cell `i` spans `[i, i + 1)`, as SpatialData draws it, so its centre
+`i + 0.5` lands on the spot. A pixel polygon is that cell exactly: a
+parallelogram when the photo is rotated against the stage.
+
+**Why.** Thyra stretched each region over the bounding box of its Area
+outline. The outline is drawn by hand and only selects nodes, so pixels came
+out 0.87 to 1.14 raster steps wide. The TIC image was also half a cell off
+its own polygons.
+
+| Run (MassIVE MSV000088438) | Before: polygons / TIC, max | After: both, max |
+|---|---|---|
+| TSF, 1000 um, 276 spots | 0.57 / 1.06 steps | 0.0010 steps |
+| TDF, 1000 um, 240 spots | 0.52 / 0.51 steps | 0.0014 steps |
+
+The reference is flexImaging's own spot list, mapped through the teaching
+points. On two local runs at 20 um, without a spot list, the commanded
+positions in the poslog fit the lattice within 0.09 um after one
+translation. Both runs need the same translation, so no node is a step off.
+
+**What changes in a store.** Every store aligned to a FlexImaging photo: the
+polygons, the TIC transform, `raster_to_global_affine` and the crop window.
+With `apply_optical_alignment=False` the photo still maps a spot onto
+`obs["spatial_x"]`, now from the lattice.
+
+**The objection.** Keep the Area stretch for a run with one region. The
+outline usually hugs the spots, it needs no teaching points, and the error is
+a fraction of a step. It did not win: on a one-region local run at 20 um the
+polygons were still up to 0.46 steps off and the TIC up to 0.99. A fraction
+of a step is the scale MSI images are read at.
+
+**Known limits.**
+
+- Fewer than three teaching points, no raster step, or measured Areas with
+  different steps fall back to the bounding-box stretch, with a warning.
+- No `<ReferencePoint>`: the first teaching point is used. Every `.mis` seen
+  puts the reference point there.
+- In micrometre stores the TIC image and the polygons are still half a pixel
+  apart. That is not FlexImaging-specific and is left to its own issue.

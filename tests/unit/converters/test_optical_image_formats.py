@@ -320,12 +320,16 @@ def _rapiflex_acquisition(folder: Path, optical_name: str) -> Path:
         # Absolute, from the machine that acquired it: provenance only.
         f"  <OriginalImage>D:\\FlexImaging\\2026\\{optical_name}</OriginalImage>\n"
         "  <Raster>20,20</Raster>\n"
+        # 2 um per photo pixel, stage y up the photo as FlexImaging has it,
+        # so the 20 um raster is 10 px and spot (x, y) sits at photo pixel
+        # (10 + 10x, 10 + 10y), on the lattice through the first teaching
+        # point. The Area is drawn half a step outside the spots (D31).
         "  <TeachPoint>10,10;1000,2000</TeachPoint>\n"
-        "  <TeachPoint>40,10;1040,2000</TeachPoint>\n"
-        "  <TeachPoint>10,40;1000,2040</TeachPoint>\n"
+        "  <TeachPoint>40,10;1060,2000</TeachPoint>\n"
+        "  <TeachPoint>10,40;1000,1940</TeachPoint>\n"
         '  <Area Name="region0" Type="0">\n'
-        "    <Point>10,10</Point>\n"
-        "    <Point>40,40</Point>\n"
+        "    <Point>5,5</Point>\n"
+        "    <Point>35,35</Point>\n"
         "  </Area>\n"
         "</ImagingSequence>\n",
         encoding="utf-8",
@@ -372,10 +376,11 @@ def test_rapiflex_acquisition_with_a_jpeg_optical_image(tmp_path: Path):
 
     sdata = SpatialData.read(str(output_path))
     assert "rapiflex_optical_highres" in sdata.images
-    # The .mis draws one Area, so the alignment image in the store is that
-    # Area's window of the JPEG (plus the margin, clamped to the 37 x 53
-    # page), not the whole page; the store says where the window sits. The
-    # bytes are still the JPEG's own, which is what this test is for.
+    # The .mis draws one Area, so the alignment image in the store is the
+    # window its pixels cover, 5 to 35 on both axes (plus the margin, clamped
+    # to the 37 x 53 page), not the whole page; the store says where the
+    # window sits. The bytes are still the JPEG's own, which is what this
+    # test is for.
     root = json.loads((output_path / "zarr.json").read_text(encoding="utf-8"))
     crop = root["attributes"]["optical_images"]["elements"]["rapiflex_optical_highres"][
         "crop"
@@ -383,7 +388,7 @@ def test_rapiflex_acquisition_with_a_jpeg_optical_image(tmp_path: Path):
     assert crop["full_size"] == [53, 37]
     x0, y0 = crop["origin"]
     width, height = crop["size"]
-    assert (x0, y0, width, height) == (7, 7, 36, 30)
+    assert (x0, y0, width, height) == (2, 2, 36, 35)
     whole = np.moveaxis(np.asarray(PILImage.open(expected)), -1, 0)
     np.testing.assert_array_equal(
         sdata.images["rapiflex_optical_highres"].values,

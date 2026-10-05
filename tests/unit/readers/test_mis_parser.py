@@ -146,7 +146,17 @@ def test_parse_mis_extracts_polygon_area_bounding_box(tmp_path: Path) -> None:
     mis = _write_mis(tmp_path, "polygon.mis", area=POLYGON_AREA)
     data = parse_mis_file(mis)
 
-    assert data["areas"] == [{"name": "01", "p1": [24420, 3043], "p2": [26753, 5777]}]
+    (area,) = data["areas"]
+    assert (area["name"], area["p1"], area["p2"]) == (
+        "01",
+        [24420, 3043],
+        [26753, 5777],
+    )
+    # The outline itself is kept too: the lattice fit tests spots against
+    # it, not against the bounding box (D31).
+    assert area["type"] == 3
+    assert area["points"][0] == [24470, 4585]
+    assert len(area["points"]) == 10
 
 
 def _write_entity_mis(tmp_path: Path, name: str = "entity.mis") -> Path:

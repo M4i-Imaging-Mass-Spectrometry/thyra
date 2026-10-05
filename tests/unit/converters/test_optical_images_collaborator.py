@@ -14,9 +14,11 @@ streamed long after this object is built, and the converter's
 ``output_path`` is not fixed at construction. See the last three tests.
 
 The alignment numbers here are derived from
-``TeachingPointAlignment.compute_area_alignment``'s own rule (a region's
-raster bounds stretched onto its Area's image bounds), not copied out of
-a run, so a change to the affine has to be a deliberate one.
+``TeachingPointAlignment.compute_area_alignment``'s own rules, not copied
+out of a run, so a change to the affine has to be a deliberate one. The
+stub states no teaching points, so most tests get the approximate fallback
+(a region's raster bounds stretched onto its Area's image bounds); one
+test gives it teaching points and gets the lattice (D31).
 """
 
 from __future__ import annotations
@@ -116,19 +118,60 @@ def test_the_affine_stretches_the_raster_bounds_onto_the_area(tmp_path: Path) ->
     assert matrix is not None
     assert matrix.shape == (3, 3)
     assert matrix.dtype == np.float64
-    # N_X raster columns over (500 - 100) image pixels, N_Y rows over
-    # (600 - 200), and the offset puts the first pixel's centre half a
-    # raster step inside the Area's own corner.
+    # Without teaching points this is the approximate fallback: N_X raster
+    # columns over (500 - 100) image pixels, N_Y rows over (600 - 200). The
+    # TIC cell i spans [i, i + 1), so coordinate 0 is the Area's corner and
+    # the first pixel's centre, at 0.5, is half a raster step inside it.
     scale_x = 400 / N_X
     scale_y = 400 / N_Y
     np.testing.assert_allclose(
         matrix,
         [
-            [scale_x, 0.0, 100 + scale_x / 2],
-            [0.0, scale_y, 200 + scale_y / 2],
+            [scale_x, 0.0, 100.0],
+            [0.0, scale_y, 200.0],
             [0.0, 0.0, 1.0],
         ],
     )
+
+
+def test_with_teaching_points_the_affine_is_flexImagings_lattice(
+    tmp_path: Path,
+) -> None:
+    """Teaching points and a reference point give the lattice, not the stretch.
+
+    10 um per photo pixel, stage y up, a 20 um raster: one raster step is 2
+    photo pixels whatever the Area's size. The Area here is drawn larger
+    than the spots, which the bounding-box stretch would have turned into
+    bigger pixels.
+    """
+    reader = _StubReader(areas=[{"name": "Area0", "p1": (99, 199), "p2": (109, 207)}])
+    reader.mis_metadata.update(
+        teaching_points=[
+            {"image": [0, 0], "stage": [0, 0]},
+            {"image": [100, 0], "stage": [1000, 0]},
+            {"image": [0, 100], "stage": [0, -1000]},
+        ],
+        reference_point=[0.0, 0.0],
+        raster=[20, 20],
+    )
+    optical = _optical(tmp_path, reader)
+    optical.compute_alignment()
+    optical.build_tic_to_image_affine()
+
+    assert optical.alignment is not None
+    lattice = optical.alignment.lattice
+    assert lattice is not None
+    assert lattice.spots_outside == 0
+    matrix = optical.tic_to_image
+    assert matrix is not None
+    np.testing.assert_allclose(matrix, lattice.cell_to_image)
+    # One step is 2 photo pixels, and cell 0's centre (0.5, 0.5) is a node.
+    np.testing.assert_allclose(matrix[:2, :2], [[2.0, 0.0], [0.0, 2.0]], atol=1e-9)
+    centre = matrix @ np.array([0.5, 0.5, 1.0])
+    off_node = np.abs((centre[:2] + 1.0) % 2.0 - 1.0)
+    np.testing.assert_allclose(off_node, [0.0, 0.0], atol=1e-9)
+    corners = np.array(optical.alignment.cell_corners(0, 0))
+    np.testing.assert_allclose(corners.mean(axis=0), centre[:2])
 
 
 def test_an_area_that_matches_no_region_leaves_no_affine(tmp_path: Path) -> None:
@@ -247,9 +290,14 @@ def test_declining_the_alignment_carries_the_photo_into_micrometers(
     transform = optical.pending["ds_optical_highres"].transformations["global"]
     assert isinstance(transform, Affine)
     ps_x, ps_y = PIXEL_SIZE
-    expected = np.array(
-        [[ps_x, 0.0, 0.0], [0.0, ps_y, 0.0], [0.0, 0.0, 1.0]]
-    ) @ np.linalg.inv(optical.tic_to_image)
+    # Back to the TIC coordinate, less the half cell its centre sits at,
+    # then to micrometres: the spot of index r lands on r * pixel_size.
+    to_index = np.array([[1.0, 0.0, -0.5], [0.0, 1.0, -0.5], [0.0, 0.0, 1.0]])
+    expected = (
+        np.array([[ps_x, 0.0, 0.0], [0.0, ps_y, 0.0], [0.0, 0.0, 1.0]])
+        @ to_index
+        @ np.linalg.inv(optical.tic_to_image)
+    )
     np.testing.assert_allclose(
         transform.to_affine_matrix(input_axes=("x", "y"), output_axes=("x", "y")),
         expected,

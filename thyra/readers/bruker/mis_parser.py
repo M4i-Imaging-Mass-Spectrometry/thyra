@@ -197,6 +197,7 @@ def parse_mis_file(path: Path) -> Dict[str, Any]:
 
         _extract_basic_elements(root, metadata)
         _extract_teaching_points(root, metadata)
+        _extract_reference_point(root, metadata)
         _extract_raster_info(root, metadata)
         _extract_areas(root, metadata)
 
@@ -245,6 +246,24 @@ def _extract_teaching_points(root: "Element", metadata: Dict[str, Any]) -> None:
         metadata["teaching_points"] = teaching_points
 
 
+def _extract_reference_point(root: "Element", metadata: Dict[str, Any]) -> None:
+    """Extract the ``<ReferencePoint>``: the image pixel a raster node sits on.
+
+    FlexImaging lays its spots on one lattice through this point (D31), so
+    it fixes where the raster falls between whole steps.
+    """
+    elem = root.find(".//ReferencePoint")
+    if elem is None or not elem.text:
+        return
+    parts = elem.text.split(",")
+    if len(parts) != 2:
+        return
+    try:
+        metadata["reference_point"] = [float(parts[0]), float(parts[1])]
+    except ValueError:
+        logger.warning(f"Unreadable ReferencePoint in .mis: {elem.text!r}")
+
+
 def _extract_raster_info(root: "Element", metadata: Dict[str, Any]) -> None:
     """Extract raster dimensions from .mis XML."""
     raster_elem = root.find(".//Raster")
@@ -259,8 +278,10 @@ def _extract_areas(root: "Element", metadata: Dict[str, Any]) -> None:
 
     Areas define the image pixel coordinates for each acquisition region.
     Areas may be rectangular (Type=0, 2 points) or polygon (Type=3, N
-    points). In both cases the bounding box of all points is stored as p1
-    and p2, since alignment only needs the enclosing rectangle.
+    points). The bounding box of all points is stored as p1 and p2. The
+    outline itself is kept as ``points`` with its ``type``, and the area's
+    own ``<Raster>`` step as ``raster``: the lattice fit (D31) needs the
+    outline to tell which raster node each region starts on.
 
     Args:
         root: XML root element
@@ -280,14 +301,25 @@ def _extract_areas(root: "Element", metadata: Dict[str, Any]) -> None:
                     all_x.append(int(p_parts[0]))
                     all_y.append(int(p_parts[1]))
 
-                # Bounding box from all points
-                areas.append(
-                    {
-                        "name": area_name,
-                        "p1": [min(all_x), min(all_y)],
-                        "p2": [max(all_x), max(all_y)],
-                    }
-                )
+                area: Dict[str, Any] = {
+                    "name": area_name,
+                    "p1": [min(all_x), min(all_y)],
+                    "p2": [max(all_x), max(all_y)],
+                    "points": [[x, y] for x, y in zip(all_x, all_y)],
+                }
+                area_type = area_elem.get("Type")
+                if area_type is not None and area_type.strip().isdigit():
+                    area["type"] = int(area_type)
+                raster_elem = area_elem.find("Raster")
+                if raster_elem is not None and raster_elem.text:
+                    step = raster_elem.text.split(",")
+                    try:
+                        if len(step) == 2:
+                            area["raster"] = [float(step[0]), float(step[1])]
+                    except ValueError:
+                        # The outline is still usable without its own step.
+                        pass
+                areas.append(area)
             except (ValueError, IndexError) as e:
                 logger.warning(f"Failed to parse Area '{area_name}': {e}")
                 continue

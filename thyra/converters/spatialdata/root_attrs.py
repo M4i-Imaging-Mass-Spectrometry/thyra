@@ -311,7 +311,9 @@ class RootAttrsBuilder:
         # the explicit 3x3 row-major affine from TIC raster indices to
         # "global" (the same mapping the TIC element's transform
         # expresses), so a consumer that reads only attrs still gets
-        # the full placement.  `coordinate_offsets_px` preserves the
+        # the full placement. In the pixel variant it takes TIC
+        # coordinates, where cell i spans [i, i + 1) and its centre
+        # i + 0.5 is the spot (D31).  `coordinate_offsets_px` preserves the
         # source's raw acquisition-index offsets, which 0-based
         # normalisation otherwise erases; `stage_offset_um` is their
         # physical equivalent, written only when "global" is in
