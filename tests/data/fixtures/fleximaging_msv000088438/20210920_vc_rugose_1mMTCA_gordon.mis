@@ -1,0 +1,106 @@
+<ImagingSequence flexImagingVersion="5.1.52.0_1664_120" last_modified="2021-09-20T16:47:01">
+<Comment>1000 um raster on previously imaged sample for Gordon</Comment>
+<ResultDir></ResultDir>
+<Method>20210920_100_2000_IMS_notims.m</Method>
+<ImageFile>IMG_0000.jpg</ImageFile>
+<OriginalImage>IMG_1357.jpg</OriginalImage>
+<FilterList></FilterList>
+<BaseGeometry>MTP MSP AnchorChip 96 Adapter</BaseGeometry>
+<AreaColor>#c08080</AreaColor>
+<RoiColor>#80c080</RoiColor>
+<SpotColor>#8080c0</SpotColor>
+<SystemType>4</SystemType>
+<ParentMass></ParentMass>
+<FragmentMass></FragmentMass>
+<BlendImgRgn>40</BlendImgRgn>
+<BlendImgRes>50</BlendImgRes>
+<GradientMode>0</GradientMode>
+<flexControlRunVersion>0.0.0.0</flexControlRunVersion>
+<View Zoom="0" CenterPos="7697,2732" ShowImage="1" ShowImage2="0" ShowAreas="1" ShowRois="1" ShowTeachPoints="1" ShowRuler="1" ShowIntensity="0" ShowSpots="0" ShowSamplePos="0" ShowSpectra="1"></View>
+<AutoScanParameters>
+<MinMass>0</MinMass>
+<MaxMass>0</MaxMass>
+<WindowSize>0.5</WindowSize>
+<Overlap>0.1</Overlap>
+<MinPercent>10</MinPercent>
+<MaxPercent>100</MaxPercent>
+<MinRelIntens>0.2</MinRelIntens>
+</AutoScanParameters>
+<Preparation Mode="0"></Preparation>
+<SpotOffset>0,0</SpotOffset>
+<SpotDia>0</SpotDia>
+<WasRunInc>0</WasRunInc>
+<RunStep>2</RunStep>
+<RunOrder>3</RunOrder>
+<DoSourceCleaning>0</DoSourceCleaning>
+<EjectTarget>0</EjectTarget>
+<ProcessingParameters>
+<DataSource>2</DataSource>
+<DataPoints>8000</DataPoints>
+<SmoothSpectrum>0</SmoothSpectrum>
+<IcrThreshold>0.95</IcrThreshold>
+<MinMass>0</MinMass>
+<MaxMass>0</MaxMass>
+<BaselineSub>0</BaselineSub>
+<CacheData>1</CacheData>
+<CacheValid>0</CacheValid>
+<NormalizeSpectra>0</NormalizeSpectra>
+<NormalizeMethod>0</NormalizeMethod>
+<NormalizeNoiseThreshold>0.5</NormalizeNoiseThreshold>
+</ProcessingParameters>
+<HierarchClusteringParams>
+<HCLRegionsOnly>0</HCLRegionsOnly>
+<HCLSmoothing>lambda=0.1 iterations=10</HCLSmoothing>
+<HCLBlackList></HCLBlackList>
+<HCLWhiteList></HCLWhiteList>
+<HCLMassTolerance>1e-10</HCLMassTolerance>
+</HierarchClusteringParams>
+<MDFParameters>
+<MdfName></MdfName>
+<MdfSource>1</MdfSource>
+<MdfBaseMass>0</MdfBaseMass>
+<MdfRangeHi>-1</MdfRangeHi>
+<MdfRangeLo>-1</MdfRangeLo>
+<MdfMinInt>0.02</MdfMinInt>
+<MdfLlimit>0.025</MdfLlimit>
+<MdfUlimit>0.025</MdfUlimit>
+<MdfLslope>0</MdfLslope>
+<MdfUslope>0</MdfUslope>
+</MDFParameters>
+<TeachPoint>1252,776;-22963,15832</TeachPoint>
+<TeachPoint>6842,696;21879,17145</TeachPoint>
+<TeachPoint>2610,5064;-11828,-18267</TeachPoint>
+<ReferencePoint>1252,776</ReferencePoint>
+<Area Type="3" Name="vc_rugose_1" ZoomArea="0" Enabled="0" ShowSpectra="0" SpectrumColor="#993333">
+<Raster>1000,1000</Raster>
+<Method>20210920_100_2000_IMS_notims.m</Method>
+<Point>1450,1592</Point>
+<Point>2750,1517</Point>
+<Point>2858,2817</Point>
+<Point>1517,2875</Point>
+</Area>
+<Area Type="3" Name="vc_rugose_2" ZoomArea="0" Enabled="0" ShowSpectra="0" SpectrumColor="#0000ff">
+<Raster>1000,1000</Raster>
+<Method>20210920_100_2000_IMS_notims.m</Method>
+<Point>3688,1403</Point>
+<Point>4879,1444</Point>
+<Point>4871,2794</Point>
+<Point>3554,2744</Point>
+<Point>3596,1394</Point>
+<Point>3693,1404</Point>
+<Point>3694,1404</Point>
+<Point>3697,1403</Point>
+</Area>
+<Area Type="0" Name="agar" ZoomArea="0" Enabled="0" ShowSpectra="0" SpectrumColor="#00ff00">
+<Raster>1000,1000</Raster>
+<Method>20210920_100_2000_IMS_notims.m</Method>
+<Point>2322,3857</Point>
+<Point>2922,4340</Point>
+</Area>
+<Area Type="0" Name="agar2" ZoomArea="0" Enabled="0" ShowSpectra="0" SpectrumColor="#ff00ff">
+<Raster>1000,1000</Raster>
+<Method>20210920_100_2000_IMS_notims.m</Method>
+<Point>3089,3807</Point>
+<Point>3681,4357</Point>
+</Area>
+</ImagingSequence>

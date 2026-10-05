@@ -56,6 +56,8 @@ Archive/
 tests/data/fixtures/.synthetic_tims-build-*/
 tests/data/fixtures/.synthetic_tims-old-*/
 *.mis
+# ...except two public flexImaging sequence files the alignment tests read.
+!tests/data/fixtures/fleximaging_msv000088438/*.mis
 *.slx
 *.tiff
 *.ipynb

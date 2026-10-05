@@ -53,7 +53,7 @@ import pandas as pd
 import zarr
 from anndata import AnnData
 from numpy.typing import NDArray
-from shapely.geometry import box
+from shapely.geometry import Polygon, box
 from spatialdata import SpatialData
 from spatialdata.models import ShapesModel
 from spatialdata.transformations import Identity
@@ -984,9 +984,23 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 rm = self.optical.alignment.region_mappings[0]
                 default_half_pixel = rm.get_half_pixel_size()
 
+            # Under the teaching-point lattice (D31) a pixel's polygon is the
+            # exact cell the TIC image draws, through the same matrix, so the
+            # two cannot disagree; it is a parallelogram when the photo is
+            # rotated against the stage.
+            cell_corners = getattr(self.optical.alignment, "cell_corners", None)
+            lattice = getattr(self.optical.alignment, "lattice", None)
+
             valid_indices = []
             for i in range(len(adata)):
                 rx, ry = int(raster_x[i]), int(raster_y[i])
+                if lattice is not None and cell_corners is not None:
+                    corners = cell_corners(rx, ry)
+                    if corners is not None:
+                        geometries.append(Polygon(corners))
+                        valid_indices.append(i)
+                    continue
+
                 img_coords = self.optical.alignment.transform_point(rx, ry)
 
                 if img_coords is not None:

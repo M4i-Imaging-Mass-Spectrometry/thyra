@@ -207,6 +207,320 @@ class RegionMapping:
         return self._get_pixel_scale_x() / 2, self._get_pixel_scale_y() / 2
 
 
+#: Raster axis directions tried against the teaching-point frame, in order of
+#: preference. FlexImaging's teaching frame has y pointing up the image while
+#: raster Y counts down it, so (+1, -1) is what every measured run uses.
+_LATTICE_AXIS_SIGNS: Tuple[Tuple[int, int], ...] = ((1, -1), (1, 1), (-1, -1), (-1, 1))
+
+#: A spot this close to its Area's outline, in raster steps, still counts as
+#: inside it. FlexImaging draws rectangles whose edges pass through the
+#: outermost spots, so an exact test would reject them.
+_AREA_EDGE_TOLERANCE_STEPS = 0.1
+
+#: How far around the estimated reference node the integer search looks.
+_NODE_SEARCH_RADIUS = 3
+
+
+@dataclass(frozen=True)
+class LatticeFit:
+    """Where FlexImaging put each raster spot on its alignment image (D31).
+
+    FlexImaging places every spot of a run on one lattice: one raster step
+    apart in the teaching-point frame, through the ``.mis`` reference
+    point. An Area outline only selects which nodes are measured, so the
+    outline's size says nothing about the pitch.
+
+    Attributes:
+        cell_to_image: 3x3 affine from the TIC image's own coordinates to
+            alignment-image pixels. Cell ``(i, j)`` spans ``[i, i + 1) x
+            [j, j + 1)``, the SpatialData convention, so its centre
+            ``(i + 0.5, j + 0.5)`` lands on the spot at raster
+            ``(first_raster_x + i, first_raster_y + j)``.
+        reference_node: Raster ``(X, Y)`` of the node on the reference point.
+        axis_signs: Direction of raster X and Y in the teaching frame.
+        raster_step_um: ``(x, y)`` lattice step in micrometres.
+        spots_outside: Measured spots that fall outside their own Area.
+        nodes_unmeasured: Lattice nodes inside an Area that were not measured.
+        reference_from: ``"ReferencePoint"``, or ``"first teaching point"``
+            when the ``.mis`` has none.
+    """
+
+    cell_to_image: np.ndarray
+    reference_node: Tuple[int, int]
+    axis_signs: Tuple[int, int]
+    raster_step_um: Tuple[float, float]
+    spots_outside: int
+    nodes_unmeasured: int
+    reference_from: str
+
+    def cell_centre(self, norm_x: float, norm_y: float) -> Tuple[float, float]:
+        """Image pixel of the spot in TIC cell ``(norm_x, norm_y)``."""
+        x, y, _ = self.cell_to_image @ np.array([norm_x + 0.5, norm_y + 0.5, 1.0])
+        return float(x), float(y)
+
+    def cell_corners(self, norm_x: float, norm_y: float) -> List[Tuple[float, float]]:
+        """The four image-pixel corners of TIC cell ``(norm_x, norm_y)``."""
+        corners = np.array(
+            [
+                [norm_x, norm_y, 1.0],
+                [norm_x + 1, norm_y, 1.0],
+                [norm_x + 1, norm_y + 1, 1.0],
+                [norm_x, norm_y + 1, 1.0],
+            ]
+        )
+        out = corners @ self.cell_to_image.T
+        return [(float(x), float(y)) for x, y, _ in out]
+
+
+def _area_outline(area: Dict[str, Any]) -> Optional[List[Tuple[float, float]]]:
+    """An Area's outline in image pixels: its polygon, or its rectangle."""
+    points = area.get("points")
+    if points and len(points) >= 3:
+        return [(float(x), float(y)) for x, y in points]
+    corners = points if points and len(points) == 2 else None
+    if corners is None and "p1" in area and "p2" in area:
+        corners = [area["p1"], area["p2"]]
+    if corners is None:
+        return None
+    (x0, y0), (x1, y1) = corners
+    return [
+        (float(x0), float(y0)),
+        (float(x1), float(y0)),
+        (float(x1), float(y1)),
+        (float(x0), float(y1)),
+    ]
+
+
+class _LatticeSearch:
+    """The whole-node search behind :func:`fit_raster_lattice`.
+
+    Holds the teaching-point affine, the reference point in stage
+    micrometres, the measured spots and each measured region's Area, and
+    scores a candidate ``(node, axis signs)`` by how many spots fall outside
+    their Area and how many Area nodes went unmeasured.
+    """
+
+    def __init__(
+        self,
+        to_stage: np.ndarray,
+        ref: np.ndarray,
+        step: Tuple[float, float],
+        positions: List[Dict[str, Any]],
+        areas: List[Dict[str, Any]],
+        tolerance_px: float,
+    ) -> None:
+        from shapely.geometry import Polygon
+
+        self.to_stage = to_stage
+        self.to_image = np.linalg.inv(to_stage)
+        self.ref = ref
+        self.step_x, self.step_y = step
+        self.raster_x = np.array([p["raster_x"] for p in positions], dtype=np.float64)
+        self.raster_y = np.array([p["raster_y"] for p in positions], dtype=np.float64)
+        self.regions = np.array([p["region"] for p in positions], dtype=np.int64)
+        # Each measured region's Area as drawn, and padded by the edge
+        # tolerance for the inside test.
+        self.exact: Dict[int, Any] = {}
+        self.padded: Dict[int, Any] = {}
+        for region in np.unique(self.regions).tolist():
+            if 0 <= region < len(areas):
+                vertices = _area_outline(areas[region])
+                if vertices is not None:
+                    self.exact[region] = Polygon(vertices)
+                    self.padded[region] = self.exact[region].buffer(tolerance_px)
+
+    def to_px(
+        self, node: Tuple[int, int], signs: Tuple[int, int], xs: Any, ys: Any
+    ) -> Tuple[Any, Any]:
+        """Image pixels of raster nodes ``(xs, ys)`` on the lattice."""
+        stage_x = self.ref[0] + signs[0] * self.step_x * (xs - node[0])
+        stage_y = self.ref[1] + signs[1] * self.step_y * (ys - node[1])
+        m = self.to_image
+        return (
+            m[0, 0] * stage_x + m[0, 1] * stage_y + m[0, 2],
+            m[1, 0] * stage_x + m[1, 1] * stage_y + m[1, 2],
+        )
+
+    def outside(self, node: Tuple[int, int], signs: Tuple[int, int]) -> int:
+        """Measured spots that fall outside their own (padded) Area."""
+        import shapely
+
+        count = 0
+        for region, polygon in self.padded.items():
+            sel = self.regions == region
+            px, py = self.to_px(node, signs, self.raster_x[sel], self.raster_y[sel])
+            count += int((~shapely.contains_xy(polygon, px, py)).sum())
+        return count
+
+    def unmeasured(self, node: Tuple[int, int], signs: Tuple[int, int]) -> int:
+        """Lattice nodes inside an Area as drawn that no spot was measured on.
+
+        Against the outline as drawn: FlexImaging measures the nodes inside
+        it, and the edge tolerance would count nodes it never meant to.
+        """
+        import shapely
+
+        count = 0
+        for region, polygon in self.exact.items():
+            sel = self.regions == region
+            measured = set(
+                zip(self.raster_x[sel].astype(int), self.raster_y[sel].astype(int))
+            )
+            # The Area's outline in raster coordinates bounds the nodes to try.
+            verts = np.array(polygon.exterior.coords)
+            stage = verts @ self.to_stage[:2, :2].T + self.to_stage[:2, 2]
+            gx = node[0] + (stage[:, 0] - self.ref[0]) / (signs[0] * self.step_x)
+            gy = node[1] + (stage[:, 1] - self.ref[1]) / (signs[1] * self.step_y)
+            xs, ys = np.meshgrid(
+                np.arange(np.floor(gx.min()), np.ceil(gx.max()) + 1),
+                np.arange(np.floor(gy.min()), np.ceil(gy.max()) + 1),
+            )
+            xs, ys = xs.ravel(), ys.ravel()
+            px, py = self.to_px(node, signs, xs, ys)
+            inside = shapely.contains_xy(polygon, px, py)
+            nodes = zip(xs[inside].astype(int), ys[inside].astype(int))
+            count += sum(1 for xy in nodes if xy not in measured)
+        return count
+
+    def candidates(self, signs: Tuple[int, int]) -> List[Tuple[int, int]]:
+        """Nodes near where each region's centre puts the reference node."""
+        guesses = set()
+        for region, polygon in self.padded.items():
+            sel = self.regions == region
+            centre = self.to_stage @ np.array(
+                [polygon.centroid.x, polygon.centroid.y, 1.0]
+            )
+            gx = self.raster_x[sel].mean() - (centre[0] - self.ref[0]) / (
+                signs[0] * self.step_x
+            )
+            gy = self.raster_y[sel].mean() - (centre[1] - self.ref[1]) / (
+                signs[1] * self.step_y
+            )
+            guesses.add((int(round(gx)), int(round(gy))))
+        span = range(-_NODE_SEARCH_RADIUS, _NODE_SEARCH_RADIUS + 1)
+        return sorted(
+            {(gx + dx, gy + dy) for gx, gy in guesses for dx in span for dy in span}
+        )
+
+    def best(self) -> Tuple[int, int, Tuple[int, int], Tuple[int, int]]:
+        """``(spots outside, unmeasured nodes, node, signs)`` of the best fit.
+
+        Fewest spots outside first, then fewest unmeasured nodes, then the
+        usual axis directions.
+        """
+        scored = [
+            (self.outside(node, signs), preference, node, signs)
+            for preference, signs in enumerate(_LATTICE_AXIS_SIGNS)
+            for node in self.candidates(signs)
+        ]
+        fewest = min(s[0] for s in scored)
+        n_unmeasured, _, node, signs, n_outside = min(
+            (self.unmeasured(node, signs), preference, node, signs, n_out)
+            for n_out, preference, node, signs in scored
+            if n_out == fewest
+        )
+        return n_outside, n_unmeasured, node, signs
+
+
+def fit_raster_lattice(
+    teaching_points: List[Dict[str, Any]],
+    reference_point: Optional[Tuple[float, float]],
+    raster_step: Tuple[float, float],
+    areas: List[Dict[str, Any]],
+    positions: List[Dict[str, Any]],
+    first_raster_x: int,
+    first_raster_y: int,
+) -> Optional[LatticeFit]:
+    """Place the run's raster on the alignment image the way FlexImaging does.
+
+    The teaching points give the image-to-stage affine. The lattice runs
+    through the reference point with the raster step. Which raster node
+    sits on the reference point is a whole-number question: it is the node
+    that puts every measured spot inside its own Area, and of those the one
+    that leaves the fewest unmeasured nodes inside the Areas. On the public
+    MassIVE MSV000088438 runs this reproduces flexImaging's own spot list
+    within 1 um.
+
+    Args:
+        teaching_points: ``.mis`` teaching points, ``{"image", "stage"}``.
+        reference_point: ``.mis`` ``<ReferencePoint>`` in image pixels, or
+            ``None`` to use the first teaching point (FlexImaging puts it
+            there in every file seen).
+        raster_step: ``(x, y)`` raster step in micrometres.
+        areas: ``.mis`` Areas, in file order. Region ``N`` is Area ``N``.
+        positions: Measured spots, ``{"raster_x", "raster_y", "region"}``.
+        first_raster_x: Raster X of TIC cell 0.
+        first_raster_y: Raster Y of TIC cell 0.
+
+    Returns:
+        The fit, or ``None`` when the inputs cannot place a lattice: fewer
+        than three teaching points, no positive step, no Area that any
+        measured region maps to.
+    """
+    step_x, step_y = (float(raster_step[0]), float(raster_step[1]))
+    if len(teaching_points) < 3 or step_x <= 0 or step_y <= 0 or not positions:
+        return None
+
+    points = [TeachingPoint.from_dict(tp) for tp in teaching_points]
+    image_to_stage = AffineTransform.from_points(
+        [(float(p.image_x), float(p.image_y)) for p in points],
+        [(float(p.stage_x), float(p.stage_y)) for p in points],
+    )
+    if reference_point is None:
+        reference_point = (float(points[0].image_x), float(points[0].image_y))
+        reference_from = "first teaching point"
+    else:
+        reference_from = "ReferencePoint"
+    to_stage = image_to_stage.matrix
+    ref = to_stage @ np.array([reference_point[0], reference_point[1], 1.0])
+
+    # The edge tolerance in image pixels: steps times pixels per micrometre.
+    um_per_px = 0.5 * (image_to_stage.scale_x + image_to_stage.scale_y)
+    tolerance_px = _AREA_EDGE_TOLERANCE_STEPS * min(step_x, step_y) / um_per_px
+    search = _LatticeSearch(
+        to_stage, ref, (step_x, step_y), positions, areas, tolerance_px
+    )
+    if not search.padded:
+        return None
+    n_outside, n_unmeasured, node, signs = search.best()
+
+    sx, sy = signs
+    lattice = np.array(
+        [
+            [sx * step_x, 0.0, ref[0] + sx * step_x * (first_raster_x - node[0] - 0.5)],
+            [0.0, sy * step_y, ref[1] + sy * step_y * (first_raster_y - node[1] - 0.5)],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+    fit = LatticeFit(
+        cell_to_image=search.to_image @ lattice,
+        reference_node=(int(node[0]), int(node[1])),
+        axis_signs=(int(sx), int(sy)),
+        raster_step_um=(step_x, step_y),
+        spots_outside=int(n_outside),
+        nodes_unmeasured=int(n_unmeasured),
+        reference_from=reference_from,
+    )
+    logger.info(
+        f"FlexImaging lattice: reference node {fit.reference_node} "
+        f"(from {reference_from}), step {step_x:g} x {step_y:g} um, "
+        f"axes {fit.axis_signs}, {n_outside} of {len(positions)} spots outside "
+        f"their Area, {n_unmeasured} unmeasured nodes inside the Areas"
+    )
+    if n_outside:
+        logger.warning(
+            f"{n_outside} of {len(positions)} measured spots fall outside their "
+            f".mis Area on the best lattice; check that the .mis belongs to this "
+            f"run. The optical alignment may be off by whole raster steps."
+        )
+    if signs != _LATTICE_AXIS_SIGNS[0]:
+        logger.warning(
+            f"FlexImaging raster axes {signs} differ from the usual (1, -1); "
+            "the optical alignment follows the Areas."
+        )
+    return fit
+
+
 @dataclass
 class AreaAlignmentResult:
     """Result of area-based alignment computation.
@@ -219,12 +533,21 @@ class AreaAlignmentResult:
         first_raster_x: First raster X offset from header
         first_raster_y: First raster Y offset from header
         pos_to_region: Mapping from (raster_x, raster_y) to region_id
+        lattice: The teaching-point lattice (D31). ``None`` only when the
+            ``.mis`` lacks what it needs, and then each region is stretched
+            over its Area's bounding box instead, which is approximate.
     """
 
     region_mappings: List[RegionMapping]
     first_raster_x: int
     first_raster_y: int
     pos_to_region: Dict[Tuple[int, int], int] = field(default_factory=dict)
+    lattice: Optional[LatticeFit] = None
+
+    @property
+    def cell_to_image(self) -> Optional[np.ndarray]:
+        """The lattice's TIC-cell-to-image affine, or ``None`` without one."""
+        return self.lattice.cell_to_image if self.lattice is not None else None
 
     def transform_point(
         self, norm_x: int, norm_y: int
@@ -247,12 +570,42 @@ class AreaAlignmentResult:
         if region_id is None:
             return None
 
+        if self.lattice is not None:
+            return self.lattice.cell_centre(norm_x, norm_y)
+
         # Find the region mapping
         for mapping in self.region_mappings:
             if mapping.region_id == region_id:
                 return mapping.raster_to_image(orig_x, orig_y)
 
         return None
+
+    def cell_corners(
+        self, norm_x: int, norm_y: int
+    ) -> Optional[List[Tuple[float, float]]]:
+        """The image-pixel outline of a measured pixel, or ``None``.
+
+        Under the lattice this is the exact cell the TIC image draws, a
+        parallelogram when the photo is rotated against the stage. Without
+        one it is the axis-aligned box of the bounding-box stretch.
+        """
+        if (norm_x + self.first_raster_x, norm_y + self.first_raster_y) not in (
+            self.pos_to_region
+        ):
+            return None
+        if self.lattice is not None:
+            return self.lattice.cell_corners(norm_x, norm_y)
+        centre = self.transform_point(norm_x, norm_y)
+        half = self.get_half_pixel_size(norm_x, norm_y)
+        if centre is None or half is None:
+            return None
+        (cx, cy), (hx, hy) = centre, half
+        return [
+            (cx - hx, cy - hy),
+            (cx + hx, cy - hy),
+            (cx + hx, cy + hy),
+            (cx - hx, cy + hy),
+        ]
 
     def get_half_pixel_size(
         self, norm_x: int, norm_y: int
@@ -279,6 +632,13 @@ class AreaAlignmentResult:
         region_id = self.pos_to_region.get((orig_x, orig_y))
         if region_id is None:
             return None
+
+        if self.lattice is not None:
+            m = self.lattice.cell_to_image
+            return (
+                float(np.hypot(m[0, 0], m[1, 0])) / 2.0,
+                float(np.hypot(m[0, 1], m[1, 1])) / 2.0,
+            )
 
         # Find the region mapping and get its half-pixel size
         for mapping in self.region_mappings:
@@ -685,19 +1045,29 @@ class TeachingPointAlignment:
         poslog_positions: List[Dict[str, Any]],
         first_raster_x: int,
         first_raster_y: int,
+        teaching_points: Optional[List[Dict[str, Any]]] = None,
+        reference_point: Optional[Tuple[float, float]] = None,
+        raster_step: Optional[Tuple[float, float]] = None,
     ) -> AreaAlignmentResult:
         """Compute alignment using Area definitions from .mis file.
 
-        This is the preferred alignment method when Area definitions are
-        available, as they provide direct image pixel coordinates for each
-        acquisition region without requiring coordinate system transformations.
+        With three teaching points and a raster step, every spot is placed
+        on FlexImaging's lattice (:func:`fit_raster_lattice`, D31). Without
+        them, each region is stretched over its Area's bounding box, which
+        is approximate: the outline is drawn by hand and is not the extent
+        of the spots.
 
         Args:
             areas: List of Area dictionaries with 'name', 'p1', 'p2' keys
-                where p1 and p2 are (x, y) tuples of image pixel coordinates
+                where p1 and p2 are (x, y) tuples of image pixel coordinates,
+                and optionally 'points', 'type' and 'raster'
             poslog_positions: List of position dictionaries from poslog parsing
             first_raster_x: First raster X offset from header
             first_raster_y: First raster Y offset from header
+            teaching_points: ``.mis`` teaching points
+            reference_point: ``.mis`` ``<ReferencePoint>`` in image pixels
+            raster_step: Raster step in micrometres, used when the Areas
+                state none of their own
 
         Returns:
             AreaAlignmentResult with region mappings and coordinate transform
@@ -773,9 +1143,69 @@ class TeachingPointAlignment:
                 f"({mapping.image_max_x}, {mapping.image_max_y})"
             )
 
+        lattice = self._fit_lattice(
+            areas,
+            poslog_positions,
+            regions,
+            first_raster_x,
+            first_raster_y,
+            teaching_points,
+            reference_point,
+            raster_step,
+        )
+
         return AreaAlignmentResult(
             region_mappings=region_mappings,
             first_raster_x=first_raster_x,
             first_raster_y=first_raster_y,
             pos_to_region=pos_to_region,
+            lattice=lattice,
+        )
+
+    @staticmethod
+    def _fit_lattice(
+        areas: List[Dict[str, Any]],
+        positions: List[Dict[str, Any]],
+        regions: Dict[int, Dict[str, Any]],
+        first_raster_x: int,
+        first_raster_y: int,
+        teaching_points: Optional[List[Dict[str, Any]]],
+        reference_point: Optional[Tuple[float, float]],
+        raster_step: Optional[Tuple[float, float]],
+    ) -> Optional[LatticeFit]:
+        """The lattice fit, or ``None`` (with the reason logged) to fall back."""
+        if not teaching_points or len(teaching_points) < 3:
+            logger.warning(
+                "The .mis has fewer than three teaching points; optical "
+                "alignment stretches each region over its Area outline, which "
+                "can be off by up to a raster step."
+            )
+            return None
+        steps = {
+            tuple(float(v) for v in areas[r]["raster"])
+            for r in regions
+            if 0 <= r < len(areas) and areas[r].get("raster")
+        }
+        if len(steps) > 1:
+            logger.warning(
+                f"The measured Areas use different raster steps {sorted(steps)}; "
+                "one lattice cannot place them, so optical alignment stretches "
+                "each region over its Area outline instead."
+            )
+            return None
+        step = next(iter(steps)) if steps else raster_step
+        if step is None:
+            logger.warning(
+                "No raster step for the optical alignment lattice; it stretches "
+                "each region over its Area outline instead."
+            )
+            return None
+        return fit_raster_lattice(
+            teaching_points=teaching_points,
+            reference_point=reference_point,
+            raster_step=(float(step[0]), float(step[1])),
+            areas=areas,
+            positions=positions,
+            first_raster_x=first_raster_x,
+            first_raster_y=first_raster_y,
         )

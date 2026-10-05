@@ -592,10 +592,13 @@ class OpticalCrop:
         x_min, x_max, y_min, y_max = box
         pad_x = (x_max - x_min) * margin
         pad_y = (y_max - y_min) * margin
-        x0 = max(0, int(math.floor(x_min - pad_x)))
-        y0 = max(0, int(math.floor(y_min - pad_y)))
-        x1 = min(full_width, int(math.ceil(x_max + pad_x)))
-        y1 = min(full_height, int(math.ceil(y_max + pad_y)))
+        # Rounded outward, but a value a hair from a whole pixel is that
+        # pixel: an affine fitted from teaching points gives 4.9999999 for 5.
+        eps = 1e-6
+        x0 = max(0, int(math.floor(x_min - pad_x + eps)))
+        y0 = max(0, int(math.floor(y_min - pad_y + eps)))
+        x1 = min(full_width, int(math.ceil(x_max + pad_x - eps)))
+        y1 = min(full_height, int(math.ceil(y_max + pad_y - eps)))
         if x1 <= x0 or y1 <= y0:
             return None
         if x0 == 0 and y0 == 0 and x1 == full_width and y1 == full_height:
@@ -1144,31 +1147,33 @@ class OpticalImages:
 
         The box is where the converted region's raster actually lands under
         :attr:`tic_to_image` -- the same affine the TIC and the polygons are
-        placed by -- not the Area's own corners. For a single region the two
-        coincide by construction (the affine stretches the raster bounds
-        onto the Area); for a selected region of a multi-region file the
-        affine is the global stretch and the Area corners are only where
-        the ``.mis`` drew them, so the affine's answer is the one that
-        agrees with the MSI. Half a raster step is added on each side so the
-        outermost pixels' full footprint is inside the box before the
-        margin is.
+        placed by -- not the Area's own corners, which are only where the
+        ``.mis`` drew the outline. It is the extent of the region's cells,
+        so the outermost pixels' full footprint is inside the box before
+        the margin is, whatever the affine's rotation.
         """
         mapping = self._converted_region_mapping()
         if mapping is None or self._alignment is None or self._tic_to_image is None:
             return None
         matrix = self._tic_to_image
-        scale_x, scale_y = float(matrix[0, 0]), float(matrix[1, 1])
-        # Raster bounds in the TIC grid's own indices, i.e. relative to the
-        # position the affine calls (0, 0).
+        # The region's cells in the TIC grid's own coordinates: cell i spans
+        # [i, i + 1), so the block runs from the first index to last + 1.
         rx0 = mapping.raster_min_x - self._alignment.first_raster_x
-        rx1 = mapping.raster_max_x - self._alignment.first_raster_x
+        rx1 = mapping.raster_max_x - self._alignment.first_raster_x + 1
         ry0 = mapping.raster_min_y - self._alignment.first_raster_y
-        ry1 = mapping.raster_max_y - self._alignment.first_raster_y
-        x_lo = float(matrix[0, 2]) + rx0 * scale_x - abs(scale_x) / 2.0
-        x_hi = float(matrix[0, 2]) + rx1 * scale_x + abs(scale_x) / 2.0
-        y_lo = float(matrix[1, 2]) + ry0 * scale_y - abs(scale_y) / 2.0
-        y_hi = float(matrix[1, 2]) + ry1 * scale_y + abs(scale_y) / 2.0
-        box = (min(x_lo, x_hi), max(x_lo, x_hi), min(y_lo, y_hi), max(y_lo, y_hi))
+        ry1 = mapping.raster_max_y - self._alignment.first_raster_y + 1
+        corners = (
+            np.array(
+                [[rx0, ry0, 1.0], [rx1, ry0, 1.0], [rx1, ry1, 1.0], [rx0, ry1, 1.0]]
+            )
+            @ np.asarray(matrix, dtype=np.float64).T
+        )
+        box = (
+            float(corners[:, 0].min()),
+            float(corners[:, 0].max()),
+            float(corners[:, 1].min()),
+            float(corners[:, 1].max()),
+        )
         return OpticalCrop.around(box, full_width, full_height, mapping=mapping)
 
     def compute_alignment(self) -> None:
@@ -1207,6 +1212,9 @@ class OpticalImages:
             self.primary_filename = Path(image_file).stem.lower()
             logger.info(f"Primary alignment image from .mis: {image_file}")
 
+        raster = mis_metadata.get("raster")
+        reference = mis_metadata.get("reference_point")
+
         # Compute area-based alignment
         try:
             aligner = TeachingPointAlignment()
@@ -1215,6 +1223,9 @@ class OpticalImages:
                 poslog_positions=positions,
                 first_raster_x=first_raster_x,
                 first_raster_y=first_raster_y,
+                teaching_points=mis_metadata.get("teaching_points"),
+                reference_point=tuple(reference) if reference else None,
+                raster_step=tuple(raster) if raster else None,
             )
             logger.info(
                 f"Computed optical alignment with "
@@ -1231,23 +1242,31 @@ class OpticalImages:
             self._alignment = None
 
     def build_tic_to_image_affine(self) -> None:
-        """Build affine matrix mapping TIC raster-index coords to image pixels.
+        """Build the affine from the TIC image's coordinates to image pixels.
 
-        When optical alignment is available, this creates a 3x3 affine matrix
-        that transforms TIC image coordinates (integer raster indices) into
-        optical image pixel coordinates, so the TIC overlays correctly on the
-        optical image in SpatialData.
+        The matrix maps the TIC image's own coordinates, where cell
+        ``(i, j)`` spans ``[i, i + 1) x [j, j + 1)`` as SpatialData draws
+        it, to optical-image pixels. A cell's centre therefore lands on its
+        spot, and the polygons, the crop and ``raster_to_global_affine`` use
+        the same matrix.
 
-        For single-region data, uses that region's mapping directly.
-        For multi-region data, computes a global affine from the overall
-        raster bounds and overall image bounds across all regions.
-
-        The matrix encodes: image_pixel = scale * raster_index + offset
-        where offset places the first pixel center at image_min + half_pixel.
+        With the teaching-point lattice (D31) the matrix is the lattice's:
+        exact, one for every region, rotation included. Without it, each
+        region is stretched over its Area's bounding box (one region), or
+        all regions over the box of all Areas, which is approximate.
         """
         if self._alignment is None:
             return
         if not self._alignment.region_mappings:
+            return
+
+        lattice = getattr(self._alignment, "lattice", None)
+        if lattice is not None:
+            self._tic_to_image = np.array(lattice.cell_to_image, dtype=np.float64)
+            logger.info(
+                "Built TIC-to-image affine from the teaching-point lattice: "
+                f"{np.round(self._tic_to_image[:2], 4).tolist()}"
+            )
             return
 
         mappings = self._alignment.region_mappings
@@ -1303,6 +1322,11 @@ class OpticalImages:
 
             tx = global_img_min_x + half_x + offset_raster_x * scale_x
             ty = global_img_min_y + half_y + offset_raster_y * scale_y
+
+        # tx/ty above place a cell's centre for an integer index; the TIC
+        # image puts that centre at index + 0.5, so move back half a cell.
+        tx -= half_x
+        ty -= half_y
 
         # 3x3 affine: [[sx, 0, tx], [0, sy, ty], [0, 0, 1]]
         self._tic_to_image = np.array(
@@ -1422,11 +1446,13 @@ class OpticalImages:
         downstream registration step (e.g. Ousia's EscDat wizard) can
         map both elements together with a single composed affine.
 
-        The math: ``tic_to_image_matrix`` is a 3x3 affine encoding
-        ``image_pixel = scale * raster_index + offset``.  Inverting
-        and composing with scale-by-pixel-size yields::
+        The math: ``tic_to_image`` maps TIC coordinates, in which raster
+        index ``i`` has its centre at ``i + 0.5``, to optical pixels. In
+        micrometres a pixel's centre is ``obs["spatial_x"] = i *
+        pixel_size_um``, where its polygon is centred. So the spot under
+        an optical pixel goes back to its index and then to that centre::
 
-            um = pixel_size_um * inv(tic_to_image) @ optical_pixel
+            um = pixel_size_um * (inv(tic_to_image) @ optical_pixel - 0.5)
 
         Returns an :class:`Affine` over ``(x, y)`` input + output axes.
         Caller should not invoke when ``tic_to_image`` is None.
@@ -1443,7 +1469,10 @@ class OpticalImages:
             [[ps_x, 0.0, 0.0], [0.0, ps_y, 0.0], [0.0, 0.0, 1.0]],
             dtype=np.float64,
         )
-        matrix = scale_mat @ inv
+        to_index = np.array(
+            [[1.0, 0.0, -0.5], [0.0, 1.0, -0.5], [0.0, 0.0, 1.0]], dtype=np.float64
+        )
+        matrix = scale_mat @ to_index @ inv
         return Affine(
             matrix,
             input_axes=("x", "y"),

@@ -196,13 +196,16 @@ def test_in_micrometre_mode_the_translation_comes_before_the_affine(
     tic = optical.tic_to_image
     assert tic is not None
     ps_x, ps_y = PIXEL_SIZE
-    to_um = np.diag([ps_x, ps_y, 1.0]) @ np.linalg.inv(tic)
+    # The TIC puts index r's centre at r + 0.5 (D31); a micrometre pixel is
+    # centred at r * pixel_size, so the half cell comes off before scaling.
+    to_index = np.array([[1.0, 0.0, -0.5], [0.0, 1.0, -0.5], [0.0, 0.0, 1.0]])
+    to_um = np.diag([ps_x, ps_y, 1.0]) @ to_index @ np.linalg.inv(tic)
     shift = np.array([[1.0, 0.0, 60.0], [0.0, 1.0, 160.0], [0.0, 0.0, 1.0]])
     np.testing.assert_allclose(composed, to_um @ shift)
 
     origin = np.array([60.0, 160.0])
     for rx, ry in [(0, 0), (N_X - 1, N_Y - 1), (1, 2)]:
-        in_crop = _apply(tic, rx, ry) - origin
+        in_crop = _apply(tic, rx + 0.5, ry + 0.5) - origin
         np.testing.assert_allclose(
             _apply(composed, *in_crop), [rx * ps_x, ry * ps_y], atol=1e-9
         )
@@ -353,11 +356,12 @@ def test_a_selected_region_of_a_multi_region_file_is_cropped_to_it(
     assert (crop.region_id, crop.region_name) == (1, "Area1")
     tic = optical.tic_to_image
     assert tic is not None
-    # Region 1's raster is TIC indices 0..N_X-1 by 0..N_Y-1 (its own
-    # origin), so its footprint under the affine is the box the crop pads.
+    # Region 1's raster is TIC cells 0..N_X-1 by 0..N_Y-1 (its own origin);
+    # cell i spans [i, i + 1), so its footprint under the affine runs from
+    # coordinate 0 to N, the box the crop pads.
     sx, sy = tic[0, 0], tic[1, 1]
-    x_lo, x_hi = tic[0, 2] - sx / 2, tic[0, 2] + (N_X - 1) * sx + sx / 2
-    y_lo, y_hi = tic[1, 2] - sy / 2, tic[1, 2] + (N_Y - 1) * sy + sy / 2
+    x_lo, x_hi = tic[0, 2], tic[0, 2] + N_X * sx
+    y_lo, y_hi = tic[1, 2], tic[1, 2] + N_Y * sy
     expected = OpticalCrop.around(
         (x_lo, x_hi, y_lo, y_hi),
         SCAN_COLS,
