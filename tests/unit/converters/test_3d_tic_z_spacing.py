@@ -198,12 +198,16 @@ def _global_affine(store_path: Path) -> NDArray[np.float64]:
 
 
 def _expected_affine(pixel_size_um: float, z_spacing_um: float) -> NDArray[np.float64]:
-    """The matrix a correct ``Scale`` produces, written out in ``(c, z, y, x)``.
+    """The matrix a correct transform produces, written out in ``(c, z, y, x)``.
 
-    Spelled as a literal diagonal rather than derived from a ``Scale`` so the
-    test cannot agree with the code by sharing its mistake.
+    Spelled as a literal rather than derived from a ``Scale`` so the test
+    cannot agree with the code by sharing its mistake. The last column moves
+    each voxel back half a step, so its centre lands on ``index * step``,
+    the position ``obs`` records (D32).
     """
-    return np.diag([1.0, z_spacing_um, pixel_size_um, pixel_size_um, 1.0])
+    matrix = np.diag([1.0, z_spacing_um, pixel_size_um, pixel_size_um, 1.0])
+    matrix[1:4, 4] = [-0.5 * z_spacing_um, -0.5 * pixel_size_um, -0.5 * pixel_size_um]
+    return matrix
 
 
 def _zarr_attrs(store_path: Path) -> Dict[str, Any]:
@@ -404,6 +408,22 @@ class TestTheTableAgreesWithTheVolume:
                 rows["spatial_z"].to_numpy(),
                 z_index * _Z_SPACING_UM,
                 rtol=1e-12,
+            )
+
+    def test_each_voxel_is_centred_on_its_row(self, tmp_path):
+        """Voxel ``(x, y, z)`` spans ``[x, x + 1)`` on each axis; its centre
+        must land on the row's ``spatial_x``, ``spatial_y`` and ``spatial_z``.
+        """
+        store = _convert(tmp_path, z_spacing_um=_Z_SPACING_UM)
+        matrix = _global_affine(store)
+        obs = _read_store(store).tables[_DATASET_ID].obs
+
+        for _, row in obs.iterrows():
+            centre = matrix @ [0.0, row["z"] + 0.5, row["y"] + 0.5, row["x"] + 0.5, 1]
+            np.testing.assert_allclose(
+                centre[1:4],
+                [row["spatial_z"], row["spatial_y"], row["spatial_x"]],
+                atol=1e-9,
             )
 
     def test_the_table_depth_is_not_the_in_plane_pitch(self, tmp_path):

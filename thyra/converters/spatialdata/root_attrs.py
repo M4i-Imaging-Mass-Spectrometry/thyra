@@ -232,12 +232,13 @@ class RootAttrsBuilder:
         Two variants are emitted depending on whether FlexImaging optical
         alignment was applied during conversion:
 
-        - No alignment (``global = micrometer``): the TIC image carries a
-          ``Scale(pixel_size_um)`` and pixel-polygon shapes are stored in
-          micrometers with ``Identity``. Both elements agree at
-          ``global``. ``pixel_size_um_x/y`` are filled with the MSI grid
-          pixel size, since "global" is in physical micrometers and there
-          is no canonical raster image other than the MSI itself.
+        - No alignment (``global = micrometer``): the TIC image carries
+          a half-cell ``Translation`` then ``Scale(pixel_size_um)``, and
+          pixel-polygon shapes are stored in micrometers with
+          ``Identity``. Both elements agree at ``global``.
+          ``pixel_size_um_x/y`` are filled with the MSI grid pixel size,
+          since "global" is in physical micrometers and there is no
+          canonical raster image other than the MSI itself.
 
         - With alignment (``global = pixel``): the TIC image carries an
           ``Affine`` mapping raster indices to optical-image pixels and
@@ -311,9 +312,10 @@ class RootAttrsBuilder:
         # the explicit 3x3 row-major affine from TIC raster indices to
         # "global" (the same mapping the TIC element's transform
         # expresses), so a consumer that reads only attrs still gets
-        # the full placement. In the pixel variant it takes TIC
-        # coordinates, where cell i spans [i, i + 1) and its centre
-        # i + 0.5 is the spot (D31).  `coordinate_offsets_px` preserves the
+        # the full placement. In both variants it takes TIC coordinates,
+        # where cell i spans [i, i + 1): its centre i + 0.5 lands on the
+        # spot (D31), or on obs["spatial_x"] = i * px in micrometres
+        # (D32).  `coordinate_offsets_px` preserves the
         # source's raw acquisition-index offsets, which 0-based
         # normalisation otherwise erases; `stage_offset_um` is their
         # physical equivalent, written only when "global" is in
@@ -325,8 +327,8 @@ class RootAttrsBuilder:
             ]
         else:
             global_cs["raster_to_global_affine"] = [
-                [px, 0.0, 0.0],
-                [0.0, py, 0.0],
+                [px, 0.0, -0.5 * px],
+                [0.0, py, -0.5 * py],
                 [0.0, 0.0, 1.0],
             ]
         offsets = self._source_coordinate_offsets()

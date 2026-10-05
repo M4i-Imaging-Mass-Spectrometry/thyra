@@ -103,8 +103,7 @@ class TestCoordinateSystemsContract:
         self, create_minimal_imzml, temp_dir
     ):
         """Mode A: image and pixel-polygon shapes must resolve to the
-        same bbox at ``"global"`` (within half a pixel) when no optical
-        alignment is provided.
+        same bbox at ``"global"`` when no optical alignment is provided.
         """
         import spatialdata as sd
 
@@ -130,10 +129,10 @@ class TestCoordinateSystemsContract:
         image_bbox = _bbox_at_global(sdata.images[image_name])
         shapes_bbox = _bbox_at_global(sdata.shapes[shapes_name])
 
-        # Pixel-polygon shapes are box-padded by half a pixel on every
-        # side relative to the image grid (a centroid at (0,0) becomes a
-        # box from (-px/2, -px/2) to (+px/2, +px/2)). Allow that tolerance.
-        tol = pixel_size_um
+        # A polygon is the square its TIC cell covers, so the two agree
+        # exactly. This allowed a whole pixel once and let the TIC sit
+        # half a pixel off the polygons unnoticed (D32).
+        tol = 1e-9 * pixel_size_um
         assert abs(image_bbox[0] - shapes_bbox[0]) < tol, (
             f"xmin mismatch at global: image={image_bbox[0]}, "
             f"shapes={shapes_bbox[0]}"

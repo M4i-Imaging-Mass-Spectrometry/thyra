@@ -145,7 +145,11 @@ class TestTheAlignmentWasDeclined:
     def test_the_raster_affine_is_the_pitch_not_the_alignment(self, declined):
         np.testing.assert_allclose(
             _global_cs(declined)["raster_to_global_affine"],
-            [[PITCH, 0.0, 0.0], [0.0, PITCH, 0.0], [0.0, 0.0, 1.0]],
+            [
+                [PITCH, 0.0, -0.5 * PITCH],
+                [0.0, PITCH, -0.5 * PITCH],
+                [0.0, 0.0, 1.0],
+            ],
         )
 
 

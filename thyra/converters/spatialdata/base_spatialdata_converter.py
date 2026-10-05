@@ -892,7 +892,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         Otherwise, shapes use physical (micrometer) coordinates.
 
         **Footprints are two-dimensional, including on a multi-slice
-        volume.** A slice's depth is carried by the TIC image's ``Scale``
+        volume.** A slice's depth is carried by the TIC image's transform
         and by ``obs["spatial_z"]``; it is deliberately not also put on
         the polygon geometry.
 
@@ -1042,7 +1042,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             half_y_um = self.pixel_size_y_um / 2
 
             # Footprints are flat, on every route including volumes. A
-            # slice's depth lives on the TIC image's Scale and in
+            # slice's depth lives on the TIC image's transform and in
             # obs["spatial_z"]; see the docstring for why it is not also
             # put on the geometry. Built through shapely's vectorised box
             # constructor -- one C call for the whole table instead of one
