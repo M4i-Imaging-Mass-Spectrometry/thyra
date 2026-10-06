@@ -86,6 +86,7 @@ from .chunk_decoding import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from ...alignment import AreaAlignmentResult
     from ...core.base_extractor import MetadataExtractor
 
 logger = logging.getLogger(__name__)
@@ -132,6 +133,11 @@ CHUNK_BATCH_POINTS = 2_000_000
 #: Bounds on the rows of one batch, whatever the points per row.
 CHUNK_BATCH_ROWS = (16, 65536)
 
+#: How mzpeak-convert marks an image affine fitted to the FlexImaging
+#: teaching points, and the direction that affine maps.
+TEACH_POINTS_QUALITY = "teach_points"
+IMAGE_TO_PIXEL_MAP = "image_px -> ms_px"
+
 #: Image formats the optical image loader reads.
 OPTICAL_IMAGE_SUFFIXES = (".tif", ".tiff", ".jpg", ".jpeg", ".png", ".bmp")
 
@@ -152,6 +158,28 @@ MS_LEVEL_COLUMN = "ms_level"
 #: Scans column holding an ion mobility value, which this reader does not
 #: convert.
 ION_MOBILITY_COLUMN = "ion_mobility_value"
+
+#: Scans column holding the ion injection time, in milliseconds. For a
+#: timsTOF frame mzpeak-convert writes the frame's accumulation time there.
+INJECTION_TIME_COLUMN = "ion_injection_time"
+
+#: Scans column holding the user parameters of each scan.
+SCAN_PARAMETERS_COLUMN = "parameters"
+
+#: The scan parameter in which mzpeak-convert names the acquisition region
+#: of a Bruker frame. It has no accession.
+REGION_PARAMETER = "acquisition region"
+
+#: Source file format of a timsTOF TDF run.
+BRUKER_TDF_FORMAT = "MS:1002817"
+
+#: Bruker's library returns a TDF intensity as the stored count times this,
+#: over the frame's accumulation time in milliseconds, rounded half up.
+TDF_INTENSITY_NUMERATOR = 100.0
+
+#: Two m/z of one TDF frame this close, relative, are one TOF bin. Bins of a
+#: timsTOF are some 1e-6 apart; one bin's copies differ in the last bit.
+SAME_BIN_RELATIVE = 1e-12
 
 #: Metadata column recording how many points each spectrum has in a signal
 #: member. The specification requires the matching column for whichever
@@ -250,6 +278,20 @@ def _whole(value: Any) -> Optional[int]:
     return int(value)
 
 
+def _box_bounds(box: List[int], offsets: Tuple[int, int]) -> Tuple[int, int, int, int]:
+    """A listed box, ``[x_lo, x_hi, y_lo, y_hi]`` in raster indices, as bounds.
+
+    Bounds are ``(x_lo, y_lo, x_hi, y_hi)`` in 0-based pixel coordinates,
+    the order the timsTOF reader gives them in.
+    """
+    return (
+        int(box[0] - offsets[0]),
+        int(box[2] - offsets[1]),
+        int(box[1] - offsets[0]),
+        int(box[3] - offsets[1]),
+    )
+
+
 def _parse_region(
     region: Any,
 ) -> Optional[Tuple[int, Optional[str], int, List[int]]]:
@@ -271,6 +313,41 @@ def _parse_region(
         return None
     name = region.get("name")
     return number, name if isinstance(name, str) and name else None, frames, box
+
+
+def _on_tdf_scale(
+    mzs: NDArray[np.float64], counts: NDArray[np.float64], accumulation_ms: float
+) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """One TDF frame's raw points as the ``.d`` reader yields that frame.
+
+    Bruker's library scales every point of a scan, ``floor(count * 100 /
+    accumulation_ms + 0.5)``, and the ``.d`` reader sums the points of all
+    scans that fall on one TOF bin. An archive keeps every scan's point, and
+    points of one bin decode to one m/z, so they are summed here. "One m/z"
+    is to within :data:`SAME_BIN_RELATIVE`: a chunk's first or last value is
+    the bound the converter states, which can differ from the decoded value
+    of the same bin in the last bit, while neighbouring bins are some 1e-6
+    apart.
+
+    Args:
+        mzs: m/z of the frame's points.
+        counts: The raw count of each point.
+        accumulation_ms: The frame's accumulation time.
+
+    Returns:
+        Distinct m/z, ascending, and the summed scaled intensity of each.
+    """
+    scaled = np.floor(counts * TDF_INTENSITY_NUMERATOR / accumulation_ms + 0.5)
+    order = np.argsort(mzs, kind="stable")
+    ordered = mzs[order]
+    starts = np.concatenate(
+        ([True], np.diff(ordered) > SAME_BIN_RELATIVE * np.abs(ordered[1:]))
+    )
+    if starts.all():
+        return ordered, scaled[order]
+    group = np.cumsum(starts) - 1
+    summed = np.bincount(group, weights=scaled[order])
+    return ordered[starts], np.asarray(summed, dtype=np.float64)
 
 
 class MzPeakSpatialIndex(NamedTuple):
@@ -297,6 +374,8 @@ class MzPeakSpatialIndex(NamedTuple):
             the axis, the mass range and the peak count skip it too.
         z_offset: The position z the archive states for its one plane, 0
             when it states none (D30).
+        scan_rows: Row of the scans member each spectrum's position was
+            read from, so that other values of the same scan can be read.
     """
 
     spectrum_indices: NDArray[np.int64]
@@ -306,6 +385,7 @@ class MzPeakSpatialIndex(NamedTuple):
     offsets: Tuple[int, int]
     complete: bool = True
     z_offset: int = 0
+    scan_rows: Optional[NDArray[np.int64]] = None
 
 
 class MzPeakArchive:
@@ -331,6 +411,8 @@ class MzPeakArchive:
         self._parquet_cache: Dict[str, Any] = {}
         self._file_metadata: Optional[Dict[str, Any]] = None
         self._spatial_index: Optional[MzPeakSpatialIndex] = None
+        #: The registered image once looked for; ``()`` when there is none.
+        self._registered: Optional[Tuple[Any, ...]] = None
         self._null_count: Optional[int] = None
         self._null_count_cached = False
         self._signal_kind: Optional[str] = None
@@ -885,8 +967,110 @@ class MzPeakArchive:
             offsets=(bases[0] + shift[0], bases[1] + shift[1]),
             complete=complete,
             z_offset=z_offset,
+            scan_rows=scan_row[rows],
         )
         return self._spatial_index
+
+    def _placed_scan_column(self, name: str) -> Optional[Any]:
+        """One scans column, for the scan of each kept spectrum in order.
+
+        ``None`` when the scans member has no such column.
+        """
+        scans = self.parquet("spectrum", "scans")
+        if name not in scans.schema_arrow.names:
+            return None
+        rows = self.spatial_index().scan_rows
+        if rows is None:
+            return None
+        import pyarrow as pa  # noqa: WPS433 - deliberate lazy import
+
+        column = scans.read(columns=[name]).column(0).combine_chunks()
+        return column.take(pa.array(rows))
+
+    def scan_regions(self) -> Optional[NDArray[np.int64]]:
+        """The acquisition region each kept spectrum's scan names, or ``None``.
+
+        mzpeak-convert 0.17 states a Bruker frame's ``RegionNumber`` as the
+        scan parameter :data:`REGION_PARAMETER`. ``None`` unless every kept
+        spectrum states one as a whole number: a region read for some
+        pixels and guessed for others would be neither.
+        """
+        column = self._placed_scan_column(SCAN_PARAMETERS_COLUMN)
+        if column is None or len(column) == 0:
+            return None
+        import pyarrow as pa  # noqa: WPS433 - deliberate lazy import
+        import pyarrow.compute as pc  # noqa: WPS433 - deliberate lazy import
+
+        if not pa.types.is_list(column.type) and not pa.types.is_large_list(
+            column.type
+        ):
+            return None
+        flat = column.flatten()
+        if not pa.types.is_struct(flat.type):
+            return None
+        fields = {flat.type.field(i).name for i in range(flat.type.num_fields)}
+        if not {"name", "value"} <= fields:
+            return None
+        value = flat.field("value")
+        if (
+            not pa.types.is_struct(value.type)
+            or value.type.get_field_index("integer") < 0
+        ):
+            return None
+        named = pc.fill_null(pc.equal(flat.field("name"), REGION_PARAMETER), False)
+        rows = np.asarray(
+            pc.list_parent_indices(column).filter(named).to_numpy(), dtype=np.int64
+        )
+        numbers = value.field("integer").filter(named)
+        numbers = np.asarray(numbers.fill_null(-1).to_numpy(), dtype=np.int64)
+        # The first such parameter of a scan is its region.
+        rows, first = np.unique(rows, return_index=True)
+        regions = np.full(len(column), -1, dtype=np.int64)
+        regions[rows] = numbers[first]
+        if (regions < 0).any():
+            return None
+        return regions
+
+    def from_tdf(self) -> bool:
+        """Whether the archive names a timsTOF TDF run as its source."""
+        description = self.file_level_metadata().get("file_description")
+        files = (
+            description.get("source_files") if isinstance(description, dict) else None
+        )
+        for source in files if isinstance(files, list) else ():
+            parameters = source.get("parameters") if isinstance(source, dict) else None
+            for parameter in parameters if isinstance(parameters, list) else ():
+                if (
+                    isinstance(parameter, dict)
+                    and parameter.get("accession") == BRUKER_TDF_FORMAT
+                ):
+                    return True
+        return False
+
+    def accumulation_times(self) -> Optional[NDArray[np.float64]]:
+        """Each kept spectrum's ion injection time in ms, or ``None``.
+
+        ``None`` unless every kept spectrum states a positive one.
+        """
+        column = self._placed_scan_column(INJECTION_TIME_COLUMN)
+        if column is None:
+            return None
+        times = np.asarray(
+            column.cast("double").to_numpy(zero_copy_only=False), dtype=np.float64
+        )
+        if times.size == 0 or not (np.isfinite(times) & (times > 0)).all():
+            return None
+        return times
+
+    def tdf_accumulation_times(self) -> Optional[NDArray[np.float64]]:
+        """The times that put a TDF run's raw counts on the ``.d``'s scale.
+
+        mzpeak-convert stores a TDF frame's counts as the run holds them,
+        and gives the frame's accumulation time as its scan's ion injection
+        time. ``None`` unless the source is a TDF run and every kept
+        spectrum gives one (D33).
+        """
+        return self.accumulation_times() if self.from_tdf() else None
 
     def _z_offset(
         self, scans: Any, z_column: Optional[str], placed_rows: NDArray[np.int64]
@@ -977,6 +1161,73 @@ class MzPeakArchive:
         """The archive's ``imaging`` block, or an empty one."""
         imaging = self.file_level_metadata().get("imaging")
         return imaging if isinstance(imaging, dict) else {}
+
+    def registered_entry(self) -> Optional[Dict[str, Any]]:
+        """The ``imaging.images`` entry fitted to the teaching points, or ``None``.
+
+        mzpeak-convert 0.17 fits a FlexImaging run's sequence image to its
+        spots through the ``.mis`` teaching points, and marks that affine
+        ``registration_quality: teach_points``. The first image so marked
+        is the one; ``None`` when none is, or its affine is not six finite
+        numbers mapping :data:`IMAGE_TO_PIXEL_MAP` with an inverse.
+        """
+        registered = self.registered_image()
+        if registered is None:
+            return None
+        for entry in self.imaging_metadata().get("images") or ():
+            if isinstance(entry, dict) and entry.get("archive_path") == registered[0]:
+                return entry
+        return None
+
+    def registered_image(self) -> Optional[Tuple[str, NDArray[np.float64]]]:
+        """The member registered to the pixels, and its 3x3 affine.
+
+        The affine maps image pixels to pixel positions, ``position_x`` and
+        ``position_y``, pixel centre to pixel centre. See
+        :meth:`registered_entry` for which image it is.
+        """
+        if self._registered is not None:
+            return self._registered or None
+        self._registered = ()
+        for entry in self.imaging_metadata().get("images") or ():
+            affine = entry.get("affine") if isinstance(entry, dict) else None
+            if not isinstance(affine, dict):
+                continue
+            if affine.get("registration_quality") != TEACH_POINTS_QUALITY:
+                continue
+            path = entry.get("archive_path")
+            matrix = affine.get("matrix")
+            full = None
+            if (
+                affine.get("maps") == IMAGE_TO_PIXEL_MAP
+                and isinstance(path, str)
+                and path in self.members
+                and isinstance(matrix, list)
+                and len(matrix) == 6
+                and all(
+                    isinstance(v, (int, float)) and not isinstance(v, bool)
+                    for v in matrix
+                )
+            ):
+                full = np.array(
+                    [matrix[0:3], matrix[3:6], [0.0, 0.0, 1.0]], dtype=np.float64
+                )
+                if not np.isfinite(full).all() or abs(np.linalg.det(full)) < 1e-300:
+                    full = None
+            if full is None:
+                logger.warning(
+                    "%s marks the affine of image %r as fitted to the "
+                    "teaching points, but does not give it as six numbers "
+                    "mapping %s that can be inverted; the image is carried "
+                    "over unaligned.",
+                    self.path.name,
+                    path,
+                    IMAGE_TO_PIXEL_MAP,
+                )
+                return None
+            self._registered = (path, full)
+            return self._registered
+        return None
 
     def _position_bases(self, raw: NDArray[np.int64]) -> Tuple[int, int]:
         """The ``(x, y)`` positions that become index 0, as D14 rules for imzML.
@@ -1182,12 +1433,16 @@ class MzPeakReader(BaseMSIReader):
         self._point_counts: Optional[NDArray[np.int64]] = None
         self._spectrum_indices: Optional[NDArray[np.int64]] = None
         self._offsets: Optional[Tuple[int, int]] = None
+        #: Accumulation time of each positioned spectrum, set when a TDF
+        #: run's raw counts are put on the scale of Bruker's library.
+        self._accumulation: Optional[NDArray[np.float64]] = None
         self._common_axis: Optional[NDArray[np.float64]] = None
         #: Folder the embedded images are copied to, made on first use.
         self._image_dir: Optional[Path] = None
         self._image_paths: Optional[List[Path]] = None
         #: What the store calls each copied image, by the copy's path.
         self._image_labels: Dict[Path, OpticalImageLabel] = {}
+        self._unregistered_warned = False
         self._regions_read = False
         self._region_cache: Optional[
             Tuple[Dict[Tuple[int, int], int], List[Dict[str, Any]]]
@@ -1248,6 +1503,41 @@ class MzPeakReader(BaseMSIReader):
         self._coordinates = index.coordinates
         self._point_counts = index.point_counts
         self._offsets = index.offsets
+        self._accumulation = self._tdf_accumulation()
+
+    def _tdf_accumulation(self) -> Optional[NDArray[np.float64]]:
+        """The accumulation times that put a TDF run on the ``.d``'s scale.
+
+        mzpeak-convert stores a TDF frame's counts as the run holds them.
+        Bruker's library, which the ``.d`` reader uses, returns each count
+        times 100 over the frame's accumulation time in ms, rounded half up
+        (D33). The archive gives that time per scan, so the reader applies
+        the same rule. ``None`` for any other source; also ``None``, with a
+        warning, for a TDF archive that does not give every time.
+        """
+        assert self._archive is not None
+        times = self._archive.tdf_accumulation_times()
+        if times is None:
+            if not self._archive.from_tdf():
+                return None
+            logger.warning(
+                "%s was made from a timsTOF TDF run but does not give every "
+                "frame's accumulation time (%s). Its intensities are stored "
+                "as the raw counts, not on the scale of a conversion from "
+                "the .d.",
+                self.data_path.name,
+                INJECTION_TIME_COLUMN,
+            )
+            return None
+        logger.info(
+            "%s holds the raw counts of a timsTOF TDF run; each is put on the "
+            "scale of a conversion from the .d (x %g / accumulation time in "
+            "ms, rounded half up), and points of one frame that share an m/z "
+            "are summed.",
+            self.data_path.name,
+            TDF_INTENSITY_NUMERATOR,
+        )
+        return times
 
     # ------------------------------------------------------------------
     # BaseMSIReader contract
@@ -1562,6 +1852,10 @@ class MzPeakReader(BaseMSIReader):
             mzs = mzs[valid]
             intensities = intensities[valid]
 
+        if self._accumulation is not None:
+            mzs, intensities = _on_tdf_scale(
+                mzs, intensities, float(self._accumulation[row])
+            )
         mzs, intensities = self._apply_intensity_filter(mzs, intensities)
         if mzs.size == 0:
             return None
@@ -1620,19 +1914,24 @@ class MzPeakReader(BaseMSIReader):
     def _regions(
         self,
     ) -> Optional[Tuple[Dict[Tuple[int, int], int], List[Dict[str, Any]]]]:
-        """Read the regions of a Bruker archive, when they place every pixel.
+        """Read the regions of a Bruker archive.
 
-        Each region is listed with the raster indices it spans and its
-        frame count, but no scan names its region. A pixel is given the
-        region whose box holds it, and that is only trusted when every
-        pixel falls in exactly one box and each region holds as many
-        pixels as it lists frames. Otherwise the regions are not read and
-        a warning says why.
+        From mzpeak-convert 0.17 every scan names its region, and those
+        names are read (:meth:`_scan_regions`). An older archive only lists
+        each region with the raster indices it spans and its frame count.
+        Then a pixel is given the region whose box holds it, and that is
+        only trusted when every pixel falls in exactly one box and each
+        region holds as many pixels as it lists frames. Otherwise the
+        regions are not read and a warning says why.
         """
         if self._regions_read:
             return self._region_cache
         self._regions_read = True
         listed = self._listed_regions()
+        named = self.archive.scan_regions()
+        if named is not None:
+            self._region_cache = self._scan_regions(named, listed)
+            return self._region_cache
         if len(listed) <= 1:
             return None
 
@@ -1642,8 +1941,7 @@ class MzPeakReader(BaseMSIReader):
         overlaps = 0
         info: List[Dict[str, Any]] = []
         for number, name, frames, box in listed:
-            x_lo, x_hi = box[0] - offsets[0], box[1] - offsets[0]
-            y_lo, y_hi = box[2] - offsets[1], box[3] - offsets[1]
+            x_lo, y_lo, x_hi, y_hi = _box_bounds(box, offsets)
             inside = (
                 (coordinates[:, 0] >= x_lo)
                 & (coordinates[:, 0] <= x_hi)
@@ -1655,7 +1953,7 @@ class MzPeakReader(BaseMSIReader):
             entry: Dict[str, Any] = {
                 "region_number": number,
                 "n_spectra": frames,
-                "bounds": (int(x_lo), int(y_lo), int(x_hi), int(y_hi)),
+                "bounds": (x_lo, y_lo, x_hi, y_hi),
             }
             if name:
                 entry["name"] = name
@@ -1685,6 +1983,62 @@ class MzPeakReader(BaseMSIReader):
         info.sort(key=lambda entry: (-entry["n_spectra"], entry["region_number"]))
         self._region_cache = (region_map, info)
         return self._region_cache
+
+    def _scan_regions(
+        self,
+        named: NDArray[np.int64],
+        listed: List[Tuple[int, Optional[str], int, List[int]]],
+    ) -> Optional[Tuple[Dict[Tuple[int, int], int], List[Dict[str, Any]]]]:
+        """Regions from the region each scan names; ``None`` for one region.
+
+        The box and the name of a region come from its listing when it has
+        one, as for the ``.d``. A region no listing describes is boxed by
+        its own pixels.
+        """
+        numbers = sorted({int(n) for n in named.tolist()})
+        if len(numbers) <= 1:
+            return None
+        coordinates = self._require(self._coordinates)
+        offsets = self._require_offsets()
+        boxes = {number: (name, box) for number, name, _, box in listed}
+        info: List[Dict[str, Any]] = []
+        for number in numbers:
+            mine = coordinates[named == number]
+            entry: Dict[str, Any] = {
+                "region_number": number,
+                "n_spectra": int(mine.shape[0]),
+            }
+            name, box = boxes.get(number, (None, None))
+            if box is not None:
+                entry["bounds"] = _box_bounds(box, offsets)
+            else:
+                low, high = mine.min(axis=0), mine.max(axis=0)
+                entry["bounds"] = (int(low[0]), int(low[1]), int(high[0]), int(high[1]))
+            if name:
+                entry["name"] = name
+            info.append(entry)
+        region_map = {
+            (int(x), int(y)): int(n)
+            for (x, y), n in zip(coordinates.tolist(), named.tolist())
+        }
+        info.sort(key=lambda entry: (-entry["n_spectra"], entry["region_number"]))
+        return region_map, info
+
+    def _single_region(self) -> Tuple[int, Optional[str]]:
+        """Number and name of an archive's one region, for its alignment.
+
+        The region map is ``None`` for one region, as from the ``.d``, but
+        the archive still names it: in every scan, or in its one listing.
+        """
+        listed = self._listed_regions()
+        named = self.archive.scan_regions()
+        number = int(named[0]) if named is not None and named.size else None
+        if number is None and len(listed) == 1:
+            number = listed[0][0]
+        if number is None:
+            return 0, None
+        names = {n: name for n, name, _, _ in listed}
+        return number, names.get(number)
 
     def _listed_regions(self) -> List[Tuple[int, Optional[str], int, List[int]]]:
         """``(number, name, frames, [x_lo, x_hi, y_lo, y_hi])`` per listed region.
@@ -1729,11 +2083,12 @@ class MzPeakReader(BaseMSIReader):
         scanner's TIFF is read as the TIFF it is. A member in a format the
         loader does not read is skipped with a warning.
 
-        The images are not aligned to the pixels. The archive gives an
-        affine for each, but the ones seen so far are marked
-        ``assumed_full_extent``: the image stretched over the whole
-        acquisition, which is no registration. It is kept, with the rest
-        of the ``imaging`` block, in the store's raw metadata.
+        An image whose affine is marked ``teach_points`` is the alignment
+        image, and the pixels are placed on it (:meth:`get_image_alignment`).
+        Any other affine is not a registration: ``assumed_full_extent``
+        stretches the image over the whole acquisition. Such an image is
+        carried over unaligned, and its affine kept, with the rest of the
+        ``imaging`` block, in the store's raw metadata.
         """
         if self._image_paths is None:
             self._image_paths = self._extract_images()
@@ -1828,13 +2183,160 @@ class MzPeakReader(BaseMSIReader):
             paths.append(target)
             self._image_labels[target] = OpticalImageLabel(candidate, name)
         if paths:
+            registered = self._registration()
             logger.info(
-                "%s embeds %d optical image(s); they are carried over without "
-                "an alignment to the pixels.",
+                "%s embeds %d optical image(s); %s",
                 self.data_path.name,
                 len(paths),
+                (
+                    f"the pixels are placed on {registered[0]} by its "
+                    f"teach_points affine."
+                    if registered is not None
+                    else "they are carried over without an alignment to the pixels."
+                ),
             )
         return paths
+
+    def _registration(self) -> Optional[Tuple[str, NDArray[np.float64]]]:
+        """The registered image the store carries, and its 3x3 affine.
+
+        The archive says which image is registered
+        (:meth:`MzPeakArchive.registered_image`). The pixels are placed on
+        it only when it is an image member in a format the loader reads, so
+        that the store holds the image its pixels are placed on.
+        """
+        registered = self.archive.registered_image()
+        if registered is None:
+            return None
+        path, matrix = registered
+        media_type = self._image_media_types().get(path)
+        if (
+            path not in self._image_members()
+            or self._copy_suffix(path, media_type) is None
+        ):
+            if not self._unregistered_warned:
+                self._unregistered_warned = True
+                logger.warning(
+                    "%s registers the image %s to its pixels, but does not "
+                    "embed it as an image Thyra reads; the pixels are not "
+                    "placed on it.",
+                    self.data_path.name,
+                    path,
+                )
+            return None
+        return path, matrix
+
+    def get_primary_optical_image_path(self) -> Optional[Path]:
+        """The copy of the image the archive registers to the pixels."""
+        registration = self._registration()
+        if registration is None:
+            return None
+        for path in self.get_optical_image_paths():
+            label = self._image_labels.get(path)
+            if label is not None and label.source_file == registration[0]:
+                return path
+        return None
+
+    def get_image_alignment(self) -> Optional["AreaAlignmentResult"]:
+        """Place the pixels on the registered image, as the ``.d`` route does.
+
+        The archive's affine takes an image pixel to a pixel position. The
+        TIC image's cell ``(i, j)`` holds the pixel at position
+        ``(base_x + i, base_y + j)``, centred on ``(i + 0.5, j + 0.5)``, so
+        the matrix from a cell to the image is the inverse of the archive's
+        after that shift (D33). It is the lattice of a FlexImaging
+        alignment, and the regions are the ones :meth:`get_region_map`
+        reads.
+        """
+        registration = self._registration()
+        if registration is None:
+            return None
+        from ...alignment.teaching_points import (  # noqa: WPS433 - lazy import
+            AreaAlignmentResult,
+            LatticeFit,
+            RegionMapping,
+        )
+
+        _, image_to_position = registration
+        index = self.archive.spatial_index()
+        coordinates = self._require(self._coordinates)
+        base = index.raw_positions[0] - coordinates[0]
+        cell_to_position = np.array(
+            [
+                [1.0, 0.0, float(base[0]) - 0.5],
+                [0.0, 1.0, float(base[1]) - 0.5],
+                [0.0, 0.0, 1.0],
+            ]
+        )
+        cell_to_image = np.linalg.inv(image_to_position) @ cell_to_position
+
+        first_x, first_y = self._require_offsets()
+        regions = self.get_region_map()
+        if regions is None:
+            only, only_name = self._single_region()
+            names = {only: only_name or ""}
+            numbers = np.full(coordinates.shape[0], only, dtype=np.int64)
+        else:
+            names = {
+                int(entry["region_number"]): str(entry.get("name") or "")
+                for entry in self.get_region_info() or []
+            }
+            numbers = np.array(
+                [regions[(int(x), int(y))] for x, y in coordinates.tolist()],
+                dtype=np.int64,
+            )
+        mappings = []
+        for number in sorted(set(numbers.tolist())):
+            mine = coordinates[numbers == number]
+            low, high = mine.min(axis=0), mine.max(axis=0)
+            corners = (
+                np.array(
+                    [
+                        [low[0], low[1], 1.0],
+                        [high[0] + 1, low[1], 1.0],
+                        [high[0] + 1, high[1] + 1, 1.0],
+                        [low[0], high[1] + 1, 1.0],
+                    ]
+                )
+                @ cell_to_image.T
+            )
+            mappings.append(
+                RegionMapping(
+                    region_id=int(number),
+                    name=names.get(int(number)) or str(number),
+                    raster_min_x=int(low[0]) + first_x,
+                    raster_max_x=int(high[0]) + first_x,
+                    raster_min_y=int(low[1]) + first_y,
+                    raster_max_y=int(high[1]) + first_y,
+                    image_min_x=int(np.floor(corners[:, 0].min())),
+                    image_max_x=int(np.ceil(corners[:, 0].max())),
+                    image_min_y=int(np.floor(corners[:, 1].min())),
+                    image_max_y=int(np.ceil(corners[:, 1].max())),
+                )
+            )
+        pixel_size = self.get_essential_metadata().pixel_size or (0.0, 0.0)
+        lattice = LatticeFit(
+            cell_to_image=cell_to_image,
+            reference_node=(first_x, first_y),
+            axis_signs=(
+                1 if cell_to_image[0, 0] >= 0 else -1,
+                1 if cell_to_image[1, 1] >= 0 else -1,
+            ),
+            raster_step_um=(float(pixel_size[0]), float(pixel_size[1])),
+            spots_outside=0,
+            nodes_unmeasured=0,
+            reference_from="the teach_points affine of the mzPeak archive",
+        )
+        return AreaAlignmentResult(
+            region_mappings=mappings,
+            first_raster_x=first_x,
+            first_raster_y=first_y,
+            pos_to_region={
+                (int(x) + first_x, int(y) + first_y): int(n)
+                for (x, y), n in zip(coordinates.tolist(), numbers.tolist())
+            },
+            lattice=lattice,
+        )
 
     def close(self) -> None:
         """Close the archive and remove the extracted images."""

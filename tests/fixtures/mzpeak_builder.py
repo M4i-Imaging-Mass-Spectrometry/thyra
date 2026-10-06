@@ -668,6 +668,7 @@ def build_mzpeak(
     ion_mobility: Optional[Sequence[Optional[float]]] = None,
     position_z: Optional[Sequence[Optional[int]]] = None,
     position_z_column: str = POSITION_Z_COLUMN,
+    scan_columns: Optional[Dict[str, Any]] = None,
 ) -> Path:
     """Write one ``.mzpeak`` archive and return its path.
 
@@ -733,6 +734,9 @@ def build_mzpeak(
             for a source that states no z.
         position_z_column: Name of that column. It is bound to IMS:1000052
             in the index whenever the index carries bindings.
+        scan_columns: Further columns of the scans member, one value per
+            scan, by name: ``ion_injection_time`` or ``parameters``, for
+            instance, as mzpeak-convert 0.17 writes them.
 
     Returns:
         ``path``, for convenience.
@@ -819,6 +823,13 @@ def build_mzpeak(
         scans_table = scans_table.append_column(
             position_z_column, pa.array(list(position_z), type=pa.uint32())
         )
+    for name, values in (scan_columns or {}).items():
+        column = (
+            values
+            if isinstance(values, (pa.Array, pa.ChunkedArray))
+            else pa.array(values)
+        )
+        scans_table = scans_table.append_column(name, column)
 
     path = Path(path)
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as archive:

@@ -123,6 +123,32 @@ class MzPeakMetadataExtractor(MetadataExtractor):
         )
 
     def _mass_range(self) -> Tuple[float, float]:
+        """The m/z range of the archive.
+
+        An archive of a Bruker run carries the run's ``GlobalMetadata`` in
+        ``vendor_metadata``. Its acquisition range, ``MzAcqRangeLower`` to
+        ``MzAcqRangeUpper``, is the range a conversion of the ``.d`` takes,
+        so it is taken here too (D33). Otherwise the range is the observed
+        one (:meth:`_observed_mass_range`).
+        """
+        acquired = self._vendor_acquisition_range()
+        return acquired if acquired is not None else self._observed_mass_range()
+
+    def _vendor_acquisition_range(self) -> Optional[Tuple[float, float]]:
+        """Bruker's acquisition m/z range, when the archive carries one."""
+        vendor = self.archive.file_level_metadata().get("vendor_metadata")
+        if not isinstance(vendor, dict):
+            return None
+        try:
+            low = float(vendor["MzAcqRangeLower"])
+            high = float(vendor["MzAcqRangeUpper"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not (np.isfinite(low) and np.isfinite(high) and 0 <= low < high):
+            return None
+        return (low, high)
+
+    def _observed_mass_range(self) -> Tuple[float, float]:
         """Observed m/z range across the archive.
 
         Read from the per-spectrum ``lowest_observed_mz`` /
@@ -480,13 +506,42 @@ class MzPeakMetadataExtractor(MetadataExtractor):
     def _extract_comprehensive_impl(self) -> ComprehensiveMetadata:
         """Extract everything the archive records, for provenance."""
         metadata = self.archive.file_level_metadata()
+        raw = dict(metadata)
+        sequence = self._registered_sequence()
+        if sequence is not None:
+            raw["mis_metadata"] = sequence
         return ComprehensiveMetadata(
             essential=self.get_essential(),
             format_specific=self._format_specific(metadata),
             acquisition_params=self._acquisition_params(),
             instrument_info=self._instrument_info(metadata),
-            raw_metadata=dict(metadata),
+            raw_metadata=raw,
         )
+
+    def _registered_sequence(self) -> Optional[Dict[str, Any]]:
+        """What the archive carries of the run's ``.mis``, as the ``.d`` route parses it.
+
+        An image fitted to the teaching points comes with the teaching
+        points themselves and the name the ``.mis`` gives the image. They
+        are put where the ``.d`` route puts its parse of the ``.mis``, so the
+        metadata document states the same alignment for either route (D33).
+        """
+        entry = self.archive.registered_entry()
+        if entry is None:
+            return None
+        registration = entry.get("registration")
+        registration = registration if isinstance(registration, dict) else {}
+        points = []
+        for point in registration.get("teach_points") or ():
+            if isinstance(point, dict):
+                points.append(
+                    {"image": point.get("image_px"), "stage": point.get("stage_um")}
+                )
+        sequence: Dict[str, Any] = {"teaching_points": points}
+        name = entry.get("source_name")
+        if isinstance(name, str) and name:
+            sequence["ImageFile"] = name
+        return sequence
 
     def _format_specific(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
         """Container facts worth keeping beside the data."""
@@ -516,6 +571,14 @@ class MzPeakMetadataExtractor(MetadataExtractor):
         encodings = self.archive.chunk_encodings()
         if encodings:
             facts["chunk_encodings"] = encodings
+        # A TDF archive holds raw counts; the store holds them on the scale
+        # a conversion of the .d gives (D33).
+        if self.archive.tdf_accumulation_times() is not None:
+            facts["intensity_scale"] = (
+                "floor(count x 100 / accumulation time in ms + 0.5), as "
+                "Bruker's library returns a TDF intensity; the points of one "
+                "frame that share an m/z are summed"
+            )
         return facts
 
     def _acquisition_params(self) -> Dict[str, Any]:

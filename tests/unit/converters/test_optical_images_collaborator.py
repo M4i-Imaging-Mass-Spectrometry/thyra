@@ -33,6 +33,11 @@ import tifffile
 import zarr
 from spatialdata.transformations import Affine, Identity
 
+from thyra.alignment.teaching_points import (
+    AreaAlignmentResult,
+    LatticeFit,
+    RegionMapping,
+)
 from thyra.converters.spatialdata.optical_image import (
     OpticalImages,
     StreamedOpticalImage,
@@ -172,6 +177,36 @@ def test_with_teaching_points_the_affine_is_flexImagings_lattice(
     np.testing.assert_allclose(off_node, [0.0, 0.0], atol=1e-9)
     corners = np.array(optical.alignment.cell_corners(0, 0))
     np.testing.assert_allclose(corners.mean(axis=0), centre[:2])
+
+
+class _StatingReader(_StubReader):
+    """A source that states its own registration, as an mzPeak archive can."""
+
+    def __init__(self, alignment: AreaAlignmentResult) -> None:
+        super().__init__()
+        self._alignment = alignment
+
+    def get_image_alignment(self) -> Optional[AreaAlignmentResult]:
+        return self._alignment
+
+
+def test_an_alignment_the_source_states_is_taken_whole(tmp_path: Path) -> None:
+    """Before the .mis route, and the TIC is placed by its lattice."""
+    cell_to_image = np.array([[50.0, 1.0, 7.0], [-1.0, 50.0, 9.0], [0.0, 0.0, 1.0]])
+    stated = AreaAlignmentResult(
+        region_mappings=[RegionMapping(0, "0", 5, 8, 2, 4, 0, 210, 0, 160)],
+        first_raster_x=5,
+        first_raster_y=2,
+        pos_to_region={(5 + x, 2 + y): 0 for x in range(4) for y in range(3)},
+        lattice=LatticeFit(cell_to_image, (5, 2), (1, 1), (10.0, 10.0), 0, 0, "stated"),
+    )
+    optical = _optical(tmp_path, _StatingReader(stated))
+    optical.compute_alignment()
+    optical.build_tic_to_image_affine()
+
+    assert optical.alignment is stated
+    assert optical.msi_in_pixel_space
+    np.testing.assert_array_equal(optical.tic_to_image, cell_to_image)
 
 
 def test_an_area_that_matches_no_region_leaves_no_affine(tmp_path: Path) -> None:

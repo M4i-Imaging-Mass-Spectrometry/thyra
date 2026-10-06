@@ -8,7 +8,12 @@ mzpeak-convert 0.14.0 (okohlbacher/mzPeakConverter @ 0ed311e) converted
 synthetic spectra, made for this purpose, once in the chunked layout and
 once in the point layout. A row is one chunk as that converter stored it,
 beside the m/z the point layout holds for the same points. They show the
-decoders agree with a writer that is not ours.
+decoders agree with a writer that is not ours. The rows under
+``CONVERTER_TIMSTOF_*`` are two chunks mzpeak-convert 0.17.2 wrote from the
+public timsTOF fleX TDF run of MassIVE MSV000088438, from two frames with
+different calibrations; the converter states the m/z of each row's first
+and last bin, evaluated by its own reference implementation, as the row's
+bounds.
 
 The other tests encode with :mod:`tests.fixtures.mzpeak_builder`, which
 follows the specification's text and asks the decoder nothing. They reach
@@ -48,7 +53,11 @@ from thyra.readers.mzpeak.chunk_decoding import (
     decode_plain,
     running_sums,
     take_bounds,
+    timstof_mz,
 )
+
+#: The timsTOF m/z grid model of the reference implementation.
+TIMSTOF_MZ_GRID = "MS:9999002"
 
 SOURCE = "fixture.mzpeak"
 
@@ -89,6 +98,28 @@ CONVERTER_GRID_INDICES = [
 CONVERTER_GRID_MZ = [
     102.0405, 102.4666, 103.0212, 105.0362, 111.2315, 124.082,
     132.5928, 134.0598, 136.149, 138.021, 144.1061, 147.2403,
+]  # fmt: skip
+
+
+#: Two timsTOF m/z grid chunks: parameters, indices, and the bounds the
+#: converter evaluated for the first and the last bin.
+CONVERTER_TIMSTOF_ROWS = [
+    (
+        [
+            316.8515891632165, 2531.224084396041, 7.555625863514373e-05, 0.0,
+            -0.002708343104990962, 0.19999999999999998, 25628.6,
+        ],
+        [3732, 1347, 847, 2958, 4774, 304, 3275, 4145, 1856, 2892, 1636, 3051],
+        (105.98313200667917, 154.62569669420392),
+    ),
+    (
+        [
+            316.8515891632165, 2531.2240816152676, 7.555625846913327e-05, 0.0,
+            -0.002708343104990962, 0.19999999999999998, 25628.6,
+        ],
+        [294660, 80, 788, 1906, 324, 1455, 2885, 6, 1311, 1],
+        (1107.680159057425, 1154.2099969562803),
+    ),
 ]  # fmt: skip
 
 
@@ -138,6 +169,30 @@ class TestAgainstTheConverter:
             SOURCE,
         )
         np.testing.assert_allclose(decoded, CONVERTER_GRID_MZ, rtol=0, atol=1e-7)
+
+    def test_timstof_mz_grid(self):
+        """Each row's ends decode to the bounds the converter evaluated.
+
+        The two rows sit side by side with different parameters, so each
+        must be decoded under its own.
+        """
+        parameters = [value for row in CONVERTER_TIMSTOF_ROWS for value in row[0]]
+        indices = [value for row in CONVERTER_TIMSTOF_ROWS for value in row[1]]
+        counts = np.array([len(row[1]) for row in CONVERTER_TIMSTOF_ROWS])
+
+        decoded = decode_grid(
+            TIMSTOF_MZ_GRID,
+            (np.array(parameters), np.array([7, 7])),
+            (np.array(indices, dtype=np.uint32), counts),
+            counts,
+            SOURCE,
+        )
+
+        ends = [decoded[0], decoded[11], decoded[12], decoded[21]]
+        bounds = [b for row in CONVERTER_TIMSTOF_ROWS for b in row[2]]
+        np.testing.assert_allclose(ends, bounds, rtol=1e-15, atol=0)
+        assert np.all(np.diff(decoded[:12]) > 0)
+        assert np.all(np.diff(decoded[12:]) > 0)
 
 
 class TestNumpressLinear:
@@ -423,6 +478,79 @@ class TestGrid:
             )
 
 
+class TestTimstofMz:
+    """The timsTOF m/z grid: a TOF bin solved through the TDF calibration.
+
+    The flight time of a bin is ``index * timebase + delay``. The model
+    states it as ``C0 + beta * u + C2 * u**2 + C3 * u**3`` of
+    ``u = sqrt(m/z + C4)``. Each test checks the decoded m/z against that
+    statement, not against how it is solved.
+    """
+
+    #: C0, beta, C2, C3, C4, timebase, delay, of the shape real runs have.
+    PARAMETERS = [316.85, 2531.22, 7.5556e-05, 0.0, -0.0027, 0.2, 25628.6]
+
+    @staticmethod
+    def _flight(mz, parameters):
+        c0, beta, c2, c3, c4 = parameters[:5]
+        u = np.sqrt(np.asarray(mz) + c4)
+        return c0 + beta * u + c2 * u**2 + c3 * u**3
+
+    def _check(self, parameters, bins):
+        decoded = timstof_mz(np.asarray(bins, dtype=np.float64), np.array(parameters))
+        flight = np.asarray(bins, dtype=np.float64) * parameters[5] + parameters[6]
+        np.testing.assert_allclose(
+            self._flight(decoded, parameters), flight, rtol=1e-14, atol=0
+        )
+        return decoded
+
+    @pytest.mark.parametrize("c2", [7.5556e-05, 0.0, -2e-05])
+    def test_quadratic(self, c2):
+        """Closed form, with the quadratic term of either sign or none."""
+        parameters = list(self.PARAMETERS)
+        parameters[2] = c2
+        decoded = self._check(parameters, [0, 1, 3732, 299_999, 400_000])
+        assert np.all(np.diff(decoded) > 0)
+
+    def test_cubic(self):
+        """A cubic term is solved by Newton's method from the linear solution."""
+        parameters = list(self.PARAMETERS)
+        parameters[3] = 1e-9
+        self._check(parameters, [100, 50_000, 250_000, 400_000])
+
+    def test_rows_take_their_own_parameters(self):
+        """A frame's temperature correction changes beta and C2 per row."""
+        other = list(self.PARAMETERS)
+        other[1] *= 1.00002
+        decoded = decode_grid(
+            TIMSTOF_MZ_GRID,
+            (np.array(self.PARAMETERS + other), np.array([7, 7])),
+            (np.array([50_000, 50_000], dtype=np.uint32), np.array([1, 1])),
+            np.array([1, 1]),
+            SOURCE,
+        )
+
+        assert decoded[0] != decoded[1]
+        np.testing.assert_array_equal(
+            decoded,
+            [
+                self._check(self.PARAMETERS, [50_000])[0],
+                self._check(other, [50_000])[0],
+            ],
+        )
+
+    def test_too_few_parameters_are_refused(self):
+        """The model needs all seven; three are a linear grid's."""
+        with pytest.raises(ConversionRefused, match="3 parameters; the model needs 7"):
+            decode_grid(
+                TIMSTOF_MZ_GRID,
+                (np.array(GRID_PARAMETERS), np.array([3])),
+                (np.array([4, 2], dtype=np.uint32), np.array([2])),
+                np.array([2]),
+                SOURCE,
+            )
+
+
 class TestRows:
     """Whole chunk rows, as a signal member holds them."""
 
@@ -621,26 +749,15 @@ class TestRefusals:
             decode_chunks(chunk, SOURCE)
 
     def test_a_grid_model_that_is_not_decoded(self):
-        """The reference implementation's own timsTOF model, for one."""
-        chunk = _chunk(TestRows.SPECTRA, encoding=GRID, grid_type="MS:9999002")
-
-        with pytest.raises(ConversionRefused, match=r"grid of type MS:9999002 \("):
-            decode_chunks(chunk, SOURCE)
-
-    def test_the_timstof_model_names_the_option_that_avoids_it(self):
-        """mzpeak-convert writes it for a timsTOF .d unless told not to."""
-        chunk = _chunk(TestRows.SPECTRA, encoding=GRID, grid_type="MS:9999002")
-
-        with pytest.raises(ConversionRefused, match="--no-ims-compact"):
-            decode_chunks(chunk, SOURCE)
-
-    def test_another_model_names_no_option(self):
-        """The hint belongs to the converter's timsTOF lane only."""
+        """Grid coordinate interpolation, for one; every decoded model is listed."""
         chunk = _chunk(TestRows.SPECTRA, encoding=GRID, grid_type="MS:1003822")
 
         with pytest.raises(ConversionRefused) as refused:
             decode_chunks(chunk, SOURCE)
-        assert "--no-ims-compact" not in str(refused.value)
+
+        message = str(refused.value)
+        assert "grid of type MS:1003822 (grid coordinate interpolation)" in message
+        assert "MS:9999002 (timsTOF m/z grid" in message
 
     def test_an_intensity_array_under_a_transform(self):
         """The column name is the sign; the term is named with it."""
