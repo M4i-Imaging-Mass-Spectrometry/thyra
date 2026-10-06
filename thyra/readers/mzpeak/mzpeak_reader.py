@@ -278,6 +278,25 @@ def _whole(value: Any) -> Optional[int]:
     return int(value)
 
 
+def _image_to_position(affine: Dict[str, Any]) -> Optional[NDArray[np.float64]]:
+    """An image affine as a 3x3 matrix, or ``None`` when it is not usable.
+
+    Usable is six finite numbers, stated as mapping
+    :data:`IMAGE_TO_PIXEL_MAP`, with an inverse.
+    """
+    matrix = affine.get("matrix")
+    if affine.get("maps") != IMAGE_TO_PIXEL_MAP or not isinstance(matrix, list):
+        return None
+    if len(matrix) != 6 or not all(
+        isinstance(v, (int, float)) and not isinstance(v, bool) for v in matrix
+    ):
+        return None
+    full = np.array([matrix[0:3], matrix[3:6], [0.0, 0.0, 1.0]], dtype=np.float64)
+    if not np.isfinite(full).all() or abs(np.linalg.det(full)) < 1e-300:
+        return None
+    return full
+
+
 def _box_bounds(box: List[int], offsets: Tuple[int, int]) -> Tuple[int, int, int, int]:
     """A listed box, ``[x_lo, x_hi, y_lo, y_hi]`` in raster indices, as bounds.
 
@@ -1196,24 +1215,9 @@ class MzPeakArchive:
             if affine.get("registration_quality") != TEACH_POINTS_QUALITY:
                 continue
             path = entry.get("archive_path")
-            matrix = affine.get("matrix")
-            full = None
-            if (
-                affine.get("maps") == IMAGE_TO_PIXEL_MAP
-                and isinstance(path, str)
-                and path in self.members
-                and isinstance(matrix, list)
-                and len(matrix) == 6
-                and all(
-                    isinstance(v, (int, float)) and not isinstance(v, bool)
-                    for v in matrix
-                )
-            ):
-                full = np.array(
-                    [matrix[0:3], matrix[3:6], [0.0, 0.0, 1.0]], dtype=np.float64
-                )
-                if not np.isfinite(full).all() or abs(np.linalg.det(full)) < 1e-300:
-                    full = None
+            full = _image_to_position(affine)
+            if not isinstance(path, str) or path not in self.members:
+                full = None
             if full is None:
                 logger.warning(
                     "%s marks the affine of image %r as fitted to the "
