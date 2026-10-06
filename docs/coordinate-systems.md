@@ -68,10 +68,10 @@ zarr.attrs["coordinate_systems"] = {
 | ``reference_element`` | Key of the canonical raster element that defines pixel space, as it appears in ``sdata.images``, when ``unit="pixel"``. ``None`` otherwise -- including when ``unit="pixel"`` but this store does not hold that element (optical images not included, or its pixels could not be read): ``"global"`` is still that image's pixel grid, there is just no element here that is it. Which *file* that was is in [``optical_images``](output-format.md#which-image-is-which-attrsoptical_images). |
 | ``convention_version`` | Schema version; bump when the shape of this attr changes. Currently ``1``. |
 | ``produced_by`` | ``"thyra/<version>"`` for Thyra-produced zarrs. |
-| ``raster_to_global_affine`` | Explicit 3x3 row-major affine from TIC raster indices to ``"global"`` -- the same mapping the TIC element's transform expresses, duplicated here so a consumer that reads only attrs still gets the full placement. A pure pixel-size scale in the micrometer variant; the optical alignment matrix in the pixel variant. There a TIC cell ``i`` spans ``[i, i + 1)``, so its centre ``i + 0.5`` lands on the spot. Purely additive (``convention_version`` stays 1, same reasoning as the z fields below). |
+| ``raster_to_global_affine`` | Explicit 3x3 row-major affine from TIC coordinates to ``"global"`` -- the same mapping the TIC element's transform expresses, duplicated here so a consumer that reads only attrs still gets the full placement. A TIC cell ``i`` spans ``[i, i + 1)``, so to place pixel ``i``, apply the matrix to its centre ``i + 0.5``. In the micrometer variant that lands on ``obs["spatial_x"] = i * pixel_size_um_x``: the matrix is the pixel size with a translation of minus half a pixel. In the pixel variant it is the optical alignment matrix, and the centre lands on the spot. Purely additive (``convention_version`` stays 1, same reasoning as the z fields below). |
 | ``coordinate_offsets_px`` | The source's raw acquisition-index offsets ``[x, y, z]``, which 0-based normalisation otherwise erases. z is 0 when the source states no z. **Only present when the reader reports them.** |
 | ``stage_offset_um`` | ``coordinate_offsets_px`` times the pixel size: where the raster origin sat, in micrometers, relative to the source's index origin. **Only written when ``unit="micrometer"``**, so it cannot be misread in the optical-pixel variant. |
-| ``z_spacing_um`` | Micrometers between consecutive slices. **Only present on multi-slice volumes.** Always an absolute micrometer distance, even when ``unit="pixel"``: the optical affine governs only x and y, while z is always scaled directly. |
+| ``z_spacing_um`` | Micrometers between consecutive slices. **Only present on multi-slice volumes.** Always an absolute micrometer distance, even when ``unit="pixel"``: the optical affine governs only x and y, while z is always scaled directly. Slice ``k`` is centred on ``k * z_spacing_um``, the row's ``obs["spatial_z"]``, so it spans ``[(k - 0.5), (k + 0.5)) * z_spacing_um``. ``raster_to_global_affine`` carries no z. |
 | ``z_spacing_source`` | Where ``z_spacing_um`` came from. **Only present on multi-slice volumes.** |
 
 ---
@@ -123,11 +123,14 @@ When there is no optical photo to align against, the only naturally
 meaningful frame is **physical micrometers of the imaged tissue**.
 
 - TIC / ion images: stored intrinsically in raster pixel indices,
-  with a transform ``Scale([pixel_size_x_um, pixel_size_y_um])`` to
-  ``"global"``.
-- Pixel-polygon shapes: stored intrinsically in micrometers
-  (``spatial_x = x * pixel_size_x_um``, ``spatial_y = y *
-  pixel_size_y_um``), with ``Identity`` to ``"global"``.
+  with a transform to ``"global"`` that moves each cell back half a
+  step, then scales by ``[pixel_size_x_um, pixel_size_y_um]``. Cell
+  ``x`` spans ``[x, x + 1)``, so its centre lands on ``x *
+  pixel_size_x_um``.
+- Pixel-polygon shapes: stored intrinsically in micrometers, centred
+  on ``spatial_x = x * pixel_size_x_um`` and ``spatial_y = y *
+  pixel_size_y_um``, with ``Identity`` to ``"global"``. A polygon is
+  the square its TIC cell covers.
 - ``zarr.attrs["coordinate_systems"]["global"]`` declares
   ``unit="micrometer"`` and fills ``pixel_size_um_x/y`` with the
   MSI grid pixel size.
@@ -138,18 +141,20 @@ DesiYStep``) scales each axis by its own, here and in every other block
 of the store that states a pitch.
 
 Both elements resolve to the same micrometer extent at ``"global"``.
+The raster starts at ``-pixel_size_um / 2``, not at 0: position 0 is the
+centre of the first pixel ([D32](design-decisions.md#d32-a-tic-cell-is-centred-on-its-pixels-position)).
 
 For a **multi-slice volume** (``--handle-3d`` over more than one plane) the
 promise holds in x and y, and is **deliberately silent in z for the shapes
-element**. The TIC volume carries the depth on its ``Scale``, and every table
-row carries it in ``obs["spatial_z"]``; the pixel polygons stay
+element**. The TIC volume carries the depth on its transform, and every
+table row carries it in ``obs["spatial_z"]``; the pixel polygons stay
 two-dimensional and make no claim about depth at all.
 
 So a volume's elements agree like this:
 
 | Element | x, y at ``"global"`` | z at ``"global"`` |
 |---------|---------------------|-------------------|
-| TIC volume | ``Scale([pixel_size_x_um, pixel_size_y_um])`` | ``Scale([z_spacing_um])`` |
+| TIC volume | half a step back, then ``Scale([pixel_size_x_um, pixel_size_y_um])`` | half a step back, then ``Scale([z_spacing_um])`` |
 | Table | ``spatial_x``, ``spatial_y`` | ``spatial_z`` |
 | Pixel shapes | micrometres, ``Identity`` | **absent** — join via ``spatial_z`` |
 
@@ -298,12 +303,14 @@ has a bug. Every Thyra release has a unit-test guard that:
 1. Runs a representative conversion end-to-end.
 2. Reads the resulting zarr.
 3. Asserts the bbox of the TIC image and the pixel-polygon shapes
-   resolve to the same ``"global"`` extent within a half-pixel
-   tolerance.
+   resolve to the same ``"global"`` extent, and that each TIC cell's
+   centre lands on its row's ``obs`` position.
 4. Asserts the ``coordinate_systems.global`` attr is present and
    self-consistent.
 
-See ``tests/unit/converters/test_coordinate_systems.py``.
+See ``tests/unit/converters/test_coordinate_systems.py`` for the
+extents, and ``test_anisotropic_pixel_size.py`` and
+``test_3d_tic_z_spacing.py`` for each cell's centre.
 
 A consumer can run the same check at load time. The recommended
 pattern is to compute the bbox at ``"global"`` for every element

@@ -121,7 +121,11 @@ class TestTheStoredArtefactsAgree:
         ]
         np.testing.assert_allclose(
             affine,
-            [[PITCH_X, 0.0, 0.0], [0.0, PITCH_Y, 0.0], [0.0, 0.0, 1.0]],
+            [
+                [PITCH_X, 0.0, -0.5 * PITCH_X],
+                [0.0, PITCH_Y, -0.5 * PITCH_Y],
+                [0.0, 0.0, 1.0],
+            ],
         )
 
     def test_the_image_transform_scales_each_axis_by_its_own_pitch(self, store):
@@ -154,18 +158,47 @@ class TestTheStoredArtefactsAgree:
         block = table.uns[MSI_METADATA_UNS_KEY]
         assert block["ms_analysis"]["pixel_size_um"] == {"x": PITCH_X, "y": PITCH_Y}
 
-    def test_the_shapes_span_the_image_extent(self, store):
-        """The contract the issue's "squashed by y/x" broke.
+    def test_the_shapes_and_the_image_cover_the_same_rectangle(self, store):
+        """The contract the issue's "squashed by y/x" broke, by SpatialData's
+        own measure.
 
-        The footprints are in micrometres and the image is scaled into
-        them, so the two describe the same rectangle to within the half
-        pixel the boxes add on each side.
+        Before D32 the widths agreed and the rectangles did not: the image
+        sat half a pixel right of and below the polygons on both axes.
         """
         sdata = spatialdata.SpatialData.read(str(store))
+        extents = {
+            name: spatialdata.get_extent(element, coordinate_system="global")
+            for name, element in (
+                ("image", sdata.images[f"{KEY}_tic"]),
+                ("shapes", sdata.shapes[f"{KEY}_pixels"]),
+            )
+        }
+        expected = {
+            "x": (-0.5 * PITCH_X, (N_X - 0.5) * PITCH_X),
+            "y": (-0.5 * PITCH_Y, (N_Y - 0.5) * PITCH_Y),
+        }
+        for name, extent in extents.items():
+            for axis, (low, high) in expected.items():
+                assert extent[axis] == pytest.approx((low, high)), (name, axis)
+
+    def test_each_tic_cell_is_centred_on_its_row(self, store):
+        """Cell ``(x, y)`` of the TIC, drawn over ``[x, x + 1)``, has its
+        centre on the row's ``obs`` position and on its polygon's centre.
+        """
+        sdata = spatialdata.SpatialData.read(str(store))
+        matrix = np.asarray(
+            get_transformation(
+                sdata.images[f"{KEY}_tic"], to_coordinate_system="global"
+            ).to_affine_matrix(input_axes=("x", "y"), output_axes=("x", "y"))
+        )
+        obs = sdata.tables[KEY].obs
         shapes = sdata.shapes[f"{KEY}_pixels"]
-        xmin, ymin, xmax, ymax = shapes.total_bounds
-        assert xmax - xmin == pytest.approx((N_X - 1) * PITCH_X + PITCH_X)
-        assert ymax - ymin == pytest.approx((N_Y - 1) * PITCH_Y + PITCH_Y)
+        for label in obs.index:
+            row = obs.loc[label]
+            centre = matrix @ [row["x"] + 0.5, row["y"] + 0.5, 1.0]
+            assert centre[:2] == pytest.approx([row["spatial_x"], row["spatial_y"]])
+            polygon = shapes.geometry.loc[label].centroid
+            assert centre[:2] == pytest.approx([polygon.x, polygon.y])
 
 
 class TestWhereTheYPitchComesFrom:

@@ -398,3 +398,52 @@ def test_rapiflex_acquisition_with_a_jpeg_optical_image(tmp_path: Path):
     # carried along beside it, scaled into its pixel space.
     assert "rapiflex_optical_derived" in sdata.images
     assert "rapiflex_optical_slide_overview" in sdata.images
+
+
+def test_a_declined_alignment_puts_the_photo_on_the_tic(tmp_path: Path):
+    """With the alignment declined, the photo, the TIC and ``obs`` agree.
+
+    The fixture puts spot ``(x, y)`` at photo pixel ``(10 + 10x, 10 + 10y)``.
+    Carried into micrometres by the photo's own transform, that point must be
+    the row's ``obs`` position, and so must the centre of the TIC cell
+    ``(x, y)`` (D32). Before D32 the TIC cell sat half a step off both.
+    """
+    from spatialdata.transformations import get_transformation
+
+    from thyra.convert import convert_msi
+
+    folder = _rapiflex_acquisition(tmp_path / "acquisition", "sample_0000.jpg")
+    _save(_rgb(seed=8), folder / "sample_0000.jpg")
+    output_path = tmp_path / "declined.zarr"
+    assert convert_msi(
+        str(folder),
+        str(output_path),
+        dataset_id="rapiflex",
+        pixel_size_um=20.0,
+        apply_optical_alignment=False,
+    )
+
+    sdata = SpatialData.read(str(output_path))
+    root = json.loads((output_path / "zarr.json").read_text(encoding="utf-8"))
+    assert root["attributes"]["coordinate_systems"]["global"]["unit"] == "micrometer"
+    photo = "rapiflex_optical_highres"
+    x0, y0 = root["attributes"]["optical_images"]["elements"][photo]["crop"]["origin"]
+
+    def matrix(element):
+        return np.asarray(
+            get_transformation(element, "global").to_affine_matrix(
+                input_axes=("x", "y"), output_axes=("x", "y")
+            )
+        )
+
+    photo_to_um = matrix(sdata.images[photo])
+    tic_to_um = matrix(sdata.images["rapiflex_z0_tic"])
+    obs = sdata.tables["rapiflex_z0"].obs
+    assert len(obs) == 9
+    for _, row in obs.iterrows():
+        x, y = int(row["x"]), int(row["y"])
+        spot = photo_to_um @ [10 + 10 * x - x0, 10 + 10 * y - y0, 1.0]
+        cell = tic_to_um @ [x + 0.5, y + 0.5, 1.0]
+        position = [row["spatial_x"], row["spatial_y"]]
+        np.testing.assert_allclose(spot[:2], position, atol=1e-9)
+        np.testing.assert_allclose(cell[:2], position, atol=1e-9)

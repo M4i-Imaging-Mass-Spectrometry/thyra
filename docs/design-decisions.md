@@ -2739,5 +2739,61 @@ of a step is the scale MSI images are read at.
   different steps fall back to the bounding-box stretch, with a warning.
 - No `<ReferencePoint>`: the first teaching point is used. Every `.mis` seen
   puts the reference point there.
-- In micrometre stores the TIC image and the polygons are still half a pixel
-  apart. That is not FlexImaging-specific and is left to its own issue.
+- In micrometre stores the TIC image and the polygons were still half a
+  pixel apart. That was not FlexImaging-specific and was fixed by
+  [D32](#d32-a-tic-cell-is-centred-on-its-pixels-position).
+
+## D32. A TIC cell is centred on its pixel's position
+
+**Status:** Implemented (2026-10-05), issue #431.
+
+**Decision.** In a micrometre store, pixel `x` sits at
+`obs["spatial_x"] = x * pixel_size_um`. Its polygon is centred there, and
+now so is its TIC cell. SpatialData draws cell `x` over `[x, x + 1)`, so the
+TIC transform moves each cell back half a step, then scales. A volume does
+the same in z. `raster_to_global_affine` carries the same half-step
+translation.
+
+Both kinds of store now follow one rule: a TIC cell's centre is where its
+pixel is. On a FlexImaging photo that is the spot (D31). In micrometres it
+is the `obs` position.
+
+**Why.** The TIC transform was a plain `Scale(pixel_size_um)`. Cell `x` was
+centred on `(x + 0.5) * pixel_size_um`, half a pixel right of and below its
+own polygon. The guard test allowed a whole pixel, and its comment called the
+shift padding.
+
+Each TIC cell's centre against its row, in raster steps, the worst row:
+
+| Store | Pixels | Before: polygon / `obs` | After |
+|---|---|---|---|
+| DESI mzPeak example, 100 um | 17,952 | 0.5 / 0.5 | 0 / 0 |
+| Waters kidney, 50 um | 5,400 | 0.5 / 0.5 | 0 / 0 |
+| PHI nanoTOF, 512 x 512 | 262,142 | 0.5 / 0.5 | 0 / 0 |
+| MSV000088438 TSF, alignment declined | 276 | 0.5 / 0.5 | 0 / 0 |
+
+In the last store the photo was half a step off the TIC as well, and now
+sits on it within 1e-14 steps. Between the two versions only the TIC
+transform and `raster_to_global_affine` differ: every array, table and
+polygon is byte-identical. The same run aligned to its photo is unchanged.
+
+**What changes in a store.** In every micrometre store, the TIC transform
+becomes a translation, then a scale. `raster_to_global_affine` gains minus
+half a pixel in its third column. The polygons, `obs`, `stage_offset_um` and
+every intensity stay as they were. Stores on a FlexImaging photo do not
+change. With `apply_optical_alignment=False`, the photo now sits on the TIC
+as well as on the polygons.
+
+**The objection.** Move `obs` and the polygons instead, to
+`(x + 0.5) * pixel_size_um`. The TIC transform would stay a pure scale, and
+a tool that looks for a scale-only raster as its reference would still find
+it. It did not win: every `obs` position would change, and so would the
+meaning of `stage_offset_um`. A source position is where a spectrum was
+taken, which is the pixel's centre, and `x * pixel_size_um` already says
+that.
+
+**Known limits.**
+
+- The raster now starts at minus half a pixel, not at 0. A consumer that
+  applied the TIC matrix to the integer index `x` now gets the cell's corner.
+  Apply it to `x + 0.5` for the centre.

@@ -128,8 +128,10 @@ print(f"Offset: ({matrix[0,2]:.0f}, {matrix[1,2]:.0f})")
     [Supported Formats](supported-formats.md#bruker-rapiflex)). The TIC image
     has an Affine transform (scale + offset)
     that positions it in the optical coordinate space. This comes from the
-    acquisition Areas in the `.mis` file (Bruker data): each region's raster
-    is stretched onto the box its Area occupies in the optical image.
+    teaching points in the `.mis` file (Bruker data): the spots sit on a
+    lattice one raster step apart, and a TIC cell's centre lands on its spot.
+    Without enough teaching points, each region is stretched over its Area
+    (see [D31](design-decisions.md#d31-fleximaging-spots-are-placed-on-their-lattice-not-on-the-drawn-area)).
 
 ### Which image is which: `attrs["optical_images"]`
 
@@ -935,8 +937,10 @@ Note the axis order is `(c, z, y, x)`, not `(c, x, y, z)`: index a slice with
 
 #### Voxel depth
 
-The volume carries a `Scale` to `"global"` built from **two** distinct numbers —
-the in-plane pixel pitch for `x` and `y`, and the slice spacing for `z`:
+The volume's transform to `"global"` scales by **two** distinct numbers —
+the in-plane pixel pitch for `x` and `y`, and the slice spacing for `z`.
+It first moves each voxel back half a step, so a voxel's centre lands on its
+row's `spatial_x`, `spatial_y` and `spatial_z`:
 
 ```python
 from spatialdata.transformations import get_transformation
@@ -947,6 +951,7 @@ matrix = get_transformation(volume, to_coordinate_system="global").to_affine_mat
 )
 print(matrix[1, 1])   # um per slice step
 print(matrix[3, 3])   # um per pixel in x
+print(matrix[1, 4])   # minus half a slice step
 ```
 
 The slice spacing comes from `--z-spacing`. When nothing supplies one, Thyra
@@ -975,7 +980,7 @@ two agree only by coincidence. See
 
 The pixel polygons are **two-dimensional**, on every route including a volume.
 A slice's depth is not on the geometry; read it from the table's `spatial_z`,
-or from the volume's own `Scale`:
+or from the volume's own transform:
 
 ```python
 dataset_id = "msi_dataset"  # the default; see --dataset-id

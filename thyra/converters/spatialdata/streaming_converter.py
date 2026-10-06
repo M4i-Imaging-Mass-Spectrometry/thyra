@@ -47,6 +47,8 @@ from anndata import AnnData
 from numpy.typing import NDArray
 from spatialdata.models import Image2DModel, Image3DModel, TableModel
 from spatialdata.transformations import Affine, Scale
+from spatialdata.transformations import Sequence as SequenceTransform
+from spatialdata.transformations import Translation
 from tqdm import tqdm
 
 from ...core.conversion_state import ConversionState
@@ -60,6 +62,17 @@ logger = logging.getLogger(__name__)
 #: The acquisition order of a grid position no spectrum has reached yet:
 #: larger than any real one, so the first spectrum's order replaces it.
 _NOT_ACQUIRED = np.iinfo(np.int64).max
+
+
+def _cell_centred_scale(pitches: List[float], axes: Tuple[str, ...]) -> Any:
+    """Raster cells to micrometres, each cell centred on its own position.
+
+    Cell ``i`` spans ``[i, i + 1)``; moving it back half a cell first puts
+    its centre on ``i * pitch``, the position ``obs`` records (D32).
+    """
+    return SequenceTransform(
+        [Translation([-0.5] * len(axes), axes=axes), Scale(pitches, axes=axes)]
+    )
 
 
 class _TableUnit:
@@ -1127,6 +1140,11 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         frame -- optical-image pixels when FlexImaging alignment is
         applied, physical micrometres otherwise, so that ``"global"``
         agrees with the pixel-polygon shapes.
+
+        SpatialData draws cell ``i`` over ``[i, i + 1)``. In micrometres
+        the cell is moved back half a step before it is scaled, so its
+        centre lands on ``obs["spatial_x"] = i * pixel_size_um``, where
+        the pixel's polygon is centred (D32).
         """
         n_z = self._dimensions[2]
         if unit.plane is None and n_z > 1:
@@ -1134,7 +1152,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             # spacing (see BaseMSIConverter._resolve_z_spacing). Scale
             # pairs values with axis *names*, so ("x", "y", "z") against
             # a (c, z, y, x) image is deliberate.
-            transform: Any = Scale(
+            transform: Any = _cell_centred_scale(
                 [self.pixel_size_um, self.pixel_size_y_um, self.z_spacing_um],
                 axes=("x", "y", "z"),
             )
@@ -1155,7 +1173,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 output_axes=("x", "y"),
             )
         else:
-            transform = Scale(
+            transform = _cell_centred_scale(
                 [self.pixel_size_um, self.pixel_size_y_um], axes=("x", "y")
             )
         return Image2DModel.parse(

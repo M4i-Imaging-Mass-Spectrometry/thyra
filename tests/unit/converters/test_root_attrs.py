@@ -232,9 +232,11 @@ class TestTheCoordinateContract:
         assert global_cs["pixel_size_um_x"] == 30.0
         assert global_cs["pixel_size_um_y"] == 50.0
         assert global_cs["reference_element"] is None
+        # Cell i spans [i, i + 1); its centre i + 0.5 lands on i * pitch,
+        # the obs position (D32).
         assert global_cs["raster_to_global_affine"] == [
-            [30.0, 0.0, 0.0],
-            [0.0, 50.0, 0.0],
+            [30.0, 0.0, -15.0],
+            [0.0, 50.0, -25.0],
             [0.0, 0.0, 1.0],
         ]
 
