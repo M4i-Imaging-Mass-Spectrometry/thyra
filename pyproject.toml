@@ -243,6 +243,7 @@ dependencies = [
 Homepage = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra"
 Repository = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra"
 Documentation = "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/"
+Paper = "https://doi.org/10.1021/jasms.6c00169"
 "Bug Tracker" = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues"
 Discussions = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/discussions"
 Changelog = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/blob/main/CHANGELOG.md"

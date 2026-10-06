@@ -1,0 +1,44 @@
+cff-version: 1.2.0
+message: "If you use Thyra, please cite the paper below."
+title: "Thyra"
+abstract: >-
+  Thyra converts mass spectrometry imaging data from imzML, mzPeak and vendor
+  formats into the SpatialData format.
+type: software
+authors:
+  - family-names: Visvikis
+    given-names: Theodoros
+repository-code: "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra"
+url: "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/"
+license: MIT
+keywords:
+  - mass spectrometry imaging
+  - SpatialData
+  - imzML
+  - zarr
+preferred-citation:
+  type: article
+  title: >-
+    Native, Memory-Bounded Conversion of Mass Spectrometry Imaging Data into
+    the SpatialData Ecosystem
+  authors:
+    - family-names: Visvikis
+      given-names: Theodoros
+    - family-names: Vierdag
+      given-names: Wouter-Michiel
+    - family-names: Marconato
+      given-names: Luca
+    - family-names: Birmpili
+      given-names: Angeliki
+      orcid: "https://orcid.org/0009-0006-7505-0557"
+    - family-names: Heeren
+      given-names: Ron M. A.
+      orcid: "https://orcid.org/0000-0002-6533-7179"
+    - family-names: Cuypers
+      given-names: Eva
+      orcid: "https://orcid.org/0000-0002-6411-2461"
+  journal: "Journal of the American Society for Mass Spectrometry"
+  year: 2026
+  month: 9
+  doi: "10.1021/jasms.6c00169"
+  url: "https://doi.org/10.1021/jasms.6c00169"

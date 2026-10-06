@@ -72,6 +72,12 @@ One folder ending in `.zarr`. It holds:
 - **Want every detail?** The [Technical reference](technical-reference.md)
   covers every option and every format.
 
+## Cite Thyra
+
+If Thyra helps your work, please cite the paper: Visvikis et al., *Journal of
+the American Society for Mass Spectrometry* (2026),
+[doi:10.1021/jasms.6c00169](https://doi.org/10.1021/jasms.6c00169).
+
 ---
 
 ## Acknowledgments
