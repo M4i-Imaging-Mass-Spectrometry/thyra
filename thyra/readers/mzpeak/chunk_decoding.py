@@ -14,6 +14,9 @@ stored under the encoding the row names in ``chunk_encoding``
   ``mz_numpress_linear_bytes``. Lossy by design.
 * ``MS:1003826``, coordinate grid encoding: integer grid indices and the
   parameters of the model that turns an index into m/z, in ``mz_grid``.
+  The models decoded are the linear and the square root grid, and the
+  timsTOF m/z grid of the reference implementation (``MS:9999002``), which
+  ``mzpeak-convert`` writes for a timsTOF TDF run by default.
 
 A decoded row always has as many m/z values as it has intensities. The
 intensity list is a plain list in every encoding, so its length is the one
@@ -60,15 +63,28 @@ DECODED_ENCODINGS: Dict[str, str] = {
 #: Encodings that give an m/z back a little off.
 LOSSY_ENCODINGS = (ENCODING_NUMPRESS_LINEAR, ENCODING_GRID)
 
-#: Grid models this module decodes. Both are open: the term's definition
-#: gives the equation.
+#: Grid models this module decodes. The first two are open: the term's
+#: definition gives the equation. The third is a provisional term of the
+#: reference implementation; its equation is that of the TDF calibration,
+#: see :func:`timstof_mz`.
 GRID_LINEAR = "MS:1003824"
 GRID_SQUARE_ROOT = "MS:1003825"
+GRID_TIMSTOF_MZ = "MS:9999002"
 
 DECODED_GRID_TYPES: Dict[str, str] = {
     GRID_LINEAR: "linear grid interpolation",
     GRID_SQUARE_ROOT: "square root grid interpolation",
+    GRID_TIMSTOF_MZ: "timsTOF m/z grid of the reference implementation",
 }
+
+#: Parameters of a :data:`GRID_TIMSTOF_MZ` row: C0, beta, C2, C3, C4, the
+#: digitizer timebase and the digitizer delay.
+TIMSTOF_MZ_PARAMETERS = 7
+
+#: Newton steps on the cubic TDF calibration, and the step that ends them
+#: early. Both as the reference implementation has them.
+TIMSTOF_NEWTON_STEPS = 8
+TIMSTOF_NEWTON_STOP = 1e-12
 
 #: Terms a refusal can name although nothing here decodes them.
 REFUSED_TERMS: Dict[str, str] = {
@@ -76,19 +92,7 @@ REFUSED_TERMS: Dict[str, str] = {
     "MS:1002314": "MS-Numpress short logged float compression",
     "MS:1003822": "grid coordinate interpolation",
     "MS:9999001": "timsTOF ion mobility grid of the reference implementation",
-    "MS:9999002": "timsTOF m/z grid of the reference implementation",
 }
-
-#: Grid models the default timsTOF (TDF) lane of mzpeak-convert writes.
-TIMSTOF_GRID_TYPES = ("MS:9999001", "MS:9999002")
-
-#: What a refusal of those models adds: the option of that converter that
-#: writes the m/z themselves (checked against the help of 0.16.0).
-TIMSTOF_GRID_HINT = (
-    " mzpeak-convert writes this model for a timsTOF .d by default. Convert "
-    "the .d again with --no-ims-compact to store m/z Thyra reads, or "
-    "convert the .d with Thyra directly."
-)
 
 #: Transforms of the intensity array, by the column that holds them.
 INTENSITY_TRANSFORMS: Dict[str, str] = {
@@ -219,11 +223,10 @@ def validate_encodings(
         return
     for grid_type in grid_types:
         if grid_type not in DECODED_GRID_TYPES:
-            hint = TIMSTOF_GRID_HINT if grid_type in TIMSTOF_GRID_TYPES else ""
             raise ConversionRefused(
                 f"{source} stores m/z on a grid of type "
                 f"{describe_term(grid_type)}, which Thyra does not decode. "
-                f"It decodes {_decoded(DECODED_GRID_TYPES)}.{hint}"
+                f"It decodes {_decoded(DECODED_GRID_TYPES)}."
             )
 
 
@@ -610,6 +613,86 @@ def decode_numpress_linear(
     return np.asarray(decoded, dtype=np.float64)
 
 
+def timstof_mz(
+    index: NDArray[np.float64], parameters: NDArray[np.float64]
+) -> NDArray[np.float64]:
+    """m/z of TOF digitizer bins under one row's TDF calibration.
+
+    The equation is the one ``MzCalibrationModel2::convert_f64`` of the
+    reference implementation evaluates (the ``mzdata`` crate). The bin is a
+    flight time, ``t = index * timebase + delay``, and the calibration
+    states that time as ``C0 + beta * u + C2 * u**2 + C3 * u**3`` of
+    ``u = sqrt(m/z + C4)``. With ``C3`` zero the quadratic is solved in
+    closed form, in the order that keeps a small ``C2`` from cancelling;
+    otherwise Newton's method runs from the linear solution.
+
+    Args:
+        index: TOF bins of the points of one row.
+        parameters: The row's ``[C0, beta, C2, C3, C4, timebase, delay]``.
+
+    Returns:
+        The m/z of every bin.
+    """
+    c0, beta, c2, c3, c4, timebase, delay = (
+        float(value) for value in parameters[:TIMSTOF_MZ_PARAMETERS]
+    )
+    flight = index * timebase + delay
+    u = (flight - c0) / beta
+    if c3 != 0.0:
+        moving = np.ones(u.shape, dtype=bool)
+        for _ in range(TIMSTOF_NEWTON_STEPS):
+            square = u * u
+            value = (u * beta + c0) + square * c2 + (square * u * c3 - flight)
+            slope = (u * (2.0 * c2) + beta) + square * (3.0 * c3)
+            stuck = slope == 0.0
+            step = np.where(stuck, 0.0, value / np.where(stuck, 1.0, slope))
+            u = np.where(moving & ~stuck, u - step, u)
+            moving &= ~stuck & (np.abs(step) >= TIMSTOF_NEWTON_STOP)
+            if not moving.any():
+                break
+    elif c2 != 0.0:
+        offset = c0 - flight
+        discriminant = beta * beta - 4.0 * c2 * offset
+        real = discriminant >= 0.0
+        q = -0.5 * (beta + np.sqrt(np.where(real, discriminant, 0.0)))
+        u = np.where(real, offset / q, u)
+    return np.asarray(u * u - c4, dtype=np.float64)
+
+
+def _decode_timstof(
+    values: NDArray[np.float64],
+    n_parameters: NDArray[np.int64],
+    index: NDArray[np.float64],
+    counts: NDArray[np.int64],
+    source: str,
+) -> NDArray[np.float64]:
+    """Decode rows on the timsTOF m/z grid, one parameter set at a time.
+
+    Every row of one frame shares its parameters, so the rows are grouped
+    by them and each group is evaluated once. The points are sorted by
+    group once, so the cost does not grow with the number of frames in a
+    batch.
+    """
+    few = np.flatnonzero(n_parameters < TIMSTOF_MZ_PARAMETERS)
+    if few.size:
+        raise ConversionRefused(
+            f"{source} holds a grid of type {describe_term(GRID_TIMSTOF_MZ)} "
+            f"with {int(n_parameters[few[0]])} parameters; the model needs "
+            f"{TIMSTOF_MZ_PARAMETERS}."
+        )
+    at = _starts(n_parameters)
+    table = values[at[:, None] + np.arange(TIMSTOF_MZ_PARAMETERS)]
+    distinct, group = np.unique(table, axis=0, return_inverse=True)
+    point_group = np.repeat(np.asarray(group).ravel(), counts)
+    order = np.argsort(point_group, kind="stable")
+    edges = np.searchsorted(point_group[order], np.arange(len(distinct) + 1))
+    decoded = np.empty(index.size, dtype=np.float64)
+    for number, parameters in enumerate(distinct):
+        points = order[edges[number] : edges[number + 1]]
+        decoded[points] = timstof_mz(index[points], parameters)
+    return decoded
+
+
 def decode_grid(
     grid_type: str,
     parameters: Tuple[NDArray[np.float64], NDArray[np.int64]],
@@ -620,12 +703,13 @@ def decode_grid(
     """Decode grid-encoded rows of one grid model.
 
     A row holds grid indices, each stored as the difference to the one
-    before it, and the intercept, slope and scale of its model. The linear
-    model gives ``(intercept + slope * index) / scale``; the square root
-    model gives the square of the bracket, over the scale.
+    before it, and the parameters of its model. The linear model gives
+    ``(intercept + slope * index) / scale``; the square root model gives
+    the square of the bracket, over the scale. The timsTOF model is
+    :func:`timstof_mz`.
 
     Args:
-        grid_type: ``MS:1003824`` or ``MS:1003825``.
+        grid_type: One of :data:`DECODED_GRID_TYPES`.
         parameters: Every row's parameters end to end, and how many each
             row has.
         indices: Every row's indices end to end, and how many each row
@@ -642,6 +726,10 @@ def decode_grid(
     if wrong.size:
         row = int(wrong[0])
         _refuse_count(source, ENCODING_GRID, row, int(n_indices[row]), int(counts[row]))
+    index = _row_sums(steps.astype(np.int64), counts).astype(np.float64)
+    if grid_type == GRID_TIMSTOF_MZ:
+        return _decode_timstof(values, n_parameters, index, counts, source)
+
     few = np.flatnonzero(n_parameters < 2)
     if few.size:
         raise ConversionRefused(
@@ -657,7 +745,6 @@ def decode_grid(
     scaled = n_parameters > 2
     scale[scaled] = values[at[scaled] + 2]
 
-    index = _row_sums(steps.astype(np.int64), counts).astype(np.float64)
     bracket = np.repeat(intercept, counts) + index * np.repeat(slope, counts)
     if grid_type == GRID_SQUARE_ROOT:
         bracket = bracket * bracket

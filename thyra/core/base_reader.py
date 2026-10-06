@@ -69,6 +69,7 @@ from numpy.typing import NDArray
 from ..metadata.types import ComprehensiveMetadata, EssentialMetadata
 
 if TYPE_CHECKING:
+    from ..alignment import AreaAlignmentResult
     from .base_extractor import MetadataExtractor
     from .frames import FrameScans
     from .mobility import MobilityAxis
@@ -191,6 +192,20 @@ class BaseMSIReader(ABC):
         Returns:
             Path to the designated image, or None if the format does not
             designate one or the designated file is not present.
+        """
+        return None
+
+    def get_image_alignment(self) -> Optional["AreaAlignmentResult"]:
+        """The registration the source states for its alignment image.
+
+        Default implementation returns None. A format whose file states
+        where each pixel sits on its alignment image overrides it; the
+        converter then places the pixels by it, as it places a FlexImaging
+        run's by its ``.mis``. The image is the one
+        :meth:`get_primary_optical_image_path` names.
+
+        Returns:
+            The alignment, or None when the source states none.
         """
         return None
 

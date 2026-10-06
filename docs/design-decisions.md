@@ -2797,3 +2797,78 @@ that.
 - The raster now starts at minus half a pixel, not at 0. A consumer that
   applied the TIC matrix to the integer index `x` now gets the cell's corner.
   Apply it to `x + 0.5` for the centre.
+
+## D33. An mzPeak archive of a Bruker run converts to the store of its `.d`
+
+**Status:** Implemented (2026-10-06), issue #429. Extends D29, and replaces
+its "embedded images are carried into the store, unaligned" for an image
+fitted to the teaching points.
+
+**Decision.** `mzpeak-convert` 0.17 states five more facts of a Bruker run.
+Thyra reads each the way it reads the `.d`.
+
+- **m/z on the timsTOF grid.** The default TDF lane stores each point as a
+  TOF bin and the frame's calibration, under the grid model `MS:9999002`.
+  Thyra solves the bin through that calibration with the equation of the
+  reference implementation (`mzdata`, `MzCalibrationModel2`).
+- **TDF intensities.** The archive holds each point's raw count. Bruker's
+  library returns `floor(count x 100 / accumulation_ms + 0.5)` for every
+  point of a scan, and the `.d` reader sums the scans that fall on one TOF
+  bin. Thyra does both, with the accumulation time the archive gives as each
+  scan's ion injection time. The store says so in
+  `format_specific.intensity_scale`.
+- **The mass range** is `MzAcqRangeLower` to `MzAcqRangeUpper` from
+  `vendor_metadata`, the range the `.d` takes, not the observed range.
+- **Regions.** Each scan names its region in the parameter
+  `acquisition region`. That name is read; the boxes are the fallback for an
+  older archive.
+- **The alignment image.** An image whose affine is marked
+  `registration_quality: teach_points` maps image pixels to pixel positions,
+  centre to centre. Its inverse, after the shift from a position to a TIC
+  cell, is the lattice of D31. The TIC, the polygons and
+  `raster_to_global_affine` are placed by it, as for the `.d`. The
+  teaching points and the image name the archive carries from the `.mis`
+  fill the metadata document's `alignment` section, as the `.d`'s do. The
+  pixels are placed on the image only when the store carries it.
+
+**Why.** Two public timsTOF fleX runs of MassIVE MSV000088438 (one TSF, one
+TDF) were converted from the `.d` and from the archives `mzpeak-convert`
+0.17.2 wrote of them.
+
+| Archive | 4.3.4, against the `.d` | Now, against the `.d` |
+|---|---|---|
+| TDF, default | refused | every value the same: 0 of 1,352,283 entries differ |
+| TDF, `--no-ims-compact` | intensities x 1.9995 (accumulation 199.953 ms) | 58 entries one bin over; every pixel's total the same |
+| TSF | axis of 406,413 bins (m/z 254-1939) | the `.d`'s axis, 599,146 bins (100-2000) |
+| Both, regions | read from boxes | read from the scans; the same on every pixel |
+| Both, pixels on the photo | not aligned | within 0.004 photo pixels of the `.d` route; one pixel is 123 to 125 |
+| Both, metadata `alignment` section | absent | the same as the `.d`'s: image, method, three teaching points |
+
+The decoded timsTOF m/z were checked against the ends of all 8,735 chunks of
+the TDF archive, which the converter evaluated itself: within 7e-16,
+relative.
+
+The rounding was measured on a copy of the TDF run with its accumulation
+time set to 200 and to 40 ms. Then half of all points fall exactly on .5.
+Over 439,522 points, half up matched Bruker's library on every one, and
+round-half-to-even on 76%. The archive keeps the time in single precision.
+On this run that changed none of the 1,784,948 rounded values.
+
+**The objection.** Keep the raw counts: they are what the instrument stored,
+and an archive is a record. It did not win. D29 makes a store independent
+of the route, and the two stores of one run differed by accumulation_ms /
+100, 0.1 on a 10 ms run. The archive gives the time, so the `.d`'s values
+can be had exactly.
+
+**Known limits.**
+
+- No archive declares its intensity convention. Thyra takes a TDF source
+  (`MS:1002817`) as raw counts. A writer that stored the library's values
+  would be scaled twice. A TDF archive without every accumulation time keeps
+  its raw counts, with a warning.
+- A TSF archive's m/z are 3.6 to 5.0 ppm below the `.d`'s on its six
+  strongest peaks. The archive stores m/z as numbers, from its converter's
+  own TSF calibration, and carries no vendor calibration to correct them. So
+  its entries sit in neighbouring bins; every pixel's total is the same.
+- Only the image marked `teach_points` is aligned. A FlexImaging run's other
+  images are not in the archive.

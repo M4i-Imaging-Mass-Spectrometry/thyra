@@ -586,16 +586,16 @@ class TestRefusals:
                 reader.get_essential_metadata()
 
     def test_grid_model_that_is_not_decoded_is_refused_by_name(self, tmp_path):
-        """The open models are decoded; a vendor's model is named and left."""
+        """A model that is not decoded is named, and the archive is left."""
         archive = build_mzpeak(
-            tmp_path / "vendor_grid.mzpeak",
+            tmp_path / "other_grid.mzpeak",
             grid_spectra(2, 1),
             layout="chunk",
             chunk_encoding=GRID,
-            grid_type="MS:9999002",
+            grid_type="MS:1003822",
         )
 
-        with pytest.raises(ConversionRefused, match=r"grid of type MS:9999002 \("):
+        with pytest.raises(ConversionRefused, match=r"grid of type MS:1003822 \("):
             with MzPeakReader(archive) as reader:
                 reader.get_essential_metadata()
 

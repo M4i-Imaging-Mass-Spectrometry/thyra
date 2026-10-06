@@ -1183,6 +1183,18 @@ class OpticalImages:
         transformation that maps MSI raster coordinates to optical image
         pixel coordinates.
         """
+        # A source that states its own registration (an mzPeak archive with
+        # a teach_points affine) hands it over whole.
+        stated = getattr(self.reader, "get_image_alignment", None)
+        alignment = stated() if callable(stated) else None
+        if alignment is not None:
+            self._alignment = alignment
+            logger.info(
+                "Optical alignment stated by the source, with "
+                f"{len(alignment.region_mappings)} region mappings"
+            )
+            return
+
         # Check if reader has FlexImaging-specific metadata
         if not hasattr(self.reader, "mis_metadata"):
             logger.debug("Reader does not have mis_metadata, skipping alignment")
@@ -1399,7 +1411,7 @@ class OpticalImages:
         primary = resolve() if callable(resolve) else None
         if primary is not None:
             self.primary_filename = Path(primary).stem.lower()
-            logger.info(f"Primary alignment image from .mis: {primary.name}")
+            logger.info(f"Primary alignment image named by the reader: {primary.name}")
 
     def _is_primary_optical(self, image_path: Path) -> bool:
         """Check if an image file is the primary alignment image from .mis.

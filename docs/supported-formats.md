@@ -533,16 +533,18 @@ four encodings:
 | `MS:1003089` | delta encoding | within 7e-15 |
 | `MS:1002312` | MS-Numpress linear prediction | within 7e-7, 0.005 ppm (lossy) |
 | `MS:1003826` | grid encoding, model `MS:1003824` (linear) or `MS:1003825` (square root) | within 1e-7 (lossy) |
+| `MS:1003826` | grid encoding, model `MS:9999002` (timsTOF m/z) | within 7e-16 of the converter's own values |
 
 The last column was measured on archives that `mzpeak-convert` 0.14.0 wrote
 from one input in both layouts. Intensities, pixels and point counts were the
-same in every case.
+same in every case. The timsTOF model is the one `mzpeak-convert` writes for
+a timsTOF TDF run by default. Its row was measured against the m/z the
+converter states for the ends of each chunk.
 
 **Converter versions read.** Archives written by `mzpeak-convert` 0.12.0 (the
-eight public examples), 0.14.0 and 0.16.0 have been converted. From 0.16.0,
-archives made from imzML and from a Bruker TSF run were read. Its Waters and
-timsTOF TDF lanes were not tried. By default the TDF lane stores m/z on a
-vendor grid Thyra refuses; `--no-ims-compact` stores the m/z themselves.
+eight public examples), 0.14.0, 0.16.0 and 0.17.2 have been converted. From
+0.17.2, archives made from imzML and from Bruker TSF and TDF runs were read.
+Its Waters lane was not tried.
 
 The first and last m/z of each chunk are exact in every encoding. The chunk
 states them as plain numbers, and Thyra takes them from there.
@@ -590,8 +592,7 @@ two members of one archive may differ in layout.
 These are refused rather than guessed at, before any spectrum is read:
 
 - **A chunk encoding that is not in the table above.** The message gives the
-  CV term. The same holds for a grid model other than the two named there,
-  such as a vendor's.
+  CV term. The same holds for a grid model other than the three named there.
 - **Intensities stored under a transform**: MS-Numpress short logged float
   (`MS:1002314`) or positive integer (`MS:1002313`).
 - **Chunks cut along another axis than m/z.**
@@ -667,13 +668,21 @@ states, the store comes out as the store of that file. See
 - **The instrument.** The instrument configurations are read as in imzML. An
   Orbitrap or FT-ICR analyzer or model picks its own mass axis, and a timsTOF
   model is known by its name.
-- **Regions.** mzPeak has no region column. A Bruker archive lists its
-  regions under `bruker_maldi.regions`, each with a box of raster indices and
-  a frame count. Each pixel is given the region whose box holds it, when the
+- **Regions.** From 0.17, each scan of a Bruker archive names its region,
+  and that name is read. An older archive only lists its regions under
+  `bruker_maldi.regions`, each with a box of raster indices and a frame
+  count. Then each pixel is given the region whose box holds it, when the
   boxes place every pixel once and the counts match. Otherwise the log says
   why and the store has one region. `--region` is refused for mzPeak: the
   whole archive is converted, and `obs["region_number"]` tells the regions
   apart.
+- **The mass range** of a Bruker archive is the run's acquisition range, as
+  for the `.d`. Any other archive uses the range of its spectra.
+- **TDF intensities.** A TDF archive holds the raw counts of the run. Bruker's
+  library, which reads the `.d`, gives each count times 100 over the frame's
+  accumulation time in ms. Thyra applies the same rule, so both routes give
+  the same values. See
+  [design decision D33](design-decisions.md#d33-an-mzpeak-archive-of-a-bruker-run-converts-to-the-store-of-its-d).
 - **MSn spectra are left out** when MS1 spectra sit on the pixels too, and
   the log counts them. Summed into the MS1 pixels, they would give spectra
   the instrument never measured. A spectrum with no stated level is kept. A
@@ -683,10 +692,13 @@ states, the store comes out as the store of that file. See
   many spectra sit on how many pixels.
 - **Ion mobility is not read.** When scans carry a mobility value or the
   signal member a mobility array, the log says so.
-- **Embedded images** are carried into the store as optical images, without
-  an alignment to the pixels. The affine the archive gives is kept in the raw
-  metadata. In every archive seen so far it stretches the image over the
-  whole acquisition, which is not a registration. An image is named after
+- **Embedded images** are carried into the store as optical images. From
+  0.17, an archive of a FlexImaging run fits its image to the spots through
+  the teaching points, and marks that affine `teach_points`. The pixels are
+  then placed on that image, as for the `.d`. Any other affine stretches the
+  image over the whole acquisition, which is not a registration: such an
+  image is carried over unaligned, and the affine is kept in the raw
+  metadata. An image is named after
   its member, `<dataset_id>_optical_image_0000` for `images/image_0000.svs`,
   and the store records that member as its source. The media type the
   archive declares picks the decoder, so a slide scanner's TIFF named `.svs`
