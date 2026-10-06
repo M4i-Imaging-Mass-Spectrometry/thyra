@@ -119,6 +119,26 @@ MIT -- see [LICENSE](LICENSE).
 
 ## Citation
 
+If you use Thyra, please cite the paper:
+
+> Visvikis, T.; Vierdag, W.-M.; Marconato, L.; Birmpili, A.; Heeren, R. M. A.;
+> Cuypers, E. Native, Memory-Bounded Conversion of Mass Spectrometry Imaging
+> Data into the SpatialData Ecosystem. *J. Am. Soc. Mass Spectrom.* **2026**.
+> [doi:10.1021/jasms.6c00169](https://doi.org/10.1021/jasms.6c00169)
+
+```bibtex
+@article{visvikis2026thyra,
+  title   = {Native, Memory-Bounded Conversion of Mass Spectrometry Imaging Data into the {SpatialData} Ecosystem},
+  author  = {Visvikis, Theodoros and Vierdag, Wouter-Michiel and Marconato, Luca and Birmpili, Angeliki and Heeren, Ron M. A. and Cuypers, Eva},
+  journal = {Journal of the American Society for Mass Spectrometry},
+  year    = {2026},
+  doi     = {10.1021/jasms.6c00169}
+}
+```
+
+The same entry is in [CITATION.cff](CITATION.cff), which GitHub's "Cite this
+repository" button reads. To cite the software itself:
+
 ```bibtex
 @software{thyra2024,
   title = {Thyra: Modern Mass Spectrometry Imaging Data Conversion},
