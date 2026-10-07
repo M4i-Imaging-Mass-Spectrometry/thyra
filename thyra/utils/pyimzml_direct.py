@@ -36,7 +36,7 @@ def has_direct_tables(parser: Any) -> bool:
     )
 
 
-def read_mzs_direct(parser: Any, idx: int) -> NDArray[Any]:
+def read_mzs_direct(parser: Any, idx: int) -> NDArray[np.float64]:
     """Read one spectrum's m/z array without touching its intensities.
 
     Callers must have checked :func:`has_direct_tables` first.
@@ -46,17 +46,19 @@ def read_mzs_direct(parser: Any, idx: int) -> NDArray[Any]:
         idx: Spectrum index.
 
     Returns:
-        The m/z array, exactly as ``getspectrum(idx)[0]`` would return it.
+        The m/z values ``getspectrum(idx)[0]`` would return, widened to
+        float64 so downstream comparisons and sums do not run in the
+        file's storage precision.
     """
     n = int(parser.mzLengths[idx])
     if n <= 0:
         return np.array([], dtype=np.float64)
     parser.m.seek(parser.mzOffsets[idx])
     data = parser.m.read(n * parser.sizeDict[parser.mzPrecision])
-    return np.frombuffer(data, dtype=parser.mzPrecision)
+    return np.frombuffer(data, dtype=parser.mzPrecision).astype(np.float64, copy=False)
 
 
-def read_spectrum_mzs_only(parser: Any, idx: int) -> NDArray[Any]:
+def read_spectrum_mzs_only(parser: Any, idx: int) -> NDArray[np.float64]:
     """Read one spectrum's m/z values by the cheapest legal route.
 
     Args:
@@ -64,9 +66,9 @@ def read_spectrum_mzs_only(parser: Any, idx: int) -> NDArray[Any]:
         idx: Spectrum index.
 
     Returns:
-        The m/z array. Falls back to ``getspectrum`` for parsers without
-        pyimzml's offset tables.
+        The m/z array, widened to float64. Falls back to ``getspectrum``
+        for parsers without pyimzml's offset tables.
     """
     if has_direct_tables(parser):
         return read_mzs_direct(parser, idx)
-    return parser.getspectrum(idx)[0]
+    return parser.getspectrum(idx)[0].astype(np.float64, copy=False)

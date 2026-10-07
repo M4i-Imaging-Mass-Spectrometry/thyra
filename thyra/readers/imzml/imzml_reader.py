@@ -1216,7 +1216,7 @@ class ImzMLReader(BaseMSIReader):
                     if spectrum_data is None or len(spectrum_data) < 1:
                         raise ValueError("Could not get first spectrum")
 
-                    mzs = spectrum_data[0]
+                    mzs = spectrum_data[0].astype(np.float64, copy=False)
                     if mzs.size == 0:
                         raise ConversionRefused("First spectrum contains no m/z values")
 
@@ -1233,7 +1233,9 @@ class ImzMLReader(BaseMSIReader):
         """Build the common mass axis for processed-mode data.
 
         Returns exactly what ``np.unique(np.concatenate(all_mzs))`` returned:
-        sorted, deduplicated, with the dtype following the file's mzPrecision.
+        sorted, deduplicated. The streamed m/z arrays arrive widened to
+        float64 (see :func:`thyra.utils.pyimzml_direct.read_spectrum_mzs_only`),
+        so the axis is float64 whatever precision the file stores.
 
         This streams the file rather than collecting it. The previous
         implementation held every spectrum's m/z array in a list, concatenated
@@ -1366,12 +1368,14 @@ class ImzMLReader(BaseMSIReader):
             idx: Spectrum index.
 
         Returns:
-            The (m/z, intensity) arrays, exactly as ``getspectrum`` would.
+            The (m/z, intensity) arrays as float64, holding the same values
+            ``getspectrum`` would return.
         """
         if not self._continuous_uniform:
-            return cast(
-                Tuple[NDArray[np.float64], NDArray[np.float64]],
-                parser.getspectrum(idx),
+            mzs, intensities = parser.getspectrum(idx)
+            return (
+                mzs.astype(np.float64, copy=False),
+                intensities.astype(np.float64, copy=False),
             )
 
         mzs = self._continuous_mzs
@@ -1383,15 +1387,18 @@ class ImzMLReader(BaseMSIReader):
                 mzs = self._continuous_mzs = self._common_mass_axis
             else:
                 mzs, intensities = parser.getspectrum(idx)
+                mzs = mzs.astype(np.float64, copy=False)
                 self._continuous_mzs = mzs
-                return mzs, intensities
+                return mzs, intensities.astype(np.float64, copy=False)
 
         m = parser.m
         m.seek(parser.intensityOffsets[idx])
         data = m.read(
             parser.intensityLengths[idx] * parser.sizeDict[parser.intensityPrecision]
         )
-        return mzs, np.frombuffer(data, dtype=parser.intensityPrecision)
+        return mzs, np.frombuffer(data, dtype=parser.intensityPrecision).astype(
+            np.float64, copy=False
+        )
 
     def _process_single_spectrum(
         self, parser: ImzMLParser, idx: int, pbar, tally: DropTally
@@ -1699,7 +1706,7 @@ class ImzMLReader(BaseMSIReader):
         if self._continuous_mzs is not None:
             mzs = self._continuous_mzs
         else:
-            mzs = cast(NDArray[np.float64], parser.getspectrum(0)[0])
+            mzs = parser.getspectrum(0)[0].astype(np.float64, copy=False)
             if self._continuous_uniform:
                 self._continuous_mzs = mzs
         mobility = cast(NDArray[np.float64], self._mobility_shared)
@@ -1708,7 +1715,7 @@ class ImzMLReader(BaseMSIReader):
                 f"Shared m/z block has {mzs.size} values but the shared mobility "
                 f"array has {mobility.size}"
             )
-        return np.asarray(mzs, dtype=np.float64), mobility
+        return mzs, mobility
 
     def iter_mobility_spectra(self) -> Generator[
         Tuple[
