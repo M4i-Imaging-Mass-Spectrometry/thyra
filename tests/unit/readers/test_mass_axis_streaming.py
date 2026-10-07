@@ -205,13 +205,14 @@ class TestFloatEdgeCases:
 
 
 class TestDtype:
-    """The axis dtype follows the file's mzPrecision."""
+    """The axis is float64 whatever precision the file stores (D36)."""
 
-    def test_float32_stays_float32(self, batch):
+    def test_float32_is_widened_to_float64(self, batch):
         runs = [np.array([3.0, 1.0], dtype=np.float32), np.array([2.0], np.float32)]
         got = _build(runs)
-        assert got.dtype == np.float32
-        _assert_bit_identical(got, _reference(runs))
+        assert got.dtype == np.float64
+        # Widening is exact: the values are the file's, not a re-rounded copy.
+        _assert_bit_identical(got, _reference(runs).astype(np.float64))
 
     def test_float64_stays_float64(self, batch):
         runs = [np.array([3.0, 1.0], dtype=np.float64)]

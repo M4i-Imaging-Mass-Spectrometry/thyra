@@ -71,4 +71,4 @@ def read_spectrum_mzs_only(parser: Any, idx: int) -> NDArray[np.float64]:
     """
     if has_direct_tables(parser):
         return read_mzs_direct(parser, idx)
-    return parser.getspectrum(idx)[0].astype(np.float64, copy=False)
+    return np.asarray(parser.getspectrum(idx)[0], dtype=np.float64)
