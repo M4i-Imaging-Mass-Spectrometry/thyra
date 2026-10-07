@@ -144,7 +144,10 @@ class TestImzML:
     def test_nothing_stated_records_nothing(self, tmp_path):
         path = _write_imzml(tmp_path / "silent.imzML")
 
-        assert _conversion_polarity(path) is None
+        with ImzMLReader(path) as reader:
+            acquisition = reader.get_comprehensive_metadata().acquisition_params
+        # No key at all, so a store of such a file does not change.
+        assert "polarity" not in acquisition
         assert _document_polarity(path) is None
 
     def test_the_store_carries_it(self, tmp_path):
