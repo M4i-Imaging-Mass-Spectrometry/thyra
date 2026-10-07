@@ -43,3 +43,13 @@ def test_empty_and_single_point_spectra():
     np.testing.assert_array_equal(
         summed_peak_mask(np.array([10.0]), np.array([0.5]), 1.0), [False]
     )
+
+
+def test_a_nan_mz_is_its_own_peak():
+    """Never folded into the largest real peak, where argsort puts it."""
+    mzs = np.array([100.0, 200.0, np.nan])
+    intensities = np.array([1.0, 30.0, 30.0])
+
+    keep = summed_peak_mask(mzs, intensities, 50.0)
+
+    np.testing.assert_array_equal(keep, [False, False, False])

@@ -2112,8 +2112,9 @@ class BrukerReader(BrukerBaseMSIReader):
         ``None`` without a threshold. The one test every table applies
         (D34): an index is kept when its intensity summed over the whole
         ramp reaches the threshold, so a mobility point or a window sum is
-        kept exactly when its peak in the scan-summed spectrum is, and the
-        tables still add up to each other.
+        kept exactly when its peak in the scan-summed spectrum is. Under
+        ``scan_sum`` the tables then add up to each other exactly; the
+        vendor centroid is a different spectrum and never did.
         """
         if self._intensity_threshold is None:
             return None

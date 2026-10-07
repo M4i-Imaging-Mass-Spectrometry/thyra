@@ -37,6 +37,7 @@ every CSC scratch memmap the finalize path's frames still hold (issue
 
 import json
 import logging
+import numbers
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
@@ -551,9 +552,7 @@ class UnsAssembler:
         # Peaks below it are not in the store, so a store made with one is
         # not the source's whole signal, and must say so (D34).
         intensity_threshold = getattr(self.reader, "intensity_threshold", None)
-        if isinstance(intensity_threshold, (int, float)) and not isinstance(
-            intensity_threshold, bool
-        ):
+        if isinstance(intensity_threshold, numbers.Real):
             conversion_parameters["intensity_threshold"] = float(intensity_threshold)
         steps = [
             ProcessingStep(

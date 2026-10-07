@@ -117,6 +117,9 @@ def summed_peak_mask(
     starts = np.concatenate(
         ([True], np.diff(ordered) > SAME_PEAK_RELATIVE * np.abs(ordered[1:]))
     )
+    # argsort puts NaN last; each NaN point is its own peak, never part of
+    # the largest real one.
+    starts |= np.isnan(ordered)
     group = np.cumsum(starts) - 1
     sums = np.bincount(group, weights=intensities[order])
     keep = np.empty(mzs.size, dtype=bool)

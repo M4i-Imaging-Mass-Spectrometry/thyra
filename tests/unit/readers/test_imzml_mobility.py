@@ -103,6 +103,13 @@ class TestContinuousExport:
         np.testing.assert_array_equal(mobility, [0.95, 1.10, 1.35, 1.20])
         np.testing.assert_array_equal(intensities, [10.0, 1.0, 2.0, 20.0])
 
+    def test_the_reader_reports_its_threshold(self):
+        """What the converter records in the conversion step."""
+        with ImzMLReader(CONTINUOUS, intensity_threshold=5.5) as reader:
+            assert reader.intensity_threshold == 5.5
+        with ImzMLReader(CONTINUOUS) as reader:
+            assert reader.intensity_threshold is None
+
     def test_the_summed_spectrum_keeps_the_same_points(self):
         """The summed table tests the same peak sums as the point cloud."""
         with ImzMLReader(CONTINUOUS, intensity_threshold=2.5) as reader:

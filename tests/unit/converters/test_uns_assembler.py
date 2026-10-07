@@ -242,8 +242,23 @@ class TestTheProcessingStep:
         assert steps[0].parameters["intensity_threshold"] == 50.0
         assert isinstance(steps[0].parameters["intensity_threshold"], float)
 
-    def test_no_threshold_records_no_key(self):
-        steps = _assembler()._processing_provenance(_context())
+    @pytest.mark.parametrize("value", [np.int64(50), np.float32(50.0)])
+    def test_a_numpy_threshold_is_recorded_too(self, value):
+        """The API passes the value through; the reader applies it as given."""
+        reader = _StubReader()
+        reader.intensity_threshold = value  # type: ignore[attr-defined]
+
+        steps = _assembler(reader)._processing_provenance(_context())
+
+        assert steps[0].parameters["intensity_threshold"] == 50.0
+
+    @pytest.mark.parametrize("value", [None, "absent"])
+    def test_no_threshold_records_no_key(self, value):
+        reader = _StubReader()
+        if value is None:
+            reader.intensity_threshold = None  # type: ignore[attr-defined]
+
+        steps = _assembler(reader)._processing_provenance(_context())
 
         assert "intensity_threshold" not in steps[0].parameters
 
