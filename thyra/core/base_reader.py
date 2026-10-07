@@ -79,6 +79,53 @@ from .mass_axis import validate_max_mass_axis_length
 
 logger = logging.getLogger(__name__)
 
+#: Two m/z of one spectrum this close, relative, are one peak listed twice.
+#: A source that lists one point per mobility scan repeats a peak's m/z
+#: (an archive's chunk bound can differ from the decoded value in the last
+#: bit), while the closest distinct peaks of any analyser are some 1e-6
+#: apart.
+SAME_PEAK_RELATIVE = 1e-12
+
+
+def summed_peak_mask(
+    mzs: NDArray[np.float64], intensities: NDArray[np.float64], threshold: float
+) -> NDArray[np.bool_]:
+    """Which points belong to a peak whose summed intensity reaches ``threshold``.
+
+    The intensity threshold's one unit (D34): a peak's intensity summed over
+    every point that lists its m/z. A spectrum that lists each m/z once is
+    tested point by point, as before; one that lists a peak once per mobility
+    scan keeps or drops all of that peak's points together, so the threshold
+    acts on the peak the store holds, not on one scan's share of it.
+
+    Args:
+        mzs: m/z of each point, in any order.
+        intensities: Intensity of each point.
+        threshold: The lowest summed intensity kept.
+
+    Returns:
+        A mask over the points, in their order.
+    """
+    if mzs.size < 2:
+        return intensities >= threshold
+    steps = np.diff(mzs)
+    if np.all(steps > SAME_PEAK_RELATIVE * np.abs(mzs[1:])):
+        # Strictly ascending with no repeat: every point is its own peak.
+        return intensities >= threshold
+    order = np.argsort(mzs, kind="stable")
+    ordered = mzs[order]
+    starts = np.concatenate(
+        ([True], np.diff(ordered) > SAME_PEAK_RELATIVE * np.abs(ordered[1:]))
+    )
+    # argsort puts NaN last; each NaN point is its own peak, never part of
+    # the largest real one.
+    starts |= np.isnan(ordered)
+    group = np.cumsum(starts) - 1
+    sums = np.bincount(group, weights=intensities[order])
+    keep = np.empty(mzs.size, dtype=bool)
+    keep[order] = sums[group] >= threshold
+    return keep
+
 
 class OpticalImageLabel(NamedTuple):
     """What a store calls an optical image whose file name is not the source's.
@@ -280,19 +327,28 @@ class BaseMSIReader(ABC):
     ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
         """Apply intensity threshold filtering to spectrum data.
 
+        A peak is kept when its intensity, summed over every point that
+        lists its m/z, reaches the threshold (:func:`summed_peak_mask`).
+
         Args:
             mzs: m/z values array
             intensities: Intensity values array
 
         Returns:
-            Tuple of (filtered_mzs, filtered_intensities) with values below
-            threshold removed. Returns original arrays if no threshold is set.
+            Tuple of (filtered_mzs, filtered_intensities) with the peaks
+            below the threshold removed. Returns original arrays if no
+            threshold is set.
         """
         if self._intensity_threshold is None:
             return mzs, intensities
 
-        mask = intensities >= self._intensity_threshold
+        mask = summed_peak_mask(mzs, intensities, self._intensity_threshold)
         return mzs[mask], intensities[mask]
+
+    @property
+    def intensity_threshold(self) -> Optional[float]:
+        """The ``--intensity-threshold`` this reader applies, ``None`` for none."""
+        return self._intensity_threshold
 
     @staticmethod
     def map_mz_to_common_axis(

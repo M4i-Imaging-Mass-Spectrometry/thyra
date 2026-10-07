@@ -313,6 +313,13 @@ picking, annotation) append theirs when they modify the store.
 ]
 ```
 
+The `conversion` step's parameters say what the conversion kept:
+
+| Parameter | When | Meaning |
+|-----------|------|---------|
+| `tdf_spectrum`: `"scan_sum"` / `"vendor_centroid"` | Bruker tdf | how each frame's mobility scans became one spectrum |
+| `intensity_threshold`: a number | `--intensity-threshold` was given | peaks whose summed intensity is below it are not in the store |
+
 The `m/z calibration` step is how a store says which calibration it holds,
 as distinct from what the source states in `calibration`: a conversion can be
 told to apply one the source does not consider current. Its parameters are

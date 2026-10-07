@@ -79,6 +79,9 @@ class FakeSDK:
         # Monotonic in the index, which is all the reader relies on.
         return 100.0 + np.asarray(indices, dtype=np.float64) * 0.5
 
+    def scannum_to_oneoverk0(self, handle, frame_id, scans):
+        return 2.0 - 0.001 * np.asarray(scans, dtype=np.float64)
+
     def close_file(self, handle):
         pass
 
@@ -217,7 +220,12 @@ class TestTheSplit:
         assert windows == {0, 1, 3}
 
     def test_the_intensity_threshold_applies_to_the_window_sum(self, tdf):
-        """Thresholded after the scans are summed, as for the whole ramp."""
+        """A window sum is kept when its index's whole-ramp sum passes (D34).
+
+        At 110 every index passes over the whole ramp (index 10 sums to
+        155), so no window loses anything, though 105 and 70 in window 2
+        and 50 in window 0 are each below the threshold on their own.
+        """
         _make_pasef(tdf)
         reader = _reader(tdf, intensity_threshold=110.0)
         try:
@@ -229,11 +237,37 @@ class TestTheSplit:
         finally:
             reader.close()
 
-        # 100 and 5 in window 2 sum to 105, which is below the threshold,
-        # and the 70 next to it is below it outright, so 936.578 drops out.
-        assert 2 not in by_window
-        np.testing.assert_allclose(by_window[0], [400.0])
+        np.testing.assert_allclose(by_window[2], [105.0, 70.0])
+        np.testing.assert_allclose(by_window[0], [50.0, 400.0])
         np.testing.assert_allclose(by_window[1], [200.0, 300.0])
+
+    def test_every_table_keeps_the_peaks_the_summed_spectrum_keeps(self, tdf):
+        """One threshold unit: the ramp-summed peak, in every view (D34).
+
+        At 160, index 10 (100 + 5 + 50 = 155) drops out of every table and
+        index 40 (70 + 400 = 470) stays in all of them, though its 70 is
+        below the threshold on its own. So the mobility points add up to
+        the summed spectrum, and each window holds only kept indices.
+        """
+        _make_pasef(tdf)
+        reader = _reader(tdf, intensity_threshold=160.0)
+        try:
+            frame = next(reader.iter_frame_scans())
+            summed = frame.spectrum()
+            points = frame.mobility_points()
+            windows = frame.precursor_spectra()
+        finally:
+            reader.close()
+
+        assert summed is not None and points is not None
+        assert float(summed[1].sum()) == pytest.approx(2746.0)
+        assert float(points[2].sum()) == pytest.approx(2746.0)
+        assert 70.0 in points[2].tolist()
+        # 105.0 is index 10's m/z: absent from every window.
+        for _, mzs, _ in windows:
+            assert 105.0 not in mzs.tolist()
+        in_window = sum(i for idx, i, s in POINTS if idx != 10 and s not in (70, 220))
+        assert sum(float(w[2].sum()) for w in windows) == pytest.approx(in_window)
 
 
 class TestRefusals:

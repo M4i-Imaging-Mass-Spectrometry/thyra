@@ -72,7 +72,7 @@ from typing import (
 import numpy as np
 from numpy.typing import NDArray
 
-from ...core.base_reader import BaseMSIReader, OpticalImageLabel
+from ...core.base_reader import SAME_PEAK_RELATIVE, BaseMSIReader, OpticalImageLabel
 from ...core.mass_axis import MassAxisAccumulator
 from ...core.registry import register_reader
 from ...errors import ConversionRefused
@@ -178,8 +178,9 @@ BRUKER_TDF_FORMAT = "MS:1002817"
 TDF_INTENSITY_NUMERATOR = 100.0
 
 #: Two m/z of one TDF frame this close, relative, are one TOF bin. Bins of a
-#: timsTOF are some 1e-6 apart; one bin's copies differ in the last bit.
-SAME_BIN_RELATIVE = 1e-12
+#: timsTOF are some 1e-6 apart; one bin's copies differ in the last bit. The
+#: intensity threshold groups a spectrum's points into peaks by the same rule.
+SAME_BIN_RELATIVE = SAME_PEAK_RELATIVE
 
 #: Metadata column recording how many points each spectrum has in a signal
 #: member. The specification requires the matching column for whichever

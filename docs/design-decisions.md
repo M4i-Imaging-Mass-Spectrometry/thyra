@@ -2872,3 +2872,78 @@ can be had exactly.
   its entries sit in neighbouring bins; every pixel's total is the same.
 - Only the image marked `teach_points` is aligned. A FlexImaging run's other
   images are not in the archive.
+
+## D34. The intensity threshold tests a peak summed over its mobility scans, in every table
+
+**Status:** Implemented (2026-10-07).
+
+**Decision.** `--intensity-threshold` keeps a peak when its intensity, summed
+over every mobility scan of its pixel, reaches the threshold. Every table
+applies that one test:
+
+- **timsTOF `.d`.** A digitizer index is kept when its sum over the whole
+  ramp passes. The summed table, the `--mobility-grid` table, the
+  mass-mobility heatmap and the MS/MS table keep or drop all of that index's
+  points together, under either `--tdf-spectrum`.
+- **imzML and mzPeak.** A spectrum that lists one point per mobility scan
+  repeats a peak's m/z. Points whose m/z agree to within 1e-12, relative, are
+  one peak, tested by their sum. A spectrum that lists each m/z once is
+  tested point by point, as before.
+- **The store says so.** A store converted with a threshold records it as
+  `intensity_threshold` in the `conversion` step of
+  `msi_metadata.processing`, from any source.
+
+**Why.** Before, each table tested a different quantity. The summed table
+tested the ramp sum, the grid and the heatmap each raw `(index, scan)`
+point, and the MS/MS table each window sum. Intensities are never negative,
+so the other tables could only lose current the summed table kept. D1 and
+D3 state that they add up exactly under `scan_sum`, and with a threshold
+they did not. The store did not record the threshold either.
+
+| Store, `--mobility-grid` | Threshold | Grid | Heatmap | MS/MS | Before |
+|---|---|---|---|---|---|
+| `synthetic_tims` with a PASEF schedule | 50 | 1.0000 | 1.0000 | 1.0000 | 0.8427 / 0.8427 / 0.9862 |
+| `synthetic_tims` | 300 | 1.0000 | 1.0000 | - | no grid table, no heatmap |
+| `tims_msms_pos_brain1` | 100 | 1.0000 | 1.0000 | 1.0000 | 0.9869 / 0.9869 / 0.9997 |
+
+The ratios are each table's ion current over the summed table's. On
+`tims_msms_pos_brain1` the summed table is byte-identical to before; the
+grid gains 710 entries and the MS/MS table 55. At 300 every raw point of
+`synthetic_tims` is below the threshold and every summed peak above it, so
+the grid used to come out empty at exit 0.
+
+`mobility_continuous.imzML` at threshold 2.5 now holds 11 at m/z 300 and 22
+at m/z 600.25 in pixel 0, as without a threshold; before it held 10 and 20.
+`synthetic_tims.d` and its three `mzpeak-convert` 0.17.2 archives (default,
+`--no-ims-compact`, and that with `--layout point`) give the same 3471 per
+pixel at thresholds 100 and 300. Those archives already did on main,
+because D33 sums a frame's points per TOF bin before the threshold.
+
+Stores made without a threshold did not change: the store-identity harness
+found 0 differences on the eight default datasets and on
+`tims_msms_pos_brain1`. At threshold 1e-9 on five sources without ion
+mobility, the only difference is the new `processing` parameter.
+
+**The objection.** Test each single scan point everywhere, the summed table
+too: one simple rule, and weak single points leave the grid. It did not
+win. A peak far above the threshold once summed could vanish, thresholded
+`.d` stores would lose current they keep today, and removing noise from the
+grid is analysis, as D1 argues for the centroid.
+
+**What changes in a store.** Stores converted with `--intensity-threshold`
+from ion-mobility data: the grid, heatmap and MS/MS tables regain current,
+and their values only rise. The summed table of a `.d` does not change. An
+imzML or mzPeak spectrum that lists a peak once per scan keeps the points
+of a peak whose sum passes, so its summed table rises to match. Every store
+converted with a threshold gains the `intensity_threshold` parameter.
+Stores made without a threshold do not change.
+
+**Known limits.**
+
+- Under `vendor_centroid` the summed table is Bruker's picked spectrum,
+  thresholded per picked peak, while the other tables test raw index sums.
+  These tables did not add up in that mode before, and still do not.
+- Points of one peak are grouped by m/z within 1e-12, relative. An archive
+  whose encoding spreads one bin's m/z further apart is tested per stored
+  m/z. The MS-Numpress archives of `mzpeak-convert` 0.16.0 were seen to do
+  so; none was measured for this entry.

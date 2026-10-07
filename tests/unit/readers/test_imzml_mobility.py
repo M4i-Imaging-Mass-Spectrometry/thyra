@@ -91,11 +91,33 @@ class TestContinuousExport:
             np.testing.assert_array_equal(intensities, row)
 
     def test_intensity_threshold_masks_all_three_arrays_together(self):
-        with ImzMLReader(CONTINUOUS, intensity_threshold=2.5) as reader:
+        """A peak's points go together, by their sum over the scans (D34).
+
+        Pixel 0 sums to 11 at m/z 300, 5 at 450.5 and 22 at 600.25. At 5.5
+        the 450.5 peak drops out, and the 1 and 2 points of the other two
+        stay, though each is below the threshold on its own.
+        """
+        with ImzMLReader(CONTINUOUS, intensity_threshold=5.5) as reader:
             _, mzs, mobility, intensities = next(reader.iter_mobility_spectra())
-        np.testing.assert_array_equal(mzs, [300.0, 450.5, 600.25])
-        np.testing.assert_array_equal(mobility, [0.95, 1.02, 1.20])
-        np.testing.assert_array_equal(intensities, [10.0, 5.0, 20.0])
+        np.testing.assert_array_equal(mzs, [300.0, 300.0, 600.25, 600.25])
+        np.testing.assert_array_equal(mobility, [0.95, 1.10, 1.35, 1.20])
+        np.testing.assert_array_equal(intensities, [10.0, 1.0, 2.0, 20.0])
+
+    def test_the_reader_reports_its_threshold(self):
+        """What the converter records in the conversion step."""
+        with ImzMLReader(CONTINUOUS, intensity_threshold=5.5) as reader:
+            assert reader.intensity_threshold == 5.5
+        with ImzMLReader(CONTINUOUS) as reader:
+            assert reader.intensity_threshold is None
+
+    def test_the_summed_spectrum_keeps_the_same_points(self):
+        """The summed table tests the same peak sums as the point cloud."""
+        with ImzMLReader(CONTINUOUS, intensity_threshold=2.5) as reader:
+            _, mzs, intensities = next(reader.iter_spectra())
+        # Every peak of pixel 0 sums above 2.5, so nothing is cut short:
+        # 300 holds 11 and 600.25 holds 22 once the converter adds them.
+        np.testing.assert_array_equal(mzs, FEATURE_MZ)
+        np.testing.assert_array_equal(intensities, INTENSITIES[0])
 
     def test_extractor_reports_the_declaration(self):
         with ImzMLReader(CONTINUOUS) as reader:

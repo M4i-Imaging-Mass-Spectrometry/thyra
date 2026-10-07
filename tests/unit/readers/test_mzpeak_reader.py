@@ -1211,3 +1211,26 @@ class TestChunkedLayout:
         for ours, theirs in zip(emitted, expected):
             np.testing.assert_array_equal(ours[1], theirs[1])
             np.testing.assert_array_equal(ours[2], theirs[2])
+
+    @pytest.mark.parametrize("layout", ["point", "chunk"])
+    def test_intensity_filter_tests_a_repeated_mz_by_its_sum(self, tmp_path, layout):
+        """One point per mobility scan: the peak is the sum of its points (D34).
+
+        m/z 300 is listed five times at 60, a peak of 300 that no single
+        point reaches; m/z 500 five times at 10, a peak of 50.
+        """
+        mzs = [300.0] * 5 + [500.0] * 5
+        intensities = [60.0] * 5 + [10.0] * 5
+        archive = build_mzpeak(
+            tmp_path / f"{layout}.mzpeak",
+            [Spectrum(1, 1, mzs, intensities)],
+            layout=layout,
+        )
+
+        with MzPeakReader(archive, intensity_threshold=100.0) as reader:
+            emitted = list(reader.iter_spectra())
+
+        assert len(emitted) == 1
+        _, kept_mzs, kept = emitted[0]
+        np.testing.assert_array_equal(kept_mzs, [300.0] * 5)
+        assert float(kept.sum()) == 300.0
