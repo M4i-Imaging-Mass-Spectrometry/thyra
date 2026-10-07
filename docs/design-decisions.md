@@ -3013,3 +3013,85 @@ Stores of sources that state no polarity do not change.
   switch would not record.
 - Only the scan polarity terms are read. A writer that states polarity in
   a user parameter is not.
+
+## D36. The imzML reader widens 32-bit arrays to float64 where it yields them
+
+**Status:** Implemented (2026-10-07).
+
+**Decision.** Every m/z, intensity and ion-mobility array the imzML reader
+yields is float64, whatever precision the file stores. The widening happens
+once, at the reader boundary: `_read_spectrum_arrays` (both the
+`getspectrum` routes and the continuous fast read), the m/z-only reads in
+`thyra/utils/pyimzml_direct.py`, and the points where the continuous shared
+m/z block is cached. The block is cast once when cached, never per spectrum,
+so the converter's identity check on the shared axis stays O(1). A file that
+already stores 64-bit floats is not copied: `astype(float64, copy=False)`
+returns the decoded array unchanged.
+
+**Why.** Many imzML files store m/z and intensity as 32-bit floats. The
+reader handed those arrays on in their storage dtype, and every downstream
+sum and comparison ran in 32-bit. Four results came out wrong at that
+precision, all from the same cause:
+
+| Effect | Before | After |
+|---|---|---|
+| `--no-resample` TIC image vs its own row sums, a 32-bit processed file, 4 pixels | all 4 differ, max 1.8e-7 relative; `[2^24, 1, 1, 1]` stores TIC 16777216 beside a row sum of 16777219 | equal on every pixel |
+| `tic_preserving` row total vs the pixel's measured total, a 32-bit continuous file | 2.9e-8 off, matching the 32-bit sum to 8e-15 | 9.3e-15, matching the 64-bit file |
+| `--intensity-threshold 0.7` on a 32-bit processed file | keeps 0.699999988 (three pixels' worth), which the lossless mzPeak archive of the same values drops | keeps nothing below 0.7; the two routes agree |
+| `--resample-min-mz 400.00001` on a 32-bit centroid file | the peak at 400.0 is kept on seven of eight pixels, and a valid file is refused with "the two passes over the source disagree" | the peak drops on every pixel; the file converts |
+
+The mzPeak, solariX, timsTOF, Waters and PHI readers already yield float64,
+which is why only the imzML route showed these. Their stores were exact;
+imzML stores of the same data were not (D29 says the two give the same
+store).
+
+Cost, measured on a 918,855-spectrum Xenium-run export whose m/z array is
+32-bit, default options, one subprocess per conversion, alternating sides,
+two runs each, this machine:
+
+| Side | Run 1 | Run 2 | Peak working set |
+|---|---|---|---|
+| Before | 366.5 s | 368.4 s | 16,704 / 16,828 MB |
+| After | 363.7 s | 361.1 s | 16,826 / 16,728 MB |
+
+The time difference is inside this machine's noise (identical code has
+measured 37-65 s apart on a parse alone); the extra memory is about 10 MB,
+0.07% of the peak, because the store's `X` was already float64 and the cast
+replaces one in-flight array with a wider one, not a second copy.
+
+**The objection.** Widen at each consumer instead: the two TIC sums in the
+streaming converter, the threshold comparison, the resamplers' masks. It did
+not win. The list of consumers is open-ended — every future sum or
+comparison would have to remember the rule — and two of the four effects
+(the two-pass refusal and the per-pixel disagreement) come from two code
+paths disagreeing, which per-consumer fixes must keep in lockstep forever.
+One cast at the boundary makes the reader's signature honest: its
+annotations always said `NDArray[np.float64]`.
+
+**What changes in a store.** Stores converted from an imzML file that
+stores 32-bit floats:
+
+- The TIC image values of a `--no-resample` store change by about 1e-7
+  relative, to equal each pixel's row sum.
+- `tic_preserving` rows are rescaled to the measured pixel total; stored
+  values move by about 1e-7 relative.
+- With `--intensity-threshold T`, values that are `float32(T)` but below
+  `T` drop out; with a very small `T`, zero-intensity points drop.
+- With a typed `--resample-min-mz`/`--resample-max-mz` bound, peaks stored
+  at `float32(bound)` are now dropped when they lie outside the typed
+  range. Ranges taken from the data are unaffected.
+
+The stored m/z axis of a 32-bit file is float64 now; the values are
+unchanged (widening is exact). Stores of 64-bit imzML files and of every
+non-imzML source are unchanged.
+
+**Known limits.**
+
+- The arrays are wider, not more accurate: a value the file stored as
+  32-bit stays the 32-bit-rounded number. Only arithmetic Thyra does on it
+  improves.
+- A threshold below about 7e-46 was 0 once cast to float32 and kept every
+  zero-intensity point; it now drops them, as the mzPeak route always did.
+- `read_metadata_document` and the preview read the imzML head and early
+  spectra; the mass range they report was always computed from the stored
+  values, which do not change, so metadata documents are unaffected.
