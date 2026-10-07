@@ -124,7 +124,8 @@ from the format itself.
 
 | Source | polarity | ionisation source | analyzer | instrument model |
 |--------|----------|-------------------|----------|------------------|
-| imzML | from `MS:1000130` / `MS:1000129` | -- | from the `<analyzer>` component cvParam | from the instrumentConfiguration (model term or `MS:1000031` value) |
+| imzML | from `MS:1000130` / `MS:1000129` in `fileContent`, a parameter group or the spectra, when all agree | -- | from the `<analyzer>` component cvParam | from the instrumentConfiguration (model term or `MS:1000031` value) |
+| mzPeak | from `file_description.contents` and each spectrum's `scan_polarity`, when all agree | -- | as for imzML | as for imzML |
 | Bruker timsTOF `.d` | from `Frames.Polarity`, when every frame agrees | MALDI, when the laser tables are present | TOF | from the DB |
 | Bruker solariX `.d` | from the file | -- | -- | from the file |
 | Bruker Rapiflex | -- | -- | -- | -- |
@@ -378,8 +379,10 @@ On the input side, every imzML file-description cvParam is preserved in
 accession where the source set one) -- the name alone cannot be resolved
 back to the CV concept. The list is stored as a JSON string (see
 [Output Format](output-format.md#provenance) for why); `json.loads`
-hands back the list of terms. Polarity declared there (`MS:1000130` /
-`MS:1000129`) auto-populates the schema field.
+hands back the list of terms. Polarity is read from these terms, from the
+parameter groups and from every spectrum. A file that states both values
+anywhere records neither. A metadata-only read (`thyra metadata`, the
+preview) looks at the first spectrum only.
 
 ### Candidate CV terms
 

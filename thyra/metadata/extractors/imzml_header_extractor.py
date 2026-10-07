@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Optional, Tuple, cast
+from typing import Any, Optional, Set, Tuple, cast
 
 from ...readers.imzml.header import ImzMLHeaderParser, scan_observed_mz_range
 from ..types import EssentialMetadata
@@ -147,6 +147,15 @@ class ImzMLHeaderExtractor(ImzMLMetadataExtractor):
     def _spectrum_count(self) -> int:
         """The count the file declares, not one taken over coordinates."""
         return int(self.header.n_spectra or 0)
+
+    def _spectrum_polarity_accessions(self) -> Set[str]:
+        """The polarity terms the first spectrum states, as pyimzml reads it.
+
+        The head ends at the second spectrum. A conversion reads every
+        spectrum's terms, so the two differ only for a file whose later
+        spectra state the other polarity (D35).
+        """
+        return set(cast(ImzMLHeaderParser, self.parser).first_spectrum_polarity)
 
 
 def head_shortfall(parser: ImzMLHeaderParser) -> Optional[str]:

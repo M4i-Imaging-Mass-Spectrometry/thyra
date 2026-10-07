@@ -665,6 +665,7 @@ def build_mzpeak(
     numpress_fixed_point: Optional[float] = None,
     file_metadata: Optional[Dict[str, Any]] = None,
     ms_levels: Optional[Sequence[int]] = None,
+    scan_polarity: Optional[Sequence[Optional[int]]] = None,
     ion_mobility: Optional[Sequence[Optional[float]]] = None,
     position_z: Optional[Sequence[Optional[int]]] = None,
     position_z_column: str = POSITION_Z_COLUMN,
@@ -727,6 +728,9 @@ def build_mzpeak(
             ``instrument_configuration_list``, spelled as mzpeak-convert
             writes them.
         ms_levels: MS level of each spectrum. All 1 by default.
+        scan_polarity: Each spectrum's ``scan_polarity`` (1, -1 or
+            ``None``), as mzpeak-convert writes it. Without it the
+            metadata member has no such column.
         ion_mobility: Ion mobility value of each scan, ``None`` for none.
             Without it the scans member has no such column.
         position_z: Position z of each scan, ``None`` for a null. Without
@@ -809,6 +813,10 @@ def build_mzpeak(
             metadata_table.schema.get_field_index("ms_level"),
             "ms_level",
             pa.array(list(ms_levels), type=pa.uint8()),
+        )
+    if scan_polarity is not None:
+        metadata_table = metadata_table.append_column(
+            "scan_polarity", pa.array(list(scan_polarity), type=pa.int8())
         )
     if footer_metadata:
         metadata_table = metadata_table.replace_schema_metadata(

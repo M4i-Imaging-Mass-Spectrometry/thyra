@@ -18,7 +18,13 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from ...core.base_extractor import MetadataExtractor
-from ..constants import ImzMLAccessions, SpectrumType
+from ..constants import (
+    MIXED_POLARITY,
+    POLARITY_OF_ACCESSION,
+    ImzMLAccessions,
+    SpectrumType,
+    agreed_polarity,
+)
 from ..ontology.cache import ONTOLOGY
 from ..types import ComprehensiveMetadata, EssentialMetadata
 from .imzml_extractor import (
@@ -64,6 +70,11 @@ AXIS_COUNT_AND_EXTENT = (
 #: meets the area reading exactly; the margin is for an extent that was
 #: rounded when written.
 EXTENT_TOLERANCE = 0.01
+
+#: Spectrum metadata column giving each spectrum's polarity, and what its
+#: values state. Any other value states nothing.
+SCAN_POLARITY_COLUMN = "scan_polarity"
+SCAN_POLARITY_VALUES = {1: "positive", -1: "negative"}
 
 
 class MzPeakMetadataExtractor(MetadataExtractor):
@@ -589,10 +600,53 @@ class MzPeakMetadataExtractor(MetadataExtractor):
             name = GRID_EXTENT_TERMS.get(str(parameter.get("accession")))
             if name is not None:
                 declared[name] = parameter.get("value")
-        return {
+        params: Dict[str, Any] = {
             "scan_settings": parameters,
             "declared_grid_extent": declared or None,
         }
+        polarity = self._polarity()
+        if polarity is not None:
+            params["polarity"] = polarity
+        return params
+
+    def _polarity(self) -> Optional[str]:
+        """The polarity every statement in the archive agrees on (D35).
+
+        An archive made from an imzML copies its file-level term into
+        ``file_description.contents``; every archive gives each spectrum a
+        ``scan_polarity`` of 1 or -1 (an archive of a Bruker ``.d`` states
+        it there only). Both are read, as the imzML and ``.d`` routes read
+        their source, so an archive converts with its source's polarity.
+        """
+        stated: List[str] = []
+        description = self.archive.file_level_metadata().get("file_description")
+        if isinstance(description, dict):
+            for parameter in description.get("contents", []) or []:
+                if isinstance(parameter, dict):
+                    polarity = POLARITY_OF_ACCESSION.get(
+                        str(parameter.get("accession"))
+                    )
+                    if polarity is not None:
+                        stated.append(polarity)
+        try:
+            member = self.archive.parquet("spectrum", "metadata")
+        except (KeyError, ValueError):
+            member = None
+        if member is not None and SCAN_POLARITY_COLUMN in member.schema_arrow.names:
+            column = member.read(columns=[SCAN_POLARITY_COLUMN]).column(0)
+            stated.extend(
+                SCAN_POLARITY_VALUES[value]
+                for value in set(column.drop_null().to_pylist())
+                if value in SCAN_POLARITY_VALUES
+            )
+        polarity = agreed_polarity(stated)
+        if polarity == MIXED_POLARITY:
+            logger.warning(
+                "%s states both positive and negative scan polarity; no "
+                "polarity is recorded.",
+                self.data_path.name,
+            )
+        return polarity
 
     def _instrument_info(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
         """The instrument as the imzML route reads it, and the raw lists.
