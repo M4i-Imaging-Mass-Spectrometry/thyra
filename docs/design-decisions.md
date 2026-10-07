@@ -2945,5 +2945,5 @@ Stores made without a threshold do not change.
   These tables did not add up in that mode before, and still do not.
 - Points of one peak are grouped by m/z within 1e-12, relative. An archive
   whose encoding spreads one bin's m/z further apart is tested per stored
-  m/z. The report behind this decision saw that with the MS-Numpress
-  archives of `mzpeak-convert` 0.16.0, which were not measured here.
+  m/z. The MS-Numpress archives of `mzpeak-convert` 0.16.0 were seen to do
+  so; none was measured for this entry.
