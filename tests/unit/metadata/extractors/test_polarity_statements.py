@@ -110,10 +110,10 @@ class TestImzML:
         assert _conversion_polarity(path) == "negative"
         assert _document_polarity(path) == "negative"
 
-    def test_file_content_and_spectra_disagree(self, tmp_path, thyra_logs):
-        """The file-level term does not win over the spectra."""
+    def test_file_content_and_a_group_disagree(self, tmp_path, thyra_logs):
+        """The file-level term does not win over the group."""
         path = _write_imzml(
-            tmp_path / "contradicts.imzML",
+            tmp_path / "group_contradicts.imzML",
             polarity="negative",
             file_content_term=POSITIVE_TERM,
         )
@@ -121,6 +121,17 @@ class TestImzML:
         with thyra_logs("thyra.metadata", logging.WARNING) as records:
             assert _conversion_polarity(path) is None
         assert "both positive and negative" in records.text
+        assert _document_polarity(path) is None
+
+    def test_file_content_and_the_spectra_disagree(self, tmp_path):
+        """The file-level term does not win over the spectra."""
+        path = _write_imzml(
+            tmp_path / "spectra_contradict.imzML",
+            file_content_term=POSITIVE_TERM,
+            spectrum_terms=[NEGATIVE_TERM] * 6,
+        )
+
+        assert _conversion_polarity(path) is None
         assert _document_polarity(path) is None
 
     def test_a_later_spectrum_that_disagrees_is_seen_on_conversion(self, tmp_path):

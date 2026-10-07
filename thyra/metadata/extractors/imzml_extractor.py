@@ -985,7 +985,10 @@ class ImzMLMetadataExtractor(MetadataExtractor):
     def _spectrum_polarity_accessions(self) -> Set[str]:
         """The scan polarity terms any spectrum states itself.
 
-        Collected by the parser during its one pass over the spectra.
+        Collected by the parser during its one pass over the spectra, when
+        it was built with ``include_spectra_metadata`` as the reader builds
+        it. A parser built without it gives none, and the polarity then
+        rests on ``fileContent`` and the groups.
         """
         fields = getattr(self.parser, "spectrum_metadata_fields", None)
         if not isinstance(fields, dict):
