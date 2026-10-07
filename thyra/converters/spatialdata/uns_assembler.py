@@ -548,6 +548,13 @@ class UnsAssembler:
             and getattr(self.reader, "file_type", None) == "tdf"
         ):
             conversion_parameters["tdf_spectrum"] = str(tdf_spectrum)
+        # Peaks below it are not in the store, so a store made with one is
+        # not the source's whole signal, and must say so (D34).
+        intensity_threshold = getattr(self.reader, "intensity_threshold", None)
+        if isinstance(intensity_threshold, (int, float)) and not isinstance(
+            intensity_threshold, bool
+        ):
+            conversion_parameters["intensity_threshold"] = float(intensity_threshold)
         steps = [
             ProcessingStep(
                 name="conversion",

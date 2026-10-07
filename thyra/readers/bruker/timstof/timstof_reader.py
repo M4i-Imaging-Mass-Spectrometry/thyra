@@ -348,6 +348,7 @@ class TdfFrameScans:
         "inverse",
         "_reader",
         "_unique_mz",
+        "_index_sums",
     )
 
     def __init__(
@@ -372,6 +373,7 @@ class TdfFrameScans:
             self.unique_indices = np.zeros(0, dtype=self.indices.dtype)
             self.inverse = np.zeros(0, dtype=np.int64)
         self._unique_mz: Optional[NDArray[np.float64]] = None
+        self._index_sums: Optional[NDArray[np.float64]] = None
 
     @property
     def acquisition_order(self) -> int:
@@ -389,6 +391,19 @@ class TdfFrameScans:
             )
         return self._unique_mz
 
+    @property
+    def index_sums(self) -> NDArray[np.float64]:
+        """Each unique digitizer index's intensity summed over the whole ramp.
+
+        The scan-summed spectrum, and the one quantity the intensity
+        threshold tests in every table (D34); summed once.
+        """
+        if self._index_sums is None:
+            self._index_sums = sum_scans_per_index(
+                self.inverse, self.intensities, self.unique_indices.size
+            )
+        return self._index_sums
+
     def spectrum(
         self,
     ) -> Optional[Tuple[NDArray[np.float64], NDArray[np.float64]]]:
@@ -404,9 +419,7 @@ class TdfFrameScans:
                 if self.indices.size == 0:
                     return None
                 mzs = self.unique_mz
-                intensities = sum_scans_per_index(
-                    self.inverse, self.intensities, self.unique_indices.size
-                )
+                intensities = self.index_sums
             mzs, intensities = reader._apply_intensity_filter(mzs, intensities)
         except Exception as e:
             logger.warning(f"Error reading spectrum for frame {self.frame_id}: {e}")
@@ -1906,8 +1919,9 @@ class BrukerReader(BrukerBaseMSIReader):
         inverse = frame.inverse
         mobility = np.take(values, scans, mode="clip")
         intensities = frame.intensities.astype(np.float64)
-        if self._intensity_threshold is not None:
-            keep = intensities >= self._intensity_threshold
+        kept = self._kept_indices(frame)
+        if kept is not None:
+            keep = kept[inverse]
             inverse, mobility, intensities = (
                 inverse[keep],
                 mobility[keep],
@@ -2082,15 +2096,28 @@ class BrukerReader(BrukerBaseMSIReader):
             weights=intensities[isolated],
             minlength=n_windows * n_unique,
         ).reshape(n_windows, n_unique)
+        kept = self._kept_indices(frame)
+        if kept is not None:
+            sums[:, ~kept] = 0.0
         out: List[Tuple[int, NDArray[np.float64], NDArray[np.float64]]] = []
         for window_index in np.flatnonzero(sums.any(axis=1)).tolist():
-            mzs, window_intensities = self._apply_intensity_filter(
-                unique_mz, sums[window_index]
-            )
+            window_intensities = sums[window_index]
             nonzero = np.flatnonzero(window_intensities)
-            if nonzero.size:
-                out.append((window_index, mzs[nonzero], window_intensities[nonzero]))
+            out.append((window_index, unique_mz[nonzero], window_intensities[nonzero]))
         return out
+
+    def _kept_indices(self, frame: "TdfFrameScans") -> Optional[NDArray[np.bool_]]:
+        """Which of the frame's unique indices the intensity threshold keeps.
+
+        ``None`` without a threshold. The one test every table applies
+        (D34): an index is kept when its intensity summed over the whole
+        ramp reaches the threshold, so a mobility point or a window sum is
+        kept exactly when its peak in the scan-summed spectrum is, and the
+        tables still add up to each other.
+        """
+        if self._intensity_threshold is None:
+            return None
+        return frame.index_sums >= self._intensity_threshold
 
     # ------------------------------------------------------------------
     # One read per frame for every table (design decision D5)

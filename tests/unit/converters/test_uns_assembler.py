@@ -231,6 +231,22 @@ class TestTheProcessingStep:
         # Unset on both sides: dropped, not serialised as a null.
         assert "min_mz" not in parameters
 
+    def test_the_intensity_threshold_is_recorded_when_set(self):
+        """Peaks below it are not in the store, so the store says so (D34)."""
+        reader = _StubReader()
+        reader.intensity_threshold = 50  # type: ignore[attr-defined]
+
+        steps = _assembler(reader)._processing_provenance(_context())
+
+        assert steps[0].name == "conversion"
+        assert steps[0].parameters["intensity_threshold"] == 50.0
+        assert isinstance(steps[0].parameters["intensity_threshold"], float)
+
+    def test_no_threshold_records_no_key(self):
+        steps = _assembler()._processing_provenance(_context())
+
+        assert "intensity_threshold" not in steps[0].parameters
+
 
 class TestTheCalibrationStep:
     """What the reader applied is a step, bound to MS:1001485."""

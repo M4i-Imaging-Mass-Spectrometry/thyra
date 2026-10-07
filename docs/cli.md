@@ -433,6 +433,11 @@ thyra tims_data.d output.zarr --tdf-spectrum vendor_centroid
     Use with care -- inspect the data with `-v DEBUG` first to choose an
     appropriate threshold.
 
+    With ion mobility, a peak's intensity is its sum over all mobility scans
+    of the pixel. Every table keeps or drops the peak by that one sum, so the
+    tables still add up. The store records the threshold as
+    `intensity_threshold`.
+
 ---
 
 ## Waters-Specific

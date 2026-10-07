@@ -19,7 +19,7 @@ from pyimzml.ImzMLParser import ImzMLParser
 from tqdm import tqdm
 
 from ...core.base_extractor import MetadataExtractor
-from ...core.base_reader import BaseMSIReader
+from ...core.base_reader import BaseMSIReader, summed_peak_mask
 from ...core.drop_tally import DropTally
 from ...core.mass_axis import (
     DEFAULT_MAX_MASS_AXIS_LENGTH,
@@ -1715,7 +1715,8 @@ class ImzMLReader(BaseMSIReader):
         """Iterate spectra as ``(coords, mz, mobility, intensity)`` point clouds.
 
         The three arrays are parallel; the intensity threshold, when set,
-        masks all three together so they stay parallel.
+        masks all three together so they stay parallel, keeping every point
+        of a peak whose intensity summed over the spectrum reaches it.
         """
         self._ensure_parser_initialized()
         if self._mobility is None:
@@ -1748,7 +1749,11 @@ class ImzMLReader(BaseMSIReader):
                             f"{mobility.size} mobility values for {mzs.size} m/z values"
                         )
                     if self._intensity_threshold is not None:
-                        keep = intensities >= self._intensity_threshold
+                        # The peak summed over the spectrum's mobility
+                        # scans, as the summed table tests it (D34).
+                        keep = summed_peak_mask(
+                            mzs, intensities, self._intensity_threshold
+                        )
                         mzs, mobility, intensities = (
                             mzs[keep],
                             mobility[keep],
