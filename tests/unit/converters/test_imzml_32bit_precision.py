@@ -87,6 +87,18 @@ def test_no_resample_tic_image_is_each_rows_sum(tmp_path):
     assert rows[table.obs["x"].to_numpy(int) == 0][0] == 2.0**24 + 3
 
 
+def test_no_resample_mz_axis_is_float64(tmp_path):
+    # The native axis is the file's own m/z values, now in the one type
+    # every other reader stores them in.
+    mzs = np.array([150.1, 250.3, 350.7])
+    spectra: List[Spectrum] = [(mzs, [1.5, 2.5, 3.5])] * 2
+    src = _write(tmp_path / "f32.imzML", spectra, mz_dtype=np.float32)
+    table = _convert(src, resampling=None)
+
+    assert table.var["mz"].dtype == np.float64
+    np.testing.assert_array_equal(table.var["mz"], mzs.astype(np.float32))
+
+
 def test_tic_preserving_keeps_the_measured_total(tmp_path):
     rng = np.random.default_rng(7)
     mz = np.linspace(150.0, 900.0, 3000)
