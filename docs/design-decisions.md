@@ -2990,8 +2990,9 @@ the same store.
 | `mzpeak-convert` 0.17.2 archives of `Example_Continuous`, `Example_Processed`, `desi_colad_centroid` | none | negative |
 | `fileContent` positive, every spectrum negative | positive | none, with a warning |
 
-Collecting the terms adds about 3% to the parse of the 918,855-spectrum
-file, and 15 MB.
+Collecting the terms adds 15 MB of traced memory to the parse of the
+918,855-spectrum file. Its time is within the noise: 37 to 65 s for either
+version, over two runs each.
 
 **The objection.** Take the majority, or the first spectrum, as pyimzml
 does. It did not win. A file that alternates polarity has no single true
