@@ -62,7 +62,10 @@ def _write_imzml(
 def _conversion_polarity(path: Path):
     """What the conversion route records: every spectrum read."""
     with ImzMLReader(path) as reader:
-        return reader.get_comprehensive_metadata().acquisition_params["polarity"]
+        acquisition = reader.get_comprehensive_metadata().acquisition_params
+    return {None: None, "mixed": None}.get(
+        acquisition.get("polarity"), acquisition.get("polarity")
+    )
 
 
 def _document_polarity(path: Path):
@@ -77,7 +80,7 @@ class TestAgreedPolarity:
             ([], None),
             (["positive"], "positive"),
             (["negative", "negative"], "negative"),
-            (["positive", "negative"], None),
+            (["positive", "negative"], "mixed"),
         ],
     )
     def test_one_value_or_none(self, stated, expected):

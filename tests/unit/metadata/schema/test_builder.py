@@ -100,11 +100,11 @@ class TestBuildMsiMetadata:
         assert meta.ms_analysis.polarity_term is not None
         assert meta.ms_analysis.polarity_term.accession == "MS:1000130"
 
-    def test_an_extractors_none_is_not_replaced_by_the_file_terms(self):
-        """The extractor weighed the spectra too; its None is an answer (D35)."""
+    def test_mixed_is_not_replaced_by_the_file_terms(self):
+        """The spectra said otherwise; fileContent alone does not win (D35)."""
         meta = build_msi_metadata(
             _comprehensive(
-                acquisition_params={"polarity": None},
+                acquisition_params={"polarity": "mixed"},
                 raw_metadata={"cvParams": [{"accession": "MS:1000130"}]},
             ),
             pixel_size_um=(20.0, 20.0),

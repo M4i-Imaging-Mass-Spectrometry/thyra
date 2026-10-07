@@ -2965,8 +2965,10 @@ values anywhere records neither, and says so in a warning. The places read:
   states nothing).
 - **timsTOF `.d`:** `Frames.Polarity`, unchanged.
 
-An extractor that has weighed the source answers with the key, `None`
-included. The file-level terms are no longer read over its head.
+`acquisition_params.polarity` holds the agreed value. It holds `mixed`
+when the statements disagree, which no polarity term matches, so the file's
+`fileContent` term cannot fill the field instead. A source that states
+nothing gets no key.
 
 **Why.** Writers state polarity in different places. pyimzml's writer
 puts it in a parameter group; `pea` states it on each of its 12,737
@@ -2995,10 +2997,12 @@ file, and 15 MB.
 does. It did not win. A file that alternates polarity has no single true
 value, and the timsTOF rule already leaves it unset.
 
-**What changes in a store.** Stores of imzML files that state polarity only
-in a parameter group or on the spectra, and of mzPeak archives that state
-one, now carry `polarity` and `polarity_term`. A file whose statements
-disagree loses the value it had. Nothing else in a store changes.
+**What changes in a store.** Stores of imzML files that state polarity, and
+of mzPeak archives that state one, gain `polarity` in `acquisition_params`
+(and so the root attribute `acquisition_parameters`). Where only a
+parameter group or the spectra stated it, `ms_analysis` gains `polarity` and
+`polarity_term`. A file whose statements disagree loses the value it had.
+Stores of sources that state no polarity do not change.
 
 **Known limits.**
 

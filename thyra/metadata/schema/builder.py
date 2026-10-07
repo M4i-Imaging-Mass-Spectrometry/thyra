@@ -820,13 +820,8 @@ def _build_ms_analysis(
     if n_spectra is not None:
         fields["n_spectra"] = n_spectra
 
-    # An extractor that weighed every statement in the source answers with
-    # the key, None included (D35); the file-level terms are only the
-    # fallback for one that did not.
     polarity = normalize_polarity(
-        acquisition["polarity"]
-        if "polarity" in acquisition
-        else _polarity_from_cv_params(raw_metadata)
+        acquisition.get("polarity") or _polarity_from_cv_params(raw_metadata)
     )
     if polarity is not None:
         fields["polarity"], fields["polarity_term"] = polarity

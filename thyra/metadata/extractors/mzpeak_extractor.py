@@ -19,6 +19,7 @@ import numpy as np
 
 from ...core.base_extractor import MetadataExtractor
 from ..constants import (
+    MIXED_POLARITY,
     POLARITY_OF_ACCESSION,
     ImzMLAccessions,
     SpectrumType,
@@ -599,11 +600,14 @@ class MzPeakMetadataExtractor(MetadataExtractor):
             name = GRID_EXTENT_TERMS.get(str(parameter.get("accession")))
             if name is not None:
                 declared[name] = parameter.get("value")
-        return {
+        params: Dict[str, Any] = {
             "scan_settings": parameters,
             "declared_grid_extent": declared or None,
-            "polarity": self._polarity(),
         }
+        polarity = self._polarity()
+        if polarity is not None:
+            params["polarity"] = polarity
+        return params
 
     def _polarity(self) -> Optional[str]:
         """The polarity every statement in the archive agrees on (D35).
@@ -636,7 +640,7 @@ class MzPeakMetadataExtractor(MetadataExtractor):
                 if value in SCAN_POLARITY_VALUES
             )
         polarity = agreed_polarity(stated)
-        if polarity is None and len(set(stated)) > 1:
+        if polarity == MIXED_POLARITY:
             logger.warning(
                 "%s states both positive and negative scan polarity; no "
                 "polarity is recorded.",

@@ -13,6 +13,7 @@ from ...errors import ConversionRefused
 from ...utils.imzml_coordinate_base import coordinate_bases, recorded_offsets
 from ...utils.pyimzml_direct import read_spectrum_mzs_only
 from ..constants import (
+    MIXED_POLARITY,
     POLARITY_OF_ACCESSION,
     BinaryDataType,
     ImzMLAccessions,
@@ -923,9 +924,11 @@ class ImzMLMetadataExtractor(MetadataExtractor):
                 params["pixel_size_x_um"] = pixel_size[0]
                 params["pixel_size_y_um"] = pixel_size[1]
 
-        # Always present, None included: the file's own answer, which the
-        # builder must not replace with the file-level terms alone (D35).
-        params["polarity"] = self._extract_polarity()
+        # Only when the file states one. "mixed" when it states both, so
+        # the builder cannot fall back to the file-level terms alone (D35).
+        polarity = self._extract_polarity()
+        if polarity is not None:
+            params["polarity"] = polarity
 
         # Add other acquisition parameters from imzmldict
         if hasattr(self.parser, "imzmldict") and self.parser.imzmldict:
@@ -955,9 +958,9 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         stated: List[str] = []
         metadata = getattr(self.parser, "metadata", None)
         groups = [getattr(metadata, "file_description", None)]
-        groups.extend(
-            (getattr(metadata, "referenceable_param_groups", None) or {}).values()
-        )
+        param_groups = getattr(metadata, "referenceable_param_groups", None)
+        if isinstance(param_groups, dict):
+            groups.extend(param_groups.values())
         for group in groups:
             by_accession = getattr(group, "param_by_accession", None)
             if isinstance(by_accession, dict):
@@ -971,7 +974,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             for accession in self._spectrum_polarity_accessions()
         )
         polarity = agreed_polarity(stated)
-        if polarity is None and len(set(stated)) > 1:
+        if polarity == MIXED_POLARITY:
             logger.warning(
                 "%s states both positive and negative scan polarity; no "
                 "polarity is recorded.",

@@ -110,18 +110,26 @@ POLARITY_OF_ACCESSION: Dict[str, str] = {
 }
 
 
+#: What an extractor records for a source that states both polarities:
+#: pyimzml's word for it. No polarity term matches it, so the document's
+#: field stays unset, and the file-level terms cannot fill it instead.
+MIXED_POLARITY = "mixed"
+
+
 def agreed_polarity(stated: Iterable[str]) -> Optional[str]:
     """The polarity every statement of a source agrees on (D35).
 
     ``stated`` holds ``"positive"`` or ``"negative"`` once for each place
     the source states one: its file-level terms, a parameter group, a
-    spectrum. One value is the answer. None means the source says nothing.
-    Both mean it alternated or contradicts itself, which has no single
-    truthful value, so neither is recorded.
+    spectrum. One value is the answer, and None means the source says
+    nothing. Both give :data:`MIXED_POLARITY`: the source alternated or
+    contradicts itself, which has no single truthful value.
     """
     values = set(stated)
-    if len(values) != 1:
+    if not values:
         return None
+    if len(values) > 1:
+        return MIXED_POLARITY
     return next(iter(values))
 
 
