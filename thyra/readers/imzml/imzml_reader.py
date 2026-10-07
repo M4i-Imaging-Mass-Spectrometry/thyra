@@ -246,6 +246,20 @@ def _spectrum_list_head(imzml_path: Path) -> Optional[_SpectrumListHead]:
     return _SpectrumListHead(declared, False)
 
 
+def _as_float64(values: NDArray[Any]) -> NDArray[np.float64]:
+    """An array the reader yields, widened to float64 (D36).
+
+    imzML stores m/z and intensity as 32- or 64-bit floats (or integers),
+    and pyimzml decodes them as stored. Everything after the reader --
+    the TIC sum, the intensity threshold, the m/z bounds and the totals
+    ``tic_preserving`` keeps -- computes in the array's own type, so a
+    32-bit file got 32-bit sums and comparisons while every other reader
+    yields float64. Widening is exact; a float64 array passes through
+    without a copy.
+    """
+    return np.asarray(values, dtype=np.float64)
+
+
 def _read_spectrum_mzs(parser: Any, idx: int) -> Optional[NDArray[Any]]:
     """Read one spectrum's m/z values, or None if missing or unreadable.
 
@@ -1216,7 +1230,7 @@ class ImzMLReader(BaseMSIReader):
                     if spectrum_data is None or len(spectrum_data) < 1:
                         raise ValueError("Could not get first spectrum")
 
-                    mzs = spectrum_data[0]
+                    mzs = _as_float64(spectrum_data[0])
                     if mzs.size == 0:
                         raise ConversionRefused("First spectrum contains no m/z values")
 
@@ -1224,7 +1238,11 @@ class ImzMLReader(BaseMSIReader):
                     if self._continuous_uniform:
                         self._continuous_mzs = mzs
             else:
-                self._common_mass_axis = self._extract_continuous_mass_axis(parser)
+                # Widened once here, so the axis and the yielded arrays
+                # share one precision (D36).
+                self._common_mass_axis = _as_float64(
+                    self._extract_continuous_mass_axis(parser)
+                )
 
         # Return the common mass axis
         return self._common_mass_axis
@@ -1366,13 +1384,12 @@ class ImzMLReader(BaseMSIReader):
             idx: Spectrum index.
 
         Returns:
-            The (m/z, intensity) arrays, exactly as ``getspectrum`` would.
+            The (m/z, intensity) arrays ``getspectrum`` would give, as
+            float64 (D36).
         """
         if not self._continuous_uniform:
-            return cast(
-                Tuple[NDArray[np.float64], NDArray[np.float64]],
-                parser.getspectrum(idx),
-            )
+            mzs, intensities = parser.getspectrum(idx)
+            return _as_float64(mzs), _as_float64(intensities)
 
         mzs = self._continuous_mzs
         if mzs is None:
@@ -1382,16 +1399,18 @@ class ImzMLReader(BaseMSIReader):
             if self._common_mass_axis is not None:
                 mzs = self._continuous_mzs = self._common_mass_axis
             else:
+                # Widened once, when cached: a cast per spectrum would hand
+                # out a new object each time and lose that identity.
                 mzs, intensities = parser.getspectrum(idx)
-                self._continuous_mzs = mzs
-                return mzs, intensities
+                mzs = self._continuous_mzs = _as_float64(mzs)
+                return mzs, _as_float64(intensities)
 
         m = parser.m
         m.seek(parser.intensityOffsets[idx])
         data = m.read(
             parser.intensityLengths[idx] * parser.sizeDict[parser.intensityPrecision]
         )
-        return mzs, np.frombuffer(data, dtype=parser.intensityPrecision)
+        return mzs, _as_float64(np.frombuffer(data, dtype=parser.intensityPrecision))
 
     def _process_single_spectrum(
         self, parser: ImzMLParser, idx: int, pbar, tally: DropTally
@@ -1699,7 +1718,7 @@ class ImzMLReader(BaseMSIReader):
         if self._continuous_mzs is not None:
             mzs = self._continuous_mzs
         else:
-            mzs = cast(NDArray[np.float64], parser.getspectrum(0)[0])
+            mzs = _as_float64(parser.getspectrum(0)[0])
             if self._continuous_uniform:
                 self._continuous_mzs = mzs
         mobility = cast(NDArray[np.float64], self._mobility_shared)
@@ -1708,7 +1727,7 @@ class ImzMLReader(BaseMSIReader):
                 f"Shared m/z block has {mzs.size} values but the shared mobility "
                 f"array has {mobility.size}"
             )
-        return np.asarray(mzs, dtype=np.float64), mobility
+        return mzs, mobility
 
     def iter_mobility_spectra(self) -> Generator[
         Tuple[
