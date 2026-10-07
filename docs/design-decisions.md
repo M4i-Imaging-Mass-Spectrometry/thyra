@@ -2947,3 +2947,64 @@ Stores made without a threshold do not change.
   whose encoding spreads one bin's m/z further apart is tested per stored
   m/z. The MS-Numpress archives of `mzpeak-convert` 0.16.0 were seen to do
   so; none was measured for this entry.
+
+## D35. Polarity is the value every statement in the source agrees on
+
+**Status:** Implemented (2026-10-07).
+
+**Decision.** `ms_analysis.polarity` is recorded when every place the
+source states a scan polarity gives the same one. A source that states both
+values anywhere records neither, and says so in a warning. The places read:
+
+- **imzML:** the `fileContent` terms, every referenceable parameter group,
+  and every spectrum's own terms (`MS:1000130` positive, `MS:1000129`
+  negative). The parser collects the spectra's terms in the one pass it
+  makes over them anyway.
+- **mzPeak:** the terms in `file_description.contents`, and every
+  spectrum's `scan_polarity` (1 positive, -1 negative; any other value
+  states nothing).
+- **timsTOF `.d`:** `Frames.Polarity`, unchanged.
+
+An extractor that has weighed the source answers with the key, `None`
+included. The file-level terms are no longer read over its head.
+
+**Why.** Writers state polarity in different places. pyimzml's writer
+puts it in a parameter group; `pea` states it on each of its 12,737
+spectra and nowhere else. Thyra read only `fileContent`, so both converted
+with no polarity at exit 0, and `export-metaspace` then left a required
+field empty. A file whose `fileContent` said positive while every spectrum
+said negative was stored as positive.
+
+An mzPeak archive was never read for polarity, so an archive converted
+without the polarity of the file it was made from. D29 says the two give
+the same store.
+
+| Source | Before | Now |
+|---|---|---|
+| `pea.imzML` | none | positive |
+| A Xenium-run imzML, negative on all 918,855 spectra | none | negative |
+| `bellini.imzML` (`fileContent`) | positive | positive |
+| `mzpeak-convert` 0.17.2 archives of two timsTOF fleX runs | none | positive, as their `.d` |
+| `mzpeak-convert` 0.17.2 archives of `Example_Continuous`, `Example_Processed`, `desi_colad_centroid` | none | negative |
+| `fileContent` positive, every spectrum negative | positive | none, with a warning |
+
+Collecting the terms adds about 3% to the parse of the 918,855-spectrum
+file, and 15 MB.
+
+**The objection.** Take the majority, or the first spectrum, as pyimzml
+does. It did not win. A file that alternates polarity has no single true
+value, and the timsTOF rule already leaves it unset.
+
+**What changes in a store.** Stores of imzML files that state polarity only
+in a parameter group or on the spectra, and of mzPeak archives that state
+one, now carry `polarity` and `polarity_term`. A file whose statements
+disagree loses the value it had. Nothing else in a store changes.
+
+**Known limits.**
+
+- A metadata-only read (`thyra metadata`, `read_metadata_document`, the
+  preview) reads the imzML head and the first spectrum, not every spectrum.
+  It can report a polarity that a conversion of a file whose later spectra
+  switch would not record.
+- Only the scan polarity terms are read. A writer that states polarity in
+  a user parameter is not.

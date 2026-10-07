@@ -29,7 +29,11 @@ from ...core.mass_axis import (
 from ...core.mobility import MobilityAxis, classify_mobility_array
 from ...core.registry import register_reader
 from ...errors import ConversionRefused
-from ...metadata.constants import ImzMLAccessions, normalize_spectrum_type
+from ...metadata.constants import (
+    POLARITY_OF_ACCESSION,
+    ImzMLAccessions,
+    normalize_spectrum_type,
+)
 from ...metadata.extractors.imzml_extractor import ImzMLMetadataExtractor
 from ...utils.imzml_coordinate_base import coordinate_bases
 from ...utils.pyimzml_direct import read_spectrum_mzs_only
@@ -539,6 +543,10 @@ class ImzMLReader(BaseMSIReader):
                 filename=str(imzml_path),
                 parse_lib="ElementTree",
                 ibd_file=self.ibd_file,
+                # Read off each spectrum during the one pass the parser
+                # makes anyway, so polarity stated per spectrum is seen
+                # (D35); pyimzml's own polarity looks at the first only.
+                include_spectra_metadata=list(POLARITY_OF_ACCESSION),
             )
         except Exception as e:
             if self.ibd_file:

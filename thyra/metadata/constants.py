@@ -15,7 +15,7 @@ module re-exports every name here, so both spellings keep working;
 ``Thresholds``, the one genuine resampling number in it, stayed there.
 """
 
-from typing import Dict, Optional
+from typing import Dict, Iterable, Optional
 
 from ..errors import ConversionRefused
 
@@ -26,6 +26,10 @@ class ImzMLAccessions:
     # Spectrum type (MS ontology)
     CENTROID_SPECTRUM = "MS:1000127"
     PROFILE_SPECTRUM = "MS:1000128"
+
+    # Scan polarity (MS ontology)
+    POSITIVE_SCAN = "MS:1000130"
+    NEGATIVE_SCAN = "MS:1000129"
 
     # Binary data type (imzML ontology)
     CONTINUOUS_BINARY = "IMS:1000030"
@@ -97,6 +101,28 @@ def normalize_spectrum_type(value: Optional[object]) -> Optional[str]:
     raise ConversionRefused(
         f"Unknown spectrum_type {value!r}. Accepted values: {accepted}."
     )
+
+
+#: The polarity each scan polarity term states.
+POLARITY_OF_ACCESSION: Dict[str, str] = {
+    ImzMLAccessions.POSITIVE_SCAN: "positive",
+    ImzMLAccessions.NEGATIVE_SCAN: "negative",
+}
+
+
+def agreed_polarity(stated: Iterable[str]) -> Optional[str]:
+    """The polarity every statement of a source agrees on (D35).
+
+    ``stated`` holds ``"positive"`` or ``"negative"`` once for each place
+    the source states one: its file-level terms, a parameter group, a
+    spectrum. One value is the answer. None means the source says nothing.
+    Both mean it alternated or contradicts itself, which has no single
+    truthful value, so neither is recorded.
+    """
+    values = set(stated)
+    if len(values) != 1:
+        return None
+    return next(iter(values))
 
 
 class BinaryDataType:

@@ -50,9 +50,10 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, NamedTuple, Optional, Tuple, Union
+from typing import Any, Dict, FrozenSet, NamedTuple, Optional, Tuple, Union
 from xml.etree import ElementTree as ET  # nosec B405
 
+from ...metadata.constants import POLARITY_OF_ACCESSION
 from ._pyimzml_compat import ensure_lenient_cv_param_values
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,7 @@ HIGHEST_OBSERVED_MZ = "MS:1000527"
 
 POSITION_X = "IMS:1000050"
 POSITION_Y = "IMS:1000051"
+
 
 EXTERNAL_OFFSET = "IMS:1000102"
 EXTERNAL_ENCODED_LENGTH = "IMS:1000104"
@@ -129,6 +131,7 @@ class ImzMLHeaderParser:
         root: ET.Element,
         n_spectra: Optional[int],
         first_position: Optional[Tuple[int, int]] = None,
+        first_spectrum_polarity: FrozenSet[str] = frozenset(),
     ) -> None:
         """Wrap a parsed document head.
 
@@ -140,6 +143,10 @@ class ImzMLHeaderParser:
             first_position: The first spectrum's ``(x, y)``, or ``None``
                 when it states none.  Read for what it says about the
                 coordinate base, not for the pixel.
+            first_spectrum_polarity: The scan polarity accessions the
+                first spectrum states itself. The metadata-only route
+                reads polarity from it, as pyimzml does; a conversion
+                reads every spectrum's (D35).
         """
         from pyimzml.metadata import Metadata
 
@@ -147,6 +154,7 @@ class ImzMLHeaderParser:
         self.imzmldict: Dict[str, Any] = _imzmldict(self.metadata)
         self.n_spectra = n_spectra
         self.first_position = first_position
+        self.first_spectrum_polarity = first_spectrum_polarity
 
 
 def read_header(path: Union[str, Path]) -> ImzMLHeaderParser:
@@ -164,13 +172,13 @@ def read_header(path: Union[str, Path]) -> ImzMLHeaderParser:
             caller (``preview_msi``) turns it into ``readable=False``.
     """
     ensure_lenient_cv_param_values()
-    root, n_spectra, first_position = _parse_head(Path(path))
-    return ImzMLHeaderParser(root, n_spectra, first_position)
+    root, n_spectra, first_position, polarity = _parse_head(Path(path))
+    return ImzMLHeaderParser(root, n_spectra, first_position, polarity)
 
 
 def _parse_head(
     path: Path,
-) -> Tuple[ET.Element, Optional[int], Optional[Tuple[int, int]]]:
+) -> Tuple[ET.Element, Optional[int], Optional[Tuple[int, int]], FrozenSet[str]]:
     """The document tree, built only as far as the first spectrum.
 
     ``iterparse`` attaches each element to its parent as it opens it, so
@@ -180,7 +188,7 @@ def _parse_head(
     is complete in the tree.  Stopping there leaves ``<run>`` present and
     nearly empty, which ``Metadata`` never looks at.
 
-    Three things are taken on the way:
+    Four things are taken on the way:
 
     - the tree, for ``Metadata``;
     - ``<spectrumList count=...>``, the number of spectra the file says it
@@ -188,10 +196,13 @@ def _parse_head(
       for;
     - the first spectrum's ``IMS:1000050``/``IMS:1000051`` position, which
       is what says whether the declared raster can be trusted.  See
-      :func:`~thyra.metadata.extractors.imzml_header_extractor.declared_raster`.
+      :func:`~thyra.metadata.extractors.imzml_header_extractor.declared_raster`;
+    - the scan polarity terms the first spectrum states, which is where
+      some writers state the run's polarity.
     """
     n_spectra: Optional[int] = None
     position: Dict[str, int] = {}
+    polarity: set = set()
     with path.open("rb") as handle:
         context = ET.iterparse(handle, events=("start",))  # nosec B314
         root: Optional[ET.Element] = None
@@ -220,15 +231,15 @@ def _parse_head(
                         position[accession] = int(element.get("value", ""))
                     except ValueError:
                         logger.debug("Unparseable %s on the first spectrum", accession)
-                    if len(position) == 2:
-                        break
+                elif accession in POLARITY_OF_ACCESSION:
+                    polarity.add(accession)
         if root is None:
             raise ValueError(f"{path} contains no XML elements")
 
     first_position = (
         (position[POSITION_X], position[POSITION_Y]) if len(position) == 2 else None
     )
-    return root, n_spectra, first_position
+    return root, n_spectra, first_position, frozenset(polarity)
 
 
 def _imzmldict(metadata: Any) -> Dict[str, Any]:

@@ -2,7 +2,7 @@
 import gc
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -13,9 +13,11 @@ from ...errors import ConversionRefused
 from ...utils.imzml_coordinate_base import coordinate_bases, recorded_offsets
 from ...utils.pyimzml_direct import read_spectrum_mzs_only
 from ..constants import (
+    POLARITY_OF_ACCESSION,
     BinaryDataType,
     ImzMLAccessions,
     SpectrumType,
+    agreed_polarity,
     normalize_spectrum_type,
 )
 from ..ontology.cache import ONTOLOGY
@@ -911,7 +913,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
 
     def _extract_acquisition_params(self) -> Dict[str, Any]:
         """Extract acquisition parameters from XML metadata."""
-        params = {}
+        params: Dict[str, Any] = {}
 
         # Extract pixel size with full XML parsing if not found in fast
         # extraction
@@ -920,6 +922,10 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             if pixel_size:
                 params["pixel_size_x_um"] = pixel_size[0]
                 params["pixel_size_y_um"] = pixel_size[1]
+
+        # Always present, None included: the file's own answer, which the
+        # builder must not replace with the file-level terms alone (D35).
+        params["polarity"] = self._extract_polarity()
 
         # Add other acquisition parameters from imzmldict
         if hasattr(self.parser, "imzmldict") and self.parser.imzmldict:
@@ -936,6 +942,56 @@ class ImzMLMetadataExtractor(MetadataExtractor):
                     params[key.replace(" ", "_")] = self.parser.imzmldict[key]
 
         return params
+
+    def _extract_polarity(self) -> Optional[str]:
+        """The polarity every statement in the file agrees on (D35).
+
+        An imzML can state it in three places: the ``fileContent`` terms,
+        a referenceable parameter group, and each spectrum. Writers differ
+        (pyimzml's writer uses the group), so all three are read. The
+        spectra's terms come from the parser's own pass over them. A file
+        that states both values, anywhere, is left unset and says so.
+        """
+        stated: List[str] = []
+        metadata = getattr(self.parser, "metadata", None)
+        groups = [getattr(metadata, "file_description", None)]
+        groups.extend(
+            (getattr(metadata, "referenceable_param_groups", None) or {}).values()
+        )
+        for group in groups:
+            by_accession = getattr(group, "param_by_accession", None)
+            if isinstance(by_accession, dict):
+                stated.extend(
+                    polarity
+                    for accession, polarity in POLARITY_OF_ACCESSION.items()
+                    if accession in by_accession
+                )
+        stated.extend(
+            POLARITY_OF_ACCESSION[accession]
+            for accession in self._spectrum_polarity_accessions()
+        )
+        polarity = agreed_polarity(stated)
+        if polarity is None and len(set(stated)) > 1:
+            logger.warning(
+                "%s states both positive and negative scan polarity; no "
+                "polarity is recorded.",
+                self.imzml_path.name,
+            )
+        return polarity
+
+    def _spectrum_polarity_accessions(self) -> Set[str]:
+        """The scan polarity terms any spectrum states itself.
+
+        Collected by the parser during its one pass over the spectra.
+        """
+        fields = getattr(self.parser, "spectrum_metadata_fields", None)
+        if not isinstance(fields, dict):
+            return set()
+        return {
+            accession
+            for accession in POLARITY_OF_ACCESSION
+            if any(value is not None for value in fields.get(accession, ()))
+        }
 
     def _extract_instrument_info(self) -> Dict[str, Any]:
         """Extract instrument information from the instrumentConfiguration blocks.
