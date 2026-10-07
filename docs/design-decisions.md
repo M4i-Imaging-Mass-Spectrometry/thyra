@@ -3013,3 +3013,81 @@ Stores of sources that state no polarity do not change.
   switch would not record.
 - Only the scan polarity terms are read. A writer that states polarity in
   a user parameter is not.
+
+## D36. The imzML reader yields float64, whatever precision the file stores
+
+**Status:** Implemented (2026-10-07).
+
+**Decision.** Every m/z and intensity array the imzML reader hands on is
+float64: each spectrum on the processed and the continuous path, the common
+m/z axis, the mobility point cloud and the shared mobility features. A file
+that stores 32-bit floats (or integers) is widened once, where the reader
+reads it. Widening is exact; the stored numbers are the file's numbers. The
+shared m/z block of a continuous file is widened once, when it is cached, so
+every spectrum still yields that one object.
+
+**Why.** pyimzml decodes an array in the precision the file declares, and
+the reader passed it on unchanged. Everything after it computed in that
+type: the TIC sum, the intensity threshold, the typed m/z bounds and the
+total `tic_preserving` keeps. The other readers, and the mzPeak archive of
+the same file (D29), yield float64. So a 32-bit imzML converted at 32-bit
+precision, and four results came out wrong at exit 0:
+
+| Small 32-bit imzML | Before | Now |
+|---|---|---|
+| `--no-resample`, intensities `[2^24, 1, 1, 1]` | TIC 16777216, row sum 16777219 | both 16777219 |
+| `tic_preserving`, 3 pixels of 30,000 profile points | rows miss the measured total by 2.9e-8 | 9.3e-15, as the 64-bit twin |
+| `--intensity-threshold 0.7`, value `float32(0.7)` | kept (0.699999988 is below 0.7) | dropped, as the mzPeak archive drops it |
+| `nearest_neighbor`, typed minimum 400.00001, peak at m/z 400.0 | kept in 7 of 8 pixels | dropped from all 8 |
+| the same, with the peak in the first pixel | refused: "the two passes over the source disagree" | converts |
+| `tic_preserving`, four pixels whose only peak is at 400.0 | 5 rows | 1 row, as the 64-bit twin |
+
+`pea` and a 918,855-spectrum Xenium-run export store 32-bit intensities,
+but as whole counts whose pixel totals stay below 2^24. A 32-bit sum holds
+those exactly, so their TIC images and `tic_preserving` totals do not
+change. A threshold set one part in a billion above one of `pea`'s stored
+intensity levels does:
+
+| `pea`, `--no-resample`, that threshold | Before | Now |
+|---|---|---|
+| Stored values | 57,564,204 | 55,140,652 |
+| Of them, below the threshold | 2,423,552 | 0 |
+
+No file with 32-bit m/z, or with fractional 32-bit intensities, was at
+hand. Those cases are measured on the constructed files above only.
+
+**The objection.** Leave the reader as it is and compute in float64 where
+it matters: the TIC sums, the threshold test, the two resamplers' masks.
+It did not win. That is at least five places, each easy to miss: changing
+the TIC sum alone makes every such conversion refuse, because the
+second-pass check then disagrees with it. One widening where the arrays
+enter covers them all, and any step added later.
+
+**What changes in a store.** Stores of imzML files that store 32-bit
+intensities or m/z:
+
+- With `--no-resample`, the TIC image now equals each row's sum. A pixel of
+  fractional intensities moves by up to about one part in ten million
+  (1.8e-7 on the constructed file). Whole counts whose pixel total stays
+  below 2^24 do not move.
+- With `tic_preserving`, each row sums to the pixel's measured total.
+- With `--intensity-threshold` at a value 32-bit floats cannot hold, a
+  stored value just below it is dropped.
+- With a typed `--resample-min-mz` or `--resample-max-mz`, a peak within
+  half a 32-bit step outside the bound is dropped from every pixel.
+- With `--no-resample`, a file with 32-bit m/z stores `var["mz"]` as
+  float64 instead of float32, with the same values, as every other reader.
+
+`X` and the default (resampled) route do not change. Stores of 64-bit imzML
+files and of every other reader do not change.
+
+**Known limits.**
+
+- Each spectrum's arrays take twice the memory in flight. The store's `X`
+  was already float64. COST
+- With `--no-resample`, a processed file with 32-bit m/z holds its native
+  axis at twice the bytes. While the axis is widened both copies are held,
+  so in the case where every m/z is distinct the axis build peaks near
+  three times the m/z payload instead of two.
+- An integer intensity above 2^53 is rounded by the widening. No imzML
+  writer is known to store one.

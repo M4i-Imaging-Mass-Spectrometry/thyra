@@ -97,7 +97,23 @@ class TestMobilityPointCloud:
             )
             clouds = list(reader.iter_mobility_spectra())
         assert clouds
-        for _, mzs, mobility, intensities in clouds:
+        for _, mzs, _, intensities in clouds:
             assert mzs.dtype == np.float64
-            assert mobility.dtype == np.float64
             assert intensities.dtype == np.float64
+
+    def test_shared_features_are_the_yielded_float64_block(self, monkeypatch):
+        # Asked for first, the shared features decode and cache the m/z
+        # block; every spectrum must then yield that same float64 object.
+        with ImzMLReader(FIXTURES / "mobility_continuous.imzML") as reader:
+            reader.get_essential_metadata()
+            decode = reader.parser.getspectrum
+            monkeypatch.setattr(
+                reader.parser,
+                "getspectrum",
+                lambda idx: tuple(a.astype(np.float32) for a in decode(idx)),
+            )
+            features = reader.get_shared_mobility_features()
+            assert features is not None
+            yielded = [mzs for _, mzs, _, _ in reader.iter_mobility_spectra()]
+        assert features[0].dtype == np.float64
+        assert yielded and all(mzs is features[0] for mzs in yielded)
