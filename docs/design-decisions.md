@@ -3084,7 +3084,10 @@ files and of every other reader do not change.
 **Known limits.**
 
 - Each spectrum's arrays take twice the memory in flight. The store's `X`
-  was already float64. COST
+  was already float64. On the 918,855-spectrum Xenium-run export (default
+  route, two runs each, alternating) the peak working set was 16.3 and
+  16.4 GiB before, 16.2 and 16.5 GiB after. The time was 433 and 409 s
+  before, 515 and 416 s after, on a machine shared with other work.
 - With `--no-resample`, a processed file with 32-bit m/z holds its native
   axis at twice the bytes. While the axis is widened both copies are held,
   so in the case where every m/z is distinct the axis build peaks near
