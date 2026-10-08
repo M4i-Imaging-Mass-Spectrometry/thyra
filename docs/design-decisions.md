@@ -3074,23 +3074,33 @@ intensities or m/z:
 - With `--intensity-threshold` at a value 32-bit floats cannot hold, a
   stored value just below it is dropped.
 - With a typed `--resample-min-mz` or `--resample-max-mz`, a peak within
-  half a 32-bit step outside the bound is dropped from every pixel.
+  half a 32-bit step outside the bound is treated as in the 64-bit twin.
+  `nearest_neighbor` drops it from every pixel, and a file that was refused
+  converts. `tic_preserving` drops a pixel whose only peak is outside; in a
+  pixel that also has peaks inside, the peak's share is measured by area,
+  as for a 64-bit file.
 - With `--no-resample`, a file with 32-bit m/z stores `var["mz"]` as
   float64 instead of float32, with the same values, as every other reader.
 
-`X` and the default (resampled) route do not change. Stores of 64-bit imzML
-files and of every other reader do not change.
+A 32-bit file converted on the default route, without a threshold or a
+typed bound, gives the same store as before. Stores of 64-bit imzML files and
+of every other reader do not change.
 
 **Known limits.**
 
 - Each spectrum's arrays take twice the memory in flight. The store's `X`
   was already float64. On the 918,855-spectrum Xenium-run export (default
-  route, two runs each, alternating) the peak working set was 16.3 and
-  16.4 GiB before, 16.2 and 16.5 GiB after. The time was 433 and 409 s
-  before, 515 and 416 s after, on a machine shared with other work.
+  route; old and new code alternated, two runs each) the time was 399 and
+  363 s before, 388 and 365 s after. The peak working set was 16.35 GiB
+  before and 16.44 GiB after; other runs of the old code gave 16.32 to
+  16.44 GiB. That file stores 64-bit m/z, so only the intensity widening
+  runs there.
 - With `--no-resample`, a processed file with 32-bit m/z holds its native
   axis at twice the bytes. While the axis is widened both copies are held,
   so in the case where every m/z is distinct the axis build peaks near
-  three times the m/z payload instead of two.
-- An integer intensity above 2^53 is rounded by the widening. No imzML
-  writer is known to store one.
+  three times the m/z payload instead of two (61 to 91 MiB on a 38 MiB
+  payload).
+- The m/z-only read in `thyra/utils/pyimzml_direct.py`, and the axis
+  builder it feeds, still return the file's precision. Each current caller
+  widens the result or takes only its smallest and largest value, which are
+  exact. Nothing stored differs, but a new caller must widen too.
