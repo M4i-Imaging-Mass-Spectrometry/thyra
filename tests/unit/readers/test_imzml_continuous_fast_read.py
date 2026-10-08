@@ -69,6 +69,7 @@ def test_iter_spectra_matches_getspectrum(tmp_path, mode):
             np.testing.assert_array_equal(np.asarray(mzs), ref_mzs)
             np.testing.assert_array_equal(np.asarray(ints), ref_ints)
             # The same values, widened to float64 (D36).
+            assert np.asarray(mzs).dtype == np.float64
             assert np.asarray(ints).dtype == np.float64
     finally:
         reader.close()

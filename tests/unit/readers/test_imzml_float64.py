@@ -7,6 +7,7 @@ computes in the array's own type. The other readers yield float64, so a
 32-bit imzML was the one source whose sums and comparisons ran in 32-bit.
 """
 
+import importlib.util
 from pathlib import Path
 
 import numpy as np
@@ -83,23 +84,107 @@ class TestIntensityThreshold:
         np.testing.assert_array_equal(kept[0], np.array([4.1, 2.3], dtype=np.float32))
 
 
-class TestMobilityPointCloud:
-    def test_mobility_spectra_are_float64(self, monkeypatch):
-        # The committed mobility fixture stores 64-bit floats; hand its
-        # values back as 32-bit, as pyimzml does for a 32-bit file.
-        with ImzMLReader(FIXTURES / "mobility_processed.imzML") as reader:
-            reader.get_essential_metadata()
-            decode = reader.parser.getspectrum
-            monkeypatch.setattr(
-                reader.parser,
-                "getspectrum",
-                lambda idx: tuple(a.astype(np.float32) for a in decode(idx)),
+MOB32_MZ = np.array([300.0, 300.0, 450.5], np.float32)
+MOB32_K0 = np.array([0.95, 1.10, 1.02], np.float32)
+MOB32_INTENSITIES = [
+    np.array([10.0, 1.0, 5.0], np.float32),
+    np.array([11.0, 2.0, 6.0], np.float32),
+]
+
+
+def _load_fixture_builder():
+    spec = importlib.util.spec_from_file_location(
+        "build_fixtures_f32", FIXTURES / "build_fixtures.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _write_32bit_mobility_imzml(directory: Path, monkeypatch) -> Path:
+    """A two-pixel processed mobility export whose three arrays are 32-bit.
+
+    pyimzml's writer cannot emit the third array, so the document is
+    assembled from the committed fixture builder's pieces, with the
+    precision declarations swapped and the .ibd packed as float32.
+    """
+    builder = _load_fixture_builder()
+    monkeypatch.setattr(builder, "FIXTURE_DIR", directory)
+
+    uuid_text = "8F7E3B1A-2C4D-4E5F-9A6B-1C3E5D7B9A01"
+    blob = bytearray(builder.uuid_module.UUID(uuid_text).bytes)
+    placements = []
+    for row in MOB32_INTENSITIES:
+        mz_placement = (len(blob), int(MOB32_MZ.size))
+        blob += MOB32_MZ.tobytes()
+        intensity_placement = (len(blob), int(row.size))
+        blob += row.tobytes()
+        mobility_placement = (len(blob), int(MOB32_K0.size))
+        blob += MOB32_K0.tobytes()
+        placements.append((mz_placement, intensity_placement, mobility_placement))
+    (directory / "mob32.ibd").write_bytes(bytes(blob))
+
+    float32_line = (
+        '      <cvParam cvRef="MS" accession="MS:1000521" name="32-bit float"'
+        ' value="" />'
+    )
+    mobility_group = [
+        '    <referenceableParamGroup id="mobilityArray">',
+        '      <cvParam cvRef="MS" accession="MS:1000576" name="no compression"'
+        ' value="" />',
+        '      <cvParam cvRef="MS" accession="MS:1003006"'
+        ' name="mean inverse reduced ion mobility array" unitCvRef="MS"'
+        ' unitAccession="MS:1002814" unitName="volt-second per square centimeter" />',
+        float32_line,
+        '      <cvParam cvRef="IMS" accession="IMS:1000101" name="external data"'
+        ' value="true" />',
+        "    </referenceableParamGroup>",
+    ]
+    lines = builder._canonical_header(
+        uuid_text,
+        builder.PLAIN_SCAN_SETTINGS,
+        [float32_line],
+        len(placements),
+        spectrum_type_line=builder.CENTROID_LINE,
+        instrument_lines=builder.TIMSTOF_INSTRUMENT_LINES,
+        extra_param_group_lines=mobility_group,
+        file_mode_line=builder.PROCESSED_MODE_LINE,
+    )
+    # The canonical header declares the intensity array 64-bit.
+    swapped = False
+    for i, line in enumerate(lines):
+        if 'accession="MS:1000523" name="64-bit float"' in line:
+            lines[i] = float32_line
+            swapped = True
+            break
+    assert swapped, "canonical header no longer declares a 64-bit intensity"
+    for i, placement in enumerate(placements):
+        lines += [
+            "      " + line
+            for line in builder._spectrum_xml_with_mobility(
+                i, builder.DENSE_COORDINATES[i], *placement, itemsize=4
             )
+        ]
+    lines += ["    </spectrumList>", "  </run>", "</mzML>"]
+    return builder._write("mob32", lines, newline=b"\n", encoding="utf-8")
+
+
+class TestMobilityPointCloud:
+    def test_a_32_bit_mobility_export_yields_float64(self, tmp_path, monkeypatch):
+        path = _write_32bit_mobility_imzml(tmp_path, monkeypatch)
+
+        with ImzMLReader(path) as reader:
             clouds = list(reader.iter_mobility_spectra())
-        assert clouds
-        for _, mzs, _, intensities in clouds:
+
+        assert len(clouds) == 2
+        for (_, mzs, mobility, intensities), written in zip(clouds, MOB32_INTENSITIES):
             assert mzs.dtype == np.float64
+            assert mobility.dtype == np.float64
             assert intensities.dtype == np.float64
+            np.testing.assert_array_equal(mzs, MOB32_MZ.astype(np.float64))
+            np.testing.assert_array_equal(mobility, MOB32_K0.astype(np.float64))
+            np.testing.assert_array_equal(intensities, written.astype(np.float64))
 
     def test_shared_features_are_the_yielded_float64_block(self, monkeypatch):
         # Asked for first, the shared features decode and cache the m/z
