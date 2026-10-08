@@ -1,0 +1,2323 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Convert imaging mass spectrometry data from Bruker, Waters, PHI and imzML into the open SpatialData format">
+      
+      
+      
+        <link rel="canonical" href="https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/settings/">
+      
+      
+        <link rel="prev" href="../which-files/">
+      
+      
+        <link rel="next" href="../describe-your-data/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/favicon.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Change how Thyra converts - Thyra</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#change-how-thyra-converts" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Thyra" class="md-header__button md-logo" aria-label="Thyra" data-md-component="logo">
+      
+  <img src="../assets/thyra-logomark.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Thyra
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Change how Thyra converts
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/M4i-Imaging-Mass-Spectrometry/thyra" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    M4i-Imaging-Mass-Spectrometry/thyra
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../install/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Get started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../which-files/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../technical-reference/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Technical reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../migration-4.0/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Project
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Thyra" class="md-nav__button md-logo" aria-label="Thyra" data-md-component="logo">
+      
+  <img src="../assets/thyra-logomark.svg" alt="logo">
+
+    </a>
+    Thyra
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/M4i-Imaging-Mass-Spectrometry/thyra" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    M4i-Imaging-Mass-Spectrometry/thyra
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Get started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Get started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Your first conversion
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../look-at-the-result/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Look at the result
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorial
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Glossary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../which-files/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Which files can I convert?
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Change how Thyra converts
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Change how Thyra converts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#set-the-pixel-size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Set the pixel size
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#convert-one-region" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Convert one region
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#leave-out-the-optical-image" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Leave out the optical image
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#choose-the-mz-axis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choose the m/z axis
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Choose the m/z axis">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-thyra-does-by-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What Thyra does by default
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#keep-the-original-mz-values" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keep the original m/z values
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#make-the-bins-finer-or-coarser" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Make the bins finer or coarser
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#keep-only-part-of-the-mass-range" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keep only part of the mass range
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#keep-3d-data-together" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keep 3D data together
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#name-the-dataset" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Name the dataset
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#keep-a-record-of-the-conversion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keep a record of the conversion
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#options-for-one-kind-of-instrument" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Options for one kind of instrument
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#convert-from-python" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Convert from Python
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#go-deeper" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Go deeper
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../describe-your-data/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Describe and share your data
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../explore-the-output/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Explore the result in Python
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Technical reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Technical reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../technical-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Technical reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../supported-formats/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Supported formats
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command-line options
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../resampling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resampling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../output-format/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Output format
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coordinate-systems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coordinate systems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../metadata-schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metadata schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../writing-the-metadata-document/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Writing the metadata document
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../design-decisions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design decisions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_11" id="__nav_4_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Format notes
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Format notes
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../imzml-parser-notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    imzML
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../phi-tofsims-notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PHI ToF-SIMS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solarix-notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bruker solariX
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Project
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../migration-4.0/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migrating to 4.0
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../code-of-conduct/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Code of conduct
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#set-the-pixel-size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Set the pixel size
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#convert-one-region" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Convert one region
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#leave-out-the-optical-image" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Leave out the optical image
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#choose-the-mz-axis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choose the m/z axis
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Choose the m/z axis">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-thyra-does-by-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What Thyra does by default
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#keep-the-original-mz-values" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keep the original m/z values
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#make-the-bins-finer-or-coarser" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Make the bins finer or coarser
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#keep-only-part-of-the-mass-range" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keep only part of the mass range
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#keep-3d-data-together" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keep 3D data together
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#name-the-dataset" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Name the dataset
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#keep-a-record-of-the-conversion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keep a record of the conversion
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#options-for-one-kind-of-instrument" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Options for one kind of instrument
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#convert-from-python" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Convert from Python
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#go-deeper" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Go deeper
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href=".." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../which-files/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Guides
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="change-how-thyra-converts">Change how Thyra converts<a class="headerlink" href="#change-how-thyra-converts" title="Permanent link">&para;</a></h1>
+<p>Thyra chooses its settings from your data, and most datasets need no options
+at all. This page explains the options you are most likely to want, one task
+at a time.</p>
+<p>Add an option to the end of the command, after the result's name:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>thyra<span class="w"> </span>my_slide.d<span class="w"> </span>my_slide.zarr<span class="w"> </span>--no-optical
+</code></pre></div>
+<h2 id="set-the-pixel-size">Set the pixel size<a class="headerlink" href="#set-the-pixel-size" title="Permanent link">&para;</a></h2>
+<p>Thyra reads the pixel size from your files. If they do not record it, the
+conversion stops before it writes anything. Give the size in micrometres:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>thyra<span class="w"> </span>input.imzML<span class="w"> </span>output.zarr<span class="w"> </span>--pixel-size<span class="w"> </span><span class="m">20</span>
+</code></pre></div>
+<p>The same size is used for both directions.</p>
+<details class="advanced">
+<summary>Advanced: pixels that are not square</summary>
+<p>A pixel size read from the file can differ between x and y, and Thyra
+keeps both. <code>--pixel-size</code> always gives square pixels.</p>
+</details>
+<h2 id="convert-one-region">Convert one region<a class="headerlink" href="#convert-one-region" title="Permanent link">&para;</a></h2>
+<p>A Bruker timsTOF slide with several regions is converted as one result, with
+every pixel labelled with its region. To convert only one region, add
+<code>--region</code> and the region's name as flexImaging shows it:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>thyra<span class="w"> </span>slide.d<span class="w"> </span>region_03.zarr<span class="w"> </span>--region<span class="w"> </span><span class="m">03</span>
+</code></pre></div>
+<p>Thyra lists the regions it finds when it starts, so a first run shows you the
+names. If the name matches none of them, Thyra stops and lists the names it
+did find.</p>
+<details class="advanced">
+<summary>Advanced: region numbers, and the cropped photo</summary>
+<p>If the value matches no region name, Thyra reads it as the region's
+number in the Bruker database, which starts at 0. The names and the
+numbers often differ: region <code>03</code> need not be number 3. When you convert
+one region, Thyra also crops the slide photo to that region, plus a 10%
+margin.</p>
+<p>For other formats, <code>--region</code> is ignored with a warning.</p>
+</details>
+<h2 id="leave-out-the-optical-image">Leave out the optical image<a class="headerlink" href="#leave-out-the-optical-image" title="Permanent link">&para;</a></h2>
+<p>For Bruker data, Thyra adds every image it finds in the data folder and the
+folder above it. The image named in the flexImaging <code>.mis</code> file is the one
+the MSI data is lined up with. To leave all images out, add <code>--no-optical</code>.</p>
+<h2 id="choose-the-mz-axis">Choose the m/z axis<a class="headerlink" href="#choose-the-mz-axis" title="Permanent link">&para;</a></h2>
+<h3 id="what-thyra-does-by-default">What Thyra does by default<a class="headerlink" href="#what-thyra-does-by-default" title="Permanent link">&para;</a></h3>
+<p>Each spectrum is recorded at slightly different m/z values. To compare
+pixels, Thyra puts every spectrum on one shared set of m/z positions, called
+bins. Each column of the result then means the same m/z in every pixel. Most
+analysis tools need this. The step is called <strong>resampling</strong>.</p>
+<p>Thyra chooses the width of the bins, and the way peaks are moved onto them,
+from your instrument. For most instruments the bins are 5 mDa wide at
+m/z 1000.</p>
+<details class="advanced">
+<summary>Advanced: what Thyra chooses for each instrument</summary>
+<table>
+<thead>
+<tr>
+<th>Your data</th>
+<th>Method</th>
+<th>Axis type</th>
+<th>Bin width at m/z 1000</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bruker timsTOF</td>
+<td>nearest_neighbor</td>
+<td>reflector_tof</td>
+<td>5 mDa</td>
+</tr>
+<tr>
+<td>Bruker rapifleX</td>
+<td>tic_preserving</td>
+<td>constant</td>
+<td>5 mDa</td>
+</tr>
+<tr>
+<td>Bruker solariX, or imzML from an <abbr title="Fourier-transform ion cyclotron resonance: a very high-resolution mass analyser">FT-ICR</abbr></td>
+<td>nearest_neighbor</td>
+<td>fticr</td>
+<td>5 mDa</td>
+</tr>
+<tr>
+<td>imzML from an Orbitrap</td>
+<td>nearest_neighbor</td>
+<td>orbitrap</td>
+<td>5 mDa</td>
+</tr>
+<tr>
+<td>PHI <abbr title="Time-of-flight secondary ion mass spectrometry">ToF-SIMS</abbr></td>
+<td>nearest_neighbor</td>
+<td>tof</td>
+<td>about 57 mDa, 3 bins per peak</td>
+</tr>
+<tr>
+<td>Waters SELECT SERIES MRT (profile, the default)</td>
+<td>tic_preserving</td>
+<td>linear_tof</td>
+<td>1.3 mDa</td>
+</tr>
+<tr>
+<td>Waters SELECT SERIES MRT, centroid</td>
+<td>nearest_neighbor</td>
+<td>tof</td>
+<td>1.75 mDa</td>
+</tr>
+<tr>
+<td>Other Waters (centroid, the default)</td>
+<td>nearest_neighbor</td>
+<td>reflector_tof</td>
+<td>2 mDa</td>
+</tr>
+<tr>
+<td>Anything else, centroid</td>
+<td>nearest_neighbor</td>
+<td>reflector_tof</td>
+<td>5 mDa</td>
+</tr>
+<tr>
+<td>Anything else, profile</td>
+<td>nearest_neighbor</td>
+<td>constant</td>
+<td>5 mDa</td>
+</tr>
+</tbody>
+</table>
+<p>The axis type sets how the bin width changes across the mass range.
+<a href="../resampling/">Resampling</a> explains each type and each method.</p>
+</details>
+<h3 id="keep-the-original-mz-values">Keep the original m/z values<a class="headerlink" href="#keep-the-original-mz-values" title="Permanent link">&para;</a></h3>
+<p>Add <code>--no-resample</code>. Each spectrum then keeps its own m/z values. Use it when
+you want to do your own peak picking or calibration.</p>
+<h3 id="make-the-bins-finer-or-coarser">Make the bins finer or coarser<a class="headerlink" href="#make-the-bins-finer-or-coarser" title="Permanent link">&para;</a></h3>
+<p>Set the bin width at m/z 1000, in Da. A smaller width gives finer bins:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>thyra<span class="w"> </span>input.imzML<span class="w"> </span>output.zarr<span class="w"> </span>--resample-width-at-mz<span class="w"> </span><span class="m">0</span>.002
+</code></pre></div>
+<p>Finer bins make a larger result and need more memory. If an axis would need
+more memory than your computer has free, Thyra refuses it before the
+conversion starts.</p>
+<details class="advanced">
+<summary>Advanced: set the number of bins instead</summary>
+<p><code>--resample-bins 100000</code> sets the number of bins directly. Use one of the
+two options, not both. <code>--resample-reference-mz</code> moves the m/z at which
+<code>--resample-width-at-mz</code> applies (1000 by default).</p>
+</details>
+<h3 id="keep-only-part-of-the-mass-range">Keep only part of the mass range<a class="headerlink" href="#keep-only-part-of-the-mass-range" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>thyra<span class="w"> </span>input.imzML<span class="w"> </span>output.zarr<span class="w"> </span>--resample-min-mz<span class="w"> </span><span class="m">300</span><span class="w"> </span>--resample-max-mz<span class="w"> </span><span class="m">1200</span>
+</code></pre></div>
+<p>Both limits are included. Peaks outside the range are left out, and Thyra
+warns you once.</p>
+<details class="advanced">
+<summary>Advanced: choose the method and the axis type yourself</summary>
+<p><code>--resample-method</code> chooses how peaks are moved onto the bins:</p>
+<ul>
+<li><code>nearest_neighbor</code> puts each peak in the nearest bin. It is safe on
+  every axis type.</li>
+<li><code>tic_preserving</code> spreads the signal between bins and keeps the total
+  ion current. It is exact only on an axis spaced like your instrument's
+  own sampling.</li>
+</ul>
+<p><code>--mass-axis-type</code> chooses how the bin width changes across the mass
+range. If you change it and leave the method on automatic, Thyra
+switches to <code>nearest_neighbor</code> where it has to. If you ask for
+<code>tic_preserving</code> yourself, Thyra does what you ask. Read
+<a href="../resampling/">Resampling</a> before combining the two options.</p>
+</details>
+<h2 id="keep-3d-data-together">Keep 3D data together<a class="headerlink" href="#keep-3d-data-together" title="Permanent link">&para;</a></h2>
+<p>A dataset with several slices becomes one result part per slice, named
+<code>_z0</code>, <code>_z1</code> and so on. To keep the slices together as one 3D volume, add
+<code>--handle-3d</code>. Give the distance between slices, in micrometres, with
+<code>--z-spacing</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>thyra<span class="w"> </span>volume.imzML<span class="w"> </span>volume.zarr<span class="w"> </span>--handle-3d<span class="w"> </span>--z-spacing<span class="w"> </span><span class="m">20</span>
+</code></pre></div>
+<p>Without <code>--z-spacing</code>, Thyra assumes the slices are one pixel apart, and warns
+you.</p>
+<h2 id="name-the-dataset">Name the dataset<a class="headerlink" href="#name-the-dataset" title="Permanent link">&para;</a></h2>
+<p>Every part of the result is named after the dataset, <code>msi_dataset</code> unless you
+choose another name:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>thyra<span class="w"> </span>slide.d<span class="w"> </span>slide.zarr<span class="w"> </span>--dataset-id<span class="w"> </span>mouse_brain
+</code></pre></div>
+<p>Use letters, digits, <code>_</code>, <code>.</code> and <code>-</code>.</p>
+<h2 id="keep-a-record-of-the-conversion">Keep a record of the conversion<a class="headerlink" href="#keep-a-record-of-the-conversion" title="Permanent link">&para;</a></h2>
+<p>To save everything Thyra reports into a file, add <code>--log-file</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>thyra<span class="w"> </span>slide.d<span class="w"> </span>slide.zarr<span class="w"> </span>--log-file<span class="w"> </span>conversion.log
+</code></pre></div>
+<p>Add <code>-v DEBUG</code> for more detail. The file is added to, not replaced, on every
+run.</p>
+<details class="advanced">
+<summary>Advanced: exit status, for scripts</summary>
+<p><code>thyra</code> exits with status 0 when the result was written, and 1 when the
+conversion failed or was refused. It exits with 2 when the command
+itself is wrong, for example an option that does not exist or a result
+that already exists.</p>
+</details>
+<h2 id="options-for-one-kind-of-instrument">Options for one kind of instrument<a class="headerlink" href="#options-for-one-kind-of-instrument" title="Permanent link">&para;</a></h2>
+<details class="advanced">
+<summary>Advanced: options for imzML, Bruker and Waters data</summary>
+<ul>
+<li><code>--spectrum-type profile</code> or <code>centroid</code> (imzML): use it when the file
+  declares the wrong type of spectrum. It changes which m/z axis Thyra
+  chooses.</li>
+<li><code>--no-recalibrated</code> (Bruker timsTOF): use the calibration recorded
+  during the acquisition, instead of the newest recalibration.</li>
+<li><code>--tdf-spectrum vendor_centroid</code> (Bruker timsTOF with ion mobility):
+  use Bruker's own peak-picked spectrum instead of the sum of all scans.</li>
+<li><code>--mobility-grid</code> (Bruker timsTOF with ion mobility): add a table that
+  keeps the ion mobility of every pixel.</li>
+<li><code>--no-msms-table</code> (Bruker timsTOF <abbr title="Parallel accumulation-serial fragmentation: a Bruker timsTOF mode for MS/MS">PASEF</abbr> MS/MS): leave out the table
+  that splits the fragments by precursor.</li>
+<li><code>--waters-spectrum profile</code> or <code>centroid</code> (Waters): profile keeps close
+  masses apart, at about three times the size. It is the default on a
+  SELECT SERIES MRT; other Waters instruments default to centroid.</li>
+<li><code>--intensity-threshold</code> (any data): leave out peaks below this
+  intensity. They cannot be recovered from the result.</li>
+</ul>
+</details>
+<h2 id="convert-from-python">Convert from Python<a class="headerlink" href="#convert-from-python" title="Permanent link">&para;</a></h2>
+<details class="advanced">
+<summary>Advanced: the same settings in Python</summary>
+<p><code>convert_msi</code> takes the same settings as the command:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">thyra</span><span class="w"> </span><span class="kn">import</span> <span class="n">convert_msi</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">convert_msi</span><span class="p">(</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="s2">"slide.d"</span><span class="p">,</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    <span class="s2">"slide.zarr"</span><span class="p">,</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    <span class="n">pixel_size_um</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>    <span class="n">resampling_config</span><span class="o">=</span><span class="p">{},</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="p">)</span>
+</code></pre></div>
+<p>From Python, resampling is off unless you pass <code>resampling_config</code>.
+An empty <code>{}</code> gives the same automatic choice as the command. The
+<a href="../api/">Python API</a> page lists every argument. <code>convert_msi</code> returns
+<code>True</code> when the result was written and <code>False</code> when it was not.</p>
+</details>
+<h2 id="go-deeper">Go deeper<a class="headerlink" href="#go-deeper" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../cli/">Command-line options</a>: every option, with examples.</li>
+<li><a href="../resampling/">Resampling</a>: the shared m/z axis in full detail.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../which-files/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Which files can I convert?">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Which files can I convert?
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../describe-your-data/" class="md-footer__link md-footer__link--next" aria-label="Next: Describe and share your data">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Describe and share your data
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["content.code.copy", "content.code.annotate", "content.tabs.link", "content.tooltips", "navigation.footer", "navigation.indexes", "navigation.path", "navigation.tabs", "navigation.sections", "navigation.top", "navigation.instant", "navigation.instant.progress", "search.highlight", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
