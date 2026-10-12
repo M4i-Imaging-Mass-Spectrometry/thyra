@@ -2,6 +2,38 @@
 
 <!-- version list -->
 
+## v4.4.0 (2026-10-12)
+
+### Bug Fixes
+
+- **converters**: Centre each micrometre TIC cell on its pixel
+  ([#432](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/432),
+  [`55fd5ff`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/55fd5ff9b70191e374f2cc09d35099852f9ec498))
+
+- **metadata**: Record the polarity every statement in the source agrees on
+  ([#437](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/437),
+  [`be2b797`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/be2b797a0021c66926f08737f538090017325c5b))
+
+- **readers**: Test the intensity threshold on the scan-summed peak in every table
+  ([#436](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/436),
+  [`5aff4ed`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/5aff4edfd09b8d0f5b41db5440a458cf202cd14d))
+
+- **readers**: Yield float64 arrays from the imzML reader
+  ([#438](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/438),
+  [`352c734`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/352c734003a809062cc7596a21c5c7e60fbfa298))
+
+### Documentation
+
+- Cite the JASMS paper ([#433](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/433),
+  [`26eb592`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/26eb5922455255824e1f37ffd2100cd179377293))
+
+### Features
+
+- **readers**: Read mzpeak-convert 0.17 archives of Bruker runs as their .d
+  ([#435](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/pull/435),
+  [`565cb7c`](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/565cb7c7c38be9fc83679519bfbc1d56ecad3dbd))
+
+
 ## v4.3.4 (2026-10-05)
 
 ### Bug Fixes
