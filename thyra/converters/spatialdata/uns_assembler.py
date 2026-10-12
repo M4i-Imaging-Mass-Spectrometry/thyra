@@ -426,6 +426,22 @@ class UnsAssembler:
         targets = ", ".join(distinct[:6])
         if len(distinct) > 6:
             targets += ", ..."
+        if not schedule.constant_across_pixels:
+            # Not every frame isolates every window: DIA window groups take
+            # turns, and survey frames isolate none. "Per pixel" would
+            # overstate it.
+            logger.warning(
+                "This acquisition's fragment frames isolate %d precursors "
+                "between them (%s) over %d isolation windows, not all of them "
+                "in every frame. Thyra sums each pixel's frames into one "
+                "spectrum, so a stored spectrum can hold fragments of several "
+                "precursors and cannot be attributed to a single one. The "
+                "schedule is recorded in uns['msms_schedule'].",
+                schedule.n_precursors,
+                targets,
+                len(schedule.windows),
+            )
+            return
         logger.warning(
             "This acquisition isolates %d precursors per pixel (%s) over %d "
             "isolation windows. Thyra sums them into one spectrum per pixel, "

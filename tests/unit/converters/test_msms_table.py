@@ -258,12 +258,12 @@ class TestRefusals:
     def test_a_source_that_records_no_precursor_at_all(self):
         """Not "one precursor": none, which is a different thing to say.
 
-        A diaPASEF acquisition puts its windows in ``DiaFrameMsMsWindows``,
-        which the TDF reader does not read, so the schedule it builds is
-        MS/MS with an empty window list. Measured on a real one (32 DIA
-        windows, 1786 survey and 28566 fragment frames): before the
-        conditions were ordered as they are now, this reported "isolates a
-        single precursor" about a run that isolates 32.
+        Type-9 frames whose DIA tables are empty build an MS/MS schedule
+        with an empty window list. So did every diaPASEF acquisition before
+        the reader read ``DiaFrameMsMsWindows`` (D37). Measured on a real
+        one (32 DIA windows, 1786 survey and 28566 fragment frames): before
+        the conditions were ordered as they are now, this reported
+        "isolates a single precursor" about a run that isolates 32.
         """
         schedule = FragmentationSchedule(ms_level=2, windows=())
         assert "no precursor" in demultiplex_refusal(schedule)

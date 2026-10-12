@@ -89,9 +89,10 @@ class _StubReader:
 
 
 class _StubSchedule:
-    """The five things the assembler reads off a fragmentation schedule."""
+    """The six things the assembler reads off a fragmentation schedule."""
 
     is_msms = True
+    constant_across_pixels = True
 
     def __init__(self, n_windows: int) -> None:
         self.windows = tuple(
@@ -354,6 +355,20 @@ class TestTheFragmentationSchedule:
         merged = [r for r in records if "isolates 3 precursors" in r.message]
         assert len(merged) == 1
         assert "msms_schedule" in merged[0].message
+
+    def test_a_varying_schedule_claims_no_count_per_pixel(self, thyra_logs):
+        """DIA window groups take turns: no pixel isolates all the windows."""
+        schedule = _StubSchedule(6)
+        schedule.constant_across_pixels = False
+        assembler = _assembler(_StubReader(fragmentation=schedule))
+
+        with thyra_logs("thyra.converters.spatialdata", logging.WARNING) as records:
+            assembler.build(_context())
+
+        messages = [r.message for r in records if "precursors" in r.message]
+        assert len(messages) == 1
+        assert "isolate 6 precursors between them" in messages[0]
+        assert "per pixel" not in messages[0]
 
     def test_a_single_precursor_is_not_warned_about(self, thyra_logs):
         assembler = _assembler(_StubReader(fragmentation=_StubSchedule(1)))

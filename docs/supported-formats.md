@@ -221,12 +221,12 @@ marginal over channels reproduces the summed table exactly; an explicit
 [Output Format](output-format.md#the-same-table-from-a-common-mobility-grid).
 
 **MS/MS acquisitions convert, and say so.** `Frames.MsMsType` tells a survey
-frame from a fragment one; the precursor detail comes from `PasefFrameMsMsInfo`
-(PASEF frames) or `FrameMsMsInfo` (single-precursor frames). What is read lands
-in `uns["msms_schedule"]` and in
+frame from a fragment one. The precursor detail comes from `PasefFrameMsMsInfo`
+(PASEF frames, type 8), from `DiaFrameMsMsWindows` (DIA frames, type 9, as
+diaPASEF writes them) or from `FrameMsMsInfo` (single-precursor frames). What is read lands in `uns["msms_schedule"]` and in
 `msi_metadata.ms_analysis.fragmentation`: the MS level, each isolation window's
-target m/z and offsets, the collision energy, and -- for PASEF -- the mobility
-scan range each window occupies.
+target m/z and offsets, the collision energy, and -- for PASEF and DIA frames
+-- the mobility scan range each window occupies.
 
 The MSI table is still the whole frame summed, so on a scheduled PASEF method
 that isolates several precursors at every pixel it holds fragments of all of
@@ -236,8 +236,13 @@ window owns a disjoint slice of the mobility ramp, so every recorded point
 belongs to exactly one precursor and the split is a filter on the scan number,
 not a deconvolution -- the per-precursor columns of a pixel add back up to what
 the summed table holds there. This is the shape a targeted MALDI MS/MS imaging
-run has, the one Bruker acquires as `iprm-PASEF`: a scheduled precursor list,
-serially fragmented at every pixel. Thyra refuses, by name and without writing a
+run has: a scheduled precursor list, fragmented at every pixel. The MS/MS
+images measured so far store it as PASEF frames. Bruker's `iprm-PASEF` is
+reported to use type-9 frames instead. Thyra splits those too when they share
+one DIA window group, but no MALDI `iprm-PASEF` run has been measured yet:
+that split is tested on a synthetic file only. A type-9 run that also keeps
+survey frames is refused for now. A spot's survey and fragment frames are
+then summed into one pixel, and conversion says so at `WARNING`. Thyra refuses, by name and without writing a
 table, when the schedule varies per pixel, when the windows overlap or carry no
 scan range, or when there is only one precursor to begin with. TDF is the only
 source that reports what the split needs; an imzML export of the same
