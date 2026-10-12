@@ -22,6 +22,9 @@ DATA_DIR = TEST_DIR / "data"
 # nothing else -- see pytest_collection_modifyitems below.
 UNIT_DIR = TEST_DIR / "unit"
 INTEGRATION_DIR = TEST_DIR / "integration"
+# The SCiLS Lab parity harness. It needs real data, so it rides in the
+# integration lane and carries its own ``parity`` marker on top.
+PARITY_DIR = TEST_DIR / "parity"
 
 
 def pytest_collection_modifyitems(config, items):
@@ -44,6 +47,10 @@ def pytest_collection_modifyitems(config, items):
     way, so the case is a hazard rather than a behaviour. It runs before ``-m``
     deselection, so the stamp is honoured by the same run that applies it.
 
+    ``tests/parity/`` gets ``integration`` and ``parity`` both: it needs real
+    reference data like the integration lane, and ``-m parity`` selects it
+    alone.
+
     Args:
         config: The pytest config (unused; part of the hook signature).
         items: The collected items, modified in place.
@@ -53,7 +60,10 @@ def pytest_collection_modifyitems(config, items):
         if raw is None:
             continue
         path = Path(raw).resolve()
-        if path.is_relative_to(INTEGRATION_DIR):
+        if path.is_relative_to(PARITY_DIR):
+            item.add_marker(pytest.mark.integration)
+            item.add_marker(pytest.mark.parity)
+        elif path.is_relative_to(INTEGRATION_DIR):
             item.add_marker(pytest.mark.integration)
         elif path.is_relative_to(UNIT_DIR):
             item.add_marker(pytest.mark.unit)

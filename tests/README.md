@@ -19,6 +19,10 @@ The tests are organized as follows:
   - Command-line interface tests
   - The streaming/CSC converter, whose tests write a real `.zarr` each
 
+- `parity/`: Thyra against SCiLS Lab, compared by outputs only. Stamped
+  `integration` and `parity`; skips unless `THYRA_PARITY_DATA` names the
+  reference data, which never enters the repository. See below.
+
 - `data/`: Test data for running the tests
   - Contains minimal test data for both imzML and Bruker formats
 
@@ -152,6 +156,28 @@ pip install pytest pytest-cov mock
 - **SpatialData Tests**: Tests for SpatialData format conversion require the `spatialdata` package to be installed. Tests will be skipped if this package is not available.
 
 - **Mock Data**: The test suite uses fixtures to create minimal test data rather than requiring large real-world datasets.
+
+## SCiLS Lab parity lane
+
+`tests/parity/` converts the same source with Thyra and SCiLS Lab and
+compares the outputs: the mass axis, the mean spectrum, the per-pixel TIC
+and a few single spectra. It asks Thyra for SCiLS's axis explicitly (range,
+bin count, law). The numbers it is held to are in `tests/parity/thresholds.py`.
+
+`THYRA_PARITY_DATA` names a folder with one subfolder per dataset; the layout
+and the `parity.json` keys are in `tests/parity/datasets.py`. The SCiLS side
+is read once with the `scilslab` client that ships with SCiLS Lab, which is
+not a Thyra dependency:
+
+```bash
+<python-with-scilslab> tests/parity/scils_extract.py $THYRA_PARITY_DATA/<name>
+pytest -m parity tests/parity
+python -m tests.parity.report
+```
+
+The report writes one markdown file per dataset and a `summary.md` to
+`$THYRA_PARITY_DATA/_reports`. A dataset's `variants` (other reader options or
+methods) are reported beside it but not asserted on.
 
 ## What the local imzML corpus can and cannot exercise
 

@@ -165,3 +165,18 @@ def test_the_two_lanes_cover_the_whole_suite() -> None:
         "a test sits outside both tests/unit/ and tests/integration/, so it "
         "carries no lane marker and belongs to no lane",
     )
+
+
+def test_tests_parity_is_in_the_integration_and_parity_lanes() -> None:
+    """Everything under tests/parity/ is selected by both `-m integration` and `-m parity`.
+
+    The parity harness needs real SCiLS Lab reference data, so it must stay
+    out of the default `-m "not integration"` run, and `-m parity` must
+    select it whole.
+    """
+    for expression in ("not integration", "not parity"):
+        result = _collect("tests/parity", "-m", expression)
+        _assert_nothing_collected(
+            result,
+            f"a test under tests/parity/ escapes `-m {expression.split()[-1]}`",
+        )

@@ -348,7 +348,8 @@ python_functions = "test_*"
 # and because `pytest --markers` is where a contributor looks for the rule.
 markers = [
     "unit: applied automatically to everything under tests/unit/ (fast, no external dependencies)",
-    "integration: applied automatically to everything under tests/integration/ (may be slow, may require external dependencies)"
+    "integration: applied automatically to everything under tests/integration/ (may be slow, may require external dependencies)",
+    "parity: applied automatically to everything under tests/parity/, together with integration (compares Thyra with SCiLS Lab outputs; skips unless THYRA_PARITY_DATA names the reference data)"
 ]
 addopts = "-v --tb=short -m \"not integration\""
 filterwarnings = [
