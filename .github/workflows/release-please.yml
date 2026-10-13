@@ -1,0 +1,138 @@
+name: Release Please
+
+# Releases go through a pull request (D49).
+#
+# On every push to main, release-please keeps one rolling "release pull
+# request" open. Its body is the pending changelog. Merging it IS the release:
+# release-please then creates the `v<version>` tag and the GitHub Release
+# through the API, and this workflow dispatches release.yml at that tag to
+# build and publish to PyPI. The version bump (pyproject.toml,
+# thyra/__init__.py, the thyra entry in uv.lock, CHANGELOG.md) is a commit on
+# the release pull request, so nothing is ever pushed straight to main. That
+# is what lets main require passing checks with no bypass list at all (D18 is
+# the history of why the old direct push made that impossible).
+#
+# Releases stay batched. The release pull request collects every feat, fix and
+# perf commit merged since the last tag, and nothing ships until it is merged:
+#   - by hand, whenever a release is wanted sooner;
+#   - on the Monday cron below, which merges it if Tests passed on its head
+#     (.github/scripts/merge-release-pr.sh).
+#
+# Only GITHUB_TOKEN is used, no App and no personal token. Three consequences,
+# each handled below:
+#   1. Pull request runs on a GITHUB_TOKEN-pushed branch are parked waiting for
+#      approval, so the release pull request would show no checks. The job
+#      approves them (approve-parked-runs.sh).
+#   2. Pushes and tags made with GITHUB_TOKEN start no workflow run. So the
+#      publish is dispatched (workflow_dispatch is exempt), not triggered by
+#      the tag.
+#   3. On the cron path the merge itself is made with GITHUB_TOKEN, so the
+#      merge commit gets no `push` run of Tests and this workflow is not
+#      re-triggered by it. The job therefore runs release-please again in the
+#      same job, right after merging, and dispatches Tests at the new tag for
+#      release.yml's gate to wait on.
+#
+# Repository setting this needs: "Allow GitHub Actions to create and approve
+# pull requests" (Settings > Actions > General), or release-please cannot open
+# the release pull request.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1'  # Mondays, 06:00 UTC; often runs hours late
+  workflow_dispatch:
+    inputs:
+      merge_release_pr:
+        description: 'Merge the release pull request now if Tests passed on it'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write       # tag and GitHub Release; the release branch
+  pull-requests: write  # open, update and merge the release pull request
+  issues: write         # labels on the release pull request use the issues API
+  actions: write        # approve parked runs; dispatch tests.yml and release.yml
+
+# One run at a time. Two runs racing could each see the release pull request
+# merged and each try to create the same tag.
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Maintain the release pull request
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Merge the release pull request (weekly release)
+        id: merge
+        if: github.event_name == 'schedule' || inputs.merge_release_pr == true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: bash .github/scripts/merge-release-pr.sh
+
+      # `!cancelled()`: a refused merge above must not stop the release pull
+      # request from being kept up to date.
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: release
+        if: ${{ !cancelled() }}
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # `prs_created` is true when the release pull request was created OR
+      # updated, which is exactly when its branch has a new head to check.
+      # The head branch is read from release-please's output rather than
+      # hard-coded, because it is derived from the branch and component config.
+      - name: Run the checks on the release pull request
+        if: ${{ !cancelled() && steps.release.outputs.prs_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_BRANCH: ${{ steps.release.outputs.pr && fromJSON(steps.release.outputs.pr).headBranchName || '' }}
+        run: |
+          if [ -z "${RELEASE_BRANCH}" ]; then
+            echo "::error::release-please reported prs_created=true but no head branch; cannot approve the checks."
+            exit 1
+          fi
+          HEAD_SHA=$(gh pr view "${RELEASE_BRANCH}" --json headRefOid --jq .headRefOid)
+          bash .github/scripts/approve-parked-runs.sh "${HEAD_SHA}"
+
+      # A merge this run made must produce a release in this run. Nothing else
+      # would notice if it did not: the merge started no workflow.
+      - name: Check the merged release pull request was released
+        if: ${{ !cancelled() && steps.merge.outputs.merged == 'true' && steps.release.outputs.release_created != 'true' }}
+        run: |
+          echo "::error::The release pull request was merged, but release-please created no release. Check the merged pull request's labels and body, then re-run this workflow."
+          exit 1
+
+      # Only when the tagged commit is not the push that started this run. A
+      # merge made by a person is a normal push, which already starts Tests on
+      # the merge commit -- that commit is github.sha here. Anything else (the
+      # cron's own merge, or a release created late for an earlier merge) may
+      # have no Tests run for release.yml's gate to wait on.
+      - name: Run Tests on the release commit
+        if: ${{ !cancelled() && steps.release.outputs.release_created == 'true' && steps.release.outputs.sha != github.sha }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run tests.yml --ref "${{ steps.release.outputs.tag_name }}"
+
+      - name: Publish the release
+        if: ${{ !cancelled() && steps.release.outputs.release_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          echo "Release ${{ steps.release.outputs.tag_name }} created; dispatching release.yml at the tag."
+          gh workflow run release.yml --ref "${{ steps.release.outputs.tag_name }}"

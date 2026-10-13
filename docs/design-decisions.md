@@ -1472,7 +1472,9 @@ already speak for the truncated case.
 
 ## D18. `main` stays unprotected until a release credential exists
 
-**Status:** Deferred (2026-09-09), issue #224. Closed as not planned
+**Status:** Superseded by D49 (2026-10-14): releases go through a pull
+request, so no release step pushes to `main` and required checks need no
+bypass. Previously deferred (2026-09-09), issue #224. Closed as not planned
 (2026-10-13). The organization-level ruleset route is ruled out: it needs a
 paid plan, and the organization is on the Free plan. Probed with an
 `admin:org` token, the org rulesets endpoint returns `HTTP 403`, "Upgrade to
@@ -3593,6 +3595,8 @@ earlier are unchanged and still valid.
   `scan_sum`, and an imzML without `--spectrum-type`. Their document can
   therefore differ from what a conversion with other options stores.
 
+---
+
 ## D47. A 1/K0 mobility table carries each feature's CCS, for charge 1
 
 **Status:** Implemented (2026-10-13). Reverses the rule, stated in the code
@@ -3694,3 +3698,72 @@ long as `mz`.
   TIMSImaging exports turn out to omit the unit, this gate is the place to
   relax.
 - Processed imzML with a mobility array keeps no mobility table, so no CCS.
+
+---
+
+## D49. A release is a pull request, and `main` requires passing checks
+
+**Status:** Accepted (2026-10-14). Supersedes D18. The release workflows land
+first; the ruleset and auto-merge follow once a release pull request has
+been seen running its checks.
+
+**Decision.** release-please replaces python-semantic-release. After every
+merge it keeps one release pull request open, `chore(main): release X.Y.Z`,
+which bumps `pyproject.toml`, `thyra/__init__.py`, the `thyra` entry in
+`uv.lock` and `CHANGELOG.md`. Merging that pull request is the release:
+release-please tags the merge commit and creates the GitHub Release, then
+`release.yml` builds the tag and publishes it to PyPI once **Tests** has
+passed on that commit. A Monday cron merges the release pull request when
+**Tests** passed on it, so releases still come weekly without anyone acting.
+`main` gets a ruleset requiring the CI checks, not strict, with no bypass
+list, and the repository allows auto-merge.
+
+**Why.** D18 measured that a `GITHUB_TOKEN` push of the version commit cannot
+pass a required-checks rule, and that the GitHub Actions app cannot be a
+bypass actor. Both routes it left open needed a new credential. This removes
+the push instead: the version commit reaches `main` through a pull request,
+like any other change, so the rule needs no bypass and no credential exists to
+store or rotate. It is the setup Ousia already runs.
+
+**The alternative, and why not.** A GitHub App holding Contents write, on the
+ruleset's bypass list, with `release.yml` pushing as the App. It keeps
+semantic-release, but adds a private key to store, and checked against
+python-semantic-release 10.6.1 it is not the one-line change it looks like:
+`remote_settings.token` puts `GITHUB_TOKEN` into the push URL, so the checkout
+token alone does not change who pushes. Making the App the pusher everywhere
+would let its GitHub Release start a second `release: published` run.
+
+**What `GITHUB_TOKEN` costs, and how each is handled** (all in
+`release-please.yml`):
+
+- Runs on a pull request it pushed are parked for approval and report no
+  checks. The workflow approves them (`.github/scripts/approve-parked-runs.sh`).
+- A tag it creates starts no workflow. The workflow dispatches `release.yml`
+  at the tag.
+- A merge it makes, on the cron path, starts no `push` run. The workflow runs
+  release-please again in the same job and dispatches **Tests** at the tag,
+  which the publish gate waits for.
+
+**What changes for releases.**
+
+- The Monday cron no longer releases by itself; it merges the release pull
+  request if **Tests** passed on it. Checks still running defer the release
+  to a dispatch (`gh workflow run release-please.yml -f merge_release_pr=true`)
+  or the next Monday.
+- The changelog lists `feat`, `fix` and `perf` commits only. Under
+  semantic-release it also listed `docs`, `refactor`, `test`, `build` and
+  `style`. release-please releases whenever a visible section is non-empty, so
+  those types are hidden to keep them from triggering a release.
+- New changelog sections use release-please's format. Older ones stay.
+- `release.yml` runs only on a dispatch at a `vX.Y.Z` tag and refuses any
+  other ref. Re-publishing a tag is `gh workflow run release.yml --ref vX.Y.Z`.
+  The `publish_only` input and the `release: published` trigger are gone.
+- The PR title check reads its allowed types from `release-please-config.json`.
+- `python-semantic-release` left the `dev` group, and with it ten packages
+  that only it needed.
+
+**The ruleset.** Required: `lint`, `test` and `integration` on Ubuntu and
+Windows for Python 3.12 to 3.14, `clean-venv-install` for 3.12 to 3.14, and
+`Conventional commit title`. Not required: `Build the site (strict)`, because
+`docs-check.yml` is path-filtered and a code-only pull request would wait for
+it forever; and `complexity-check`, which is advisory.
