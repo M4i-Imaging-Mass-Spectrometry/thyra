@@ -618,7 +618,9 @@ class UnsAssembler:
         if config is not None:
             parameters: Dict[str, Any] = {}
             for field_name, value in vars(config).items():
-                if value is None:
+                # The plan's hash is a check on the axis, not a setting that
+                # made it; the axis's own hash is provenance.mass_axis (D42).
+                if value is None or field_name == "mass_axis_sha256":
                     continue
                 parameters[field_name] = getattr(value, "value", value)
             # The resolved plan wins over the requested config: with

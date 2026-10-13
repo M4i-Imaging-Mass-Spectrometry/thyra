@@ -691,6 +691,33 @@ automatic.
 
 ---
 
+## One axis for several data sets
+
+To compare data sets bin for bin, they need the same mass axis. Plan the axis
+once, then give the plan to every conversion.
+
+```python
+from thyra import convert_msi, plan_mass_axis
+
+plan = plan_mass_axis(["a.imzML", "b.imzML"])
+print(plan.origins)    # where each setting came from
+print(plan.warnings)   # what the plan costs each source
+plan.save("axis.json")
+
+convert_msi("a.imzML", "a.zarr", resampling_config=plan)
+convert_msi("b.imzML", "b.zarr", resampling_config=plan)
+```
+
+On the command line, pass the saved file: `--mass-axis-plan axis.json`. The
+plan fixes the axis, so the other axis options cannot be combined with it.
+
+The plan takes the range all sources share and, on most axes, the widest bin
+width any source declares. Each source keeps its own resampling method. A
+conversion refuses to run when the axis it builds is not the planned one.
+Pass `axis_type`, `min_mz`, `max_mz` or `width_at_mz` to set a value yourself.
+
+---
+
 ## Checking what was used
 
 The decision is recorded in the output store, so a converted dataset is

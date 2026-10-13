@@ -31,6 +31,7 @@ from .mobility_grid import (
     build_mobility_grid,
     linear_channel,
 )
+from .plan import MassAxisPlan
 from .strategies import (
     NearestNeighborStrategy,
     ResamplingStrategy,
@@ -48,6 +49,7 @@ __all__ = [
     "AxisPlan",
     "SettledAxis",
     "normalize_resampling_config",
+    "MassAxisPlan",
     # Per-spectrum operators (Strategy pattern)
     "ResamplingStrategy",
     "NearestNeighborStrategy",

@@ -226,6 +226,7 @@ the table after this one says when each option is actually needed.
 | `--resample-max-mz FLOAT` | auto | Maximum m/z value. Inclusive, as above; peaks outside the range are dropped, never folded into the edge bins |
 | `--resample-width-at-mz FLOAT` | auto | Mass width in Da at reference m/z for physics-based binning |
 | `--resample-reference-mz FLOAT` | `1000.0` | Reference m/z for width specification |
+| `--mass-axis-plan FILE` | none | A plan file from `plan_mass_axis`, so several data sets share one mass axis. It fixes the axis, so it cannot be combined with `--no-resample` or the axis options above |
 | `--resample-gap-tolerance FLOAT` | none | `tic_preserving` only: discard target bins farther than this many Da from any measured m/z, instead of interpolating across the gap |
 
 ### Which of these you actually need
@@ -244,6 +245,7 @@ cases the defaults cannot know about.
 | An axis law for an instrument Thyra could not identify | `--mass-axis-type` | Note that a manual axis type also resets the width to the axis type's own default (5 mDa at m/z 1000; 17 mDa at 300 for `linear_tof`), since a width tuned for one law is not a default for another |
 | The measured `tof` law on a timsTOF, or on a new TOF you have fitted | `--mass-axis-type tof`, plus `--tof-law A B` only when Thyra has no pair for the instrument | |
 | Force interpolation on data Thyra would bin | `--resample-method tic_preserving`, and `--resample-gap-tolerance` if the m/z arrays are sparse | The conversion warns when the method contradicts the detector, and names the tolerance flag. Take it seriously: on a sparse source, interpolation without a tolerance filled the axis and stored 1,400x the non-zeros |
+| One axis shared by several data sets | `--mass-axis-plan FILE`, written by `plan_mass_axis` | every axis option above: the plan fixes them |
 | The raw m/z values, no common axis | `--no-resample` | |
 
 The bin width of a `tof` axis is set the same way as any other: the width at

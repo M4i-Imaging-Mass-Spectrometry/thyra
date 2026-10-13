@@ -432,6 +432,76 @@ def _build_resampling_config(
     }
 
 
+#: The options that decide the mass axis, which a ``--mass-axis-plan`` has
+#: already fixed. Combining one with the plan would either be ignored or
+#: contradict it, so it is refused.
+_PLAN_FIXES = (
+    "--no-resample",
+    "--mass-axis-type",
+    "--resample-bins",
+    "--resample-min-mz",
+    "--resample-max-mz",
+    "--resample-width-at-mz",
+    "--resample-reference-mz",
+    "--tof-law",
+)
+
+
+def _refuse_axis_flags_with_plan(given: dict) -> None:
+    """Refuse every axis option given beside ``--mass-axis-plan``.
+
+    Args:
+        given: Option spelling mapped to whether it was given, for each of
+            :data:`_PLAN_FIXES`.
+
+    Raises:
+        click.BadParameter: Naming the options, since the plan fixes the axis.
+    """
+    clash = [flag for flag in _PLAN_FIXES if given.get(flag)]
+    if clash:
+        raise click.BadParameter(
+            f"{', '.join(clash)} cannot be combined with --mass-axis-plan: "
+            "the plan already fixes the mass axis.",
+            param_hint="--mass-axis-plan",
+        )
+
+
+def _resampling_config_from_plan(
+    plan_file: Path,
+    resample_method: str,
+    resample_gap_tolerance: Optional[float],
+) -> dict:
+    """The resampling config a ``--mass-axis-plan`` file stands for.
+
+    ``--resample-method`` is accepted unless the plan forces a different
+    method, and ``--resample-gap-tolerance`` always: neither changes the
+    axis.
+
+    Raises:
+        click.BadParameter: If the file is not a plan, or the method clashes
+            with the one the plan forces.
+    """
+    from thyra.errors import ConversionRefused
+    from thyra.resampling.plan import MassAxisPlan
+
+    try:
+        plan = MassAxisPlan.load(plan_file)
+    except ConversionRefused as exc:
+        raise click.BadParameter(str(exc), param_hint="--mass-axis-plan") from exc
+    config = plan.to_resampling_config()
+    if resample_method != "auto":
+        if plan.method is not None and plan.method.value != resample_method:
+            raise click.BadParameter(
+                f"the plan already forces the method {plan.method.value}; "
+                "drop --resample-method.",
+                param_hint="--resample-method",
+            )
+        config["method"] = resample_method
+    if resample_gap_tolerance is not None:
+        config["gap_tolerance_da"] = resample_gap_tolerance
+    return config
+
+
 def _build_reader_options(
     use_recalibrated: bool,
     intensity_threshold: Optional[float],
@@ -658,6 +728,7 @@ class GroupedCommand(click.Command):
             "--resample-reference-mz",
             "--resample-gap-tolerance",
             "--tof-law",
+            "--mass-axis-plan",
         ],
         "imzML-specific": ["--spectrum-type"],
         "Bruker-specific": [
@@ -953,6 +1024,16 @@ class GroupedCommand(click.Command):
     ),
 )
 @click.option(
+    "--mass-axis-plan",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Use the mass axis of a plan file (from MassAxisPlan.save) so several "
+        "data sets share one axis. The plan fixes the axis, so the other axis "
+        "options and --no-resample cannot be combined with it."
+    ),
+)
+@click.option(
     "--spectrum-type",
     type=click.Choice(["auto", "profile", "centroid"]),
     default="auto",
@@ -1051,6 +1132,7 @@ def main(
     resample_gap_tolerance: Optional[float],
     mass_axis_type: str,
     tof_law: Optional[Tuple[float, float]],
+    mass_axis_plan: Optional[Path],
     spectrum_type: str,
     include_optical: bool,
     mobility_table: bool,
@@ -1089,6 +1171,27 @@ def main(
         resample_gap_tolerance, "resample_gap_tolerance", "Gap tolerance"
     )
     _validate_tof_law(tof_law)
+    plan_config = None
+    if mass_axis_plan is not None:
+        ctx = click.get_current_context(silent=True)
+        _refuse_axis_flags_with_plan(
+            {
+                "--no-resample": not resample,
+                "--mass-axis-type": mass_axis_type != "auto",
+                "--resample-bins": resample_bins is not None,
+                "--resample-min-mz": resample_min_mz is not None,
+                "--resample-max-mz": resample_max_mz is not None,
+                "--resample-width-at-mz": resample_width_at_mz is not None,
+                "--resample-reference-mz": (
+                    resample_reference_mz != 1000.0
+                    or _given_on_the_command_line(ctx, "resample_reference_mz")
+                ),
+                "--tof-law": tof_law is not None,
+            }
+        )
+        plan_config = _resampling_config_from_plan(
+            mass_axis_plan, resample_method, resample_gap_tolerance
+        )
     _validate_positive_float(
         intensity_threshold, "intensity_threshold", "Intensity threshold"
     )
@@ -1134,7 +1237,7 @@ def main(
         _display_calibration_info(input, use_recalibrated)
 
     # Build resampling config if enabled
-    resampling_config = (
+    resampling_config = plan_config or (
         _build_resampling_config(
             resample_method,
             mass_axis_type,

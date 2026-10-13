@@ -172,6 +172,26 @@ downstream tool decides whether EscDat-derived registration is available.
 
 ---
 
+## Planning One Mass Axis
+
+`plan_mass_axis` reads the header of each source (no spectra) and decides one
+mass axis for all of them. The returned `MassAxisPlan` is passed to
+`convert_msi` as `resampling_config`, and can be saved to a JSON file for the
+`--mass-axis-plan` command-line option. See
+[One axis for several data sets](resampling.md#one-axis-for-several-data-sets).
+
+::: thyra.mass_axis_plan.plan_mass_axis
+    options:
+      show_root_heading: true
+      heading_level: 3
+
+::: thyra.resampling.plan.MassAxisPlan
+    options:
+      show_root_heading: true
+      heading_level: 3
+
+---
+
 ## Resampling Configuration
 
 When you pass `resampling_config` to `convert_msi`, the dictionary keys map
