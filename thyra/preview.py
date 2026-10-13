@@ -121,6 +121,16 @@ class MsiPreview:
             :attr:`instrument_type` does.  Sorted by ``region_number``
             -- readers are not required to be, and the timsTOF one
             answers in frame-count order.
+        tof_law: The ``(A, B)`` of the two-term TOF width law
+            ``FWHM(m) = sqrt(A m + B m^2)`` (``A`` in mDa^2/Da, ``B``
+            dimensionless) that the detected instrument declares, or
+            ``None`` when it declares none or metadata could not be
+            read.  A conversion with ``axis_type="tof"`` and no
+            ``tof_a``/``tof_b`` takes this pair from each source's own
+            detector, so a caller putting several sources on one ``tof``
+            axis reads it here and passes one pair to every conversion.
+            Reported whatever :attr:`instrument_type` is: an instrument
+            may declare a law without its detector picking ``tof``.
     """
 
     mz_range: Optional[Tuple[float, float]]
@@ -133,6 +143,7 @@ class MsiPreview:
     error: Optional[str] = None
     resampling_method: Optional[ResamplingMethod] = None
     regions: Optional[List[Dict[str, Any]]] = None
+    tof_law: Optional[Tuple[float, float]] = None
 
 
 def _region_summary(reader: Any) -> Optional[List[Dict[str, Any]]]:
@@ -322,6 +333,24 @@ def _guess_resampling_method(
         return None
 
 
+def _guess_tof_law(essential: Any, comprehensive: Any) -> Optional[Tuple[float, float]]:
+    """Best-effort TOF width law.  Returns ``None`` on hard failure.
+
+    Same contract as :func:`_guess_axis_type`, asked of the same metadata
+    the conversion's planner gives the detectors, so a pair read here is
+    the pair a ``tof`` conversion of this source would fill in.
+    """
+    try:
+        metadata_dict = _resampling_metadata_dict(essential, comprehensive)
+        law = ResamplingDecisionTree().select_tof_law(metadata_dict)
+    except Exception as exc:
+        logger.debug("TOF law auto-detection failed for preview: %s", exc)
+        return None
+    if law is None:
+        return None
+    return float(law[0]), float(law[1])
+
+
 def _close_quietly(reader: Optional[Any]) -> None:
     """Close a reader, swallowing any errors.  Best-effort cleanup."""
     if reader is None:
@@ -400,6 +429,7 @@ def preview_msi(path: Path) -> MsiPreview:
             error=None,
             resampling_method=_guess_resampling_method(essential, comprehensive),
             regions=_region_summary(reader),
+            tof_law=_guess_tof_law(essential, comprehensive),
         )
     finally:
         _close_quietly(reader)

@@ -154,6 +154,9 @@ spectrum was measured 28 Da narrow on a real file.
 
 `instrument_type` is the `AxisType` the resampling decision tree would pick for
 this input, so a caller can show the default before the user commits to it.
+`tof_law` is the `(A, B)` width-law pair the instrument declares, or `None`.
+Pass one pair as `tof_a`/`tof_b` to every conversion that should share a
+`tof` axis.
 `has_escdat_folder` reports whether `<path>/EscDat/` exists, which is how a
 downstream tool decides whether EscDat-derived registration is available.
 
