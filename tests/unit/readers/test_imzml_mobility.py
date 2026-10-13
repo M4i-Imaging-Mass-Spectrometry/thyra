@@ -171,7 +171,7 @@ class TestProcessedExport:
 
 
 class TestMobilityValueRange:
-    """The range the heatmap and the grid bin over (design decision D45)."""
+    """The range the heatmap and the grid bin over (design decision D46)."""
 
     def test_a_processed_export_reads_it_from_its_pixels(self):
         with ImzMLReader(PROCESSED) as reader:

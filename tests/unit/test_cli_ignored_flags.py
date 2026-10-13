@@ -117,7 +117,7 @@ class TestGridSizingWithoutAGrid:
 
 
 class TestTheGridOnImzML:
-    """A processed imzML carries mobility per pixel, as a Bruker TDF does (D45).
+    """A processed imzML carries mobility per pixel, as a Bruker TDF does (D46).
 
     The converter told such a file's user to pass ``--mobility-grid`` and the
     CLI then called the flag ignored on imzML, which it was not quite: the

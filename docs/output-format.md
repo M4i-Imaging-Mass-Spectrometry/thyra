@@ -532,7 +532,7 @@ Three things are worth knowing before asking for one:
   acquisition), and `uns["mobility_heatmap"]` already bins over the values.
   A processed imzML has no shared axis, so its values are read from every
   pixel, once, before the heatmap's pass
-  ([D45](design-decisions.md#d45-a-processed-imzml-with-mobility-gets-the-heatmap-and-the-grid-when-asked)). `--mobility-min` / `--mobility-max` override
+  ([D46](design-decisions.md#d46-a-processed-imzml-with-mobility-gets-the-heatmap-and-the-grid-when-asked)). `--mobility-min` / `--mobility-max` override
   them, at the cost of the alignment below.
 - **256 channels is an alignment anchor, not a tuning knob.** It is the
   heatmap's own channel count over the heatmap's own edges, so a box drawn on

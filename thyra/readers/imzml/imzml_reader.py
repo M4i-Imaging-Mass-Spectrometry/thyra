@@ -1723,7 +1723,7 @@ class ImzMLReader(BaseMSIReader):
         the same two floats. A range the file might state is not used in
         their place: only the values are sure to hold every point, and the
         heatmap and the mobility grid both bin over this range, so a box on
-        the one indexes the other (design decision D45).
+        the one indexes the other (design decision D46).
 
         A file whose mobility arrays cannot be read has no range: that is
         said once, at ``WARNING``, and not retried, so the heatmap and the

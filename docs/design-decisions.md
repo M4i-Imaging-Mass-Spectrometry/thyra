@@ -3595,7 +3595,7 @@ earlier are unchanged and still valid.
   `scan_sum`, and an imzML without `--spectrum-type`. Their document can
   therefore differ from what a conversion with other options stores.
 
-## D45. A processed imzML with mobility gets the heatmap, and the grid when asked
+## D46. A processed imzML with mobility gets the heatmap, and the grid when asked
 
 **Status:** Implemented (2026-10-13).
 
