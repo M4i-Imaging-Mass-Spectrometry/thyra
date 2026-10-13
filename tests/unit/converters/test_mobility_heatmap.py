@@ -6,6 +6,7 @@ so the block round-trips through zarr -- on Windows too, which is where
 a colon in a key would fail.
 """
 
+import logging
 from pathlib import Path
 from typing import Generator, Optional, Tuple
 
@@ -18,6 +19,7 @@ from thyra.converters.spatialdata.mobility_heatmap import (
     HEATMAP_MOBILITY_CHANNELS,
     HEATMAP_MZ_BINS,
     MobilityHeatmap,
+    PlaneHeatmaps,
     build_mobility_heatmap,
     map_indexed_points_to_axis,
     map_points_to_axis,
@@ -586,3 +588,119 @@ class TestStoredBlock:
         out = _convert(_NoMobilityReader(), tmp_path / "stub.zarr")
         uns = _read(out).tables["stub_z0"].uns
         assert "mobility_heatmap" not in uns and "mobility_axis" not in uns
+
+
+# ----------------------------------------------------------------------
+# A multi-plane source converted as 2D: one table, one heatmap, per plane.
+# ----------------------------------------------------------------------
+
+#: Plane 1 carries this many times plane 0's intensities, so a heatmap
+#: built over both planes is told apart from either plane's own.
+PLANE_SCALE = (1.0, 3.0)
+
+
+class _TwoPlaneExtractor(_StubExtractor):
+    def _extract_essential_impl(self) -> EssentialMetadata:
+        return EssentialMetadata(
+            dimensions=(2, 2, 2),
+            coordinate_bounds=(0.0, 1.0, 0.0, 1.0),
+            mass_range=(100.0, 130.0),
+            pixel_size=(10.0, 10.0),
+            n_spectra=8,
+            total_peaks=24,
+            source_path="stub_mobility",
+            spectrum_type="centroid spectrum",
+        )
+
+
+class TwoPlaneMobilityReader(MobilityStubReader):
+    """The stub's four pixels on two z planes, plane 1 three times brighter."""
+
+    def _create_metadata_extractor(self) -> MetadataExtractor:
+        return _TwoPlaneExtractor()
+
+    def iter_spectra(self) -> Generator:
+        for z, scale in enumerate(PLANE_SCALE):
+            for p, (x, y) in enumerate(PIXELS):
+                mzs, it = _summed(p)
+                yield (x, y, z), mzs, it * scale
+
+    def iter_mobility_spectra(self) -> Generator:
+        self.mobility_passes += 1
+        for z, scale in enumerate(PLANE_SCALE):
+            for p, (x, y) in enumerate(PIXELS):
+                mzs, mob, it = _cloud(p)
+                yield (x, y, z), mzs, mob, it * scale
+
+
+class TestPerPlaneHeatmap:
+    """Each plane's table holds the heatmap of its own plane (D41).
+
+    Its marginal is that table's ``average_spectrum``, which has been per
+    plane since #243, so ``current_ratio`` is 1 on every plane of a
+    lossless source. A heatmap built once over both planes and shared
+    between the tables gave both the last plane's ratio, and neither 1.
+    """
+
+    def test_every_plane_gets_its_own_heatmap(self, tmp_path):
+        reader = TwoPlaneMobilityReader()
+        out = _convert(reader, tmp_path / "stub.zarr")
+        tables = _read(out).tables
+
+        blocks = {}
+        for z in (0, 1):
+            table = tables[f"stub_z{z}"]
+            block = table.uns["mobility_heatmap"]
+            counts = np.asarray(block["counts"])
+            np.testing.assert_allclose(
+                counts.sum(axis=1),
+                np.asarray(table.uns["average_spectrum"]),
+                rtol=1e-6,
+            )
+            assert block["current_ratio"] == pytest.approx(1.0, abs=1e-6)
+            blocks[z] = counts
+
+        np.testing.assert_allclose(blocks[1], 3.0 * blocks[0], rtol=1e-6)
+        # One raw pass serves every plane.
+        assert reader.mobility_passes == 1
+
+    def test_a_volume_keeps_one_heatmap_over_every_plane(self, tmp_path):
+        out = _convert(TwoPlaneMobilityReader(), tmp_path / "stub.zarr", handle_3d=True)
+        table = _read(out).tables["stub"]
+        block = table.uns["mobility_heatmap"]
+        np.testing.assert_allclose(
+            np.asarray(block["counts"]).sum(axis=1),
+            np.asarray(table.uns["average_spectrum"]),
+            rtol=1e-6,
+        )
+        assert block["current_ratio"] == pytest.approx(1.0, abs=1e-6)
+
+    def test_a_plane_without_mobility_spectra_says_so(self, tmp_path, thyra_logs):
+        reader = _PlaneZeroMobilityReader()
+        with thyra_logs("thyra.converters.spatialdata", logging.WARNING) as records:
+            out = _convert(reader, tmp_path / "stub.zarr")
+        tables = _read(out).tables
+        assert "mobility_heatmap" in tables["stub_z0"].uns
+        assert "mobility_heatmap" not in tables["stub_z1"].uns
+        assert any(
+            "No mass-mobility heatmap for plane z=1" in r.getMessage() for r in records
+        )
+
+    def test_only_the_plane_being_fed_holds_a_point_buffer(self):
+        planes = PlaneHeatmaps(MASS_AXIS, (1.1, 1.5))
+        for z in (0, 1):
+            mzs, mob, it = _cloud(1)
+            planes.add_mapped((0, 0, z), *map_points_to_axis(MASS_AXIS, mzs, mob, it))
+        assert planes.planes[0]._buffered == 0
+        assert planes.planes[1]._buffered > 0
+        blocks = planes.finish()
+        np.testing.assert_allclose(blocks[0]["counts"], blocks[1]["counts"])
+
+
+class _PlaneZeroMobilityReader(TwoPlaneMobilityReader):
+    """Plane 1 has spectra but no mobility spectra."""
+
+    def iter_mobility_spectra(self) -> Generator:
+        for coords, mzs, mob, it in super().iter_mobility_spectra():
+            if coords[2] == 0:
+                yield coords, mzs, mob, it

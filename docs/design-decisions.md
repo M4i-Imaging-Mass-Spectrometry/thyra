@@ -3305,3 +3305,60 @@ read by the same code and do not change either; both were compared on
   Their shape is taken from the stress test of 4.3.3, which read them.
 - When an archive has both a z column and z in the list, the column wins
   and the list is not compared with it. No such archive is known.
+
+## D41. A plane's table holds the mass-mobility heatmap of its own plane
+
+**Status:** Implemented (2026-10-13). Removes the second known limit of D38
+(the heatmap of a multi-plane store covering every plane).
+
+**Decision.** A multi-slice source converted as 2D writes one table per z
+plane. Each of them now holds, in `uns["mobility_heatmap"]`, the heatmap of
+its own plane's pixels: the same pixels its `uns["average_spectrum"]`
+averages over. The one raw mobility pass the conversion already made builds
+every plane's heatmap, routing each pixel by its z. Under D38 each plane's
+heatmap then divides by the distinct positions on that plane, which are the
+rows its table holds. A volume (`--handle-3d`) and a single-plane source
+keep one heatmap over every pixel, which is again the population of their
+one table.
+
+**Why.** Since #243 a plane's `average_spectrum` is its own plane's mean.
+The heatmap beside it was still built once over every plane, and every
+plane's table was handed the same dictionary. `current_ratio` was then
+written into that shared dictionary once per table, comparing the
+dataset-wide heatmap with that plane's mean, so the store kept the last
+plane's ratio in every table. A two-plane source whose second plane is three
+times brighter, converted from the raw sum (`scan_sum`), showed it:
+
+| Table | Stored ratio, before | Ratio of its own table, before | Now |
+|---|---|---|---|
+| `z0` | 0.6667 | 2.0 | 1.0 |
+| `z1` | 0.6667 | 0.6667 | 1.0 |
+
+The heatmap's total was 47 in both tables, against plane means of 23.5 and
+70.5. docs/output-format.md promised the marginal equals the
+`average_spectrum` beside it under `scan_sum`, and it held on no plane.
+
+**The objection.** Keep one dataset-wide heatmap, give each table its own
+copy, and compute the ratio against a dataset-wide mean. It did not win.
+That mean is stored nowhere since #243, so the ratio would compare against a
+number no reader of the store can see, and the marginal would still differ
+from the spectrum it is drawn beside. A viewer showing one plane's ion image
+next to a heatmap of every plane misleads the same way the old shared mean
+spectrum did. `average_spectrum_per_region` stays dataset-wide for a
+different reason: a region has no z (see docs/output-format.md), whereas
+every pixel the heatmap reads has one.
+
+**Cost.** One accumulator per plane while the pass runs: about 8 MB per
+plane at the default 4,000 m/z bins by 256 mobility channels. The point
+buffer (up to 4 million points, 64 MB) is folded in whenever the pass moves
+to another plane, so only one plane holds one at a time, as before. No extra
+read; the stub conversion in the tests still makes one mobility pass for two
+planes. A plane whose pixels yield no mobility spectra gets no heatmap, and
+the conversion says so at `WARNING`.
+
+**What changes in a store.** Stores of multi-slice sources with an ion
+mobility dimension converted as 2D: each plane's `mobility_heatmap.counts`
+becomes that plane's mean frame, and `current_ratio` becomes that plane's
+ratio (1.0 under `scan_sum`). Each plane's table stores its own block where
+before all held the same values. Volumes, single-plane sources (every Bruker
+TDF) and sources without mobility do not change.

@@ -383,13 +383,15 @@ Windows), numpy arrays rather than lists:
 | `source` | `"bruker_tdf"` or `"imzml"` |
 | `resolved_table` | element key of the mobility-resolved sibling table, when one was written |
 
-**`uns["mobility_heatmap"]`** is the dataset's mean mass-mobility frame: the
+**`uns["mobility_heatmap"]`** is the table's mean mass-mobility frame: the
 raw `(m/z, mobility, intensity)` points of every pixel, binned and averaged
 over pixel positions (two spectra on one position count once, as they make
 one row), accumulated from the raw scan read during conversion. It is the
 discovery surface -- look at it to see whether mobility separates anything
 before asking for a mobility-resolved table -- and what a viewer's mobility
-panel draws.
+panel draws. It covers the same pixels as `uns["average_spectrum"]` beside
+it: on a multi-slice source converted as 2D, each plane's table holds its own
+plane's heatmap.
 
 | key | value |
 |---|---|
