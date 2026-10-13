@@ -2695,6 +2695,8 @@ where its `.d` records 0, and that 1 would again be a value nobody stated.
 
 - The glioma archive from 0.12.0 still records 0 against its imzML's 1. That
   converter dropped the z column; 0.16.0 writes it.
+  Corrected by D39: that converter states z in each scan's parameters list,
+  which the reader now reads.
 - An imzML that cannot be read a second time keeps the subtracted 1.
 - No mzPeak archive with more than one plane was found, so the refusal is
   tested on constructed archives.
@@ -3260,3 +3262,46 @@ per position do not change.
 - When survey and fragment frames on one spot are kept apart, as D37
   expects to happen, the heatmap must follow whatever the summed row
   keeps. Today both go into the row and into the heatmap.
+
+## D39. mzPeak position z is read from a scan's parameters list too
+
+**Status:** Implemented (2026-10-13).
+
+**Decision.** The mzPeak reader reads position z (`IMS:1000052`) from the
+scans' z column when there is one, and from each scan's `parameters` list
+otherwise. A scan's z is the first parameter in its list that carries that
+accession or the name "position z"; it must state z as an integer, or the
+scan states none. Everything D30 says about a z the
+archive states then holds for both places: one plane records its z, and
+spectra on several planes, or z stated for some spectra only, are refused.
+
+**Why.** mzpeak-convert 0.12.0 and 0.14.0 do not drop z. They write no z
+column, but put `IMS:1000052` into every scan's `parameters` list. Read only
+from a column, an archive from those versions with two planes converted
+with exit 0 into one plane, each pixel the sum of both. The same archive
+with a z column was refused. D30's first known limit rested on the same
+misreading: the glioma archive from 0.12.0 states z, in the list.
+
+The scans join their spectra on `source_index`, so each spectrum takes the
+z of its own scan, whatever order the scans member lists them in.
+
+**What changes in a store.** Only archives from mzpeak-convert 0.12.0 and
+0.14.0 whose scans state z in the list:
+
+- One plane: `coordinate_offsets_px` on z goes from 0 to the stated z. The
+  public archives `gbm_Test_P15_r2` and `ltpmsi-chilli` state z = 1 on
+  every scan, so they record 1, as their imzML files do.
+- Several planes, or z for some spectra only: refused, where the planes
+  were summed into one.
+
+Archives from 0.16.0 and 0.17.2 write a z column and no z parameter; their
+stores do not change. Region numbers read from the same list (D33) are
+read by the same code and do not change either; both were compared on
+0.17.2 archives from Bruker runs.
+
+**Known limits.**
+
+- The public archives from 0.12.0 were not converted again for this entry.
+  Their shape is taken from the stress test of 4.3.3, which read them.
+- When an archive has both a z column and z in the list, the column wins
+  and the list is not compared with it. No such archive is known.

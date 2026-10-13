@@ -108,6 +108,10 @@ IMS_POSITION_X = "IMS:1000050"
 IMS_POSITION_Y = "IMS:1000051"
 IMS_POSITION_Z = "IMS:1000052"
 
+#: The name mzpeak-convert 0.12.0 and 0.14.0 give position z in a scan's
+#: parameters list, beside its accession.
+IMS_POSITION_Z_NAME = "position z"
+
 #: Conventional column names for the position terms. Used only as a fallback
 #: when the index carries no column mapping, which the schema permits.
 DEFAULT_POSITION_X_COLUMN = "opt_IMS_1000050_position_x"
@@ -270,6 +274,64 @@ def _positions(column: Any) -> Tuple[NDArray[np.int64], NDArray[np.bool_]]:
         present = present & finite
         values = np.where(finite, values, 0)
     return values.astype(np.int64), present
+
+
+def _integer_parameter(
+    column: Any, *, name: Optional[str] = None, accession: Optional[str] = None
+) -> Optional[Tuple[NDArray[np.int64], NDArray[np.bool_]]]:
+    """Read one integer parameter from each scan's ``parameters`` list.
+
+    A parameter matches when it carries ``name`` or ``accession``. The first
+    match in a scan's list is that scan's value.
+
+    Args:
+        column: The ``parameters`` column of the scans member, one list of
+            ``{name, accession, value, unit}`` structs per scan.
+        name: The parameter name to match, or ``None``.
+        accession: The parameter accession to match, or ``None``.
+
+    Returns:
+        The values, 0 where there is none, and a mask that is ``True`` where
+        the scan states the parameter as a whole number. ``None`` when the
+        column is not a list of such structs.
+    """
+    import pyarrow as pa  # noqa: WPS433 - deliberate lazy import
+    import pyarrow.compute as pc  # noqa: WPS433 - deliberate lazy import
+
+    if isinstance(column, pa.ChunkedArray):
+        column = column.combine_chunks()
+    if not pa.types.is_list(column.type) and not pa.types.is_large_list(column.type):
+        return None
+    flat = column.flatten()
+    if not pa.types.is_struct(flat.type):
+        return None
+    fields = {flat.type.field(i).name for i in range(flat.type.num_fields)}
+    value = flat.field("value") if "value" in fields else None
+    if (
+        value is None
+        or not pa.types.is_struct(value.type)
+        or value.type.get_field_index("integer") < 0
+    ):
+        return None
+    matched = pa.array(np.zeros(len(flat), dtype=bool))
+    for key, wanted in (("name", name), ("accession", accession)):
+        if wanted is not None and key in fields:
+            matched = pc.or_(
+                matched, pc.fill_null(pc.equal(flat.field(key), wanted), False)
+            )
+    rows = np.asarray(
+        pc.list_parent_indices(column).filter(matched).to_numpy(), dtype=np.int64
+    )
+    integers = value.field("integer").filter(matched)
+    stated = np.asarray(integers.is_valid().to_numpy(zero_copy_only=False), dtype=bool)
+    numbers = np.asarray(integers.fill_null(0).to_numpy(), dtype=np.int64)
+    # The first such parameter of a scan is its value.
+    rows, first = np.unique(rows, return_index=True)
+    values = np.zeros(len(column), dtype=np.int64)
+    has = np.zeros(len(column), dtype=bool)
+    values[rows] = numbers[first]
+    has[rows] = stated[first]
+    return values, has
 
 
 def _whole(value: Any) -> Optional[int]:
@@ -973,7 +1035,7 @@ class MzPeakArchive:
         complete = spectrum_index.size == n_listed
 
         raw = np.stack([xs[rows], ys[rows]], axis=1)
-        z_offset = self._z_offset(scans, z_column, scan_row[rows])
+        z_offset = self._z_offset(self._scan_z(scans, z_column), scan_row[rows])
         self._report_shared_pixels(raw)
         bases = self._position_bases(raw)
         coordinates = raw - np.array(bases, dtype=np.int64)
@@ -1018,36 +1080,11 @@ class MzPeakArchive:
         column = self._placed_scan_column(SCAN_PARAMETERS_COLUMN)
         if column is None or len(column) == 0:
             return None
-        import pyarrow as pa  # noqa: WPS433 - deliberate lazy import
-        import pyarrow.compute as pc  # noqa: WPS433 - deliberate lazy import
-
-        if not pa.types.is_list(column.type) and not pa.types.is_large_list(
-            column.type
-        ):
+        found = _integer_parameter(column, name=REGION_PARAMETER)
+        if found is None:
             return None
-        flat = column.flatten()
-        if not pa.types.is_struct(flat.type):
-            return None
-        fields = {flat.type.field(i).name for i in range(flat.type.num_fields)}
-        if not {"name", "value"} <= fields:
-            return None
-        value = flat.field("value")
-        if (
-            not pa.types.is_struct(value.type)
-            or value.type.get_field_index("integer") < 0
-        ):
-            return None
-        named = pc.fill_null(pc.equal(flat.field("name"), REGION_PARAMETER), False)
-        rows = np.asarray(
-            pc.list_parent_indices(column).filter(named).to_numpy(), dtype=np.int64
-        )
-        numbers = value.field("integer").filter(named)
-        numbers = np.asarray(numbers.fill_null(-1).to_numpy(), dtype=np.int64)
-        # The first such parameter of a scan is its region.
-        rows, first = np.unique(rows, return_index=True)
-        regions = np.full(len(column), -1, dtype=np.int64)
-        regions[rows] = numbers[first]
-        if (regions < 0).any():
+        regions, stated = found
+        if not stated.all() or (regions < 0).any():
             return None
         return regions
 
@@ -1092,8 +1129,39 @@ class MzPeakArchive:
         """
         return self.accumulation_times() if self.from_tdf() else None
 
+    def _scan_z(
+        self, scans: Any, z_column: Optional[str]
+    ) -> Optional[Tuple[NDArray[np.int64], NDArray[np.bool_]]]:
+        """Position z of every row of the scans member, where it is stated.
+
+        mzpeak-convert 0.16.0 writes z as a column. 0.12.0 and 0.14.0 write
+        no column but state ``IMS:1000052`` in each scan's ``parameters``
+        list (D39). The column is read when there is one, the list
+        otherwise.
+
+        Args:
+            scans: The scans member as read, with the z column when there is
+                one.
+            z_column: The column holding position z, or ``None``.
+
+        Returns:
+            The z values and the mask of rows that state one, in the order of
+            ``scans``, or ``None`` when the archive states z nowhere.
+        """
+        if z_column is not None:
+            return _positions(scans.column(z_column))
+        member = self.parquet("spectrum", "scans")
+        if SCAN_PARAMETERS_COLUMN not in member.schema_arrow.names:
+            return None
+        column = member.read(columns=[SCAN_PARAMETERS_COLUMN]).column(0)
+        return _integer_parameter(
+            column, name=IMS_POSITION_Z_NAME, accession=IMS_POSITION_Z
+        )
+
     def _z_offset(
-        self, scans: Any, z_column: Optional[str], placed_rows: NDArray[np.int64]
+        self,
+        scan_z: Optional[Tuple[NDArray[np.int64], NDArray[np.bool_]]],
+        placed_rows: NDArray[np.int64],
     ) -> int:
         """The position z of the archive's plane, 0 when it states none.
 
@@ -1103,19 +1171,19 @@ class MzPeakArchive:
         way: this reader yields one plane.
 
         Args:
-            scans: The scans member as read, with the z column when there is
-                one.
-            z_column: The column holding position z, or ``None``.
-            placed_rows: The rows of ``scans`` whose spectra are on a pixel.
+            scan_z: Position z of every scans row and the mask of rows that
+                state one, from :meth:`_scan_z`, or ``None``.
+            placed_rows: The rows of the scans member whose spectra are on a
+                pixel.
 
         Raises:
             ConversionRefused: If some of those spectra state z and the
                 others do not, or if they state more than one z. Spectra on
                 several planes would otherwise be summed into one.
         """
-        if z_column is None:
+        if scan_z is None:
             return 0
-        zs, has_z = _positions(scans.column(z_column))
+        zs, has_z = scan_z
         zs, has_z = zs[placed_rows], has_z[placed_rows]
         if not has_z.any():
             return 0

@@ -18,6 +18,7 @@ import pytest
 
 from tests.fixtures.mzpeak_builder import (
     INDEX_MEMBER,
+    SCANS_MEMBER,
     Spectrum,
     build_mzpeak,
     grid_spectra,
@@ -363,6 +364,130 @@ class TestPositionZ:
         with pytest.raises(ConversionRefused, match="2 planes"):
             with MzPeakReader(archive) as reader:
                 reader.get_essential_metadata()
+
+    def test_scans_listed_out_of_order_keep_their_plane(self, tmp_path):
+        """Each spectrum's z comes from its own scan, joined on source_index.
+
+        The scan on no pixel, which states no z, is listed first. Read in row
+        order, its missing z would land on a spectrum on a pixel and refuse
+        the archive.
+        """
+        spectra = grid_spectra(2, 2) + [Spectrum(None, None, [100.0], [1.0])]
+        archive = build_mzpeak(
+            tmp_path / "shuffled.mzpeak", spectra, position_z=[1, 1, 1, 1, None]
+        )
+        _reverse_scans(archive)
+
+        assert self._offsets(archive) == (1, 1, 1)
+
+
+def _z_parameter(z, name="position z", accession="IMS:1000052"):
+    """A scan's position z parameter, as mzpeak-convert 0.12.0 and 0.14.0 write it."""
+    if z is None:
+        return []
+    return [
+        {
+            "value": {"integer": z, "float": None, "string": None, "boolean": None},
+            "accession": accession,
+            "name": name,
+            "unit": None,
+        }
+    ]
+
+
+def _reverse_scans(archive):
+    """List the rows of an archive's scans member in reverse order."""
+    import io
+
+    import pyarrow.parquet as pq
+
+    with zipfile.ZipFile(archive) as zf:
+        members = {name: zf.read(name) for name in zf.namelist()}
+    scans = pq.read_table(io.BytesIO(members[SCANS_MEMBER]))
+    scans = scans.take(list(range(scans.num_rows - 1, -1, -1)))
+    sink = io.BytesIO()
+    pq.write_table(scans, sink)
+    members[SCANS_MEMBER] = sink.getvalue()
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as zf:
+        for name, data in members.items():
+            zf.writestr(name, data)
+
+
+class TestPositionZInScanParameters:
+    """mzpeak-convert 0.12.0 and 0.14.0 state z in each scan's parameters list.
+
+    They write no z column. Read only from a column, two planes were summed
+    into one and a stated plane was recorded as 0 (D39).
+    """
+
+    def _archive(self, tmp_path, zs, spectra=None, **parameter):
+        return build_mzpeak(
+            tmp_path / "params.mzpeak",
+            spectra or grid_spectra(2, 2),
+            scan_columns={"parameters": [_z_parameter(z, **parameter) for z in zs]},
+        )
+
+    def _offsets(self, archive):
+        with MzPeakReader(archive) as reader:
+            coords = [c for c, _, _ in reader.iter_spectra()]
+            essential = reader.get_essential_metadata()
+        assert {z for _, _, z in coords} == {0}
+        return essential.coordinate_offsets
+
+    def test_a_stated_plane_is_the_z_offset(self, tmp_path):
+        """As gbm_Test_P15_r2 and ltpmsi-chilli state z = 1 on every scan."""
+        archive = self._archive(tmp_path, [1, 1, 1, 1])
+
+        assert self._offsets(archive) == (1, 1, 1)
+
+    def test_two_planes_are_refused(self, tmp_path):
+        """The same refusal as for a z column."""
+        archive = self._archive(tmp_path, [1, 1, 2, 2])
+
+        with pytest.raises(ConversionRefused, match="2 planes"):
+            with MzPeakReader(archive) as reader:
+                reader.get_essential_metadata()
+
+    def test_a_plane_stated_for_some_spectra_only_is_refused(self, tmp_path):
+        """A scan whose list lacks z, beside scans that state it."""
+        archive = self._archive(tmp_path, [1, 1, None, 1])
+
+        with pytest.raises(ConversionRefused, match="3 of 4 spectra"):
+            with MzPeakReader(archive) as reader:
+                reader.get_essential_metadata()
+
+    def test_the_parameter_is_found_by_its_accession(self, tmp_path):
+        """A writer may spell the name differently; the accession is the contract."""
+        archive = self._archive(tmp_path, [2, 2, 2, 2], name="z position")
+
+        assert self._offsets(archive) == (1, 1, 2)
+
+    def test_the_parameter_is_found_by_its_name(self, tmp_path):
+        """A writer may leave the accession out, as 0.17 does for its region."""
+        archive = self._archive(tmp_path, [2, 2, 2, 2], accession=None)
+
+        assert self._offsets(archive) == (1, 1, 2)
+
+    def test_lists_without_z_record_zero(self, tmp_path):
+        """Parameters that name no plane state none."""
+        archive = self._archive(tmp_path, [None, None, None, None])
+
+        assert self._offsets(archive) == (1, 1, 0)
+
+    def test_a_scan_on_no_pixel_needs_no_plane(self, tmp_path):
+        """Only the spectra on a pixel are asked for one."""
+        spectra = grid_spectra(2, 2) + [Spectrum(None, None, [100.0], [1.0])]
+        archive = self._archive(tmp_path, [1, 1, 1, 1, None], spectra=spectra)
+
+        assert self._offsets(archive) == (1, 1, 1)
+
+    def test_scans_listed_out_of_order_keep_their_plane(self, tmp_path):
+        """The parameters list follows its scan, as the z column does."""
+        spectra = grid_spectra(2, 2) + [Spectrum(None, None, [100.0], [1.0])]
+        archive = self._archive(tmp_path, [1, 1, 1, 1, None], spectra=spectra)
+        _reverse_scans(archive)
+
+        assert self._offsets(archive) == (1, 1, 1)
 
 
 def _region(number, frames, x_index, y_index, name=None):
