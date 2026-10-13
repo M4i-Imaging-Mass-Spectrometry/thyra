@@ -35,7 +35,7 @@ from thyra.converters.spatialdata.streaming_converter import (
     StreamingSpatialDataConverter,
 )
 from thyra.errors import ConversionRefused
-from thyra.resampling import axis_planner
+from thyra.resampling import axis_planner, memory_guard
 from thyra.resampling.axis_planner import bin_width_range
 
 
@@ -111,7 +111,7 @@ class TestTheProjection:
         free = 8.0
         bins = int(free * AXIS_WARN_FRACTION * 1024**3 / AXIS_BYTES_PER_BIN) + 1
 
-        with thyra_logs("thyra.converters.spatialdata.csc_assembly") as records:
+        with thyra_logs("thyra.resampling.memory_guard") as records:
             assert mass_axis_refusal(bins, available_gb=free) is None
 
         assert any("projected to need" in r.getMessage() for r in records)
@@ -130,7 +130,7 @@ class TestTheConverterRefusesBeforeBuilding:
 
     def test_a_resampled_axis_is_refused_unbuilt(self, monkeypatch):
         """The point of the guard: nothing wide is allocated first."""
-        monkeypatch.setattr(csc_assembly, "available_memory_gb", lambda: 1.0)
+        monkeypatch.setattr(memory_guard, "available_memory_gb", lambda: 1.0)
         reader = _Reader()
         converter = self._converter(
             reader,
@@ -147,7 +147,7 @@ class TestTheConverterRefusesBeforeBuilding:
 
     def test_a_raw_axis_is_refused_too(self, monkeypatch):
         """It is already built, but every per-bin structure is still ahead."""
-        monkeypatch.setattr(csc_assembly, "available_memory_gb", lambda: 1e-6)
+        monkeypatch.setattr(memory_guard, "available_memory_gb", lambda: 1e-6)
         reader = _Reader()
         converter = self._converter(reader)
 
@@ -157,7 +157,7 @@ class TestTheConverterRefusesBeforeBuilding:
         assert reader.axis_built
 
     def test_an_axis_that_fits_is_built(self, monkeypatch):
-        monkeypatch.setattr(csc_assembly, "available_memory_gb", lambda: 32.0)
+        monkeypatch.setattr(memory_guard, "available_memory_gb", lambda: 32.0)
         converter = self._converter(_Reader())
 
         converter._setup_mass_axis()

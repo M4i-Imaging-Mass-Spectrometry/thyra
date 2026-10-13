@@ -1012,7 +1012,11 @@ class AxisPlanner:
                 + (
                     "Both come from the source's own mass range."
                     if config.min_mz is None and config.max_mz is None
-                    else "Check --resample-min-mz / --resample-max-mz."
+                    else (
+                        "Check the mass axis plan's min_mz and max_mz."
+                        if config.mass_axis_sha256 is not None
+                        else "Check --resample-min-mz / --resample-max-mz."
+                    )
                 )
             )
 

@@ -10,6 +10,7 @@ axis every source's own conversion builds from the plan's settings.
 from __future__ import annotations
 
 import json
+import re
 
 import numpy as np
 import pytest
@@ -25,7 +26,7 @@ from thyra.resampling.mass_axis.tof_generator import (
     TIMSTOF_TOF_LAW,
 )
 from thyra.resampling.plan import MassAxisPlan
-from thyra.resampling.types import AxisType, ResamplingMethod
+from thyra.resampling.types import AxisType, ResamplingConfig, ResamplingMethod
 
 _RAPIFLEX = {"format_specific": {"format": "Rapiflex"}}
 _TIMS = {"GlobalMetadata": {"InstrumentName": "timsTOF fleX"}}
@@ -117,6 +118,81 @@ class TestRange:
         assert warning.startswith("a.imzML:")
         assert "minimum and maximum" in warning
 
+    def test_an_imzml_header_range_is_widened_by_one_ppm(self):
+        """The header rounds to six decimals, which can cut its own edge (#473)."""
+        sources = [
+            _src(
+                "a.imzML",
+                _RAPIFLEX,
+                (300.0, 600.0),
+                source_format="imzml",
+                range_is_header=True,
+            )
+        ]
+
+        plan = _plan_from_metadata(sources)
+
+        assert plan.min_mz == pytest.approx(300.0 - 300.0e-6, rel=1e-12)
+        assert plan.max_mz == pytest.approx(600.0 + 600.0e-6, rel=1e-12)
+        assert plan.min_mz < 300.0 and plan.max_mz > 600.0
+        assert "widened by 1 ppm" in plan.origins["min_mz"]
+        assert "widened by 1 ppm" in plan.origins["max_mz"]
+
+    def test_a_bound_below_one_dalton_is_widened_by_the_floor(self):
+        source = _src("a", _RAPIFLEX, (0.1, 0.5), range_is_header=True)
+
+        assert source.planning_range == pytest.approx((0.1 - 1e-6, 0.5 + 1e-6))
+
+    def test_a_source_that_is_not_a_header_range_is_not_widened(self):
+        plan = _plan_from_metadata([_src("a", _RAPIFLEX, (300.0, 600.0))])
+
+        assert (plan.min_mz, plan.max_mz) == (300.0, 600.0)
+        assert "widened" not in plan.origins["min_mz"]
+
+    def test_a_forced_bound_is_not_widened(self):
+        sources = [
+            _src("a.imzML", _RAPIFLEX, (300.0, 600.0), range_is_header=True),
+        ]
+
+        plan = _plan_from_metadata(sources, min_mz=300.0, max_mz=600.0)
+
+        assert (plan.min_mz, plan.max_mz) == (300.0, 600.0)
+        assert plan.origins["min_mz"] == "forced"
+
+    def test_the_imzml_edge_warning_still_fires_on_the_widened_range(self):
+        sources = [
+            _src(
+                "a.imzML",
+                _RAPIFLEX,
+                (150.0, 900.0),
+                source_format="imzml",
+                range_is_header=True,
+            ),
+            _src("b", _RAPIFLEX, (100.0, 1100.0), source_format="bruker"),
+        ]
+
+        plan = _plan_from_metadata(sources)
+
+        (warning,) = [w for w in plan.warnings if "acquisition window" in w]
+        assert warning.startswith("a.imzML:")
+        assert "minimum and maximum" in warning
+
+    def test_a_forced_min_above_the_planned_max_says_so(self):
+        with pytest.raises(ConversionRefused) as err:
+            _two(min_mz=950.0)
+
+        message = str(err.value)
+        assert "forced min_mz 950" in message and "planned max_mz 900" in message
+        assert "Pass a lower min_mz, or pass max_mz too" in message
+
+    def test_a_forced_max_below_the_planned_min_says_so(self):
+        with pytest.raises(ConversionRefused) as err:
+            _two(max_mz=150.0)
+
+        message = str(err.value)
+        assert "forced max_mz 150" in message and "planned min_mz 200" in message
+        assert "Pass a higher max_mz, or pass min_mz too" in message
+
     def test_a_source_that_is_not_imzml_is_not_flagged_for_it(self):
         sources = [
             _src("a", _RAPIFLEX, (150.0, 900.0), source_format="phi"),
@@ -150,6 +226,25 @@ class TestRange:
 
         assert (plan.min_mz, plan.max_mz) == (100.0, 1100.0)
         assert plan.sources == ("a",)
+
+
+class TestTheMemoryGuard:
+    def test_an_axis_too_wide_for_memory_is_refused_unbuilt(self, monkeypatch):
+        """The plan lays its axis through the guard a conversion uses (#473)."""
+        from thyra.resampling import memory_guard
+
+        # About 100,000 bins against 1 MB "free": refused by the guard, and
+        # small enough that a plan laid without the guard fails fast instead
+        # of allocating.
+        monkeypatch.setattr(memory_guard, "available_memory_gb", lambda: 0.001)
+        source = ("a", {"essential_metadata": {"mass_range": (100.0, 200.0)}})
+
+        with pytest.raises(ConversionRefused, match=r"bins") as err:
+            _plan_from_metadata([source], axis_type="constant", width_at_mz=1e-3)
+
+        message = str(err.value)
+        assert re.search(r"100,00\d bins", message), message
+        assert "width_at_mz" in message and "--resample-bins" not in message
 
 
 class TestAxisType:
@@ -405,6 +500,10 @@ class TestThePlanItself:
         with pytest.raises(ConversionRefused, match="mass_axis_sha256"):
             normalize_resampling_config({"mass_axis_sha256": bad})
 
+    def test_a_config_object_with_a_bad_fingerprint_is_refused(self):
+        with pytest.raises(ConversionRefused, match="mass_axis_sha256"):
+            normalize_resampling_config(ResamplingConfig(mass_axis_sha256="abc"))
+
     def test_the_dict_round_trips(self):
         plan = _two(method="tic_preserving")
 
@@ -429,6 +528,88 @@ class TestThePlanItself:
         assert json.loads(path.read_text(encoding="utf-8"))["format"] == (
             "thyra-mass-axis-plan"
         )
+
+    def test_a_plan_file_in_utf8_with_a_mark_or_utf16_loads(self, tmp_path):
+        plan = _two()
+        text = json.dumps(plan.to_dict(), ensure_ascii=False)
+        encoded = {
+            "utf-8-sig": text.encode("utf-8-sig"),
+            "utf-16-le": text.encode("utf-16"),
+            "utf-16-be": b"\xfe\xff" + text.encode("utf-16-be"),
+        }
+        for name, raw in encoded.items():
+            path = tmp_path / f"{name}.json"
+            path.write_bytes(raw)
+
+            assert MassAxisPlan.load(path) == plan, name
+
+    def test_a_plan_file_in_another_encoding_is_refused_in_one_line(self, tmp_path):
+        data = _two().to_dict()
+        data["sources"] = ["caf\u00e9"]
+        path = tmp_path / "latin.json"
+        path.write_bytes(json.dumps(data, ensure_ascii=False).encode("latin-1"))
+
+        with pytest.raises(ConversionRefused, match="not UTF-8, UTF-16 or UTF-32") as e:
+            MassAxisPlan.load(path)
+
+        assert "\n" not in str(e.value) and "latin.json" in str(e.value)
+
+    @pytest.mark.parametrize("version", [True, 1.0, "1", 2, None])
+    def test_a_version_that_is_not_the_whole_number_one_is_refused(self, version):
+        data = _two().to_dict()
+        data["version"] = version
+
+        with pytest.raises(ConversionRefused, match="version"):
+            MassAxisPlan.from_dict(data)
+
+    def test_a_key_no_plan_has_is_refused_by_name(self):
+        data = _two().to_dict()
+        data["target_bins"] = 5000
+
+        with pytest.raises(ConversionRefused, match="'target_bins'"):
+            MassAxisPlan.from_dict(data)
+
+    def test_an_edited_bin_count_is_refused(self):
+        plan = _two()
+        data = plan.to_dict()
+        data["n_bins"] = plan.n_bins + 1
+
+        with pytest.raises(ConversionRefused, match="does not match its settings") as e:
+            MassAxisPlan.from_dict(data)
+
+        assert f"{plan.n_bins:,}" in str(e.value)
+
+    @pytest.mark.parametrize("key", ["tof_a", "tof_b", "bins_per_fwhm"])
+    def test_a_tof_plan_without_its_law_is_refused_naming_the_key(self, key):
+        data = _two(axis_type="tof", tof_a=0.03, tof_b=2e-5).to_dict()
+        data[key] = None
+
+        with pytest.raises(ConversionRefused, match=repr(key)) as e:
+            MassAxisPlan.from_dict(data)
+
+        assert "--" not in str(e.value)
+
+    def test_a_plan_without_its_width_is_refused_naming_the_key(self):
+        data = _two().to_dict()
+        data["width_at_mz"] = None
+
+        with pytest.raises(ConversionRefused, match="'width_at_mz'"):
+            MassAxisPlan.from_dict(data)
+
+    def test_loading_a_plan_logs_no_axis_calculation(self, thyra_logs):
+        data = _two().to_dict()
+
+        with thyra_logs("thyra.resampling.axis_planner") as records:
+            MassAxisPlan.from_dict(data)
+
+        assert not [r for r in records if "bins" in r.getMessage()]
+
+    def test_an_inverted_range_is_refused_naming_the_keys(self):
+        data = _two().to_dict()
+        data["min_mz"], data["max_mz"] = data["max_mz"], data["min_mz"]
+
+        with pytest.raises(ConversionRefused, match="'min_mz'.*below its 'max_mz'"):
+            MassAxisPlan.from_dict(data)
 
     def test_a_dict_that_is_not_a_plan_is_refused(self):
         data = _two().to_dict()

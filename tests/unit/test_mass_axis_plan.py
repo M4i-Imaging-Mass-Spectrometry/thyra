@@ -49,3 +49,19 @@ def test_names_carry_the_folder_only_where_two_would_collide(tmp_path):
     paths = [tmp_path / "x" / "a.imzML", tmp_path / "y" / "a.imzML", tmp_path / "b"]
 
     assert _source_names(paths) == ["x/a.imzML", "y/a.imzML", "b"]
+
+
+def test_duplicates_apart_in_the_list_are_numbered_in_turn(tmp_path):
+    a, b = tmp_path / "x" / "a.imzML", tmp_path / "y" / "b.imzML"
+
+    assert _source_names([a, b, a]) == ["x/a.imzML (1)", "b.imzML", "x/a.imzML (2)"]
+
+
+@pytest.mark.parametrize("copies", [2, 3])
+def test_the_same_path_given_more_than_once_gets_a_number_each(tmp_path, copies):
+    paths = [tmp_path / "x" / "a.imzML"] * copies
+
+    names = _source_names(paths)
+
+    assert len(set(names)) == copies
+    assert names == [f"x/a.imzML ({i + 1})" for i in range(copies)]

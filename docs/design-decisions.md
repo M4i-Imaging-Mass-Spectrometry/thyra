@@ -3694,3 +3694,43 @@ long as `mz`.
   TIMSImaging exports turn out to omit the unit, this gate is the place to
   relax.
 - Processed imzML with a mobility array keeps no mobility table, so no CCS.
+
+## D49. A mass axis plan widens an imzML header range by 1 ppm
+
+**Status:** Implemented (2026-10-14).
+
+**Decision.** When `plan_mass_axis` takes a range from an imzML source, it
+uses the header range widened outward by 1 ppm: the low bound becomes
+`lo - max(lo * 1e-6, 1e-6)` and the high bound `hi + max(hi * 1e-6, 1e-6)`
+(the 1e-6 Da floor serves bounds below 1 Da). This supersedes D43's range
+rule for imzML sources only; the intersection, the forced bounds and every
+other source format are as D43 describes. A bound the caller forces is used
+exactly as given. The plan's `origins` for a derived bound say that an imzML
+range is its header value widened by 1 ppm.
+
+**Why.** An imzML header states the lowest and highest observed m/z
+(MS:1000528 and MS:1000527) rounded to six decimals, and a writer that stores
+32-bit m/z takes them from the float64 values before the cast. The rounded low bound can sit above the
+source's first sample, and the rounded high bound below its last. A
+conversion keeps the m/z inside its declared bounds, inclusive, so a plan
+built from the header as it stands dropped those samples in every spectrum
+and reported nothing. Measured: on `imzml_continuous_profile_a` a one-source
+plan lost one sample per spectrum (620 of 3.4e7 counts), and a synthetic file
+lost 15%. Rounding to six decimals moves a bound by at most
+5e-7 Da, which is 1 ppm of any m/z from 0.5 up; float32 rounding of the m/z
+is about 0.06 ppm. The same file converted without a plan reads the exact
+extremes of the decoded data and loses nothing.
+
+**What changes in a store.** A planned conversion of imzML sources lays an
+axis 1 ppm wider at a header-derived end and keeps its edge samples. Stores
+converted without a plan do not change. Nothing released changes: plans are
+new since 4.4.0.
+
+**Known limits.**
+
+- The widening is a bound on rounding, not a measurement. A header that
+  states a range wrongly by more than 1 ppm still cuts samples; the plan
+  cannot tell without decoding spectra.
+- Only imzML sources are widened. Every other format's plan range comes from
+  the same values its conversion uses, so a plan cuts nothing the conversion
+  keeps.

@@ -18,6 +18,13 @@ The decision is split in two. :func:`_plan_from_metadata` takes what the
 detector chain is told about each source and reads no file, so every rule
 can be exercised without one. :func:`plan_mass_axis` reads the sources and
 calls it.
+
+An imzML header states its m/z range rounded to six decimals, and the writer
+that fills it casts float64 values to float32, so the stated low bound can sit
+above the source's first sample. A conversion keeps only the m/z inside its
+declared bounds, inclusive, so a range taken from such a header as it stands
+drops the edge samples (issue #473, D49). The planner therefore widens an
+imzML source's range outward by 1 ppm before using it.
 """
 
 from __future__ import annotations
@@ -43,6 +50,7 @@ from .resampling.axis_planner import (
 )
 from .resampling.decision_tree import ResamplingDecisionTree
 from .resampling.mass_axis.tof_generator import DEFAULT_BINS_PER_FWHM, TOFAxisGenerator
+from .resampling.memory_guard import mass_axis_refusal
 from .resampling.plan import MassAxisPlan
 from .resampling.types import (
     DEFAULT_REFERENCE_MZ,
@@ -64,6 +72,13 @@ _WIDTH_EXPONENT = {
     "fticr": 2.0,
 }
 
+#: How far an imzML header range is widened on each side, relative to the
+#: bound, and the absolute floor (Da) for bounds below 1 Da. One ppm covers
+#: the header's rounding to six decimals for m/z >= 0.5 and float32 rounding
+#: of the m/z (about 0.06 ppm).
+_HEADER_RANGE_PPM = 1e-6
+_HEADER_RANGE_FLOOR_DA = 1e-6
+
 #: Relative slack when asking whether one width is narrower than another, so
 #: two widths that agree to rounding do not warn.
 _WIDTH_TOLERANCE = 1e-9
@@ -81,12 +96,16 @@ class _Source:
         range_known: Whether the source states a mass range at all.
         source_format: The registry format name (``"imzml"``, ``"phi"``,
             ...), or ``None`` when unknown.
+        range_is_header: Whether the range is a header value that was
+            rounded when it was written (an imzML source). The plan then
+            uses it widened by 1 ppm, see :attr:`planning_range`.
     """
 
     name: str
     metadata: Dict[str, Any]
     range_known: bool = True
     source_format: Optional[str] = None
+    range_is_header: bool = False
 
     @property
     def mass_range(self) -> Tuple[float, float]:
@@ -95,6 +114,23 @@ class _Source:
         if raw is None:
             return 0.0, 0.0
         return float(raw[0]), float(raw[1])
+
+    @property
+    def planning_range(self) -> Tuple[float, float]:
+        """The range the plan uses: ``mass_range``, widened when a header's.
+
+        A header value is rounded to six decimals and, in an imzML, cast
+        through float32, so it can sit inside the source's own first or
+        last sample; the conversion's range test is inclusive at the bounds
+        it is given, and would drop that sample (issue #473).
+        """
+        lo, hi = self.mass_range
+        if not self.range_is_header:
+            return lo, hi
+        return (
+            lo - max(lo * _HEADER_RANGE_PPM, _HEADER_RANGE_FLOOR_DA),
+            hi + max(hi * _HEADER_RANGE_PPM, _HEADER_RANGE_FLOOR_DA),
+        )
 
     @property
     def spectrum_type(self) -> Optional[str]:
@@ -204,28 +240,43 @@ def _plan_range(
             "No mass range is stated by " + ", ".join(unknown) + ", and finding "
             "one would mean decoding spectra. Pass both min_mz and max_mz."
         )
-    low = min_mz if min_mz is not None else max(s.mass_range[0] for s in known)
-    high = max_mz if max_mz is not None else min(s.mass_range[1] for s in known)
+    ranges_of = {s.name: s.planning_range for s in known}
+    low = min_mz if min_mz is not None else max(r[0] for r in ranges_of.values())
+    high = max_mz if max_mz is not None else min(r[1] for r in ranges_of.values())
     if not low < high:
         ranges = _fmt_each(
-            [(s.name, f"[{s.mass_range[0]:g}, {s.mass_range[1]:g}]") for s in known]
+            [(n, f"[{lo:g}, {hi:g}]") for n, (lo, hi) in ranges_of.items()]
         )
         if min_mz is not None and max_mz is not None:
             raise ConversionRefused(
                 f"The range [{low:g}, {high:g}] m/z is empty: the minimum has "
                 "to be below the maximum."
             )
+        if min_mz is not None:
+            raise ConversionRefused(
+                f"The forced min_mz {low:g} is not below the planned max_mz "
+                f"{high:g} (the sources' ranges: {ranges}). Pass a lower "
+                "min_mz, or pass max_mz too."
+            )
+        if max_mz is not None:
+            raise ConversionRefused(
+                f"The forced max_mz {high:g} is not above the planned min_mz "
+                f"{low:g} (the sources' ranges: {ranges}). Pass a higher "
+                "max_mz, or pass min_mz too."
+            )
         raise ConversionRefused(
             f"The sources have no m/z in common: the planned range "
             f"[{low:g}, {high:g}] is empty ({ranges}). Pass min_mz and max_mz "
             "to plan a range anyway."
         )
-    notes.origins["min_mz"] = (
-        "forced" if min_mz is not None else "intersection of the sources' ranges"
-    )
-    notes.origins["max_mz"] = (
-        "forced" if max_mz is not None else "intersection of the sources' ranges"
-    )
+    derived = "intersection of the sources' ranges"
+    if any(s.range_is_header for s in known):
+        derived += (
+            "; an imzML range is its header value widened by 1 ppm, because "
+            "the header rounds it"
+        )
+    notes.origins["min_mz"] = "forced" if min_mz is not None else derived
+    notes.origins["max_mz"] = "forced" if max_mz is not None else derived
     _warn_range(known, low, high, min_mz is None, max_mz is None, notes)
     return float(low), float(high)
 
@@ -240,7 +291,7 @@ def _warn_range(
 ) -> None:
     """Say which sources the planned range does not fit, and which cut others."""
     for s in known:
-        lo, hi = s.mass_range
+        lo, hi = s.planning_range
         if lo > low or hi < high:
             notes.warnings.append(
                 f"{s.name}: its own range [{lo:g}, {hi:g}] does not cover the "
@@ -255,12 +306,16 @@ def _warn_range(
     for s in known:
         if (s.source_format or "").lower() != "imzml":
             continue
-        lo, hi = s.mass_range
+        lo, hi = s.planning_range
         others = [o for o in known if o is not s]
         bounds = []
-        if low_derived and lo == low and any(o.mass_range[0] < low for o in others):
+        if low_derived and lo == low and any(o.planning_range[0] < low for o in others):
             bounds.append("minimum")
-        if high_derived and hi == high and any(o.mass_range[1] > high for o in others):
+        if (
+            high_derived
+            and hi == high
+            and any(o.planning_range[1] > high for o in others)
+        ):
             bounds.append("maximum")
         if bounds:
             notes.warnings.append(
@@ -397,6 +452,27 @@ def _warn_spectrum_types(sources: Sequence[_Source], notes: _Notes) -> None:
         )
 
 
+def _refuse_wide_axis(n_bins: int) -> None:
+    """Refuse an axis whose per-bin cost will not fit in memory (issue #473).
+
+    The guard a conversion applies, asked before the axis is built, with the
+    levers a plan has instead of the CLI's.
+
+    Raises:
+        ConversionRefused: When the projection exceeds the fraction of free
+            memory a conversion may take.
+    """
+    refusal = mass_axis_refusal(
+        int(n_bins),
+        levers=(
+            "pass a wider width_at_mz or fewer bins_per_fwhm, or a narrower "
+            "min_mz / max_mz"
+        ),
+    )
+    if refusal is not None:
+        raise ConversionRefused(refusal)
+
+
 def _lay_axis(first: _Source, plan: MassAxisPlan) -> Tuple[int, str]:
     """Build the planned axis the way a conversion does, and fingerprint it.
 
@@ -411,7 +487,7 @@ def _lay_axis(first: _Source, plan: MassAxisPlan) -> Tuple[int, str]:
     essential["mass_range"] = (plan.min_mz, plan.max_mz)
     metadata["essential_metadata"] = essential
     planner = AxisPlanner.from_metadata(metadata, normalize_resampling_config(config))
-    axis = planner.settle(lambda n_bins: None).axis
+    axis = planner.settle(_refuse_wide_axis).axis
     return int(len(axis)), mass_axis_sha256(axis)
 
 
@@ -517,10 +593,15 @@ def _source_names(paths: Sequence[Path]) -> List[str]:
         if names.count(name) > 1:
             name = f"{path.parent.name}/{name}"
         out.append(name)
-    for i, name in enumerate(out):
-        if out.count(name) > 1:
-            out[i] = f"{name} ({i + 1})"
-    return out
+    counts = {name: out.count(name) for name in out}
+    seen: Dict[str, int] = {}
+    numbered = []
+    for name in out:
+        if counts[name] > 1:
+            seen[name] = seen.get(name, 0) + 1
+            name = f"{name} ({seen[name]})"
+        numbered.append(name)
+    return numbered
 
 
 def _read_source(path: Path, name: str) -> _Source:
@@ -547,7 +628,13 @@ def _read_source(path: Path, name: str) -> _Source:
         source_format: Optional[str] = detect_format(path)
     except Exception:
         source_format = None
-    return _Source(name, metadata, range_known=known, source_format=source_format)
+    return _Source(
+        name,
+        metadata,
+        range_known=known,
+        source_format=source_format,
+        range_is_header=(source_format or "").lower() == "imzml",
+    )
 
 
 def plan_mass_axis(
@@ -571,7 +658,9 @@ def plan_mass_axis(
     from in ``origins`` and what it costs a source in ``warnings``.
 
     * Axis type: every source's detector agrees, else refused.
-    * Range: the intersection of the sources' ranges.
+    * Range: the intersection of the sources' ranges. An imzML source's
+      range is its header value widened outward by 1 ppm, because the
+      header rounds it and would otherwise cut the source's edge samples.
     * Width (non-``tof`` axes): the widest width any source declares, each
       first stated at ``reference_mz`` under the axis law, so that on the
       shared axis no source's peaks scatter over bins finer than they are.
@@ -603,7 +692,8 @@ def plan_mass_axis(
         ConversionRefused: If a source cannot be read or states no m/z range
             (and ``min_mz`` and ``max_mz`` were not both given), if the ranges
             have no m/z in common, if the detectors want different axis types
-            or TOF laws and none was forced, or if the axis cannot be built.
+            or TOF laws and none was forced, or if the axis cannot be built
+            (including when its bin count would not fit in memory).
     """
     if isinstance(sources, (str, Path)):
         sources = [sources]
