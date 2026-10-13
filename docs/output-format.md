@@ -382,6 +382,7 @@ Windows), numpy arrays rather than lists:
 | `acq_range` | `float64[2]`, `[lower, upper]`: the acquired range as declared, else the span of `values` |
 | `calibration` | `{model_type, coefficients}`: the vendor `TimsCalibration` row, provenance only |
 | `source` | `"bruker_tdf"`, `"imzml"` or `"waters_raw"` |
+| `bin_width` | `float`, only where the source defines its own equal-width bins (Waters drift bins): the width of one, in the axis unit. Its presence is what gives the heatmap one channel per bin (D49) |
 | `resolved_table` | element key of the mobility-resolved sibling table, when one was written |
 
 **`uns["mobility_heatmap"]`** is the table's mean mass-mobility frame: the

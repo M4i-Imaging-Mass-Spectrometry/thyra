@@ -168,6 +168,8 @@ class WatersReader(BaseMSIReader):
         self._common_mass_axis_cache: Optional[NDArray[np.float64]] = None
         #: Functions MassLynx reports drift bins for, converted or not.
         self._drift_functions: Set[int] = set()
+        #: Drift functions left out because the run lacks "ADC Mode".
+        self._unreadable_drift_functions: List[int] = []
         #: The drift axis, read once: ``None`` until asked, then the axis,
         #: or ``False`` when the converted functions give none.
         self._mobility_axis: Any = None
@@ -296,6 +298,24 @@ class WatersReader(BaseMSIReader):
             for f, ft in self._function_types.items()
             if ft in (FunctionType.MS, FunctionType.IMS_MS)
         ]
+
+        # A run the library cannot read drift bins from (no "ADC Mode" in
+        # _extern.inf): its mobility functions stay out, as they always did
+        # before drift time was read, and the run is refused only when
+        # nothing else is left. Decided here, before the grid build, so no
+        # spectrum of theirs is ever asked for -- an access violation in
+        # the library ends the process with no message.
+        self._unreadable_drift_functions = (
+            [] if self._instrument.mobility_readable else sorted(self._drift_functions)
+        )
+        if self._unreadable_drift_functions:
+            ms_functions = [f for f in ms_functions if f not in self._drift_functions]
+            if not ms_functions:
+                self._ml.close_file(self._handle)
+                self._handle = None
+                raise ConversionRefused(
+                    self._unreadable_mobility_message(self._unreadable_drift_functions)
+                )
         self._ms_functions = ms_functions
 
         if not self._ms_functions:
@@ -362,35 +382,62 @@ class WatersReader(BaseMSIReader):
             f"grid {self._imaging_grid.pixel_count_x}x{self._imaging_grid.pixel_count_y}"
         )
 
+    def _unreadable_mobility_message(self, drift: List[int]) -> str:
+        """Why a run's mobility functions are not read (see :meth:`_ensure_initialized`)."""
+        return (
+            f"{self.data_path.name} was acquired with ion mobility on "
+            f"(function(s) {', '.join(str(f) for f in drift)}), and its "
+            "_extern.inf does not declare 'Acquisition Algorithm: ADC "
+            "Mode'. On every such run measured (older Synapt G1 "
+            "acquisitions) the Waters library crashed or returned "
+            "inconsistent data, so Thyra does not read them."
+        )
+
+    def _record_unreadable_drift_functions(self) -> None:
+        """List the mobility functions left out of a run without ADC Mode."""
+        left_out = [
+            f
+            for f in self._unreadable_drift_functions
+            if f not in self._excluded_functions
+            and self._function_types is not None
+            and self._function_types.get(f)
+            in (FunctionType.MS, FunctionType.IMS_MS, FunctionType.LOCKMASS)
+        ]
+        if not left_out:
+            return
+        grid = self._imaging_grid
+        for f in left_out:
+            summary = self._function_summary(f, grid) if grid is not None else {}
+            self._excluded_functions[f] = {
+                **summary,
+                "reason": (
+                    "carries drift bins the Waters library cannot read on a run "
+                    "without 'Acquisition Algorithm: ADC Mode'"
+                ),
+            }
+        logger.warning(
+            "%s Function(s) %s are left out; the others are converted.",
+            self._unreadable_mobility_message(left_out),
+            ", ".join(str(f) for f in left_out),
+        )
+
     def _refuse_unreadable_mobility(self) -> None:
-        """Refuse a run whose converted mobility functions the library cannot read.
+        """Refuse a run whose converted mobility functions have lost their data.
 
-        Two cases, both found on real files rather than guessed:
-
-        * The run does not declare ``Acquisition Algorithm  ADC Mode``
-          (older Synapt G1 acquisitions). On those the library crashed with
-          an access violation reading spectra from a mobility function, or
-          returned drift bins that do not sum to the spectrum; see
-          :attr:`WatersInstrument.mobility_readable`. Such a run was refused
-          before mobility was read at all, so refusing it here changes
-          nothing it used to convert.
-        * A converted mobility function has lost its ``_FUNCnnn.CDT`` drift
-          file, the mobility counterpart of a missing ``.DAT`` (issue #229).
+        A converted mobility function without its ``_FUNCnnn.CDT`` drift
+        file is the mobility counterpart of a missing ``.DAT`` (issue
+        #229). A run without ``ADC Mode`` never gets here with a mobility
+        function: :meth:`_ensure_initialized` leaves those out before the
+        grid is built, and refusing here as well is a safety net.
         """
+        self._record_unreadable_drift_functions()
         converted = set(self._ms_functions or ())
         drift = sorted(converted & self._drift_functions)
         if not drift:
             return
         reason = None
         if not self._instrument.mobility_readable:
-            reason = (
-                f"{self.data_path.name} was acquired with ion mobility on "
-                f"(function(s) {', '.join(str(f) for f in drift)}), and its "
-                "_extern.inf does not declare 'Acquisition Algorithm: ADC "
-                "Mode', as older Synapt G1 runs do not. The Waters library "
-                "crashes or returns inconsistent data reading these, so Thyra "
-                "does not read them."
-            )
+            reason = self._unreadable_mobility_message(drift)
         else:
             present = {path.name.upper() for path in self.data_path.iterdir()}
             missing = [f for f in drift if f"_FUNC{f + 1:03d}.CDT" not in present]
@@ -478,6 +525,9 @@ class WatersReader(BaseMSIReader):
         extra, uncentroidable, off_raster = [], [], []
         for f, ft in sorted(function_types.items()):
             if ft is not FunctionType.LOCKMASS:
+                continue
+            if f in self._unreadable_drift_functions:
+                # Its spectra cannot be read safely on this run.
                 continue
             # The rescue rule reads "covers pixels no MS function covers"
             # as "is the tail of a split raster". A reference spot parked
@@ -623,6 +673,7 @@ class WatersReader(BaseMSIReader):
 
     def _select_within_group(self, group: List[int], grid: "ImagingGrid") -> List[int]:
         """Which of a set of functions competing for one pixel set is stored."""
+        group = self._without_parallel_drift_functions(group, grid)
         levels = {f: self._function_ms_level(f, grid) for f in group}
         ms1 = [f for f in group if levels[f] == 1]
         if not ms1 or len(ms1) == len(group):
@@ -653,6 +704,39 @@ class WatersReader(BaseMSIReader):
             ", ".join(str(f) for f in ms1),
         )
         return ms1
+
+    def _without_parallel_drift_functions(
+        self, group: List[int], grid: "ImagingGrid"
+    ) -> List[int]:
+        """Leave out the functions with drift bins when others share their pixels.
+
+        Before drift time was read, a function acquired with mobility on was
+        never a candidate, so a run recording one in parallel with plain MS
+        functions stored the plain ones alone. Summing the two now would
+        change those stored spectra, and their drift bins would not add up
+        to the sum anyway, so the old store is kept and the mobility
+        function is listed under ``excluded_functions``.
+        """
+        drift = [f for f in group if f in self._drift_functions]
+        if not drift or len(drift) == len(group):
+            return group
+        for f in drift:
+            self._excluded_functions[f] = {
+                **self._function_summary(f, grid),
+                "reason": (
+                    "carries drift bins and covers the same pixels as a "
+                    "function that does not"
+                ),
+            }
+        logger.warning(
+            "Function(s) %s carry drift bins and cover the same pixels as "
+            "%s, which do not. Only the latter are converted, as before "
+            "drift time was read; the former are recorded in the Waters "
+            "metadata block as 'excluded_functions'.",
+            ", ".join(str(f) for f in drift),
+            ", ".join(str(f) for f in group if f not in drift),
+        )
+        return [f for f in group if f not in drift]
 
     @classmethod
     def _function_precursors(cls, func: int, grid: "ImagingGrid") -> List[float]:

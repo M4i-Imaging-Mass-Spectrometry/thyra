@@ -3640,9 +3640,12 @@ process: the 56 that declare `Acquisition Algorithm: ADC Mode` read cleanly;
 the 35 that do not, all older Synapt G1 runs, crashed the library with an
 access violation (32) or returned bins that do not sum to the spectrum (3).
 Even the summed-spectrum read crashed on most of them. An access violation
-ends the Python process with no message, so the reader refuses such a run
-from the side file before it reads any spectrum. That is no regression: they
-were refused before, as "No MS functions found". `getMobility` past the last
+ends the Python process with no message, so on such a run the reader leaves
+the mobility functions out, decided from the side file before it reads any
+spectrum, and refuses the run when nothing else is left. That is no regression: before drift time was
+read, mobility functions were never converted, so those runs store what they
+stored before, and a run with nothing else was refused then too, as "No MS
+functions found". `getMobility` past the last
 bin raises a C++ exception inside the library, so it is never asked past
 `getNumberOfMobilityScans`.
 
@@ -3698,8 +3701,12 @@ continuum, so only the Waters reader sets `bin_width`.
   mobility functions report different bin counts. A run whose functions
   share a count but not a pusher period would be described by one axis;
   none has been seen.
-- A run whose converted functions mix mobility and no mobility keeps its
-  spectra and records no mobility.
+- Functions with and without drift bins on the same pixels (a parallel
+  acquisition): the ones without are converted, as before drift time was
+  read, and the mobility functions are listed under `excluded_functions`.
+  Functions with and without drift bins on different pixels (chunks of
+  one raster) are all converted, and no mobility is recorded, since the
+  bins would not cover the image. No measured run has either layout.
 - Drift time is not converted to CCS. That needs the run's calibration
   (`getDriftTime_CCS` in `MassLynxRaw`), which is not bound.
 - No public DESI or cyclic IMS image with its `.raw` folder was found, so

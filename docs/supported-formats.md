@@ -481,20 +481,25 @@ Thyra reads them the way it reads a TIMS frame:
   centroids, and the store's `current_ratio` says by how much;
   `--waters-spectrum profile` makes the two agree.
 
-Two things refuse rather than convert:
+Two things are not read:
 
-- **A run that does not declare `Acquisition Algorithm: ADC Mode`** in
-  `_extern.inf`. Over 91 Synapt runs with mobility on, the 56 that declare it
+- **The mobility functions of a run that does not declare `Acquisition
+  Algorithm: ADC Mode`** in `_extern.inf`. Over 91 Synapt runs with mobility on, the 56 that declare it
   read cleanly; the 35 that do not (older Synapt G1 acquisitions) crashed the
   native library with an access violation (32) or returned drift bins that do
   not add up to the spectrum (3). A crash inside the library ends the process
   with no message, so this is decided from the side file before any spectrum
-  is read. Such runs were refused before drift time was read too.
-- **A converted mobility function without its `_FUNCnnn.CDT`** drift file.
+  is read. Their other functions convert as before; a run with nothing else
+  is refused, as it was before drift time was read.
+- **A converted mobility function without its `_FUNCnnn.CDT`** drift file:
+  the run is refused.
 
-A run that converts a function with drift bins next to one without, summed
-into the same image, keeps its spectra and records no mobility: the bins
-would not add up to the stored spectrum. The cost is one library call per bin,
+A mobility function recorded in parallel with plain MS functions, on the
+same pixels, stays out as it did before, and is listed under
+`excluded_functions`.
+
+A raster whose chunks mix functions with and without drift bins converts
+every chunk and records no mobility: the bins would not cover the image. The cost is one library call per bin,
 about 13 ms per scan for 200 bins on a Synapt G2-Si; there is no single-read
 record as there is for TDF, so the heatmap and a grid table each take their
 own pass. `--no-mobility-heatmap` skips the heatmap's.

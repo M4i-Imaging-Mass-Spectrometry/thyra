@@ -1359,3 +1359,72 @@ class TestWatersReaderDriftTime:
 
         assert centroid.lossless_spectrum_option == "--waters-spectrum profile"
         assert profile.lossless_spectrum_option is None
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_a_parallel_mobility_function_stays_out_as_before(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        # Plain MS and mobility functions on the same pixels: before drift
+        # time was read the plain one alone was stored, and it still is.
+        reader, mock_ml = _open_drift_reader(
+            mock_ml_cls,
+            mock_build_grid,
+            mock_waters_data,
+            _drift_grid({0: 1, 1: 1}),
+            {0: FunctionType.MS, 1: FunctionType.IMS_MS},
+            {1},
+        )
+
+        assert len(list(reader.iter_spectra())) == 3
+        assert reader._ms_functions == [0]
+        assert "drift bins" in reader._excluded_functions[1]["reason"]
+        assert {c.args[1] for c in mock_ml.read_spectrum.call_args_list} == {0}
+        assert reader.has_ion_mobility is False
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_without_adc_mode_the_plain_functions_still_convert(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        # A run the library cannot read drift bins from keeps converting
+        # what it converted before: the mobility functions stay out, and
+        # nothing is ever read from them.
+        reader, mock_ml = _open_drift_reader(
+            mock_ml_cls,
+            mock_build_grid,
+            mock_waters_data,
+            _drift_grid({0: 1, 1: 1}),
+            {0: FunctionType.MS, 1: FunctionType.IMS_MS},
+            {1},
+            extern=None,
+        )
+
+        assert len(list(reader.iter_spectra())) == 3
+        assert reader._ms_functions == [0]
+        assert "ADC Mode" in reader._excluded_functions[1]["reason"]
+        assert {c.args[1] for c in mock_ml.read_spectrum.call_args_list} == {0}
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_without_adc_mode_a_lockmass_named_drift_tail_is_not_rescued(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        reader, mock_ml = _open_drift_reader(
+            mock_ml_cls,
+            mock_build_grid,
+            mock_waters_data,
+            _drift_grid({0: 1, 1: 0}, chunked=True),
+            {0: FunctionType.MS, 1: FunctionType.LOCKMASS},
+            {1},
+            extern=None,
+            use_centroid=False,
+        )
+
+        list(reader.iter_spectra())
+
+        assert reader._ms_functions == [0]
+        assert {c.args[1] for c in mock_ml.read_spectrum.call_args_list} == {0}
+        reader.close()
