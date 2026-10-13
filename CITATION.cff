@@ -3,7 +3,7 @@ message: "If you use Thyra, please cite the paper below."
 title: "Thyra"
 abstract: >-
   Thyra converts mass spectrometry imaging data from imzML, mzPeak and vendor
-  formats into the SpatialData format.
+  formats into the SpatialData format, keeping ion mobility and MS/MS data.
 type: software
 authors:
   - family-names: Visvikis
@@ -16,6 +16,8 @@ keywords:
   - SpatialData
   - imzML
   - zarr
+  - ion mobility
+  - MS/MS
 preferred-citation:
   type: article
   title: >-
@@ -40,5 +42,9 @@ preferred-citation:
   journal: "Journal of the American Society for Mass Spectrometry"
   year: 2026
   month: 9
+  volume: 37
+  issue: 10
+  start: 2379
+  end: 2387
   doi: "10.1021/jasms.6c00169"
   url: "https://doi.org/10.1021/jasms.6c00169"

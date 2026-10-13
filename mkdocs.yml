@@ -1,5 +1,5 @@
 site_name: Thyra
-site_description: Convert imaging mass spectrometry data from Bruker, Waters, PHI and imzML into the open SpatialData format
+site_description: Convert imaging mass spectrometry data from Bruker, Waters, PHI and imzML, with ion mobility and MS/MS, into the open SpatialData format
 site_url: https://M4i-Imaging-Mass-Spectrometry.github.io/thyra
 repo_url: https://github.com/M4i-Imaging-Mass-Spectrometry/thyra
 repo_name: M4i-Imaging-Mass-Spectrometry/thyra
@@ -115,6 +115,7 @@ nav:
       - Which files can I convert?: which-files.md
       - Change how Thyra converts: settings.md
       - Describe and share your data: describe-your-data.md
+      - Ion mobility and MS/MS: ion-mobility-and-msms.md
       - Explore the result in Python: explore-the-output.ipynb
   - Technical reference:
       - technical-reference.md

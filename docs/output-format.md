@@ -430,8 +430,8 @@ Both blocks are summaries of the whole dataset. Nothing in them is per pixel,
 and nothing in them enters `obs` or a coordinate system.
 
 When every pixel shares one set of `(m/z, mobility)` feature pairs -- a
-continuous imzML export with a mobility array, as TIMSCONVERT and
-TIMSImaging write -- Thyra also writes a **mobility-resolved sibling
+continuous imzML export with a mobility array, as TIMSImaging writes --
+Thyra also writes a **mobility-resolved sibling
 table**, `{table}_mobility`, unless `--no-mobility-table` is given:
 
 | | MSI table `{id}_z0` | mobility table `{id}_z0_mobility` |
@@ -560,8 +560,10 @@ span would turn away conversions that fit ninefold over. The span is said at
 moment the first pass ends and before a single value has been scattered, so a
 refusal costs one read and no memory.
 
-Bruker TDF is the only source that needs a grid today; an imzML export with a
-mobility array already has a shared feature axis and is read off it.
+Bruker TDF is the only source that gets a grid today. A continuous imzML
+export with a mobility array already has a shared feature axis and is read
+off it. A processed imzML export with a mobility array has neither: its
+table is summed over mobility, with no heatmap and no mobility table.
 
 ### Fragmentation (MS/MS)
 

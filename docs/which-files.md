@@ -44,6 +44,8 @@ will need `--pixel-size`.
   does not, give it with `--pixel-size`.
 - A file with several z-slices becomes one dataset per slice. Add
   `--handle-3d` to keep them together as one 3D volume.
+- A file with a mobility array is read too. See
+  [Ion mobility and MS/MS](ion-mobility-and-msms.md).
 - If Thyra refuses the file, see
   [Troubleshooting](troubleshooting.md#an-imzml-file-is-refused-before-the-conversion-starts).
 
@@ -61,7 +63,8 @@ will need `--pixel-size`.
 - A slide with several regions is converted as one dataset, with every pixel
   labelled with its region. To convert only one region, see
   [Change how Thyra converts](settings.md#convert-one-region).
-- Ion mobility (TIMS) and PASEF MS/MS data are kept automatically.
+- Ion mobility (TIMS) and PASEF MS/MS data are kept automatically. See
+  [Ion mobility and MS/MS](ion-mobility-and-msms.md).
 - Close Bruker DataAnalysis before converting. While it has the dataset open,
   Thyra cannot read it.
 

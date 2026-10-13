@@ -7,7 +7,7 @@
 Thyra reads the files your instrument writes and saves them in
 [SpatialData](https://spatialdata.scverse.org/), an open format that analysis
 and viewing tools can read. Bruker, Waters and PHI data work, and so does
-imzML from any vendor.
+imzML from any vendor. Ion mobility and MS/MS data are kept too.
 
 **You do not need to know how to program.** You install Thyra once. After
 that, converting a dataset is one command.
@@ -59,6 +59,8 @@ One folder ending in `.zarr`. It holds:
 - the spectrum of every pixel, on one shared m/z axis
 - an image of the total ion current (TIC)
 - the optical image of the slide, when the acquisition has one
+- ion mobility and MS/MS data, when the acquisition has them: see
+  [Ion mobility and MS/MS](ion-mobility-and-msms.md)
 - the details of the acquisition: instrument, settings and pixel size
 
 ## Where to go next
