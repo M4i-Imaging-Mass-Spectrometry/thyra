@@ -125,6 +125,7 @@ precursor 0, one value per pixel.
     a `mobility` column is a mobility table. A table with a `precursor_mz`
     column is an MS/MS table. In both, `var["mz"]` repeats, so code that
     expects every m/z once must not be pointed at them.
+    [For tool developers](for-tool-developers.md) lists the rules.
 
 ## Not covered yet
 

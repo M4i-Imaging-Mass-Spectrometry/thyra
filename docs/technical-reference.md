@@ -13,6 +13,7 @@ start with [Install](install.md) and [Your first conversion](getting-started.md)
 | [Coordinate systems](coordinate-systems.md) | How positions in the result relate to the slide and the optical image |
 | [Metadata schema](metadata-schema.md) | The structured description of each acquisition, and METASPACE export |
 | [Writing the metadata document](writing-the-metadata-document.md) | For other programs that want to write the same description |
+| [For tool developers](for-tool-developers.md) | For tools that read a store: the rules you can rely on, how changes are versioned, and short recipes |
 | [Python API](api.md) | Every function and class you can use from Python |
 | [Design decisions](design-decisions.md) | Why each default is what it is, with the measurements behind it |
 | Format notes | Background on reading [imzML](imzml-parser-notes.md), [PHI ToF-SIMS](phi-tofsims-notes.md) and [Bruker solariX](solarix-notes.md) files |
