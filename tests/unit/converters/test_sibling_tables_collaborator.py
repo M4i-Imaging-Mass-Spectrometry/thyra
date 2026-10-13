@@ -148,6 +148,7 @@ def _context(siblings: SiblingTables, reader: Any) -> SiblingContext:
                 mobility_grid=siblings.mobility_grid,
                 resolved_resampling_plan=None,
                 region_info=None,
+                mass_axis_fingerprint=None,
                 pixel_size_source=PixelSizeSource.DEFAULT,
                 mobility_heatmap=lambda: None,
             )

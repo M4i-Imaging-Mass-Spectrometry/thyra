@@ -134,6 +134,7 @@ def _context(**overrides: Any) -> UnsContext:
         "mobility_grid": None,
         "resolved_resampling_plan": None,
         "region_info": _REGIONS,
+        "mass_axis_fingerprint": None,
         "pixel_size_source": PixelSizeSource.AUTO_DETECTED,
         "mobility_heatmap": lambda: None,
     }

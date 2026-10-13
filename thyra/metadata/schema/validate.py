@@ -25,6 +25,7 @@ from pydantic import ValidationError
 
 from ...utils.windows_paths import prepare_zarr_read_path
 from ..ontology.cache import ONTOLOGY
+from .axis_fingerprint import mass_axis_sha256
 from .models import (
     MSI_METADATA_SCHEMA_VERSION,
     MSI_VAR_MOBILITY_COLUMN,
@@ -35,6 +36,7 @@ from .models import (
     OntologyTerm,
     holder_of,
 )
+from .store_io import read_msi_metadata_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -272,6 +274,14 @@ def check_store_var_conventions(
     Only the ``var`` group is read -- never the intensity matrix -- so
     this stays cheap on stores of any size.
 
+    A plain MSI table whose ``msi_metadata`` block records a
+    ``provenance.mass_axis`` fingerprint is also checked against it: the
+    SHA-256 and the bin count of its ``var["mz"]`` must equal the recorded
+    ones (an error at ``provenance.mass_axis`` otherwise). Mobility and
+    MS/MS tables are skipped, because their own ``mz`` is not the main
+    axis, and a store with no fingerprint (written before schema 0.11.0)
+    gets no such check.
+
     Args:
         store_path: Path to a converted ``.zarr`` store.
 
@@ -282,6 +292,8 @@ def check_store_var_conventions(
     Raises:
         ValueError: If the path is not a SpatialData store (no
             ``tables`` group).
+        Exception: Whatever :func:`read_msi_metadata_blocks` raises for a
+            block it cannot read; every table's block is read first.
     """
     import numpy as np
     import zarr
@@ -295,6 +307,7 @@ def check_store_var_conventions(
             "it has no 'tables' group"
         )
 
+    blocks = read_msi_metadata_blocks(store_path)
     results: Dict[str, List[ValidationIssue]] = {}
     for name in sorted(root["tables"].keys()):
         issues: List[ValidationIssue] = []
@@ -332,11 +345,48 @@ def check_store_var_conventions(
             _check_mobility_var(var_group, mz, issues)
         elif MSI_VAR_PRECURSOR_COLUMN in var_group:
             _check_msms_var(var_group, mz, issues)
-        elif mz.size > 1 and not bool((np.diff(mz) > 0).all()):
-            issues.append(
-                ValidationIssue("error", "var.mz", "'mz' is not strictly increasing")
-            )
+        else:
+            if mz.size > 1 and not bool((np.diff(mz) > 0).all()):
+                issues.append(
+                    ValidationIssue(
+                        "error", "var.mz", "'mz' is not strictly increasing"
+                    )
+                )
+            _check_mass_axis_fingerprint(blocks.get(name), mz, issues)
     return results
+
+
+def _check_mass_axis_fingerprint(
+    block: Optional[Dict[str, Any]], mz: Any, issues: List[ValidationIssue]
+) -> None:
+    """Compare a plain MSI table's ``var["mz"]`` with its recorded fingerprint."""
+    if not block:
+        return
+    provenance = block.get("provenance")
+    recorded = provenance.get("mass_axis") if isinstance(provenance, dict) else None
+    if recorded is None:
+        return
+    if not isinstance(recorded, dict):
+        # Malformed, not mismatched: report it rather than raise, so
+        # ``thyra validate`` still exits with its verdict.
+        issues.append(
+            ValidationIssue(
+                "error",
+                "provenance.mass_axis",
+                "the recorded mass axis fingerprint is not a mapping",
+            )
+        )
+        return
+    if recorded.get("sha256") != mass_axis_sha256(mz) or int(
+        recorded.get("n_bins", -1)
+    ) != int(mz.size):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "provenance.mass_axis",
+                "var['mz'] does not match the recorded mass axis fingerprint",
+            )
+        )
 
 
 def _check_mobility_var(var_group: Any, mz: Any, issues: List[ValidationIssue]) -> None:

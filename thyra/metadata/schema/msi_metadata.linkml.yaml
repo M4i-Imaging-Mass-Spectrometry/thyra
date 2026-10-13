@@ -8,14 +8,14 @@
 # LinkML-as-source changes no field names.  A unit test keeps the class
 # and slot inventory, required flags, CV bindings and enum meanings in
 # step with the pydantic models; edit both together.
-id: https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.10.0/msi_metadata.linkml.yaml
+id: https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.11.0/msi_metadata.linkml.yaml
 name: thyra-msi-metadata
 description: >-
   Versioned, ontology-mapped metadata for mass spectrometry imaging
   datasets converted to SpatialData.  Stored in
   table.uns["msi_metadata"]; base fields mirror the METASPACE
   submission form.
-version: 0.10.0
+version: 0.11.0
 prefixes:
   linkml: https://w3id.org/linkml/
   MS: http://purl.obolibrary.org/obo/MS_
@@ -308,6 +308,14 @@ classes:
       # Free-form mapping of parameter name to scalar value; the exact
       # LinkML rendering is one of the questions for the working group.
       parameters: {}
+  MassAxisFingerprint:
+    description: The identity of a store's mass axis, a hash and a bin count.
+    attributes:
+      sha256:
+        required: true
+      n_bins:
+        range: integer
+        required: true
   Provenance:
     description: Who wrote the block and from what.
     attributes:
@@ -317,6 +325,8 @@ classes:
       source_path: {}
       pixel_size_source:
         range: PixelSizeSourceEnum
+      mass_axis:
+        range: MassAxisFingerprint
   MSIMetadata:
     description: The versioned MSI metadata document.
     tree_root: true

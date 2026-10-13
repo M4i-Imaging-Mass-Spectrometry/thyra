@@ -282,7 +282,7 @@ class TestSyntheticFixture:
         assert conversion["name"] == "conversion"
         assert conversion["parameters"]["tdf_spectrum"] == "scan_sum"
         assert "resolved_table" not in mobility and "grid" not in mobility
-        assert block["schema_version"] == "0.10.0"
+        assert block["schema_version"] == "0.11.0"
 
     #: What the fixture's calibration.sqlite and analysis database state,
     #: through the schema's ``calibration`` section: the external

@@ -34,7 +34,7 @@ import spatialdata as sd
 sdata = sd.read_zarr("output.zarr")
 block = sdata.tables["msi_dataset_z0"].uns["msi_metadata"]
 
-print(block["schema_version"])                       # "0.10.0"
+print(block["schema_version"])                       # "0.11.0"
 print(block["ms_analysis"]["pixel_size_um"])         # {"x": 20.0, "y": 20.0}
 print(block["ms_analysis"]["ionisation_source"])     # "MALDI"
 print(block["ms_analysis"]["ionisation_source_term"])
@@ -96,6 +96,7 @@ see [Completing the metadata](#completing-the-metadata).
 | | `source_format` | `"imzml"`, `"bruker"`, ... | -- |
 | | `source_path` | text, the source's path in a store block and its name alone in a document | -- |
 | | `pixel_size_source` | `"automatic"` / `"manual"` / `"default"` | -- |
+| | `mass_axis` | optional `{sha256, n_bins}`: a SHA-256 of the store's `var["mz"]` (little-endian float64 bytes, lower-case hex) and its length; written for every conversion, resampled or not; absent from a document and from stores older than 0.11.0 | -- |
 
 An ontology term is always the pair
 `{"accession": "MS:1000075", "name": "matrix-assisted laser desorption ionization"}` --
@@ -400,6 +401,7 @@ standard converge:
 - missing / empty pixel semantics
 - continuous-vs-processed source provenance after conversion
 - mass axis resampling provenance (method, axis law, target bins)
+- mass axis identity (a hash of the stored m/z values)
 - acquisition start timestamp (mzML has only the run's `startTimeStamp`
   attribute; `MS:1000747` is the completion time)
 - laser power as a percentage of the instrument's range (`MS:1000846`
@@ -510,13 +512,13 @@ added), 0.7.0 (`ms_analysis.manufacturer` and `ms_analysis.serial_number`
 added), 0.8.0 (the `calibration` section, `ms_analysis.n_spectra` and
 the processing steps' `action_term` added), 0.9.0 (the `alignment` section
 added), 0.10.0 (the `obs` column `acquisition_order` reserved; the document
-is unchanged).
+is unchanged), 0.11.0 (`provenance.mass_axis` added).
 
 The JSON Schema rendering is published at a fixed, versioned address,
 which is also its `$id`:
 
 ```
-https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.10.0/msi_metadata.schema.json
+https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.11.0/msi_metadata.schema.json
 ```
 
 Every version from 0.6.0 on has its own folder under that path, and a
@@ -526,7 +528,7 @@ program that writes the document without Thyra validates against that
 address; see [Writing the Metadata Document](writing-the-metadata-document.md).
 
 The same file is committed at
-`thyra/metadata/schema/msi_metadata_schema_v0_10.json` and ships in the
+`thyra/metadata/schema/msi_metadata_schema_v0_11.json` and ships in the
 wheel, so a Python consumer can validate documents offline without
 importing Thyra:
 
@@ -536,7 +538,7 @@ import json
 
 schema = json.loads(
     resources.files("thyra.metadata.schema")
-    .joinpath("msi_metadata_schema_v0_10.json")
+    .joinpath("msi_metadata_schema_v0_11.json")
     .read_text()
 )
 ```

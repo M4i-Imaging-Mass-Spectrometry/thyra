@@ -605,7 +605,9 @@ thyra validate PATH [OPTIONS]
 ```
 
 Validates the `uns["msi_metadata"]` block (or a JSON document) against
-the schema: structure, schema version, and ontology terms.
+the schema: structure, schema version, and ontology terms. For a store,
+it also checks each table's `var` and that its m/z axis matches the
+recorded `provenance.mass_axis`.
 
 | Option | Default | Description |
 |--------|---------|-------------|
