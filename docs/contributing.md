@@ -2,6 +2,9 @@
 
 Thank you for your interest in contributing to Thyra! This document provides guidelines for contributing to this project.
 
+To report a security problem, do not open an issue: follow
+[SECURITY.md](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/blob/main/SECURITY.md).
+
 ## Table of Contents
 
 - [Development Environment Setup](#development-environment-setup)
@@ -30,8 +33,12 @@ Thank you for your interest in contributing to Thyra! This document provides gui
 
 2. **Install Dependencies**
    ```bash
-   uv sync
+   uv sync --locked --group test --group dev
    ```
+
+   The dependencies live in PEP 735 groups: `test` (pytest), `dev` (the
+   linters) and `docs` (the documentation site). A plain `uv sync` installs
+   only `dev`, so pytest would be missing.
 
 3. **Install Pre-commit Hooks**
    ```bash
@@ -170,12 +177,21 @@ which reads the test sources rather than running them.
 
 4. **Commit Your Changes**
    - Use clear, descriptive commit messages
-   - Follow conventional commit format when possible:
+   - Pull requests are squash-merged, so the **pull request title** becomes the
+     commit title on `main`. It must be a conventional commit, and the
+     **PR title** check fails the pull request when it is not:
      ```
      feat: add dry-run mode for conversion preview
      fix: resolve memory leak in large dataset processing
      docs: update installation instructions
      ```
+     The allowed types are `allowed_tags` under
+     `[tool.semantic_release.commit_parser_options]` in `pyproject.toml`. A
+     title the release tool cannot parse would ship with no version bump and
+     no changelog line.
+   - Your commit messages become the body of the squash commit, and the
+     release tool reads them too. A paragraph starting with a type counts as
+     one more change, and a `BREAKING CHANGE:` line makes a major version.
 
 ### Submitting the Pull Request
 
@@ -287,7 +303,7 @@ underlining them would only add clutter.
 Test every code example, and preview the site before opening a pull request:
 
 ```bash
-uv sync --group docs
+uv sync --locked --group test --group dev --group docs
 uv run mkdocs serve
 ```
 

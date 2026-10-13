@@ -1,0 +1,85 @@
+name: PR title
+
+# Fails a pull request whose title is not a conventional commit.
+#
+# Squash is the only merge method the repository allows, and its commit title
+# is set to the pull request title, so the title becomes the commit subject on
+# main. release.yml's `semantic-release version` reads that subject to pick the
+# next version. A subject it cannot parse is skipped without a warning, so the
+# change ships with no version bump and no changelog line unless a commit
+# message in the body happens to parse. This check moves that failure to the
+# pull request, where the title can still be edited.
+#
+# The allowed types are read from `allowed_tags` in the base branch's
+# pyproject.toml, the list semantic-release itself uses, so the two cannot
+# drift apart, and a pull request cannot widen the list for its own title. The
+# pattern accepts a strict subset of what semantic-release's conventional-commit
+# parser accepts: `type`, an optional `(scope)`, an optional `!`, then `: ` and
+# a description. A `!` makes the next release a major version whatever the
+# type, so it gets a warning rather than passing quietly. The warning uses the
+# parser's own pattern, whose greedy scope can find a `!` the strict pattern
+# reads as part of the description.
+#
+# `pull_request`, not `pull_request_target`: a run from a fork gets no secrets
+# and a read-only token, and needs neither. The title reaches the script only
+# through an environment variable, never interpolated into the script, so a
+# title cannot inject shell or Python.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Conventional commit title
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          sparse-checkout: pyproject.toml
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Check the title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          python3 - <<'EOF'
+          import os
+          import re
+          import sys
+          import tomllib
+
+          with open("pyproject.toml", "rb") as fh:
+              config = tomllib.load(fh)["tool"]["semantic_release"]
+          types = config["commit_parser_options"]["allowed_tags"]
+          title = os.environ["PR_TITLE"]
+          alternatives = "|".join(map(re.escape, types))
+          pattern = r"(?:%s)(?:\([^\n()]+\))?!?: \S.*" % alternatives
+          parser = r"(?:%s)(?:\((?P<scope>[^\n]+)\))?(?P<brk>!)?:\s+" % alternatives
+
+          if re.fullmatch(pattern, title):
+              parsed = re.match(parser, title)
+              if parsed and parsed.group("brk"):
+                  print("::warning title=PR title::'!' makes the next release a MAJOR version.")
+              print(f"OK: {title}")
+              sys.exit(0)
+
+          print(f"::error title=PR title::Not a conventional commit: {title}")
+          print()
+          print("The title becomes the commit message, and the release tool reads it.")
+          print("Use: type(optional scope): short description")
+          print(f"Allowed types: {', '.join(types)}")
+          print("feat = next minor version; fix, perf = next patch; others release nothing.")
+          print("A '!' after the type (feat!: ...) means the next MAJOR version.")
+          print("Example: fix(resampling): refuse a bin count with a width")
+          sys.exit(1)
+          EOF
