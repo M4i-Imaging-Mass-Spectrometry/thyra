@@ -396,6 +396,69 @@ class TestAMetadataOnlyReaderCanStillRead:
         assert len(parser_builds) == 1
 
 
+_LOWEST_OBSERVED = re.compile(r'(accession="MS:1000528"[^>]*?value=")([^"]*)(")')
+
+
+def restate_every(path: Path, pattern: "re.Pattern[str]", text: str) -> Path:
+    """Write every occurrence of one observed-m/z term as ``text``."""
+    body = path.read_text(encoding="utf-8")
+    path.write_text(
+        pattern.sub(lambda m: m.group(1) + text + m.group(3), body), encoding="utf-8"
+    )
+    return path
+
+
+class TestAnOutwardRange:
+    """``outward=True`` moves each bound out by the precision of its own text (#473)."""
+
+    @pytest.mark.parametrize(
+        "raw, step",
+        [
+            (b"100.123457", 1e-6),
+            (b"1200.0", 0.1),
+            (b"1000", 1.0),
+            (b"1.2E3", 100.0),
+            (b" 5.5 ", 0.1),
+            (b"abc", 0.0),
+            (b"NaN", 0.0),
+        ],
+    )
+    def test_the_step_is_one_unit_of_the_last_stated_digit(self, raw, step):
+        from thyra.readers.imzml.header import _stated_step
+
+        assert _stated_step(raw) == pytest.approx(step)
+
+    def test_each_bound_moves_by_its_own_text(self, temp_dir):
+        from thyra.readers.imzml.header import scan_observed_mz_range
+
+        path = write_imzml(temp_dir, n_spectra=6)
+        restate_every(path, _LOWEST_OBSERVED, "100.00")
+        restate_every(path, _HIGHEST_OBSERVED, "500")
+
+        assert scan_observed_mz_range(path) == (100.0, 500.0)
+        assert scan_observed_mz_range(path, outward=True) == pytest.approx(
+            (99.99, 501.0)
+        )
+
+    def test_the_coarsest_text_of_an_extreme_wins(self, temp_dir):
+        from thyra.readers.imzml.header import scan_observed_mz_range
+
+        path = write_imzml(temp_dir, n_spectra=6)
+        restate_every(path, _HIGHEST_OBSERVED, "500.000")
+        raise_recorded_highest(path, 2, "500")  # type: ignore[arg-type]
+
+        assert scan_observed_mz_range(path, outward=True)[1] == pytest.approx(501.0)
+
+    def test_a_low_bound_is_halved_rather_than_moved_to_zero(self, temp_dir):
+        from thyra.readers.imzml.header import scan_observed_mz_range
+
+        path = write_imzml(temp_dir, n_spectra=6)
+        restate_every(path, _LOWEST_OBSERVED, "1")
+
+        low, _ = scan_observed_mz_range(path, outward=True)
+        assert low == pytest.approx(0.5)
+
+
 def test_refusals_still_carry_their_type(temp_dir):
     """The missing-``.ibd`` refusal is a ``ConversionRefused``, as before.
 

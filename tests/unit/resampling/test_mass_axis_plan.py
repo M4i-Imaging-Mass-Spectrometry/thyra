@@ -118,13 +118,14 @@ class TestRange:
         assert warning.startswith("a.imzML:")
         assert "minimum and maximum" in warning
 
-    def test_an_imzml_header_range_is_widened_by_one_ppm(self):
-        """The header rounds to six decimals, which can cut its own edge (#473)."""
+    def test_a_header_range_is_planned_as_read_and_its_origin_says_so(self):
+        """The text step is applied when the header is read (D49); the
+        planner takes the moved range as it stands and says where it came from."""
         sources = [
             _src(
                 "a.imzML",
                 _RAPIFLEX,
-                (300.0, 600.0),
+                (299.9, 600.1),
                 source_format="imzml",
                 range_is_header=True,
             )
@@ -132,24 +133,17 @@ class TestRange:
 
         plan = _plan_from_metadata(sources)
 
-        assert plan.min_mz == pytest.approx(300.0 - 300.0e-6, rel=1e-12)
-        assert plan.max_mz == pytest.approx(600.0 + 600.0e-6, rel=1e-12)
-        assert plan.min_mz < 300.0 and plan.max_mz > 600.0
-        assert "widened by 1 ppm" in plan.origins["min_mz"]
-        assert "widened by 1 ppm" in plan.origins["max_mz"]
+        assert (plan.min_mz, plan.max_mz) == (299.9, 600.1)
+        assert "header text moved out" in plan.origins["min_mz"]
+        assert "header text moved out" in plan.origins["max_mz"]
 
-    def test_a_bound_below_one_dalton_is_widened_by_the_floor(self):
-        source = _src("a", _RAPIFLEX, (0.1, 0.5), range_is_header=True)
-
-        assert source.planning_range == pytest.approx((0.1 - 1e-6, 0.5 + 1e-6))
-
-    def test_a_source_that_is_not_a_header_range_is_not_widened(self):
+    def test_a_source_that_is_not_a_header_range_says_nothing_of_one(self):
         plan = _plan_from_metadata([_src("a", _RAPIFLEX, (300.0, 600.0))])
 
         assert (plan.min_mz, plan.max_mz) == (300.0, 600.0)
-        assert "widened" not in plan.origins["min_mz"]
+        assert "header" not in plan.origins["min_mz"]
 
-    def test_a_forced_bound_is_not_widened(self):
+    def test_a_forced_bound_is_used_as_given(self):
         sources = [
             _src("a.imzML", _RAPIFLEX, (300.0, 600.0), range_is_header=True),
         ]
@@ -159,7 +153,7 @@ class TestRange:
         assert (plan.min_mz, plan.max_mz) == (300.0, 600.0)
         assert plan.origins["min_mz"] == "forced"
 
-    def test_the_imzml_edge_warning_still_fires_on_the_widened_range(self):
+    def test_the_imzml_edge_warning_fires_on_a_header_range(self):
         sources = [
             _src(
                 "a.imzML",

@@ -19,12 +19,12 @@ detector chain is told about each source and reads no file, so every rule
 can be exercised without one. :func:`plan_mass_axis` reads the sources and
 calls it.
 
-An imzML header states its m/z range rounded to six decimals, and the writer
-that fills it casts float64 values to float32, so the stated low bound can sit
-above the source's first sample. A conversion keeps only the m/z inside its
-declared bounds, inclusive, so a range taken from such a header as it stands
-drops the edge samples (issue #473, D49). The planner therefore widens an
-imzML source's range outward by 1 ppm before using it.
+An imzML header states its observed m/z range as rounded text, so the
+stated low bound can sit above the source's first sample. A conversion keeps
+only the m/z inside its declared bounds, inclusive, so a range taken from such
+a header as it stands drops the edge samples (issue #473, D49). The planner
+therefore moves each imzML bound out by one unit of the last digit its text
+states before using it.
 """
 
 from __future__ import annotations
@@ -72,13 +72,6 @@ _WIDTH_EXPONENT = {
     "fticr": 2.0,
 }
 
-#: How far an imzML header range is widened on each side, relative to the
-#: bound, and the absolute floor (Da) for bounds below 1 Da. One ppm covers
-#: the header's rounding to six decimals for m/z >= 0.5 and float32 rounding
-#: of the m/z (about 0.06 ppm).
-_HEADER_RANGE_PPM = 1e-6
-_HEADER_RANGE_FLOOR_DA = 1e-6
-
 #: Relative slack when asking whether one width is narrower than another, so
 #: two widths that agree to rounding do not warn.
 _WIDTH_TOLERANCE = 1e-9
@@ -96,9 +89,8 @@ class _Source:
         range_known: Whether the source states a mass range at all.
         source_format: The registry format name (``"imzml"``, ``"phi"``,
             ...), or ``None`` when unknown.
-        range_is_header: Whether the range is a header value that was
-            rounded when it was written (an imzML source). The plan then
-            uses it widened by 1 ppm, see :attr:`planning_range`.
+        range_is_header: Whether the range was read from an imzML header's
+            text and moved out by the precision that text states (D49).
     """
 
     name: str
@@ -114,23 +106,6 @@ class _Source:
         if raw is None:
             return 0.0, 0.0
         return float(raw[0]), float(raw[1])
-
-    @property
-    def planning_range(self) -> Tuple[float, float]:
-        """The range the plan uses: ``mass_range``, widened when a header's.
-
-        A header value is rounded to six decimals and, in an imzML, cast
-        through float32, so it can sit inside the source's own first or
-        last sample; the conversion's range test is inclusive at the bounds
-        it is given, and would drop that sample (issue #473).
-        """
-        lo, hi = self.mass_range
-        if not self.range_is_header:
-            return lo, hi
-        return (
-            lo - max(lo * _HEADER_RANGE_PPM, _HEADER_RANGE_FLOOR_DA),
-            hi + max(hi * _HEADER_RANGE_PPM, _HEADER_RANGE_FLOOR_DA),
-        )
 
     @property
     def spectrum_type(self) -> Optional[str]:
@@ -240,7 +215,7 @@ def _plan_range(
             "No mass range is stated by " + ", ".join(unknown) + ", and finding "
             "one would mean decoding spectra. Pass both min_mz and max_mz."
         )
-    ranges_of = {s.name: s.planning_range for s in known}
+    ranges_of = {s.name: s.mass_range for s in known}
     low = min_mz if min_mz is not None else max(r[0] for r in ranges_of.values())
     high = max_mz if max_mz is not None else min(r[1] for r in ranges_of.values())
     if not low < high:
@@ -272,8 +247,8 @@ def _plan_range(
     derived = "intersection of the sources' ranges"
     if any(s.range_is_header for s in known):
         derived += (
-            "; an imzML range is its header value widened by 1 ppm, because "
-            "the header rounds it"
+            "; an imzML range is its header text moved out by one unit of "
+            "the last digit it states, because the text is rounded"
         )
     notes.origins["min_mz"] = "forced" if min_mz is not None else derived
     notes.origins["max_mz"] = "forced" if max_mz is not None else derived
@@ -291,7 +266,7 @@ def _warn_range(
 ) -> None:
     """Say which sources the planned range does not fit, and which cut others."""
     for s in known:
-        lo, hi = s.planning_range
+        lo, hi = s.mass_range
         if lo > low or hi < high:
             notes.warnings.append(
                 f"{s.name}: its own range [{lo:g}, {hi:g}] does not cover the "
@@ -306,16 +281,12 @@ def _warn_range(
     for s in known:
         if (s.source_format or "").lower() != "imzml":
             continue
-        lo, hi = s.planning_range
+        lo, hi = s.mass_range
         others = [o for o in known if o is not s]
         bounds = []
-        if low_derived and lo == low and any(o.planning_range[0] < low for o in others):
+        if low_derived and lo == low and any(o.mass_range[0] < low for o in others):
             bounds.append("minimum")
-        if (
-            high_derived
-            and hi == high
-            and any(o.planning_range[1] > high for o in others)
-        ):
+        if high_derived and hi == high and any(o.mass_range[1] > high for o in others):
             bounds.append("maximum")
         if bounds:
             notes.warnings.append(
@@ -628,13 +599,44 @@ def _read_source(path: Path, name: str) -> _Source:
         source_format: Optional[str] = detect_format(path)
     except Exception:
         source_format = None
+    from_header = known and (source_format or "").lower() == "imzml"
+    if from_header:
+        metadata = _with_outward_range(path, metadata)
     return _Source(
         name,
         metadata,
         range_known=known,
         source_format=source_format,
-        range_is_header=(source_format or "").lower() == "imzml",
+        range_is_header=from_header,
     )
+
+
+def _with_outward_range(path: Path, metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """An imzML source's range moved out by the precision of its header text.
+
+    The header states the lowest and highest observed m/z as rounded text:
+    ``100.123457`` for a first sample at ``100.12345678``. A conversion
+    reads the exact range from the ``.ibd``, but a plan reads no spectra. A
+    plan bound taken from the rounded text can sit inside the data, and a
+    conversion given the plan then drops every sample beyond it (#473). So
+    the header is read again for bounds moved out by one unit of the last
+    digit each states. On a continuous file that read stops after the first
+    spectra, as the metadata read does.
+    """
+    from .metadata.constants import BinaryDataType
+    from .readers.imzml.header import scan_observed_mz_range
+
+    mode = (metadata.get("format_specific") or {}).get("file_mode")
+    outward = scan_observed_mz_range(
+        path, shared_axis=mode == BinaryDataType.CONTINUOUS, outward=True
+    )
+    if outward is None:
+        return metadata
+    essential = dict(metadata.get("essential_metadata") or {})
+    essential["mass_range"] = outward
+    moved = dict(metadata)
+    moved["essential_metadata"] = essential
+    return moved
 
 
 def plan_mass_axis(
@@ -659,7 +661,8 @@ def plan_mass_axis(
 
     * Axis type: every source's detector agrees, else refused.
     * Range: the intersection of the sources' ranges. An imzML source's
-      range is its header value widened outward by 1 ppm, because the
+      range is its header text moved out by one unit of the last digit it
+      states (``100.123457`` by 1e-6, ``1000`` by 1), because the
       header rounds it and would otherwise cut the source's edge samples.
     * Width (non-``tof`` axes): the widest width any source declares, each
       first stated at ``reference_mz`` under the axis law, so that on the

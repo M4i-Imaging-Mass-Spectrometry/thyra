@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
+import numpy as np
 import pytest
+from pyimzml.ImzMLWriter import ImzMLWriter
 
 import thyra
 from thyra.errors import ConversionRefused
@@ -65,3 +68,41 @@ def test_the_same_path_given_more_than_once_gets_a_number_each(tmp_path, copies)
 
     assert len(set(names)) == copies
     assert names == [f"x/a.imzML ({i + 1})" for i in range(copies)]
+
+
+def _imzml_with_a_rounded_header(path: Path, mzs: np.ndarray, fmt: str) -> Path:
+    """A continuous imzML whose header states its observed m/z as ``fmt`` text."""
+    with ImzMLWriter(str(path), mode="continuous", mz_dtype=np.float64) as writer:
+        for x in (1, 2):
+            writer.addSpectrum(mzs, np.full(mzs.size, 5.0), (x, 1, 1))
+    text = path.read_text(encoding="utf-8")
+    text = re.sub(
+        r'(accession="MS:100052[78]"[^>]*?value=")([^"]*)"',
+        lambda m: f'{m.group(1)}{format(float(m.group(2)), fmt)}"',
+        text,
+    )
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+class TestARoundedHeaderRange:
+    """An imzML header rounds its observed range; the plan must still cover it (#473)."""
+
+    def test_six_decimals_move_by_one_unit_of_the_sixth(self, tmp_path):
+        mzs = np.linspace(100.12345678, 999.87654321, 50)
+        source = _imzml_with_a_rounded_header(tmp_path / "a.imzML", mzs, ".6f")
+
+        plan = plan_mass_axis(source)
+
+        assert plan.min_mz < mzs[0] and plan.max_mz > mzs[-1]
+        assert mzs[0] - plan.min_mz < 2e-6 and plan.max_mz - mzs[-1] < 2e-6
+
+    def test_a_whole_number_moves_by_one(self, tmp_path):
+        """The text "1000" was rounded to 1, which its float 1000.0 does not say."""
+        mzs = np.linspace(100.4, 1000.4, 50)
+        source = _imzml_with_a_rounded_header(tmp_path / "a.imzML", mzs, ".0f")
+
+        plan = plan_mass_axis(source)
+
+        assert plan.min_mz == pytest.approx(99.0)
+        assert plan.max_mz == pytest.approx(1001.0)

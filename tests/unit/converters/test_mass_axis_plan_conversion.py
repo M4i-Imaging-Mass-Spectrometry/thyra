@@ -87,11 +87,9 @@ def test_both_sources_get_the_planned_axis(tmp_path, sources, as_dict):
         recorded = _recorded(store)
         assert recorded["sha256"] == plan.sha256
         assert int(recorded["n_bins"]) == plan.n_bins
-    # The sources' header ranges are 300 and 600; an imzML range is widened by
-    # 1 ppm because its header rounds it (D49), so the plan sits just outside.
-    assert plan.min_mz < 300.0 and plan.max_mz > 600.0
-    assert plan.min_mz == pytest.approx(300.0 - 300e-6, rel=1e-12)
-    assert plan.max_mz == pytest.approx(600.0 + 600e-6, rel=1e-12)
+    # The intersection, each imzML header bound moved out by one unit of its
+    # last stated decimal: pyimzml writes "300.0" and "600.0" (D49).
+    assert (plan.min_mz, plan.max_mz) == pytest.approx((299.9, 600.1), rel=1e-12)
 
 
 def _stored_total(store: Path) -> float:
