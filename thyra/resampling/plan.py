@@ -122,6 +122,43 @@ def _strings(data: Dict[str, Any], key: str) -> Tuple[str, ...]:
     return tuple(value)
 
 
+def _check_layout(data: Any) -> None:
+    """Refuse what is not a plan of this layout: format, version and keys.
+
+    A plan file is edited by hand, so what would be ignored is refused: a key
+    :meth:`MassAxisPlan.to_dict` does not write, and a ``version`` that is
+    not the whole number 1 (``True`` and ``1.0`` compare equal to 1).
+    """
+    if not isinstance(data, dict) or data.get("format") != PLAN_FORMAT:
+        raise ConversionRefused(
+            f"Not a mass axis plan: the 'format' key must be {PLAN_FORMAT!r}."
+        )
+    version = data.get("version")
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version != PLAN_VERSION
+    ):
+        raise ConversionRefused(
+            f"Unsupported mass axis plan version {version!r}; "
+            f"this Thyra reads version {PLAN_VERSION}."
+        )
+    unknown = sorted(str(key) for key in set(data) - _PLAN_KEYS)
+    if unknown:
+        raise ConversionRefused(
+            "The mass axis plan holds "
+            + ", ".join(repr(k) for k in unknown)
+            + ", which no plan has and which would change nothing. "
+            "Known keys: " + ", ".join(sorted(_PLAN_KEYS)) + "."
+        )
+    required = ("axis_type", "min_mz", "max_mz", "reference_mz", "n_bins", "sha256")
+    missing = [key for key in required if data.get(key) is None]
+    if missing:
+        raise ConversionRefused(
+            "The mass axis plan lacks " + ", ".join(repr(k) for k in missing) + "."
+        )
+
+
 @dataclass(frozen=True)
 class MassAxisPlan:
     """One mass axis, fixed for several sources.
@@ -221,34 +258,7 @@ class MassAxisPlan:
                 a setting every plan holds, holds a key no plan has, or is
                 inconsistent in the ways above.
         """
-        if not isinstance(data, dict) or data.get("format") != PLAN_FORMAT:
-            raise ConversionRefused(
-                f"Not a mass axis plan: the 'format' key must be {PLAN_FORMAT!r}."
-            )
-        version = data.get("version")
-        if (
-            isinstance(version, bool)
-            or not isinstance(version, int)
-            or version != PLAN_VERSION
-        ):
-            raise ConversionRefused(
-                f"Unsupported mass axis plan version {version!r}; "
-                f"this Thyra reads version {PLAN_VERSION}."
-            )
-        unknown = sorted(str(key) for key in set(data) - _PLAN_KEYS)
-        if unknown:
-            raise ConversionRefused(
-                "The mass axis plan holds "
-                + ", ".join(repr(k) for k in unknown)
-                + ", which no plan has and which would change nothing. "
-                "Known keys: " + ", ".join(sorted(_PLAN_KEYS)) + "."
-            )
-        required = ("axis_type", "min_mz", "max_mz", "reference_mz", "n_bins", "sha256")
-        missing = [key for key in required if data.get(key) is None]
-        if missing:
-            raise ConversionRefused(
-                "The mass axis plan lacks " + ", ".join(repr(k) for k in missing) + "."
-            )
+        _check_layout(data)
         try:
             axis_type = AxisType(data["axis_type"])
             raw_method = data.get("method")
@@ -288,25 +298,28 @@ class MassAxisPlan:
             warnings=_strings(data, "warnings"),
             sources=_strings(data, "sources"),
         )
-        if not plan.min_mz < plan.max_mz:
+        plan._check_settings(data)
+        plan._check_n_bins()
+        return plan
+
+    def _check_settings(self, data: Dict[str, Any]) -> None:
+        """Refuse an inverted range, or an axis without the settings it needs."""
+        if not self.min_mz < self.max_mz:
             raise ConversionRefused(
-                f"The mass axis plan's 'min_mz' ({plan.min_mz:g}) must be "
-                f"below its 'max_mz' ({plan.max_mz:g})."
+                f"The mass axis plan's 'min_mz' ({self.min_mz:g}) must be "
+                f"below its 'max_mz' ({self.max_mz:g})."
             )
-        if axis_type is AxisType.TOF:
-            missing = [
-                k for k in ("tof_a", "tof_b", "bins_per_fwhm") if data.get(k) is None
-            ]
+        if self.axis_type is AxisType.TOF:
+            needs: Tuple[str, ...] = ("tof_a", "tof_b", "bins_per_fwhm")
         else:
-            missing = [] if data.get("width_at_mz") is not None else ["width_at_mz"]
+            needs = ("width_at_mz",)
+        missing = [k for k in needs if data.get(k) is None]
         if missing:
             raise ConversionRefused(
-                f"The mass axis plan's {axis_type.value} axis needs "
+                f"The mass axis plan's {self.axis_type.value} axis needs "
                 + ", ".join(repr(k) for k in missing)
                 + "."
             )
-        plan._check_n_bins()
-        return plan
 
     def _check_n_bins(self) -> None:
         """Refuse an ``n_bins`` the settings do not lay.
