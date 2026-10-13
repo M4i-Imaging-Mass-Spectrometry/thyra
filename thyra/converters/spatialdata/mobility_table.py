@@ -361,6 +361,7 @@ def _build_from_shared_axis(
     n_obs: int,
     scratch: Path,
     linearisation: Optional[AxisLinearisation] = None,
+    merge_duplicates: bool = False,
 ) -> Optional[Tuple[sparse.csc_matrix, pd.DataFrame, CscAssembly]]:
     """Scatter the source's own feature pairs; ``(matrix, var, assembly)`` or ``None``."""
     listed = reader.get_shared_mobility_features()
@@ -371,6 +372,7 @@ def _build_from_shared_axis(
     # included: a feature no pixel carries is still a feature the export
     # declared, and a consumer aligning on the list must find it.
     assembly = CscAssembly(features.n_features, n_obs, keep_empty_columns=True)
+    assembly.merge_duplicates = merge_duplicates
     n_skipped = 0
     n_pixels = 0
     for coords, mzs, mobility, intensities in reader.iter_mobility_spectra():
@@ -793,6 +795,7 @@ def _build_from_grid(
     discovery: Optional[GridDiscovery],
     scratch: Path,
     linearisation: Optional[AxisLinearisation] = None,
+    merge_duplicates: bool = False,
 ) -> Optional[Tuple[sparse.csc_matrix, pd.DataFrame, CscAssembly]]:
     """Bin every pixel's point cloud onto the grid; ``(matrix, var, assembly)`` or ``None``.
 
@@ -828,6 +831,8 @@ def _build_from_grid(
             description="Mobility grid: scattering",
             linearisation=linearisation,
         )
+    if merge_duplicates:
+        assembly.merge_duplicates = True
     matrix = assembly.matrix()
     var = _grid_feature_var(assembly.unique_keys, axis, grid)
     logger.info(
@@ -861,6 +866,7 @@ def build_mobility_table(
     discovery: Optional[GridDiscovery] = None,
     scratch: Optional[Path] = None,
     linearisation: Optional[AxisLinearisation] = None,
+    merge_duplicates: bool = False,
 ) -> Optional[Any]:
     """Build the mobility-resolved table for one MSI table, or ``None``.
 
@@ -897,6 +903,11 @@ def build_mobility_table(
             every m/z is placed by the closed form rather than by binary
             search (issue #348). ``None`` searches. Ignored on the parts
             of the grid route ``discovery`` already ran.
+        merge_duplicates: Whether the source gave some position more than
+            one spectrum. The summed table sums those into the position's
+            one row; this table must too, or it stores the repeated
+            ``(row, column)`` entries side by side (issue #241). The
+            converter knows from its own count pass and says so.
 
     Returns:
         A ``TableModel``-parsed AnnData, or ``None`` when no table can be
@@ -914,7 +925,13 @@ def build_mobility_table(
     try:
         if reader.has_shared_mobility_axis:
             built = _build_from_shared_axis(
-                reader, row_for, axis, n_obs, workdir, linearisation
+                reader,
+                row_for,
+                axis,
+                n_obs,
+                workdir,
+                linearisation,
+                merge_duplicates=merge_duplicates,
             )
         else:
             refusal = grid_refusal(reader, axis, grid)
@@ -926,7 +943,15 @@ def build_mobility_table(
                 )
                 return None
             built = _build_from_grid(
-                reader, row_for, axis, grid, n_obs, discovery, workdir, linearisation
+                reader,
+                row_for,
+                axis,
+                grid,
+                n_obs,
+                discovery,
+                workdir,
+                linearisation,
+                merge_duplicates=merge_duplicates,
             )
             grid_uns = grid.to_uns()
     finally:
