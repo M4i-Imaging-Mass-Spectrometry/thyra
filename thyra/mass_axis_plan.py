@@ -411,8 +411,25 @@ def _lay_axis(first: _Source, plan: MassAxisPlan) -> Tuple[int, str]:
     essential["mass_range"] = (plan.min_mz, plan.max_mz)
     metadata["essential_metadata"] = essential
     planner = AxisPlanner.from_metadata(metadata, normalize_resampling_config(config))
-    axis = planner.settle(lambda n_bins: None).axis
+    axis = planner.settle(_refuse_wide_axis).axis
     return int(len(axis)), mass_axis_sha256(axis)
+
+
+def _refuse_wide_axis(n_bins: int) -> None:
+    """Refuse an axis no conversion here could hold, before it is laid.
+
+    The conversion's own memory check: a plan for an axis that every
+    conversion would refuse is no use, and laying it first can take more
+    memory than the machine has.
+    """
+    from .converters.spatialdata.csc_assembly import mass_axis_refusal
+
+    refusal = mass_axis_refusal(
+        int(n_bins),
+        levers="pass a wider width_at_mz, or fewer bins_per_fwhm on a tof axis",
+    )
+    if refusal is not None:
+        raise ConversionRefused(refusal)
 
 
 def _plan_from_metadata(
@@ -547,7 +564,37 @@ def _read_source(path: Path, name: str) -> _Source:
         source_format: Optional[str] = detect_format(path)
     except Exception:
         source_format = None
+    if known and (source_format or "").lower() == "imzml":
+        metadata = _with_outward_range(path, metadata)
     return _Source(name, metadata, range_known=known, source_format=source_format)
+
+
+def _with_outward_range(path: Path, metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """An imzML source's range moved out by the precision of its header text.
+
+    The header states the lowest and highest observed m/z as rounded text:
+    ``100.123457`` for a first sample at ``100.12345678``. A conversion
+    reads the exact range from the ``.ibd``, but a plan reads no spectra. A
+    plan bound taken from the rounded text can sit inside the data, and a
+    conversion given the plan then drops every sample beyond it (#473). So
+    the header is read again for bounds moved out by one unit of the last
+    digit each states. On a continuous file that read stops after the first
+    spectra, as the metadata read does.
+    """
+    from .metadata.constants import BinaryDataType
+    from .readers.imzml.header import scan_observed_mz_range
+
+    mode = (metadata.get("format_specific") or {}).get("file_mode")
+    outward = scan_observed_mz_range(
+        path, shared_axis=mode == BinaryDataType.CONTINUOUS, outward=True
+    )
+    if outward is None:
+        return metadata
+    essential = dict(metadata.get("essential_metadata") or {})
+    essential["mass_range"] = outward
+    moved = dict(metadata)
+    moved["essential_metadata"] = essential
+    return moved
 
 
 def plan_mass_axis(

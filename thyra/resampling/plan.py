@@ -252,12 +252,22 @@ class MassAxisPlan:
     def load(cls, path: Union[str, Path]) -> "MassAxisPlan":
         """Read a plan written by :meth:`save`.
 
+        The bytes go to ``json.loads``, which reads UTF-8, UTF-16 and
+        UTF-32 and skips a byte-order mark: a plan edited in Notepad or
+        written by Windows PowerShell loads like one :meth:`save` wrote.
+
         Raises:
             ConversionRefused: If the file cannot be read, is not JSON, or
                 is not a plan.
         """
         try:
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            data = json.loads(Path(path).read_bytes())
+        except UnicodeDecodeError as exc:
+            raise ConversionRefused(
+                f"Could not read the mass axis plan {Path(path).name}: it is "
+                f"not UTF-8, UTF-16 or UTF-32 text ({exc.reason} at byte "
+                f"{exc.start}). Save it as UTF-8."
+            ) from exc
         except (OSError, ValueError) as exc:
             raise ConversionRefused(
                 f"Could not read the mass axis plan {Path(path).name}: {exc}"

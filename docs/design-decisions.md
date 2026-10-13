@@ -3518,6 +3518,22 @@ exist. The new check refuses a conversion; it writes nothing.
   peaks (#442).
 - There is no plan for "the axis of an existing store" yet.
 
+**Added 2026-10-14, before release (#473).** An imzML header states its
+observed range as rounded text: `100.123457` for a first sample at
+`100.12345678`. A conversion reads the exact range from the `.ibd`, but a plan
+reads no spectra, so a plan bound could sit inside the data. A conversion given
+the plan then dropped every sample beyond it, in every spectrum, with no plan
+warning. The plan now moves each imzML header bound out by one unit of the
+last digit its text states: `100.123457` by 1e-6, `1000` by 1, `1.2E3` by 100.
+That covers rounding and truncation. The step is read from the text, not the
+parsed number, because `1000` and `1000.000000` parse to the same float. The
+extra bins are zero in every store. Other formats state their range as numbers
+and are not moved.
+
+The plan also runs the conversion's memory check before it lays the axis, and
+a plan file loads from UTF-16 or UTF-8 with a byte-order mark, as the other
+JSON inputs do (#454).
+
 ## D45. The metadata block names the sample and the spectrum representation
 
 **Status:** Implemented (2026-10-13).

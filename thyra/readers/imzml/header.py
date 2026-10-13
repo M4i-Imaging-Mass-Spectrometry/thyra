@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import logging
 import re
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, NamedTuple, Optional, Tuple, Union
 from xml.etree import ElementTree as ET  # nosec B405
@@ -290,6 +291,7 @@ def scan_observed_mz_range(
     path: Union[str, Path],
     *,
     shared_axis: bool = False,
+    outward: bool = False,
 ) -> Optional[Tuple[float, float]]:
     """The mass range the file itself records, or ``None``.
 
@@ -323,6 +325,14 @@ def scan_observed_mz_range(
     Measured on a 270 MB continuous export over a network share: the full
     pass cost 5.6 s cold and 0.58 s warm for a range the first spectrum
     already stated (issue #371).
+
+    ``outward`` moves each bound out by one unit of the last digit its text
+    states: ``100.123457`` by 1e-6, ``1000`` by 1, ``1.2E3`` by 100. The
+    text is rounded, so the stated low can sit above the first sample and
+    the stated high below the last. A caller that takes the range as a hard
+    limit without reading spectra, such as a mass axis plan, asks for this
+    so that no sample falls outside (#473). A low bound is never moved to
+    zero or below; it is halved instead.
     """
     path = Path(path)
     seen = _ObservedExtremes()
@@ -335,9 +345,11 @@ def scan_observed_mz_range(
                 break
             buffer = carry + chunk
             for match in _LOWEST.finditer(buffer):
-                seen.note_lowest(_as_float(match.group(1)))
+                raw = match.group(1)
+                seen.note_lowest(_as_float(raw), _stated_step(raw))
             for match in _HIGHEST.finditer(buffer):
-                seen.note_highest(_as_float(match.group(1)))
+                raw = match.group(1)
+                seen.note_highest(_as_float(raw), _stated_step(raw))
             if shared_axis and seen.uniform and seen.complete:
                 logger.debug(
                     "%s declares a shared m/z axis and its first spectra agree on "
@@ -356,7 +368,27 @@ def scan_observed_mz_range(
             path.name,
         )
         return None
+    if outward:
+        low = seen.lowest - seen.lowest_step
+        return (
+            low if low > 0 or seen.lowest <= 0 else seen.lowest / 2,
+            seen.highest + seen.highest_step,
+        )
     return (seen.lowest, seen.highest)
+
+
+def _stated_step(raw: bytes) -> float:
+    """One unit of the last digit a cvParam value's text states, or 0.
+
+    ``b"100.123457"`` is 1e-6, ``b"1000"`` is 1 and ``b"1.2E3"`` is 100.
+    """
+    try:
+        exponent = Decimal(raw.decode("ascii").strip()).as_tuple().exponent
+    except (UnicodeDecodeError, InvalidOperation):
+        return 0.0
+    if not isinstance(exponent, int):  # NaN or infinity
+        return 0.0
+    return float(10.0**exponent)
 
 
 class _ObservedExtremes:
@@ -371,6 +403,10 @@ class _ObservedExtremes:
     def __init__(self) -> None:
         self.lowest: Optional[float] = None
         self.highest: Optional[float] = None
+        #: One unit of the last digit the text of each extreme states; the
+        #: coarsest wins when two texts give the same value.
+        self.lowest_step = 0.0
+        self.highest_step = 0.0
         self.uniform = True
 
     @property
@@ -378,25 +414,33 @@ class _ObservedExtremes:
         """Whether both a lowest and a highest have been seen."""
         return self.lowest is not None and self.highest is not None
 
-    def note_lowest(self, value: Optional[float]) -> None:
+    def note_lowest(self, value: Optional[float], step: float = 0.0) -> None:
         """Fold one recorded lowest observed m/z in; ``None`` is skipped."""
         if value is None:
             return
-        if self.lowest is None:
-            self.lowest = value
-        elif value != self.lowest:
+        if self.lowest is None or value < self.lowest:
+            if self.lowest is not None:
+                self.uniform = False
+            self.lowest, self.lowest_step = value, step
+            return
+        if value != self.lowest:
             self.uniform = False
-            self.lowest = min(self.lowest, value)
+        else:
+            self.lowest_step = max(self.lowest_step, step)
 
-    def note_highest(self, value: Optional[float]) -> None:
+    def note_highest(self, value: Optional[float], step: float = 0.0) -> None:
         """Fold one recorded highest observed m/z in; ``None`` is skipped."""
         if value is None:
             return
-        if self.highest is None:
-            self.highest = value
-        elif value != self.highest:
+        if self.highest is None or value > self.highest:
+            if self.highest is not None:
+                self.uniform = False
+            self.highest, self.highest_step = value, step
+            return
+        if value != self.highest:
             self.uniform = False
-            self.highest = max(self.highest, value)
+        else:
+            self.highest_step = max(self.highest_step, step)
 
 
 _ARRAY_BLOCK = re.compile(rb"<binaryDataArray\b.*?</binaryDataArray>", re.DOTALL)

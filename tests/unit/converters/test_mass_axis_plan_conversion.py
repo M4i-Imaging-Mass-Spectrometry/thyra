@@ -87,7 +87,9 @@ def test_both_sources_get_the_planned_axis(tmp_path, sources, as_dict):
         recorded = _recorded(store)
         assert recorded["sha256"] == plan.sha256
         assert int(recorded["n_bins"]) == plan.n_bins
-    assert (plan.min_mz, plan.max_mz) == (300.0, 600.0)
+    # The intersection, each imzML header bound moved out by one unit of its
+    # last stated decimal: "300.0" and "600.0" state one decimal (#473).
+    assert (plan.min_mz, plan.max_mz) == pytest.approx((299.9, 600.1))
 
 
 def test_the_plan_leaves_the_resampling_step_as_without_it(tmp_path, sources):
@@ -166,6 +168,35 @@ def test_a_conversion_given_a_different_range_than_the_plan_is_refused(
 
     assert _convert(sources[0], tmp_path / "out.zarr", config) is False
     assert not (tmp_path / "out.zarr").exists()
+
+
+def test_a_plan_from_a_rounded_imzml_header_keeps_every_count(tmp_path):
+    """The header states the observed range to 6 decimals; no edge sample is lost (#473)."""
+    import re
+
+    import zarr
+
+    mzs = np.linspace(100.12345678, 999.87654321, 200)
+    source = tmp_path / "src.imzML"
+    with ImzMLWriter(str(source), mode="continuous", mz_dtype=np.float64) as writer:
+        for x, y in [(1, 1), (1, 2), (2, 1), (2, 2)]:
+            writer.addSpectrum(mzs, np.full(mzs.size, 5.0), (x, y, 1))
+    text = source.read_text(encoding="utf-8")
+    text = re.sub(
+        r'(accession="MS:100052[78]"[^>]*?value=")([^"]*)"',
+        lambda m: f'{m.group(1)}{float(m.group(2)):.6f}"',
+        text,
+    )
+    source.write_text(text, encoding="utf-8")
+
+    plan = plan_mass_axis(source)
+    out = tmp_path / "out.zarr"
+    assert _convert(source, out, plan) is True
+
+    root = zarr.open_group(str(prepare_zarr_read_path(out)), mode="r")
+    (table,) = list(root["tables"])
+    stored = float(np.asarray(root["tables"][table]["X"]["data"]).sum(dtype=np.float64))
+    assert stored == pytest.approx(4 * mzs.size * 5.0)
 
 
 def test_a_fingerprint_that_is_not_hex_is_refused_by_the_constructor(tmp_path):

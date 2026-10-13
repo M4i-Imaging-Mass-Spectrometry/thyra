@@ -153,7 +153,12 @@ def projected_axis_gb(n_bins: int) -> float:
 
 
 def mass_axis_refusal(
-    n_bins: int, available_gb: Optional[float] = None
+    n_bins: int,
+    available_gb: Optional[float] = None,
+    levers: str = (
+        "resample to fewer mass bins (--resample-bins) or ask for a wider "
+        "bin (--resample-width-at-mz)"
+    ),
 ) -> Optional[str]:
     """Why a mass axis this wide cannot be converted here, or ``None``.
 
@@ -166,13 +171,10 @@ def mass_axis_refusal(
     (issue #251).
 
     ``available_gb`` overrides the machine's own answer, for tests.
+    ``levers`` says what the caller can change to make the axis smaller.
     """
     gb = projected_axis_gb(n_bins)
     free = available_memory_gb() if available_gb is None else float(available_gb)
-    levers = (
-        "resample to fewer mass bins (--resample-bins) or ask for a wider "
-        "bin (--resample-width-at-mz)"
-    )
     if gb > free * AXIS_REFUSE_FRACTION:
         return (
             f"the mass axis would have {int(n_bins):,} bins, and the "

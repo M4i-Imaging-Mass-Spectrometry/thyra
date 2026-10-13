@@ -145,6 +145,19 @@ class TestRange:
         with pytest.raises(ConversionRefused, match="at least one"):
             _plan_from_metadata([])
 
+    def test_an_axis_no_conversion_could_hold_is_refused_before_it_is_laid(self):
+        """The conversion's memory check runs first, not numpy's MemoryError (#473)."""
+        with pytest.raises(ConversionRefused, match="bins") as err:
+            _plan_from_metadata(
+                [_src("a", _RAPIFLEX, (100.0, 2000.0))],
+                axis_type="constant",
+                width_at_mz=1e-8,
+            )
+
+        assert "190,000,000,000" in str(err.value)
+        assert "width_at_mz" in str(err.value)
+        assert "--resample-bins" not in str(err.value)
+
     def test_one_source_pins_its_own_axis(self):
         plan = _plan_from_metadata([_src("a", _RAPIFLEX, (100.0, 1100.0))])
 
@@ -439,6 +452,26 @@ class TestThePlanItself:
         del data["format"]
         with pytest.raises(ConversionRefused, match="Not a mass axis plan"):
             MassAxisPlan.from_dict(data)
+
+    @pytest.mark.parametrize("codec", ["utf-8-sig", "utf-16", "utf-16-be", "utf-32"])
+    def test_a_plan_saved_in_another_unicode_encoding_loads(self, tmp_path, codec):
+        """Notepad and Windows PowerShell write these (#473)."""
+        plan = _two()
+        path = tmp_path / "axis.json"
+        path.write_bytes(json.dumps(plan.to_dict(), ensure_ascii=False).encode(codec))
+
+        assert MassAxisPlan.load(path) == plan
+
+    def test_a_plan_in_an_ansi_code_page_is_refused_in_one_line(self, tmp_path):
+        data = _two().to_dict()
+        data["sources"] = ["café.imzML", "b"]
+        path = tmp_path / "axis.json"
+        path.write_bytes(json.dumps(data, ensure_ascii=False).encode("cp1252"))
+
+        with pytest.raises(ConversionRefused, match="Save it as UTF-8") as err:
+            MassAxisPlan.load(path)
+
+        assert "axis.json" in str(err.value) and "\n" not in str(err.value)
 
     def test_a_file_that_is_not_json_is_refused(self, tmp_path):
         path = tmp_path / "axis.json"
