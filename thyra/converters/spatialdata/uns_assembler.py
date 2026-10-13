@@ -209,10 +209,8 @@ def record_heatmap_current(adata: Any, tdf_spectrum: Optional[str] = None) -> No
     logger.warning(
         "The mass-mobility heatmap holds %.4fx the stored mean spectrum's "
         "ion current, though both are built from the same raw points. A "
-        "spectrum the table has no row for (empty, or off the grid), or a "
-        "store with more than one plane, whose heatmap covers every plane, "
-        'makes them differ. uns["mobility_heatmap"]["current_ratio"] '
-        "records it.",
+        "spectrum the table has no row for (empty, or off the grid) makes "
+        'them differ. uns["mobility_heatmap"]["current_ratio"] records it.',
         ratio,
     )
 
@@ -513,7 +511,7 @@ class UnsAssembler:
     def _collect_mobility_heatmap(self, uns: Dict[str, Any], ctx: UnsContext) -> None:
         """Add ``mobility_heatmap`` when the source has a mobility dimension.
 
-        The mean (m/z, mobility) frame of the whole dataset, the surface
+        The mean (m/z, mobility) frame of this table's pixels (D41), the surface
         a consumer looks at to decide whether mobility separates anything
         before asking for a mobility-resolved table. Arrays, not lists,
         and plain-name keys; nothing in it is per pixel.

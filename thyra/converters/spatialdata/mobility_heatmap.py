@@ -1,11 +1,13 @@
-"""The mass-mobility heatmap: the dataset's mean frame, binned.
+"""The mass-mobility heatmap: a table's mean frame, binned.
 
 A source with an ion mobility dimension is summed over it in the MSI
 table. Before anyone pays for a mobility-resolved table they need to see
 whether mobility separates anything, and that is what this block is for:
-the global mean (m/z, mobility) frame, accumulated from the raw scan
-read of every pixel during conversion and stored on the summed table as
-``uns["mobility_heatmap"]``::
+the mean (m/z, mobility) frame of a table's pixels, accumulated from the
+raw scan read during conversion and stored on the summed table as
+``uns["mobility_heatmap"]``. A conversion that writes one table per z
+plane builds one per plane in the same pass (:class:`PlaneHeatmaps`), so
+each covers the pixels its table's ``average_spectrum`` covers::
 
     mz_edges        float64[m + 1]   bin edges on the common m/z axis
     mobility_edges  float64[k + 1]   bin edges in the axis unit (1/K0)
@@ -36,6 +38,7 @@ gathers for the same bins.
 Mobility is a feature coordinate. The heatmap knows where a pixel is
 only to count it once: two spectra the source places on one position are
 one row of the summed table, so they are one pixel here too (D38).
+:class:`PlaneHeatmaps` also reads which plane a pixel is on (D41).
 """
 
 import logging
@@ -418,6 +421,66 @@ class MobilityHeatmap:
         }
 
 
+class PlaneHeatmaps:
+    """One :class:`MobilityHeatmap` per z plane, fed by a single scan.
+
+    A multi-plane source converted as 2D writes one table per plane, and
+    each table's ``average_spectrum`` is its own plane's mean (#243). The
+    heatmap beside it has to be the same population, or its marginal is
+    not that spectrum and ``current_ratio`` compares two different means
+    (design decision D41). Every plane's pixels arrive in the one raw
+    pass, so they are routed here by their ``z`` rather than read again
+    per plane; the cost is one accumulator per plane while the pass runs.
+    A plane's buffered points are folded in when the next plane starts,
+    so only one plane holds a point buffer at a time.
+    """
+
+    def __init__(
+        self, mass_axis: NDArray[np.float64], mobility_range: Tuple[float, float]
+    ) -> None:
+        """Remember how to size a plane's heatmap; planes appear as they are seen."""
+        self._axis = mass_axis
+        self._mobility_range = mobility_range
+        self.planes: Dict[int, MobilityHeatmap] = {}
+        self._current: Optional[MobilityHeatmap] = None
+
+    def add_mapped(
+        self,
+        coords: Optional[Coords],
+        bins: NDArray[np.int64],
+        mobility: NDArray[np.float64],
+        intensities: NDArray[np.float64],
+        n_dropped: int,
+    ) -> None:
+        """Fold one mapped pixel into the heatmap of its plane."""
+        z = 0 if coords is None else int(coords[2])
+        heatmap = self.planes.get(z)
+        if heatmap is None:
+            heatmap = MobilityHeatmap(self._axis, self._mobility_range)
+            self.planes[z] = heatmap
+        if heatmap is not self._current:
+            # Each accumulator buffers up to _FLUSH_POINTS points of its
+            # own; left alone, every plane would keep its tail buffered
+            # until the scan ends.
+            if self._current is not None:
+                self._current._flush()
+            self._current = heatmap
+        heatmap.add_mapped(coords, bins, mobility, intensities, n_dropped)
+
+    def finish(self) -> Dict[int, Dict[str, Any]]:
+        """Each plane's ``uns`` block, keyed by ``z``; a plane with none is absent."""
+        blocks = {}
+        for z in sorted(self.planes):
+            block = finish_mobility_heatmap(self.planes[z], label=f"plane z={z}")
+            if block is not None:
+                blocks[z] = block
+        if not blocks:
+            logger.warning(
+                "No mass-mobility heatmap: the source yielded no mobility spectra"
+            )
+        return blocks
+
+
 def _mobility_range(reader: BaseMSIReader) -> Optional[Tuple[float, float]]:
     """The range to bin mobility over, from the reader's axis.
 
@@ -452,6 +515,26 @@ def prepare_mobility_heatmap(
     no range to bin over (a per-pixel mobility source without a shared
     axis), or when the common mass axis is empty.
     """
+    mobility_range = _checked_range(reader, mass_axis)
+    if mobility_range is None:
+        return None
+    return MobilityHeatmap(np.asarray(mass_axis, dtype=np.float64), mobility_range)
+
+
+def prepare_plane_heatmaps(
+    reader: BaseMSIReader, mass_axis: NDArray[np.float64]
+) -> Optional[PlaneHeatmaps]:
+    """:func:`prepare_mobility_heatmap`, one heatmap per z plane."""
+    mobility_range = _checked_range(reader, mass_axis)
+    if mobility_range is None:
+        return None
+    return PlaneHeatmaps(np.asarray(mass_axis, dtype=np.float64), mobility_range)
+
+
+def _checked_range(
+    reader: BaseMSIReader, mass_axis: NDArray[np.float64]
+) -> Optional[Tuple[float, float]]:
+    """The mobility range to bin over, or ``None`` with the reason logged."""
     if not reader.has_ion_mobility:
         return None
     mobility_range = _mobility_range(reader)
@@ -464,24 +547,33 @@ def prepare_mobility_heatmap(
     if np.asarray(mass_axis).size == 0:
         logger.warning("No mass-mobility heatmap: the common mass axis is empty")
         return None
-    return MobilityHeatmap(np.asarray(mass_axis, dtype=np.float64), mobility_range)
+    return mobility_range
 
 
-def finish_mobility_heatmap(heatmap: MobilityHeatmap) -> Optional[Dict[str, Any]]:
-    """The ``uns`` block of a heatmap the scan has been run over, or ``None``."""
+def finish_mobility_heatmap(
+    heatmap: MobilityHeatmap, label: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """The ``uns`` block of a heatmap the scan has been run over, or ``None``.
+
+    ``label`` names which heatmap this is in the log lines, for a
+    conversion that builds one per plane.
+    """
     if heatmap.n_spectra == 0:
         logger.warning(
             "No mass-mobility heatmap: the source yielded no mobility spectra"
         )
         return None
+    name = "Mass-mobility heatmap" + ("" if label is None else f" ({label})")
     if heatmap.n_out_of_range:
         logger.info(
-            "Mass-mobility heatmap dropped %d of %d points outside the mass axis",
+            "%s dropped %d of %d points outside the mass axis",
+            name,
             heatmap.n_out_of_range,
             heatmap.n_points + heatmap.n_out_of_range,
         )
     logger.info(
-        "Mass-mobility heatmap: %d x %d bins over %d pixels (%d spectra, " "%d points)",
+        "%s: %d x %d bins over %d pixels (%d spectra, %d points)",
+        name,
         heatmap.n_mz,
         heatmap.n_mobility,
         heatmap.n_pixels,

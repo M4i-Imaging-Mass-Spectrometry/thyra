@@ -284,13 +284,18 @@ class SiblingTables:
         # Scratch directories holding the memmapped matrices of every table
         # until it is written; released by release_scratch.
         self._table_scratch: List[Tuple[Any, Path]] = []
-        # The mass-mobility heatmap (see mobility_heatmap.py): built once
-        # per conversion, on first demand, and shared by every uns block
-        # that asks for it. ``_built`` distinguishes "not yet" from
+        # The mass-mobility heatmap (see mobility_heatmap.py): built in one
+        # raw pass per conversion, on first demand. A table's heatmap is
+        # its own population's, as its average_spectrum is (D41): keyed
+        # by plane when the conversion writes one table per plane, and
+        # by ``None`` when one block covers every pixel (a single table,
+        # or a volume). ``_heatmap_plane`` is the plane whose table is
+        # being finalised. ``_built`` distinguishes "not yet" from
         # "tried, nothing to write".
         self._mobility_heatmap_enabled = bool(mobility_heatmap)
-        self._mobility_heatmap_block: Optional[Dict[str, Any]] = None
+        self._mobility_heatmap_blocks: Dict[Optional[int], Dict[str, Any]] = {}
         self._mobility_heatmap_built = False
+        self._heatmap_plane: Optional[int] = None
         # The demultiplexed MS/MS sibling (see msms_table.py): on by default,
         # and -- once a finalize step has decided for its slice -- the element
         # key it gets, so the MSI table's uns can name it.
@@ -326,33 +331,51 @@ class SiblingTables:
     # -- The heatmap -----------------------------------------------------
 
     def heatmap(self, ctx: SiblingContext) -> Optional[Dict[str, Any]]:
-        """Build the heatmap the first time it is asked for; cache the result.
+        """The heatmap block of the table being finalised, built on first demand.
 
         Needs the common mass axis, so it can only run after
         ``_initialize_conversion``. A failure is logged and leaves the
         summed table untouched: the block is additive, and a store
         without it is still complete.
+
+        Each call returns a dict of its own. The ``uns`` assembler writes
+        ``current_ratio`` into the block it is given, and a dict shared
+        between two tables carried the last table's ratio into both.
         """
-        if self._mobility_heatmap_built:
-            return self._mobility_heatmap_block
+        if not self._mobility_heatmap_built:
+            self._build_heatmap(ctx)
+        blocks = self._mobility_heatmap_blocks
+        block = blocks.get(None, blocks.get(self._heatmap_plane))
+        if block is None:
+            if blocks:
+                logger.warning(
+                    "No mass-mobility heatmap for plane z=%s: the source "
+                    "yielded no mobility spectra on it",
+                    self._heatmap_plane,
+                )
+            return None
+        return dict(block)
+
+    def _build_heatmap(self, ctx: SiblingContext) -> None:
+        """The route that never ran :meth:`prepare_scans`: one block, every pixel."""
         self._mobility_heatmap_built = True
         if not self._mobility_heatmap_enabled:
-            return None
+            return
         try:
             if not self.reader.has_ion_mobility:
-                return None
+                return
         except Exception as e:  # pragma: no cover - reader-defined
             logger.warning("Could not inspect the mobility axis: %s", str(e))
-            return None
+            return
         if ctx.mass_axis is None:
             logger.warning(
                 "No mass-mobility heatmap: the common mass axis is not built yet"
             )
-            return None
+            return
         from .mobility_heatmap import build_mobility_heatmap
 
         try:
-            self._mobility_heatmap_block = build_mobility_heatmap(
+            block = build_mobility_heatmap(
                 self.reader,
                 ctx.mass_axis,
                 n_spectra=ctx.n_spectra(),
@@ -360,8 +383,9 @@ class SiblingTables:
             )
         except Exception as e:
             logger.error("Could not build the mass-mobility heatmap: %s", str(e))
-            self._mobility_heatmap_block = None
-        return self._mobility_heatmap_block
+            return
+        if block is not None:
+            self._mobility_heatmap_blocks = {None: block}
 
     # -- Planning --------------------------------------------------------
 
@@ -557,14 +581,17 @@ class SiblingTables:
         rows each holds -- is fused into the heatmap's pass, so the two
         share one read *and* one mapping of every point onto the mass
         axis; the mapping is the larger cost of the two. The heatmap is
-        built here once and cached for every ``uns`` block that asks; a
-        route that never calls this still gets it from :meth:`heatmap` on
-        first demand.
+        built here once, on the first table's call: for a conversion that
+        writes one table per plane (``z_value`` set) that one pass builds
+        every plane's heatmap, each table later taking its own (D41). A
+        route that never calls this still gets one from :meth:`heatmap`
+        on first demand.
 
         A no-op when the sinks were already fed from the summed table's
         own passes (a reader that hands its frames over as records; see
         ``fused_passes.py``).
         """
+        self._heatmap_plane = z_value
         if self._sibling_scans_done:
             return
         self._grid_discovery = None
@@ -576,9 +603,15 @@ class SiblingTables:
             return
         if ctx.mass_axis is None:
             return
-        from .mobility_heatmap import finish_mobility_heatmap, scan_mobility
+        from .mobility_heatmap import scan_mobility
 
-        heatmap = self._pending_heatmap(ctx)
+        per_plane = z_value is not None
+        heatmap = self._pending_heatmap(ctx, per_plane=per_plane)
+        if heatmap is None and per_plane and self._mobility_heatmap_enabled:
+            # Nothing to build (prepare_plane_heatmaps said why, once);
+            # without this every later plane would ask again and log it
+            # again through the route that builds on first demand.
+            self._mobility_heatmap_built = True
         discovery = self._pending_grid_discovery(ctx, obs, z_value)
         sinks = [sink for sink in (heatmap, discovery) if sink is not None]
         if not sinks:
@@ -600,22 +633,38 @@ class SiblingTables:
             logger.error("Could not scan the mobility spectra: %s", str(e))
             if heatmap is not None:
                 self._mobility_heatmap_built = True
-                self._mobility_heatmap_block = None
+                self._mobility_heatmap_blocks = {}
             return
         if heatmap is not None:
             self._mobility_heatmap_built = True
-            self._mobility_heatmap_block = finish_mobility_heatmap(heatmap)
+            self._mobility_heatmap_blocks = self._finished_blocks(heatmap)
         if discovery is not None:
             discovery.finish()
             self._grid_discovery = discovery
 
-    def _pending_heatmap(self, ctx: SiblingContext) -> Any:
-        """An empty heatmap accumulator, when one is wanted and not yet built."""
+    def _pending_heatmap(self, ctx: SiblingContext, per_plane: bool = False) -> Any:
+        """An empty heatmap accumulator, when one is wanted and not yet built.
+
+        ``per_plane`` asks for one heatmap per z plane, fed by the same
+        pass, for a conversion that writes one table per plane.
+        """
         if not self._mobility_heatmap_enabled or self._mobility_heatmap_built:
             return None
-        from .mobility_heatmap import prepare_mobility_heatmap
+        from .mobility_heatmap import prepare_mobility_heatmap, prepare_plane_heatmaps
 
+        if per_plane:
+            return prepare_plane_heatmaps(self.reader, ctx.mass_axis)
         return prepare_mobility_heatmap(self.reader, ctx.mass_axis)
+
+    @staticmethod
+    def _finished_blocks(heatmap: Any) -> Dict[Optional[int], Dict[str, Any]]:
+        """The blocks of a scanned accumulator, keyed for :meth:`heatmap`."""
+        from .mobility_heatmap import PlaneHeatmaps, finish_mobility_heatmap
+
+        if isinstance(heatmap, PlaneHeatmaps):
+            return dict(heatmap.finish())
+        block = finish_mobility_heatmap(heatmap)
+        return {} if block is None else {None: block}
 
     def _pending_grid_discovery(
         self, ctx: SiblingContext, obs: pd.DataFrame, z_value: Optional[int]
@@ -694,7 +743,8 @@ class SiblingTables:
         """Keep what the fused passes built for the finalize step to write."""
         if passes.heatmap_wanted:
             self._mobility_heatmap_built = True
-            self._mobility_heatmap_block = passes.heatmap_block
+            block = passes.heatmap_block
+            self._mobility_heatmap_blocks = {} if block is None else {None: block}
         self._grid_discovery = passes.discovery
         self._msms_accumulator = passes.msms
 
