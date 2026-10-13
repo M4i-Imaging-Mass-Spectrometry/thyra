@@ -13,6 +13,10 @@ Please check the relevant option:
 - [ ] Performance improvement
 - [ ] Test coverage improvement
 
+## Release notes
+Only if this changes what a converted store contains, changes a default, or retires
+an option: one or two plain sentences for users. Leave empty otherwise.
+
 ## Related Issues
 Closes #[issue number]
 

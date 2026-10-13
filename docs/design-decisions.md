@@ -1472,7 +1472,15 @@ already speak for the truncated case.
 
 ## D18. `main` stays unprotected until a release credential exists
 
-**Status:** Deferred (2026-09-09), issue #224.
+**Status:** Deferred (2026-09-09), issue #224. Closed as not planned
+(2026-10-13). The organization-level ruleset route is ruled out: it needs a
+paid plan, and the organization is on the Free plan. Probed with an
+`admin:org` token, the org rulesets endpoint returns `HTTP 403`, "Upgrade to
+GitHub Team to enable this feature". The routes left both need a new
+credential. What reopens it, replacing the conditions under **What would
+reopen it** below: several people merging regularly. Then use a GitHub App
+owned by the organization as the ruleset's bypass actor, with `release.yml`
+pushing with a token minted from it.
 
 **Decision.** Do not turn on required status checks for `main`. Keep the
 existing ruleset, which forbids deletion and non-fast-forward pushes and costs
