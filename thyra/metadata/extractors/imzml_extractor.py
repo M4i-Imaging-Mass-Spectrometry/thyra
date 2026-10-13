@@ -325,6 +325,9 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         self.spectrum_type_override = normalize_spectrum_type(spectrum_type)
         # See _coordinate_bases(): one memoised pass gives all three.
         self._coordinate_bases_value: Optional[Tuple[int, int, int]] = None
+        # True when _detect_centroid_spectrum had to guess; see
+        # _guess_spectrum_type_from_storage_mode().
+        self._spectrum_type_guessed = False
 
     def _extract_essential_impl(self) -> EssentialMetadata:
         """Extract essential metadata optimized for speed."""
@@ -361,6 +364,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
                 self._coordinate_bases(coords), coords[:, 2], self.imzml_path
             ),
             spectrum_type=spectrum_type,
+            spectrum_type_guessed=self._spectrum_type_guessed,
         )
 
     def _extract_comprehensive_impl(self) -> ComprehensiveMetadata:
@@ -1107,6 +1111,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         :meth:`_guess_spectrum_type_from_storage_mode` for what that guess is
         worth.
         """
+        self._spectrum_type_guessed = False
         try:
             # 0. An explicit override outranks the file.
             if self.spectrum_type_override is not None:
@@ -1125,7 +1130,10 @@ class ImzMLMetadataExtractor(MetadataExtractor):
                 return result
 
             # 3. Nothing declared. Only now is a guess appropriate.
-            return self._guess_spectrum_type_from_storage_mode()
+            guess = self._guess_spectrum_type_from_storage_mode()
+            # Recorded so the store's msi_metadata does not state a guess.
+            self._spectrum_type_guessed = guess is not None
+            return guess
         except Exception as e:
             logger.debug(f"Could not detect spectrum type: {e}")
             return None

@@ -69,6 +69,7 @@ class BrukerMetadataExtractor(MetadataExtractor):
         region: Optional[int] = None,
         skip_total_peaks: bool = False,
         mis_metadata: Optional[Dict[str, Any]] = None,
+        spectrum_type: Optional[str] = None,
     ):
         """Initialize Bruker metadata extractor.
 
@@ -91,6 +92,11 @@ class BrukerMetadataExtractor(MetadataExtractor):
                 Handed on as ``raw_metadata["mis_metadata"]``, where the
                 rapiflex and solariX extractors already put theirs, rather
                 than parsed a second time here.
+            spectrum_type: The representation the reader delivers, as a
+                :class:`~thyra.metadata.constants.SpectrumType` name, or
+                ``None`` when unknown. The database does not state it (a
+                TDF is read as centroid or profile by choice of the reader),
+                so the reader says.
         """
         super().__init__(conn)
         self.conn = conn
@@ -99,6 +105,7 @@ class BrukerMetadataExtractor(MetadataExtractor):
         self._region = region
         self._skip_total_peaks = bool(skip_total_peaks)
         self._mis_metadata = dict(mis_metadata or {})
+        self._spectrum_type = spectrum_type
 
     def _query_imaging_bounds(self, cursor):
         """Query imaging area bounds from GlobalMetadata."""
@@ -304,6 +311,7 @@ class BrukerMetadataExtractor(MetadataExtractor):
             n_spectra=self._query_frame_count(cursor),
             total_peaks=total_peaks,
             source_path=str(self.data_path),
+            spectrum_type=self._spectrum_type,
         )
 
     def _extract_essential_impl(self) -> EssentialMetadata:
@@ -376,6 +384,7 @@ class BrukerMetadataExtractor(MetadataExtractor):
                 total_peaks=total_peaks,
                 source_path=str(self.data_path),
                 coordinate_offsets=imaging_area_offsets,
+                spectrum_type=self._spectrum_type,
             )
 
         except sqlite3.OperationalError as e:

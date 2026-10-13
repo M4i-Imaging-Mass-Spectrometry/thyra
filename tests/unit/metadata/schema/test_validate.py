@@ -111,6 +111,19 @@ class TestOntologyChecks:
         assert meta is not None
         assert any(i.location == "sample.organism_term" for i in _warnings(issues))
 
+    def test_wrong_prefix_for_the_representation_term_is_a_warning(self):
+        doc = _valid_doc()
+        doc["ms_analysis"]["spectrum_representation_term"] = {
+            "accession": "CHEBI:12345",
+            "name": "not a spectrum representation",
+        }
+        meta, issues = validate_document(doc)
+        assert meta is not None
+        assert any(
+            i.location == "ms_analysis.spectrum_representation_term"
+            for i in _warnings(issues)
+        )
+
     def test_foreign_prefixes_are_not_checked_against_local_tables(self):
         # NCBITaxon is not shipped locally; a plausible term must pass
         # without an existence check.

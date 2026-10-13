@@ -153,6 +153,19 @@ class TestBrukerMetadataExtractor:
         assert essential.n_spectra == 400
         assert essential.source_path == str(data_path)
 
+    def test_spectrum_type_is_what_the_reader_said(self):
+        """The database does not state it, so the reader's value is carried."""
+        mock_conn = self.create_mock_connection()
+        extractor = BrukerMetadataExtractor(
+            mock_conn, Path("/test/data.d"), spectrum_type="profile spectrum"
+        )
+        assert extractor.get_essential().spectrum_type == "profile spectrum"
+
+    def test_spectrum_type_defaults_to_unknown(self):
+        mock_conn = self.create_mock_connection()
+        extractor = BrukerMetadataExtractor(mock_conn, Path("/test/data.d"))
+        assert extractor.get_essential().spectrum_type is None
+
     def test_extract_essential_no_pixel_size(self):
         """Test essential metadata extraction when pixel size is not available."""
         # Mock data without pixel size

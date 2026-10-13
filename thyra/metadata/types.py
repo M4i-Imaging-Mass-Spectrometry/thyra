@@ -80,6 +80,10 @@ class EssentialMetadata:
             to be supplied by the user.  The field exists so a format that
             *does* record it has somewhere to report it, and so the
             converter's precedence chain has something to consult.
+        spectrum_type_guessed: True when the reader inferred the spectrum
+            type rather than reading it from the file or the user. The value
+            is still used for resampling, but it is not stated in
+            ``msi_metadata``.
     """
 
     dimensions: Tuple[int, int, int]
@@ -94,6 +98,7 @@ class EssentialMetadata:
     z_spacing_um: Optional[float] = None
     n_spectra_counted: bool = True
     mass_range_known: bool = True
+    spectrum_type_guessed: bool = False
 
     @property
     def has_pixel_size(self) -> bool:

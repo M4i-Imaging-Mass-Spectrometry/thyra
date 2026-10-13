@@ -35,12 +35,14 @@ from .models import (
     ProcessingStep,
     Provenance,
     ResolvingPower,
+    SampleInformation,
     TeachingPoint,
 )
 from .vocab import (
     normalize_analyzer,
     normalize_ionisation_source,
     normalize_polarity,
+    normalize_spectrum_representation,
     term_from_accession,
 )
 
@@ -815,11 +817,22 @@ def _build_ms_analysis(
     fragmentation: Any = None,
     msms_resolved_table: Optional[str] = None,
     n_spectra: Optional[int] = None,
+    spectrum_type: Optional[str] = None,
+    spectrum_type_guessed: bool = False,
 ) -> MSAnalysis:
     """Assemble the acquisition section from what the extractors report."""
     fields: Dict[str, Any] = {}
     if n_spectra is not None:
         fields["n_spectra"] = n_spectra
+
+    # A guess is left out: unset beats a representation Thyra only supposed.
+    if not spectrum_type_guessed:
+        representation = normalize_spectrum_representation(spectrum_type)
+        if representation is not None:
+            (
+                fields["spectrum_representation"],
+                fields["spectrum_representation_term"],
+            ) = representation
 
     polarity = normalize_polarity(
         acquisition.get("polarity") or _polarity_from_cv_params(raw_metadata)
@@ -1040,6 +1053,8 @@ def build_msi_metadata(
     fragmentation: Any = None,
     msms_resolved_table: Optional[str] = None,
     mass_axis: Optional[Dict[str, Any]] = None,
+    sample_id: Optional[str] = None,
+    sample_name: Optional[str] = None,
 ) -> MSIMetadata:
     """Build an :class:`MSIMetadata` document from extracted metadata.
 
@@ -1073,6 +1088,9 @@ def build_msi_metadata(
             "n_bins": ...}`` (see
             :func:`thyra.metadata.schema.axis_fingerprint.mass_axis_sha256`).
             ``None`` for a standalone document, which has no axis.
+        sample_id: The user's identifier for the sample, or ``None``. Never
+            read from the source: a sample name can identify a person.
+        sample_name: The user's name for the sample, or ``None``; same rule.
 
     Returns:
         The populated document.  Fields the source does not report are
@@ -1088,6 +1106,8 @@ def build_msi_metadata(
     raw_metadata: Dict[str, Any] = {}
     source_path: Optional[str] = None
     n_spectra: Optional[int] = None
+    spectrum_type: Optional[str] = None
+    spectrum_type_guessed = False
     if comprehensive is not None:
         acquisition = dict(comprehensive.acquisition_params or {})
         instrument = dict(comprehensive.instrument_info or {})
@@ -1097,6 +1117,19 @@ def build_msi_metadata(
         if essential is not None:
             source_path = str(essential.source_path)
             n_spectra = _counted_spectra(essential)
+            spectrum_type = essential.spectrum_type
+            spectrum_type_guessed = getattr(essential, "spectrum_type_guessed", False)
+
+    # Absent unless the user gave one: the model's own default is an empty
+    # sample, which to_uns_dict leaves out.
+    sample_fields = {
+        key: value
+        for key, value in (("sample_id", sample_id), ("sample_name", sample_name))
+        if value is not None
+    }
+    sample_section: Dict[str, Any] = (
+        {"sample": SampleInformation(**sample_fields)} if sample_fields else {}
+    )
 
     return MSIMetadata(
         ms_analysis=_build_ms_analysis(
@@ -1111,6 +1144,8 @@ def build_msi_metadata(
             fragmentation,
             msms_resolved_table,
             n_spectra,
+            spectrum_type,
+            spectrum_type_guessed,
         ),
         acquisition=_build_acquisition(acquisition, source_format),
         calibration=_build_calibration(acquisition, format_specific, raw_metadata),
@@ -1128,6 +1163,7 @@ def build_msi_metadata(
                 MassAxisFingerprint(**mass_axis) if mass_axis is not None else None
             ),
         ),
+        **sample_section,
     )
 
 
@@ -1195,6 +1231,8 @@ def build_metadata_document(
     source_format: Optional[str] = None,
     processing: Optional[List[ProcessingStep]] = None,
     fragmentation: Any = None,
+    sample_id: Optional[str] = None,
+    sample_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """The ``msi_metadata`` document for a source that was not converted.
 
@@ -1224,6 +1262,8 @@ def build_metadata_document(
         fragmentation: What the reader reported about fragmentation, as
             :meth:`thyra.core.msms.FragmentationSchedule.to_extractor_report`
             renders it.
+        sample_id: The user's identifier for the sample, or ``None``.
+        sample_name: The user's name for the sample, or ``None``.
 
     Returns:
         The document as a plain dict.  Sibling-table fields are absent:
@@ -1238,6 +1278,8 @@ def build_metadata_document(
         source_format=source_format,
         processing=processing,
         fragmentation=fragmentation,
+        sample_id=sample_id,
+        sample_name=sample_name,
     )
     document = meta.to_uns_dict()
     if pixel_size_um is None:

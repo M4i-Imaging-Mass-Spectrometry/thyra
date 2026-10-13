@@ -52,6 +52,7 @@ EXPECTED_TERM_PREFIXES: Dict[Tuple[str, str], Tuple[str, ...]] = {
     ("sample", "organism_part_term"): ("UBERON",),
     ("preparation", "matrix_term"): ("CHEBI",),
     ("ms_analysis", "polarity_term"): ("MS",),
+    ("ms_analysis", "spectrum_representation_term"): ("MS",),
     ("ms_analysis", "ionisation_source_term"): ("MS",),
     ("ms_analysis", "analyzer_term"): ("MS",),
 }

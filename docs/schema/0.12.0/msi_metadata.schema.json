@@ -756,6 +756,39 @@
           "default": null,
           "description": "Serial number of the instrument that ran the acquisition. Identifies one physical machine, which is what makes it worth recording: calibration and detector response are properties of the machine, not of the model.",
           "title": "Serial Number"
+        },
+        "spectrum_representation": {
+          "anyOf": [
+            {
+              "enum": [
+                "profile",
+                "centroid"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "MS:1000525",
+            "name": "spectrum representation"
+          },
+          "default": null,
+          "description": "Whether the stored spectra are profile or centroid, as the reader delivered them. Resampling does not change it: Thyra never peak-picks. Unset when the source does not state it and Thyra could only guess.",
+          "title": "Spectrum Representation"
+        },
+        "spectrum_representation_term": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OntologyTerm"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "PSI-MS spectrum representation term (MS:1000128 / MS:1000127)."
         }
       },
       "required": [
@@ -937,7 +970,7 @@
     },
     "Provenance": {
       "additionalProperties": false,
-      "description": "Who wrote the block and from what.\n\nDeliberately small: the store's ``uns[\"essential_metadata\"]`` and\nroot attributes already record dimensions, mass range, spectrum\ntype and conversion timestamp.  This section records only what is\nneeded to interpret the *metadata block itself*, and contains no\ntimestamps so that two conversions of the same input produce an\nidentical block (the uns parity tests rely on this).  The mass axis\nfingerprint keeps that true: it is a hash of the axis, so the same\naxis gives the same block.",
+      "description": "Who wrote the block and from what.\n\nDeliberately small: the store's ``uns[\"essential_metadata\"]`` already\nrecords the source's dimensions, mass range and spectrum type, and the\nspectrum representation is also a field of ``ms_analysis``.  This\nsection records only what is needed to interpret the *metadata block\nitself*, and contains no timestamps so that two conversions of the\nsame input produce an identical block (the uns parity tests rely on this).  The mass axis\nfingerprint keeps that true: it is a hash of the axis, so the same\naxis gives the same block.",
       "properties": {
         "mass_axis": {
           "anyOf": [
@@ -1034,7 +1067,7 @@
     },
     "SampleInformation": {
       "additionalProperties": false,
-      "description": "What the sample is (METASPACE ``Sample_Information``).",
+      "description": "What the sample is (METASPACE ``Sample_Information``).\n\nEvery field is user-supplied. ``sample_id`` and ``sample_name`` are set\nonly from what the user gives the conversion, never read from the\nsource: a vendor sample name can be a patient identifier, so Thyra\ndoes not carry one into a store on its own.",
       "properties": {
         "condition": {
           "anyOf": [
@@ -1111,6 +1144,42 @@
           "default": null,
           "description": "E.g. intervention or treatment.",
           "title": "Sample Growth Conditions"
+        },
+        "sample_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "MS:1000001",
+            "name": "sample number"
+          },
+          "default": null,
+          "description": "The user's identifier for the sample, to tell it apart from the others in a study. Supplied by the user, never read from the source. One conversion stamps the same value on every region it converts.",
+          "title": "Sample Id"
+        },
+        "sample_name": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "cv": {
+            "accession": "MS:1000002",
+            "name": "sample name"
+          },
+          "default": null,
+          "description": "The user's name for the sample, to tell it apart from the others in a study. Supplied by the user, never read from the source. One conversion stamps the same value on every region it converts.",
+          "title": "Sample Name"
         }
       },
       "title": "SampleInformation",
@@ -1273,10 +1342,10 @@
       "type": "object"
     }
   },
-  "$id": "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.11.0/msi_metadata.schema.json",
+  "$id": "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.12.0/msi_metadata.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "The versioned MSI metadata document.\n\n``sample`` and ``preparation`` cannot be auto-populated from raw\nfiles and default to empty; ``ms_analysis`` and ``provenance`` are\nwritten by the converter for every store; ``acquisition``,\n``calibration`` and ``alignment`` are each written when the reader\nreports at least one of their facts and are absent -- not empty --\notherwise.\n\nThe emitted JSON Schema carries ``$id`` and ``$schema`` so that the\ncommitted artifact names its own published address; they are added\nhere, on the root model, rather than pasted into the file, so the\nsync test that compares the file with ``model_json_schema()`` keeps\nholding.",
+  "description": "The versioned MSI metadata document.\n\n``sample`` and ``preparation`` cannot be auto-populated from raw\nfiles and default to empty; Thyra fills ``sample.sample_id`` and\n``sample.sample_name`` only when the conversion was given them;\n``ms_analysis`` and ``provenance`` are written by the converter for\nevery store; ``acquisition``, ``calibration`` and ``alignment`` are\neach written when the reader reports at least one of their facts and\nare absent -- not empty -- otherwise.\n\nThe emitted JSON Schema carries ``$id`` and ``$schema`` so that the\ncommitted artifact names its own published address; they are added\nhere, on the root model, rather than pasted into the file, so the\nsync test that compares the file with ``model_json_schema()`` keeps\nholding.",
   "properties": {
     "acquisition": {
       "anyOf": [
@@ -1336,10 +1405,10 @@
     },
     "sample": {
       "$ref": "#/$defs/SampleInformation",
-      "description": "What the sample is; user-supplied."
+      "description": "What the sample is; user-supplied. Thyra fills its id and name only when the conversion was given them."
     },
     "schema_version": {
-      "default": "0.11.0",
+      "default": "0.12.0",
       "description": "Semantic version of the schema this document conforms to.",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
       "title": "Schema Version",

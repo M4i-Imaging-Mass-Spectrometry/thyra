@@ -33,6 +33,7 @@ from .core.base_converter import BaseMSIConverter, PixelSizeSource
 from .core.base_reader import BaseMSIReader
 from .core.registry import detect_format, get_converter_class, get_reader_class
 from .errors import ConversionRefused
+from .metadata.constants import sample_value_problem
 from .resampling.plan import MassAxisPlan
 from .resampling.types import ResamplingConfig
 from .utils.windows_paths import prepare_zarr_output_path
@@ -100,6 +101,16 @@ def dataset_id_problem(dataset_id: Any) -> Optional[str]:
             f"{dataset_id!r} also holds " + ", ".join(repr(c) for c in bad)
         )
     return None
+
+
+def _validate_sample_parameters(sample_id: Any, sample_name: Any) -> bool:
+    """Validate the user-supplied sample id and name."""
+    for name, value in (("sample_id", sample_id), ("sample_name", sample_name)):
+        problem = sample_value_problem(name, value)
+        if problem is not None:
+            logger.error(problem)
+            return False
+    return True
 
 
 def _validate_string_parameters(format_type: str, dataset_id: str) -> bool:
@@ -178,11 +189,14 @@ def _validate_input_parameters(
     pixel_size_um: Optional[float],
     z_spacing_um: Optional[float] = None,
     streaming: object = "auto",
+    sample_id: Any = None,
+    sample_name: Any = None,
 ) -> bool:
     """Validate all input parameters for convert_msi function."""
     return (
         _validate_paths_parameters(input_path, output_path)
         and _validate_string_parameters(format_type, dataset_id)
+        and _validate_sample_parameters(sample_id, sample_name)
         and _validate_numeric_parameters(pixel_size_um, z_spacing_um)
         and _validate_streaming(streaming)
     )
@@ -398,6 +412,8 @@ def _create_converter(
     apply_optical_alignment: bool = True,
     streaming: Union[bool, Literal["auto"]] = "auto",
     z_spacing_um: Optional[float] = None,
+    sample_id: Optional[str] = None,
+    sample_name: Optional[str] = None,
     **kwargs: Any,
 ) -> BaseMSIConverter:
     """Create and return a converter for the specified format.
@@ -437,6 +453,11 @@ def _create_converter(
         "resampling_config": resampling_config,
         "include_optical": include_optical,
         "apply_optical_alignment": apply_optical_alignment,
+        # Explicit, not left to **kwargs: the converter records its
+        # leftover options as conversion_options in the store root, and a
+        # sample name has no business there.
+        "sample_id": sample_id,
+        "sample_name": sample_name,
         **kwargs,
     }
     # The registry's own refusal names the format asked for and the formats
@@ -477,6 +498,8 @@ def convert_msi(
     apply_optical_alignment: bool = True,
     streaming: Union[bool, Literal["auto"]] = "auto",
     region: Optional[Union[int, str]] = None,
+    sample_id: Optional[str] = None,
+    sample_name: Optional[str] = None,
     **kwargs: Any,
 ) -> bool:
     """Convert MSI data to the specified format.
@@ -579,6 +602,15 @@ def convert_msi(
             Name, falling back to integer parse). None (default)
             converts all regions. Passed to the reader as
             reader_options["region"].
+        sample_id: Your identifier for the sample, written to
+            ``msi_metadata.sample.sample_id``. Never read from the
+            source, because a vendor sample name can identify a person.
+            One conversion stamps the same value on every region it
+            converts. At most 256 printable characters. Default: None
+            (nothing is recorded).
+        sample_name: Your name for the sample, written to
+            ``msi_metadata.sample.sample_name`` under the same rules as
+            ``sample_id``. Default: None.
 
     Returns:
         True if the conversion completed and the store was written, False
@@ -611,6 +643,8 @@ def convert_msi(
         pixel_size_um,
         z_spacing_um,
         streaming,
+        sample_id,
+        sample_name,
     ):
         return False
 
@@ -687,6 +721,8 @@ def convert_msi(
                 apply_optical_alignment=apply_optical_alignment,
                 streaming=streaming,
                 z_spacing_um=z_spacing_um,
+                sample_id=sample_id,
+                sample_name=sample_name,
                 **kwargs,
             )
 

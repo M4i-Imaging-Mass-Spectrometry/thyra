@@ -823,12 +823,16 @@ print("Columns:", list(msi_table.obs.columns))
 |--------|------|-------------|
 | `x`, `y` | int | Raster grid coordinates (pixel indices) |
 | `spatial_x`, `spatial_y` | float | Physical coordinates in micrometers |
-| `region` | categorical | SpatialData region key |
-| `region_number` | int | Acquisition region number |
+| `region` | categorical | SpatialData annotation target: the key of the pixel shapes element, the same on every row |
+| `region_number` | int | The acquisition region the pixel was measured in |
 | `acquisition_order` | int64 | The order the pixels were acquired in, when the source records it (see below) |
 | `instance_key` | str | A copy of the index, which SpatialData uses to link each row to its pixel shape |
 
 The DataFrame index is `instance_id` (a string pixel identifier).
+
+`region` and `region_number` are unrelated. `region` tells SpatialData which
+element the table annotates; to split pixels by acquisition region, use
+`region_number`.
 
 ### Acquisition order
 
@@ -1082,6 +1086,10 @@ print(provenance["thyra_version"])   # the Thyra that wrote the store
 `mass_range` describes the source, not the resampled axis -- for the axis
 the data actually sits on, read `msi_table.var["mz"]`.
 
+`spectrum_type` is the representation the reader delivered. It is also in
+`msi_metadata` as `ms_analysis.spectrum_representation` (see below), except
+when Thyra only guessed it.
+
 Beside it, when the source format provides them:
 
 | Key | Contents |
@@ -1155,8 +1163,10 @@ terms, and a schema a validator can hold it to.
 ```python
 block = msi_table.uns["msi_metadata"]
 
-print(block["schema_version"])                    # "0.11.0"
+print(block["schema_version"])                    # "0.12.0"
 print(block["ms_analysis"]["pixel_size_um"])      # {"x": 20.0, "y": 20.0}
+print(block["ms_analysis"].get("spectrum_representation"))  # "profile" / "centroid"
+print(block.get("sample", {}).get("sample_id"))   # only when you named the sample
 print(block["provenance"]["source_format"])       # "imzml"
 print(block.get("acquisition"))                   # see below; absent for imzML
 print(block.get("calibration"))                   # see below; absent for imzML

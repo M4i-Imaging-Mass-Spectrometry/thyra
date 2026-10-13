@@ -49,6 +49,55 @@ def _make_reader(file_type: str, **kwargs) -> tuple:
     return reader, sdk, sdk_functions
 
 
+class TestDeliveredSpectrumType:
+    """Issue #447: Bruker readers say which representation they deliver."""
+
+    def test_tsf_is_centroid(self):
+        reader, _, _ = _make_reader("tsf")
+        assert reader._delivered_spectrum_type() == "centroid spectrum"
+
+    def test_tdf_vendor_centroid_is_centroid(self):
+        reader, _, _ = _make_reader("tdf", tdf_spectrum="vendor_centroid")
+        assert reader._delivered_spectrum_type() == "centroid spectrum"
+
+    def test_tdf_scan_sum_is_profile(self):
+        reader, _, _ = _make_reader("tdf", tdf_spectrum="scan_sum")
+        assert reader._delivered_spectrum_type() == "profile spectrum"
+
+    def test_the_default_tdf_is_profile(self):
+        reader, _, _ = _make_reader("tdf")
+        assert reader._delivered_spectrum_type() == "profile spectrum"
+
+    def test_a_library_without_the_centroid_export_reports_scan_sum(self):
+        # SDKFunctions falls back to scan_sum when the library cannot
+        # centroid; the reader must describe what it delivers, not the request.
+        exists = _only_tdf_exists
+        with (
+            patch("thyra.readers.bruker.timstof.timstof_reader.DLLManager"),
+            patch(
+                "thyra.readers.bruker.timstof.timstof_reader.SDKFunctions"
+            ) as sdk_functions,
+            patch.object(Path, "exists", new=exists),
+            patch.object(Path, "is_dir", return_value=True),
+            patch("sqlite3.connect"),
+        ):
+            sdk = MagicMock()
+            sdk.tdf_spectrum = "scan_sum"
+            sdk_functions.return_value = sdk
+            reader = BrukerReader(
+                Path("/fake/bruker.d"), tdf_spectrum="vendor_centroid"
+            )
+        assert reader.tdf_spectrum == "scan_sum"
+        assert reader._delivered_spectrum_type() == "profile spectrum"
+
+    def test_the_extractor_is_handed_the_type(self):
+        # The metadata-only path builds its extractor the same way.
+        reader, _, _ = _make_reader("tdf", metadata_only=True)
+        assert reader._create_metadata_extractor()._spectrum_type == (
+            "profile spectrum"
+        )
+
+
 class TestTdfWiring:
     def test_tdf_read_passes_the_frame_id_and_its_num_scans(self):
         reader, sdk, _ = _make_reader("tdf")

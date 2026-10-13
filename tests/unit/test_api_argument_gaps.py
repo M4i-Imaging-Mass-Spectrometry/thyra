@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from thyra.convert import _validate_streaming, convert_msi
+from thyra.convert import _validate_streaming, convert_msi, sample_value_problem
 from thyra.core.mass_axis import (
     validate_max_mass_axis_length as _validate_max_mass_axis_length,
 )
@@ -161,3 +161,46 @@ class TestSparseFormatReachesTheCaller:
             is False
         )
         assert not out.exists(), "a refused conversion must leave no store"
+
+
+class TestSampleValues:
+    """``sample_id`` and ``sample_name`` are the user's labels (issue #447).
+
+    They are written into the store's metadata, so a bad one is refused
+    with the other arguments, before the source is looked at.
+    """
+
+    @pytest.mark.parametrize("argument", ["sample_id", "sample_name"])
+    @pytest.mark.parametrize(
+        "value, said",
+        [
+            ("", "empty or blank"),
+            ("   ", "empty or blank"),
+            (7, "must be a string"),
+            ("a\nb", "control characters"),
+            ("a\x00b", "control characters"),
+            ("x" * 257, "at most 256"),
+        ],
+    )
+    def test_a_bad_value_is_refused_before_the_source_is_opened(
+        self, tmp_path, thyra_logs, argument, value, said
+    ):
+        with thyra_logs("thyra.convert", logging.ERROR) as records:
+            assert (
+                convert_msi(
+                    tmp_path / "no-such-file.imzML",
+                    tmp_path / "out.zarr",
+                    **{argument: value},
+                )
+                is False
+            )
+        message = " ".join(r.getMessage() for r in records)
+        assert argument in message
+        assert said in message
+        assert "does not exist" not in message
+
+    @pytest.mark.parametrize(
+        "value", [None, "S1", "liver section 3", "x" * 256, "caf\u00e9 \u00b5m"]
+    )
+    def test_an_ordinary_label_passes(self, value):
+        assert sample_value_problem("sample_id", value) is None

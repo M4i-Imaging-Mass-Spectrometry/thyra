@@ -10,6 +10,7 @@ from thyra.metadata.schema.vocab import (
     normalize_analyzer,
     normalize_ionisation_source,
     normalize_polarity,
+    normalize_spectrum_representation,
     term_from_accession,
 )
 
@@ -110,3 +111,24 @@ class TestNormalizeAnalyzer:
 
     def test_unrecognised_input_normalises_to_none(self):
         assert normalize_analyzer("quadrupole array of mystery") is None
+
+
+class TestNormalizeSpectrumRepresentation:
+    @pytest.mark.parametrize(
+        "raw, label, accession",
+        [
+            ("centroid", "centroid", "MS:1000127"),
+            ("Centroid Spectrum", "centroid", "MS:1000127"),
+            (" profile ", "profile", "MS:1000128"),
+            ("profile spectrum", "profile", "MS:1000128"),
+        ],
+    )
+    def test_known_spellings(self, raw, label, accession):
+        result = normalize_spectrum_representation(raw)
+        assert result is not None
+        assert result[0] == label
+        assert result[1].accession == accession
+
+    @pytest.mark.parametrize("raw", [None, "", "processed", 3, "continuum"])
+    def test_anything_else_is_none_and_never_raises(self, raw):
+        assert normalize_spectrum_representation(raw) is None

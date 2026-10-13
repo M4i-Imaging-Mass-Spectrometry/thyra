@@ -15,7 +15,7 @@ module re-exports every name here, so both spellings keep working;
 ``Thresholds``, the one genuine resampling number in it, stayed there.
 """
 
-from typing import Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Optional
 
 from ..errors import ConversionRefused
 
@@ -138,3 +138,38 @@ class BinaryDataType:
 
     CONTINUOUS = "continuous"
     PROCESSED = "processed"
+
+
+#: The longest sample id or name accepted. Both are labels a person types,
+#: stored once in the metadata block; a longer value is a pasted document.
+MAX_SAMPLE_VALUE_LENGTH = 256
+
+
+def sample_value_problem(name: str, value: Any) -> Optional[str]:
+    """Why ``value`` cannot be a sample id or name, or ``None``.
+
+    ``None`` is fine: both are optional and Thyra never fills them in.
+    Anything given must be a printable, non-blank string of at most
+    :data:`MAX_SAMPLE_VALUE_LENGTH` characters. ``convert_msi`` checks it
+    before the reader opens, and the SpatialData converter checks it again
+    for a caller that builds one directly: a value the metadata model
+    refuses at write time would drop the whole ``msi_metadata`` block.
+
+    Args:
+        name: The argument's name, for the message.
+        value: What the caller passed.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return f"{name} must be a string, not {type(value).__name__}"
+    if not value.strip():
+        return f"{name} must not be empty or blank"
+    if any(not c.isprintable() for c in value):
+        return f"{name} must not contain control characters or line breaks"
+    if len(value) > MAX_SAMPLE_VALUE_LENGTH:
+        return (
+            f"{name} must be at most {MAX_SAMPLE_VALUE_LENGTH} characters, "
+            f"got {len(value)}"
+        )
+    return None
