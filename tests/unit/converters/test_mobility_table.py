@@ -306,6 +306,23 @@ class TestProcessedExportOnAGrid:
             "mob_z0_mobility": [],
         }
 
+    def test_the_grid_table_carries_ccs_like_every_1_k0_table(
+        self, tmp_path, streaming
+    ):
+        """The fixture states 1/K0 in MS:1002814, so D47 applies (D46)."""
+        _, sdata = _convert(
+            PROCESSED, tmp_path, streaming=streaming, mobility_grid=True
+        )
+        grid = sdata.tables["mob_z0_mobility"]
+        ccs = grid.var["ccs"].to_numpy()
+        assert ccs.shape == (grid.n_vars,) and np.all(np.isfinite(ccs))
+        assert int(grid.uns["ccs"]["charge_assumed"]) == 1
+        # Same m/z: the higher-mobility channel has the larger cross section.
+        mz = grid.var["mz"].to_numpy()
+        at_100 = np.flatnonzero(mz == 100.0)
+        order = np.argsort(grid.var["mobility"].to_numpy()[at_100])
+        assert np.all(np.diff(ccs[at_100][order]) > 0)
+
     def test_each_point_lands_in_its_cell(self, tmp_path, streaming):
         _, sdata = _convert(
             PROCESSED, tmp_path, streaming=streaming, mobility_grid=True
