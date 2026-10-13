@@ -291,8 +291,8 @@ def _force_scan_sum(
     when that table was built from the same scans. The default
     ``scan_sum`` is built from them, so nothing needs switching; the
     vendor centroid is a peak-picked spectrum over the same ramp that
-    keeps only the current inside the peaks it picks (87-96% on measured
-    acquisitions), so an explicit ``--tdf-spectrum vendor_centroid`` is
+    keeps only the current inside the peaks it picks (79-99% on measured
+    imaging acquisitions), so an explicit ``--tdf-spectrum vendor_centroid`` is
     the caller saying they want the mismatch, which the sibling's ``uns``
     block then records. It is said at WARNING rather than overridden.
 

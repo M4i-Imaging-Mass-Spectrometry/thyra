@@ -18,7 +18,8 @@ the default, ``vendor_centroid`` the opt-in:
     so TSF and TDF stores from the same instrument family agree. It reports
     peak areas, merges neighbouring digitizer bins and drops every index
     bin its picker assigns to no peak, which on measured imaging
-    acquisitions keeps 87-96% of the raw ion current. Bruker's own
+    acquisitions keeps 79-99% of the raw ion current, the least on a
+    MALDI-2 slide. Bruker's own
     ``Frames.SummedIntensities`` is the scan sum, not the centroid total.
 
 ``scan_sum``

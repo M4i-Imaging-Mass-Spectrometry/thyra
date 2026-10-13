@@ -7,6 +7,7 @@ in every table -- and the fused way must not have touched the iterators
 the sinks used to read from, which is the whole saving.
 """
 
+import logging
 from pathlib import Path
 from typing import Generator, List, Optional, Tuple
 
@@ -260,6 +261,42 @@ class IndexedStubReader(FusedStubReader):
             yield _IndexedFrame(p, (x, y, 0))
 
 
+#: The four spectra, then pixel 1's cloud measured again on pixel 0's
+#: position, last and so out of order: the summed table sums it into
+#: that position's row, which is one pixel, not two (D38).
+REPEATED = list(enumerate(PIXELS)) + [(1, PIXELS[0])]
+
+
+class RepeatedStubReader(FusedStubReader):
+    """The same source with a fifth frame on a position already measured."""
+
+    def iter_spectra(self) -> Generator:
+        for p, (x, y) in REPEATED:
+            mzs, intensities = _summed(p)
+            yield (x, y, 0), mzs, intensities
+
+    def iter_mobility_spectra(self) -> Generator:
+        self.mobility_passes += 1
+        for p, (x, y) in REPEATED:
+            mzs, mobility, intensities = _cloud(p)
+            yield (x, y, 0), mzs, mobility, intensities
+
+    def iter_precursor_spectra(self) -> Generator:
+        self.precursor_passes += 1
+        for p, (x, y) in REPEATED:
+            for window, mzs, intensities in _precursors(p):
+                yield (x, y, 0), window, mzs, intensities
+
+    def iter_frame_scans(self) -> Generator:
+        self.frame_passes += 1
+        for p, (x, y) in REPEATED:
+            yield _Frame(p, (x, y, 0))
+
+
+class UnfusedRepeatedStubReader(RepeatedStubReader):
+    frame_scans = False
+
+
 RESAMPLED = {
     "method": "nearest_neighbor",
     "axis_type": "constant",
@@ -395,3 +432,25 @@ class TestFusedPasses:
             split = sdata.tables["stub_z0_msms"].uns["demultiplexed_current"]
             assert float(grid["current_ratio"]) == pytest.approx(1.0)
             assert float(split["current_ratio"]) == pytest.approx(1.0)
+
+
+class TestRepeatedPosition:
+    @pytest.mark.parametrize(
+        "reader_type", [RepeatedStubReader, UnfusedRepeatedStubReader]
+    )
+    def test_the_heatmap_divides_by_positions_not_spectra(
+        self, tmp_path, thyra_logs, reader_type
+    ):
+        with thyra_logs("thyra.converters", logging.WARNING) as records:
+            out = _convert(reader_type(), tmp_path / "repeated.zarr")
+        table = _read(out).tables["stub_z0"]
+        messages = [r.getMessage() for r in records]
+
+        assert table.n_obs == 4
+        counts = np.asarray(table.uns["mobility_heatmap"]["counts"])
+        every_point = sum(_cloud(p)[2].sum() for p, _ in REPEATED)
+        assert counts.sum() == pytest.approx(every_point / 4)
+        assert float(table.uns["mobility_heatmap"]["current_ratio"]) == (
+            pytest.approx(1.0)
+        )
+        assert not any("mass-mobility heatmap" in m for m in messages)

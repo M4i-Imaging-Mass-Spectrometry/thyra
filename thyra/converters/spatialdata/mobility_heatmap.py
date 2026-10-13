@@ -9,7 +9,7 @@ read of every pixel during conversion and stored on the summed table as
 
     mz_edges        float64[m + 1]   bin edges on the common m/z axis
     mobility_edges  float64[k + 1]   bin edges in the axis unit (1/K0)
-    counts          float32[m, k]    mean intensity per bin over pixels
+    counts          float32[m, k]    mean intensity per bin over positions
 
 ``m`` is the common mass axis coarsened to about
 :data:`HEATMAP_MZ_BINS` bins; ``k`` is exactly
@@ -18,8 +18,8 @@ own nearest-bin mapping onto the common axis, coarsened, so that under a
 lossless summed spectrum (``--tdf-spectrum scan_sum``) the heatmap's
 marginal over mobility is the stored mean spectrum coarsened to the same
 bins. Under the vendor centroid it is not, and cannot be: the centroid
-keeps only the current inside the peaks it picks (87-96% on measured
-acquisitions) and merges bins, and the heatmap is built
+keeps only the current inside the peaks it picks (79-99% on measured
+imaging acquisitions) and merges bins, and the heatmap is built
 from the raw points, not from the centroid.
 
 The raw pass itself is :func:`scan_mobility`, which maps every pixel's
@@ -33,10 +33,13 @@ indices, so about three fifths as many distinct values as points -- goes
 through :func:`map_indexed_points_to_axis`, which maps those once and
 gathers for the same bins.
 
-Mobility is a feature coordinate. Nothing here knows where a pixel is.
+Mobility is a feature coordinate. The heatmap knows where a pixel is
+only to count it once: two spectra the source places on one position are
+one row of the summed table, so they are one pixel here too (D38).
 """
 
 import logging
+from array import array
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -281,8 +284,11 @@ def map_indexed_points_to_axis(
 class MobilityHeatmap:
     """Accumulator for the mean (m/z, mobility) frame.
 
-    ``add`` takes one pixel's raw point cloud; ``finalize`` divides by
-    the number of pixels added and returns the ``uns`` block.
+    ``add`` takes one spectrum's raw point cloud; ``finalize`` divides by
+    the number of pixels added and returns the ``uns`` block. A pixel is a
+    position: spectra added with the same ``coords`` are one pixel, as the
+    summed table sums them into one row, so the two means share a
+    denominator. A spectrum added without ``coords`` is a pixel of its own.
     """
 
     def __init__(
@@ -314,7 +320,10 @@ class MobilityHeatmap:
         self._buffer_cells: List[NDArray[np.int64]] = []
         self._buffer_weights: List[NDArray[np.float64]] = []
         self._buffered = 0
-        self.n_pixels = 0
+        self.n_spectra = 0
+        self._positions = array("q")
+        self._unplaced = 0
+        self._distinct: Optional[Tuple[int, int]] = None
         self.n_points = 0
         self.n_out_of_range = 0
 
@@ -323,8 +332,9 @@ class MobilityHeatmap:
         mzs: NDArray[np.float64],
         mobility: NDArray[np.float64],
         intensities: NDArray[np.float64],
+        coords: Optional[Coords] = None,
     ) -> None:
-        """Fold one pixel's ``(m/z, mobility, intensity)`` points in.
+        """Fold one spectrum's ``(m/z, mobility, intensity)`` points in.
 
         m/z goes to its nearest common-axis entry (the converter's own
         rule, ties to the right) and then to the coarse bin; points
@@ -333,12 +343,13 @@ class MobilityHeatmap:
         values at the upper edge belong to the last channel, and the
         rare point beyond either edge (an axis that overhangs its declared
         range) is clipped into the edge channel rather than lost, so the
-        marginal keeps every count.
+        marginal keeps every count. ``coords`` is the spectrum's position,
+        or ``None`` for a pixel of its own.
         """
         bins, mobility, intensities, n_dropped = map_points_to_axis(
             self._axis, mzs, mobility, intensities
         )
-        self.add_mapped(None, bins, mobility, intensities, n_dropped)
+        self.add_mapped(coords, bins, mobility, intensities, n_dropped)
 
     def add_mapped(
         self,
@@ -348,12 +359,18 @@ class MobilityHeatmap:
         intensities: NDArray[np.float64],
         n_dropped: int,
     ) -> None:
-        """Fold in one pixel already mapped by :func:`map_points_to_axis`.
+        """Fold in one spectrum already mapped by :func:`map_points_to_axis`.
 
-        The sink interface :func:`scan_mobility` feeds; the heatmap does
-        not care where a pixel is, so ``coords`` is ignored.
+        The sink interface :func:`scan_mobility` feeds. ``coords`` is only
+        counted: a second spectrum on a position already seen adds its
+        points to the total but no pixel to the denominator.
         """
-        self.n_pixels += 1
+        self.n_spectra += 1
+        if coords is None:
+            self._unplaced += 1
+        else:
+            x, y, z = coords
+            self._positions.extend((int(x), int(y), int(z)))
         self.n_out_of_range += int(n_dropped)
         if bins.size == 0:
             return
@@ -380,6 +397,15 @@ class MobilityHeatmap:
         self._buffer_cells = []
         self._buffer_weights = []
         self._buffered = 0
+
+    @property
+    def n_pixels(self) -> int:
+        """Distinct positions added, plus each spectrum added without one."""
+        if self._distinct is None or self._distinct[0] != len(self._positions):
+            placed = np.frombuffer(self._positions, dtype=np.int64).reshape(-1, 3)
+            n = int(np.unique(placed, axis=0).shape[0]) if placed.size else 0
+            self._distinct = (len(self._positions), n)
+        return self._distinct[1] + self._unplaced
 
     def finalize(self) -> Dict[str, Any]:
         """The ``uns["mobility_heatmap"]`` block: mean over the pixels added."""
@@ -443,7 +469,7 @@ def prepare_mobility_heatmap(
 
 def finish_mobility_heatmap(heatmap: MobilityHeatmap) -> Optional[Dict[str, Any]]:
     """The ``uns`` block of a heatmap the scan has been run over, or ``None``."""
-    if heatmap.n_pixels == 0:
+    if heatmap.n_spectra == 0:
         logger.warning(
             "No mass-mobility heatmap: the source yielded no mobility spectra"
         )
@@ -455,10 +481,11 @@ def finish_mobility_heatmap(heatmap: MobilityHeatmap) -> Optional[Dict[str, Any]
             heatmap.n_points + heatmap.n_out_of_range,
         )
     logger.info(
-        "Mass-mobility heatmap: %d x %d bins over %d pixels (%d points)",
+        "Mass-mobility heatmap: %d x %d bins over %d pixels (%d spectra, " "%d points)",
         heatmap.n_mz,
         heatmap.n_mobility,
         heatmap.n_pixels,
+        heatmap.n_spectra,
         heatmap.n_points,
     )
     return heatmap.finalize()

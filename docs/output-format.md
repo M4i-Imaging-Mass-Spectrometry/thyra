@@ -385,7 +385,8 @@ Windows), numpy arrays rather than lists:
 
 **`uns["mobility_heatmap"]`** is the dataset's mean mass-mobility frame: the
 raw `(m/z, mobility, intensity)` points of every pixel, binned and averaged
-over pixels, accumulated from the raw scan read during conversion. It is the
+over pixel positions (two spectra on one position count once, as they make
+one row), accumulated from the raw scan read during conversion. It is the
 discovery surface -- look at it to see whether mobility separates anything
 before asking for a mobility-resolved table -- and what a viewer's mobility
 panel draws.
@@ -394,8 +395,8 @@ panel draws.
 |---|---|
 | `mz_edges` | `float64[m + 1]`: bin edges on the common m/z axis, which is coarsened by an integer factor to about 4,000 bins (`m` is the axis length itself when it is shorter) |
 | `mobility_edges` | `float64[k + 1]`, **`k = 256`**: equal-width bins in the axis unit, ascending, spanning the axis `values` |
-| `counts` | `float32[m, k]`: mean intensity per bin over pixels |
-| `current_ratio` | `float`: the heatmap's ion current over `uns["average_spectrum"]`'s -- 1.0 under `scan_sum`; above 1 under `vendor_centroid` (about 1.04 to 1.15), whose picked peaks keep only part of the raw current the heatmap holds |
+| `counts` | `float32[m, k]`: mean intensity per bin over pixel positions, the rows `uns["average_spectrum"]` divides by |
+| `current_ratio` | `float`: the heatmap's ion current over `uns["average_spectrum"]`'s -- 1.0 under `scan_sum`; above 1 under `vendor_centroid` (about 1.01 to 1.23), whose picked peaks keep only part of the raw current the heatmap holds |
 
 `k = 256` is fixed on purpose: the mobility grid table below defaults to the
 same 256 channels over the same edges -- literally the same constant and the
@@ -405,7 +406,7 @@ The m/z binning is the converter's own nearest-bin rule, coarsened, so under a
 lossless summed spectrum (`--tdf-spectrum scan_sum`) the heatmap summed over
 mobility, `counts.sum(axis=1)`, equals `uns["average_spectrum"]` coarsened to
 `mz_edges`. Under `vendor_centroid` it does not: the centroid keeps only the current
-inside the peaks its picker assigns (87 to 96 percent on the acquisitions
+inside the peaks its picker assigns (79 to 99 percent on the imaging acquisitions
 measured, see [Design Decisions](design-decisions.md#d1-which-spectrum-a-reader-takes))
 and merges bins, while the heatmap is built from every raw point. Which case a given store is in is recorded rather than left to be found by subtraction: `current_ratio` is the heatmap's total over the stored mean spectrum's, the same number `uns["mobility_marginal"]` carries for the grid table, and the conversion says it at `WARNING` when it is not 1. On a Bruker source the heatmap costs one extra
 library call per frame (about a millisecond); `--no-mobility-heatmap` skips
@@ -640,7 +641,7 @@ pixel, because each recorded point falls in exactly one isolation window.
 Exactly, under the default `--tdf-spectrum scan_sum`: the split is built
 from the raw scans, and only a summed spectrum built from the same scans
 can add back up to it. An explicit `vendor_centroid` keeps only the current
-inside the peaks it picks (87 to 96 percent on the acquisitions measured),
+inside the peaks it picks (79 to 99 percent on the imaging acquisitions measured),
 so the two tables of one store would genuinely not agree; that is said at
 `WARNING` and recorded in `uns["demultiplexed_current"]`.
 

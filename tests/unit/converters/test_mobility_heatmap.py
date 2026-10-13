@@ -147,6 +147,22 @@ class TestAccumulator:
         assert heat.n_pixels == 3
         assert heat.finalize()["counts"][5, 1] == pytest.approx(4.0)
 
+    def test_two_spectra_on_one_position_are_one_pixel(self):
+        """The summed table sums them into one row; the heatmap's mean agrees."""
+        heat = _heatmap()
+        heat.add([150.0], [1.3], [8.0], coords=(3, 4, 0))
+        heat.add([150.0], [1.3], [4.0], coords=(3, 4, 0))
+        heat.add([150.0], [1.3], [6.0], coords=(5, 4, 0))
+        assert heat.n_spectra == 3
+        assert heat.n_pixels == 2
+        assert heat.finalize()["counts"][5, 1] == pytest.approx(9.0)
+
+    def test_the_same_x_y_on_another_plane_is_another_pixel(self):
+        heat = _heatmap()
+        heat.add([150.0], [1.3], [8.0], coords=(3, 4, 0))
+        heat.add([150.0], [1.3], [4.0], coords=(3, 4, 1))
+        assert heat.n_pixels == 2
+
     def test_coincident_points_sum(self):
         heat = _heatmap()
         heat.add([150.0, 150.0, 150.0], [1.3, 1.31, 1.3], [1.0, 2.0, 3.0])
@@ -166,8 +182,8 @@ class TestAccumulator:
         buffered = _heatmap()
         for start in range(0, 5000, 300):
             sl = slice(start, start + 300)
-            buffered.add(mzs[sl], mob[sl], w[sl])
-        buffered.n_pixels = 1
+            buffered.add(mzs[sl], mob[sl], w[sl], coords=(0, 0, 0))
+        assert buffered.n_pixels == 1
         np.testing.assert_allclose(buffered.finalize()["counts"], expected, rtol=1e-6)
 
     def test_coarse_bins_follow_the_axis_step(self):
@@ -422,6 +438,15 @@ class _NoMobilityReader(MobilityStubReader):
         return False
 
 
+class _RepeatedPositionReader(MobilityStubReader):
+    """Pixel 3's cloud measured again on pixel 0's position, last."""
+
+    def iter_mobility_spectra(self) -> Generator:
+        yield from super().iter_mobility_spectra()
+        mzs, mob, it = _cloud(3)
+        yield (0, 0, 0), mzs, mob, it
+
+
 class TestBuildFromReader:
     def test_reader_without_mobility_gives_nothing(self):
         assert build_mobility_heatmap(_NoMobilityReader(), MASS_AXIS) is None
@@ -451,6 +476,11 @@ class TestBuildFromReader:
             mean[np.searchsorted(MASS_AXIS, mzs)] += it
         mean /= 4
         np.testing.assert_allclose(block["counts"].sum(axis=1), mean, rtol=1e-6)
+
+    def test_a_repeated_position_is_one_pixel(self):
+        block = build_mobility_heatmap(_RepeatedPositionReader(), MASS_AXIS)
+        every_point = sum(_cloud(p)[2].sum() for p in range(4)) + _cloud(3)[2].sum()
+        assert block["counts"].sum() == pytest.approx(every_point / 4)
 
     def test_the_split_feature_occupies_two_channels(self):
         block = build_mobility_heatmap(MobilityStubReader(), MASS_AXIS)

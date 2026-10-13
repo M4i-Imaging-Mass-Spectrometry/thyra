@@ -564,10 +564,11 @@ class BaseMSIReader(ABC):
     ]:
         """Iterate through spectra with their per-point mobility values.
 
-        Yields ``((x, y, z), mzs, mobilities, intensities)`` per pixel: the
-        raw (m/z, mobility) point cloud, unbinned, with the three arrays
-        parallel. Readers whose source has no mobility dimension do not
-        implement this.
+        Yields ``((x, y, z), mzs, mobilities, intensities)`` per spectrum:
+        the raw (m/z, mobility) point cloud, unbinned, with the three arrays
+        parallel, at the same coordinates :meth:`iter_spectra` gives it. A
+        source may place two spectra on one position. Readers whose source
+        has no mobility dimension do not implement this.
 
         Raises:
             NotImplementedError: If the reader exposes no mobility dimension.
