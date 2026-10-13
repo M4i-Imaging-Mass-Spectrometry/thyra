@@ -901,8 +901,9 @@ def build_mobility_processed() -> Path:
     """A TIMSCONVERT-style export: processed, every pixel its own m/z values
     with a mobility per point, the same m/z listed twice at two mobilities.
 
-    No shared feature axis exists here, so only the summed MSI table can be
-    written; the repeated m/z within a pixel must be summed into one bin.
+    No shared feature axis exists here: the summed MSI table and the
+    heatmap are written by default, the mobility table only on a common
+    grid; the repeated m/z within a pixel must be summed into one bin.
     """
     spectra = [mobility_processed_spectrum(i) for i in range(len(DENSE_COORDINATES))]
     return _build_mobility_fixture(

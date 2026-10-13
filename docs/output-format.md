@@ -397,7 +397,7 @@ plane's heatmap.
 | key | value |
 |---|---|
 | `mz_edges` | `float64[m + 1]`: bin edges on the common m/z axis, which is coarsened by an integer factor to about 4,000 bins (`m` is the axis length itself when it is shorter) |
-| `mobility_edges` | `float64[k + 1]`, **`k = 256`**: equal-width bins in the axis unit, ascending, spanning the axis `values` |
+| `mobility_edges` | `float64[k + 1]`, **`k = 256`**: equal-width bins in the axis unit, ascending, spanning the smallest to the largest mobility value the source holds (the axis `values` when shared; every pixel's own values on a processed imzML, read once for this) |
 | `counts` | `float32[m, k]`: mean intensity per bin over pixel positions, the rows `uns["average_spectrum"]` divides by |
 | `current_ratio` | `float`: the heatmap's ion current over `uns["average_spectrum"]`'s -- 1.0 under `scan_sum`; above 1 under `vendor_centroid` (about 1.01 to 1.23), whose picked peaks keep only part of the raw current the heatmap holds |
 
@@ -502,7 +502,8 @@ an m/z keep the order of their mobility: the larger 1/K0 has the larger CCS.
 
 A source whose mobility values differ per pixel -- a Bruker TDF, where a
 frame is a point cloud and no two pixels are promised the same `(m/z, 1/K0)`
-pairs -- has no shared feature axis to read off. `--mobility-grid` fills the
+pairs, or a processed imzML export with a mobility array, as TIMSCONVERT
+writes it -- has no shared feature axis to read off. `--mobility-grid` fills the
 **same** `{table}_mobility` element for it by binning: every pixel's points
 go onto one set of mobility channels shared across the conversion, and
 `(m/z bin, channel)` becomes the feature axis.
@@ -525,11 +526,13 @@ and `n_channels` too, so a consumer reading only the summed table finds them.
 
 Three things are worth knowing before asking for one:
 
-- **The edges come from the axis values, never the declared acquisition
-  range.** A real file's per-scan 1/K0 overhangs its declared
-  `OneOverK0AcqRange` by a few scans (1.00003 to 1.29133 against a declared
-  1.0 to 1.29 on one measured acquisition), and `uns["mobility_heatmap"]`
-  already bins over the values. `--mobility-min` / `--mobility-max` override
+- **The edges come from the values, never a declared range.** A real
+  TDF's per-scan 1/K0 overhangs its declared `OneOverK0AcqRange` by a few
+  scans (1.00003 to 1.29133 against a declared 1.0 to 1.29 on one measured
+  acquisition), and `uns["mobility_heatmap"]` already bins over the values.
+  A processed imzML has no shared axis, so its values are read from every
+  pixel, once, before the heatmap's pass
+  ([D45](design-decisions.md#d45-a-processed-imzml-with-mobility-gets-the-heatmap-and-the-grid-when-asked)). `--mobility-min` / `--mobility-max` override
   them, at the cost of the alignment below.
 - **256 channels is an alignment anchor, not a tuning knob.** It is the
   heatmap's own channel count over the heatmap's own edges, so a box drawn on
@@ -542,7 +545,9 @@ Three things are worth knowing before asking for one:
 - **Its marginal reproduces the summed table under the default
   `--tdf-spectrum scan_sum`.** A grid table is built from raw scans, so its
   marginal reproduces the summed table only when the summed table was built
-  from the same scans, which the default is. An explicit `vendor_centroid`,
+  from the same scans, which the default is. On an imzML that means each
+  point placed on its nearest mass bin: no resampling, or
+  `nearest_neighbor`. An explicit `vendor_centroid`,
   a peak-picked spectrum over the same ramp, is kept and said at `WARNING`;
   `uns["mobility_marginal"]` then records by how much the two differ.
 
@@ -576,7 +581,7 @@ A grid is refused, at `INFO` or `WARNING` and never as an exception, when:
 |---|---|
 | the source has no mobility dimension | there is nothing to bin |
 | `--mobility-grid` was not given | binning is opt in: it costs a pass over the source and a much larger table |
-| the mobility axis carries no per-scan values | a reader opened without its vendor library cannot supply them, and the declared range is not a substitute |
+| the source gives no mobility values to bin over | a Bruker reader opened without its vendor library cannot supply them, and the declared range is not a substitute |
 | the grid spans more pairs than the counting pass can hold (a raw, unresampled axis of millions of bins) | the count array is `4 bytes x bins x channels`, capped at 1 GB; resample to fewer mass bins |
 | the `var` frame of the occupied `(m/z bin, channel)` pairs is projected to take more than half of the machine's free memory (338 bytes per pair: 330 measured, plus the `ccs` column), or the pairs pass an absolute cap of 100,000,000 | the count, the projection and the free memory are printed; resample to fewer mass bins or ask for fewer channels. A projection past a quarter of free memory is attempted with a `WARNING`. See [Design Decisions](design-decisions.md#d4-the-grids-feature-ceiling-is-a-memory-guard-not-a-format-limit) |
 
@@ -593,6 +598,9 @@ the summed table's own: the converter reads each frame once per pass
 and derives the summed spectrum, the heatmap's points, the grid's cells and
 the MS/MS split from that one read, so none of the siblings adds a read of
 the source (see [Design Decisions](design-decisions.md#d5-one-raw-read-per-frame-per-pass-serves-every-table)).
+On a processed imzML the two passes are the heatmap's pass, which also
+counts, and one more for the scatter, after a read of the mobility arrays
+alone for the range.
 Every point is mapped onto the mass axis once per pass and shared between
 the heatmap and the grid, since the mapping costs more than the vendor read.
 
@@ -604,10 +612,12 @@ span would turn away conversions that fit ninefold over. The span is said at
 moment the first pass ends and before a single value has been scattered, so a
 refusal costs one read and no memory.
 
-Bruker TDF is the only source that gets a grid today. A continuous imzML
-export with a mobility array already has a shared feature axis and is read
-off it. A processed imzML export with a mobility array has neither: its
-table is summed over mobility, with no heatmap and no mobility table.
+Bruker TDF and processed imzML exports with a mobility array get a grid. A
+continuous imzML export with a mobility array already has a shared feature
+axis and is read off it; `--mobility-grid` is ignored there, with a
+`WARNING`. A point whose mobility value is not a finite number has no
+channel: the heatmap and the grid leave it out, the summed table keeps it,
+and a `WARNING` gives the count.
 
 ### Fragmentation (MS/MS)
 

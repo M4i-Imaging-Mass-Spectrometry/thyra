@@ -143,11 +143,12 @@ m/z block that repeats a value where mobility splits a feature collapses to
 one column -- and, for a continuous export (one shared feature list), the
 `(m/z, mobility)` pairs are also written as a mobility-resolved sibling
 table; see [Output Format](output-format.md#ion-mobility). A processed export
-(per-pixel point cloud) gets the summed table only -- `--mobility-grid`
-covers per-pixel mobility for Bruker TDF, not yet for imzML. A mobility array declared
-with zlib compression is refused like the other two. When the array states 1/K0
-in `MS:1002814`, the sibling table also carries each feature's collision cross
-section, `var["ccs"]`, for an assumed charge of 1; see
+(per-pixel point cloud, as TIMSCONVERT writes) gets the summed table and the
+mass-mobility heatmap, and with `--mobility-grid` the mobility-resolved table
+too, binned onto the heatmap's channels as for Bruker TDF. A mobility array
+declared with zlib compression is refused like the other two. When the array
+states 1/K0 in `MS:1002814`, the sibling table also carries each feature's
+collision cross section, `var["ccs"]`, for an assumed charge of 1; see
 [Output Format](output-format.md#collision-cross-section).
 
 See [imzML Parser Notes](imzml-parser-notes.md) for the hazards Thyra works

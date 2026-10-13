@@ -3595,6 +3595,86 @@ earlier are unchanged and still valid.
   `scan_sum`, and an imzML without `--spectrum-type`. Their document can
   therefore differ from what a conversion with other options stores.
 
+## D45. A processed imzML with mobility gets the heatmap, and the grid when asked
+
+**Status:** Implemented (2026-10-13).
+
+**Decision.** The range a per-pixel mobility source is binned over is the
+smallest and largest finite mobility value it holds. A reader states it
+through one method, `get_mobility_value_range()`. A source with a shared
+axis (Bruker TDF, a continuous imzML export) reads it off the axis values,
+as before. An imzML whose pixels carry their own mobility values (processed
+mode, as TIMSCONVERT writes it, or a continuous file whose arrays differ)
+reads it in one pass over its mobility arrays, and only those arrays, the
+first time anything asks. The result is cached, so the heatmap and the grid
+get the same two numbers. From this:
+
+- Such a file gets `uns["mobility_heatmap"]` by default, like every other
+  mobility source (D3).
+- `--mobility-grid`, `--mobility-bins`, `--mobility-min` and
+  `--mobility-max` are accepted on imzML. On a per-pixel file they write
+  `{table}_mobility` with the grid's contract: `uns["mobility_grid"]`, 256
+  channels on the heatmap's own edges, and `uns["mobility_marginal"]`.
+- On a continuous file with a shared axis the table is read off the shared
+  features, as before. `--mobility-grid` is ignored there, and a `WARNING`
+  now says so.
+- A point whose mobility value is not a finite number has no channel. The
+  imzML reader leaves it out of the mobility point cloud and says how many
+  at `WARNING`. The summed table keeps it.
+
+**Why.** Before this, a processed imzML with a mobility array kept no
+mobility at all. The log told the user to pass `--mobility-grid`, and the
+CLI then called that flag ignored on imzML. Processed mode is how
+TIMSCONVERT writes timsTOF imaging data, and a recent review of ion mobility
+imaging names unread mobility in such files as a bottleneck of the field
+(doi:10.1021/acsmeasuresciau.6c00282). Nothing in the converter was specific
+to TDF except where the range came from.
+
+The range comes from the values because only they are sure to contain every
+point. TDF uses its values for the same reason: its per-scan 1/K0 overhangs
+the declared acquisition range. PSI-MS has terms for a lowest and highest
+observed mobility (`MS:1003437`, `MS:1003438`), but Thyra reads neither, and
+a stated range narrower than the data would pile points into an edge
+channel.
+
+**Objections considered.**
+
+- *A whole extra read for a range.* It reads the mobility arrays only: a
+  third of a 64-bit `.ibd`. The heatmap itself is already one more full pass
+  on any source other than TDF. `--no-mobility-heatmap` without a grid reads
+  nothing extra.
+- *A range stated in the file would be free.* It would be, when present and
+  right. Neither can be checked without reading the values.
+
+**What changes in a store.**
+
+- A processed imzML (or a continuous one with differing arrays) with a
+  mobility array: the summed table gains `uns["mobility_heatmap"]`.
+  `uns["mobility_axis"]` is unchanged and records no range: the range is in
+  the heatmap's `mobility_edges` and the grid's `edges`.
+- The same file with `--mobility-grid`: a `{table}_mobility` table, its
+  `uns["mobility_grid"]` and `uns["mobility_marginal"]`,
+  `uns["mobility_axis"]["resolved_table"]` on the summed table, and
+  `msi_metadata.ms_analysis.ion_mobility.grid`.
+- A continuous imzML whose shared mobility axis holds a non-finite value:
+  the heatmap was refused with an error before (the channel index was
+  undefined) and is now written without those points.
+- Bruker TDF and continuous imzML with a finite shared axis: nothing.
+
+**Known limits.**
+
+- The grid's marginal reproduces the summed table only when the summed
+  table puts the same points on their nearest bin: no resampling, or
+  `nearest_neighbor`. Under `tic_preserving` it does not. On a resampled
+  axis a point exactly at the data's m/z edge can also lie just outside the
+  first or last bin centre; the heatmap and the grid drop it while the
+  summed table folds it into the edge bin (#347). `current_ratio` records
+  both.
+- A multi-plane imzML converted as 2D reads the whole file once per plane
+  for the grid's discovery pass.
+- With `--no-resample` the raw union axis times 256 channels can pass the
+  grid's size ceiling (D4).
+
 ---
 
 ## D47. A 1/K0 mobility table carries each feature's CCS, for charge 1
