@@ -221,7 +221,7 @@ the manual, and keep the override.
 
 ### 5. Consider implementing real TIC-preserving
 
-**Partly done (D44, issue #442):** a spectrum whose bins are wide enough to
+**Partly done (D48, issue #442):** a spectrum whose bins are wide enough to
 skip a sample is now rebinned by cell overlap wherever a bin holds two or more
 samples. Spectra that skip no sample keep the interpolating operator.
 

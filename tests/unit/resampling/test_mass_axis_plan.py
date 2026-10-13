@@ -339,7 +339,7 @@ class TestWidth:
 
         by_name = {w.split(":")[0]: w for w in plan.warnings if "bin width" in w}
         assert "loses resolution" in by_name["fine"]
-        # tic_preserving rebins bins wider than its samples (D44), so a
+        # tic_preserving rebins bins wider than its samples (D48), so a
         # coarse plan no longer costs it peaks and draws no extra caution.
         assert "tic_preserving" not in by_name["fine"]
 
