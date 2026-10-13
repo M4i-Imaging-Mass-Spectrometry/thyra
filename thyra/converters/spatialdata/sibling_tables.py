@@ -794,10 +794,16 @@ class SiblingTables:
         region_key: str,
         obs: pd.DataFrame,
         z_value: Optional[int] = None,
+        merge_duplicates: bool = False,
     ) -> None:
         """Build the sibling tables of ``table_key`` and add them to ``tables``.
 
         No-op for a sibling :meth:`plan` did not name for this slice.
+
+        ``merge_duplicates`` says the source gave some position of this
+        slice more than one spectrum. The summed table sums them into the
+        position's one row, so each sibling sums its repeated entries
+        too, whichever route fed it (issue #241).
 
         A sibling that *was* named is not additive, and this used to say
         it was. The summed table's ``uns`` is built before the siblings
@@ -820,7 +826,13 @@ class SiblingTables:
         declined: List[str] = []
         if self._mobility_table_key is not None:
             table = self._build_mobility_sibling(
-                ctx, obs, table_key, region_key, dict(sibling_uns), z_value
+                ctx,
+                obs,
+                table_key,
+                region_key,
+                dict(sibling_uns),
+                z_value,
+                merge_duplicates,
             )
             if table is None:
                 declined.append("ion_mobility")
@@ -831,7 +843,13 @@ class SiblingTables:
                 tables[self._mobility_table_key] = table
         if self._msms_table_key is not None:
             table = self._build_msms_sibling(
-                ctx, obs, table_key, region_key, dict(sibling_uns), z_value
+                ctx,
+                obs,
+                table_key,
+                region_key,
+                dict(sibling_uns),
+                z_value,
+                merge_duplicates,
             )
             if table is None:
                 declined.append("fragmentation")
@@ -857,6 +875,7 @@ class SiblingTables:
         region_key: str,
         uns: Dict[str, Any],
         z_value: Optional[int],
+        merge_duplicates: bool = False,
     ) -> Optional[Any]:
         """The mobility sibling of one slice, on a scratch directory of its own."""
         from .mobility_table import build_mobility_table
@@ -898,6 +917,7 @@ class SiblingTables:
             discovery=discovery,
             scratch=scratch,
             linearisation=ctx.linearisation,
+            merge_duplicates=merge_duplicates,
         )
 
     def _build_msms_sibling(
@@ -908,6 +928,7 @@ class SiblingTables:
         region_key: str,
         uns: Dict[str, Any],
         z_value: Optional[int],
+        merge_duplicates: bool = False,
     ) -> Optional[Any]:
         """The demultiplexed sibling of one slice, on a scratch directory of its own."""
         from .msms_table import build_msms_table
@@ -933,6 +954,7 @@ class SiblingTables:
             scratch=scratch,
             accumulator=accumulator,
             linearisation=ctx.linearisation,
+            merge_duplicates=merge_duplicates,
         )
 
     # -- What the two tables say about each other ------------------------

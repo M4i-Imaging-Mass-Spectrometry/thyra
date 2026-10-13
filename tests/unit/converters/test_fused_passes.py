@@ -252,6 +252,86 @@ class UnfusedOrderedStubReader(OrderedStubReader):
     frame_scans = False
 
 
+#: The four spectra, then pixel 0 measured a second time, last and so out
+#: of order: every entry of the repeat lands on a (row, column) the first
+#: measurement already holds, in every table.
+REMEASURED = list(enumerate(PIXELS)) + [(0, PIXELS[0])]
+
+
+class RemeasuredStubReader(FusedStubReader):
+    """The same source with a fifth frame repeating pixel 0 on its own position."""
+
+    def iter_spectra(self) -> Generator:
+        for p, (x, y) in REMEASURED:
+            mzs, intensities = _summed(p)
+            yield (x, y, 0), mzs, intensities
+
+    def iter_mobility_spectra(self) -> Generator:
+        self.mobility_passes += 1
+        for p, (x, y) in REMEASURED:
+            mzs, mobility, intensities = _cloud(p)
+            yield (x, y, 0), mzs, mobility, intensities
+
+    def iter_precursor_spectra(self) -> Generator:
+        self.precursor_passes += 1
+        for p, (x, y) in REMEASURED:
+            for window, mzs, intensities in _precursors(p):
+                yield (x, y, 0), window, mzs, intensities
+
+    def iter_frame_scans(self) -> Generator:
+        self.frame_passes += 1
+        for p, (x, y) in REMEASURED:
+            yield _Frame(p, (x, y, 0))
+
+
+class UnfusedRemeasuredStubReader(RemeasuredStubReader):
+    frame_scans = False
+
+
+class _SharedAxis:
+    """Every pixel's points listed as one ``(m/z, mobility)`` feature axis."""
+
+    @property
+    def has_shared_mobility_axis(self) -> bool:
+        return True
+
+    def get_shared_mobility_features(self):
+        pairs = sorted(
+            {(mz, SCAN_K0[scan]) for cloud in CLOUDS.values() for mz, scan, _ in cloud}
+        )
+        return (
+            np.array([mz for mz, _ in pairs], dtype=np.float64),
+            np.array([k0 for _, k0 in pairs], dtype=np.float64),
+        )
+
+
+class SharedAxisStubReader(_SharedAxis, UnfusedStubReader):
+    pass
+
+
+class SharedAxisRemeasuredStubReader(_SharedAxis, UnfusedRemeasuredStubReader):
+    pass
+
+
+class _OutOfRangeRepeat(SharedAxisStubReader):
+    """Pixel 0 measured again, its summed spectrum wholly outside the mass range.
+
+    The summed table never sees the repeat -- the spectrum resamples to
+    nothing, so the position is measured once as far as it knows -- but
+    the shared feature axis keeps every listed feature whatever the range,
+    so the mobility table still reads pixel 0's cloud twice.
+    """
+
+    def iter_spectra(self) -> Generator:
+        yield from super().iter_spectra()
+        yield (0, 0, 0), np.array([900.0]), np.array([5.0])
+
+    def iter_mobility_spectra(self) -> Generator:
+        yield from super().iter_mobility_spectra()
+        mzs, mobility, intensities = _cloud(0)
+        yield (0, 0, 0), mzs, mobility, intensities
+
+
 class IndexedStubReader(FusedStubReader):
     """The same source whose records hand their points over indexed."""
 
@@ -335,6 +415,74 @@ def _read(out: Path):
 def _dense(table) -> np.ndarray:
     X = table.X
     return np.asarray(X.toarray() if hasattr(X, "toarray") else X)
+
+
+def _distinct_entries(table) -> int:
+    merged = table.X.copy()
+    merged.sum_duplicates()
+    return int(merged.nnz)
+
+
+class TestARemeasuredPosition:
+    """A position measured twice is one summed row in every table (#241).
+
+    The summed table always summed it. The siblings did on the fused
+    route only: the standalone passes stored both measurements' entries
+    side by side, a matrix that densifies to the same values but holds
+    more entries than cells and is not canonical.
+    """
+
+    @pytest.mark.parametrize(
+        "plain, remeasured",
+        [
+            (FusedStubReader, RemeasuredStubReader),
+            (UnfusedStubReader, UnfusedRemeasuredStubReader),
+            (SharedAxisStubReader, SharedAxisRemeasuredStubReader),
+        ],
+        ids=["fused", "unfused", "shared-axis"],
+    )
+    def test_every_table_sums_the_repeat_into_one_entry_per_cell(
+        self, tmp_path, plain, remeasured
+    ):
+        once = _read(_convert(plain(), tmp_path / "once.zarr")).tables
+        twice = _read(_convert(remeasured(), tmp_path / "twice.zarr")).tables
+
+        assert set(twice) == {"stub_z0", "stub_z0_mobility", "stub_z0_msms"}
+        for key, table in twice.items():
+            assert table.n_obs == 4, key
+            assert table.X.nnz == _distinct_entries(table), key
+            assert table.X.nnz == once[key].X.nnz, key
+            assert list(table.var.index) == list(once[key].var.index), key
+            # Pixel 0 is row 0, and its row is its spectrum twice over.
+            expected = _dense(once[key])
+            expected[0] *= 2
+            np.testing.assert_allclose(_dense(table), expected, err_msg=key)
+
+    def test_a_repeat_the_summed_table_never_saw_is_summed_too(self, tmp_path):
+        tables = _read(_convert(_OutOfRangeRepeat(), tmp_path / "range.zarr")).tables
+        once = _read(_convert(SharedAxisStubReader(), tmp_path / "once.zarr")).tables
+
+        table = tables["stub_z0_mobility"]
+        assert table.X.nnz == _distinct_entries(table)
+        expected = _dense(once["stub_z0_mobility"])
+        expected[0] *= 2
+        np.testing.assert_allclose(_dense(table), expected)
+
+    def test_both_routes_write_the_same_store(self, tmp_path):
+        a = _read(_convert(RemeasuredStubReader(), tmp_path / "fused.zarr")).tables
+        b = _read(
+            _convert(UnfusedRemeasuredStubReader(), tmp_path / "unfused.zarr")
+        ).tables
+
+        for key in ("stub_z0_mobility", "stub_z0_msms"):
+            assert a[key].X.nnz == b[key].X.nnz, key
+            np.testing.assert_array_equal(_dense(a[key]), _dense(b[key]))
+        for key, block in (
+            ("stub_z0_mobility", "mobility_marginal"),
+            ("stub_z0_msms", "demultiplexed_current"),
+        ):
+            assert float(a[key].uns[block]["current_ratio"]) == pytest.approx(1.0)
+            assert float(b[key].uns[block]["current_ratio"]) == pytest.approx(1.0)
 
 
 class TestFusedPasses:

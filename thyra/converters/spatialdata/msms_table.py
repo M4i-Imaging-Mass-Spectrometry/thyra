@@ -413,11 +413,13 @@ def _demultiplex(
     n_obs: int,
     scratch: Path,
     linearisation: Optional[AxisLinearisation] = None,
+    merge_duplicates: bool = False,
 ) -> Optional[Tuple[sparse.csc_matrix, NDArray[np.int64], CscAssembly]]:
     """Two passes over the precursor spectra; ``(matrix, keys, assembly)`` or ``None``."""
     from tqdm import tqdm
 
     accumulator = MsmsAccumulator(axis, window_rank, n_obs, linearisation)
+    accumulator.assembly.merge_duplicates = merge_duplicates
     with tqdm(desc="MS/MS table: counting", unit="spectrum") as pbar:
         for coords, window_index, mzs, intensities in reader.iter_precursor_spectra():
             pbar.update(1)
@@ -466,6 +468,7 @@ def build_msms_table(
     scratch: Optional[Path] = None,
     accumulator: Optional[MsmsAccumulator] = None,
     linearisation: Optional[AxisLinearisation] = None,
+    merge_duplicates: bool = False,
 ) -> Optional[Any]:
     """Build the demultiplexed MS/MS table for one MSI table, or ``None``.
 
@@ -491,6 +494,10 @@ def build_msms_table(
             each fragment's column is computed rather than searched for
             (issue #348). Ignored when ``accumulator`` is given: that one
             was built with its own.
+        merge_duplicates: Whether the source gave some position more than
+            one spectrum, so one ``(row, precursor, fragment)`` entry may
+            arrive twice; they are summed into one, as the summed table
+            sums the position's spectra into its row (issue #241).
 
     Returns:
         A ``TableModel``-parsed AnnData, or ``None`` when the acquisition
@@ -513,6 +520,8 @@ def build_msms_table(
     if accumulator is not None:
         if not accumulator.has_rows or not accumulator.scattered:
             return None
+        if merge_duplicates:
+            accumulator.assembly.merge_duplicates = True
         built: Optional[Tuple[Any, NDArray[np.int64], CscAssembly]] = (
             accumulator.result()
         )
@@ -531,6 +540,7 @@ def build_msms_table(
                 n_obs,
                 workdir,
                 linearisation,
+                merge_duplicates=merge_duplicates,
             )
         finally:
             if built is None and owns_scratch:

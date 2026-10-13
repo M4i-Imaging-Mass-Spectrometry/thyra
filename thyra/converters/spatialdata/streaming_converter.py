@@ -1065,6 +1065,10 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             unit.region_key,
             adata.obs,
             z_value=unit.plane,
+            # A position measured twice is one summed row here; the
+            # siblings read the same spectra and must sum them as well,
+            # on the fused route and on the standalone passes alike.
+            merge_duplicates=bool(unit.repeats.any()),
         )
         state.images[f"{unit.key}_tic"] = self._tic_image(unit)
 

@@ -3306,6 +3306,54 @@ read by the same code and do not change either; both were compared on
 - When an archive has both a z column and z in the list, the column wins
   and the list is not compared with it. No such archive is known.
 
+## D40. A position measured twice is one summed row in the sibling tables too
+
+**Status:** Implemented (2026-10-13).
+
+**Decision.** When a source gives one raster position more than one
+spectrum, the mobility-resolved table and the demultiplexed MS/MS table sum
+the repeated entries into one, as the summed table already does (issue
+#241). This holds on both routes that fill them: the passes fused into the
+summed table's own (D5), and the standalone passes that read the source
+again.
+
+**Why.** Only the fused route was told about the repeat. The standalone
+builders (grid, shared feature axis, MS/MS) stored both measurements'
+entries side by side at the same (row, column). Such a matrix densifies to
+the same values, so the dense rows and the current ratios agreed. But it
+held more entries than cells, it was not canonical, and the two routes
+wrote different stores from one source. On a four-pixel stand-in with
+pixel 0 measured again last, the standalone route stored 16 entries for
+12 cells in both siblings; the fused route stored 12.
+
+The converter counts the repeats in its first pass and now tells every
+sibling builder, per table. The two mobility builders also notice a row
+reached twice themselves, since one spectrum is one row there. That
+catches a repeat the summed table never saw: the shared feature axis keeps
+features outside the mass range, so a spectrum that resamples to nothing
+still fills the mobility table. A builder that knows of a repeat sums it
+with the same chunked sort and merge the summed table uses. A source with
+no repeat pays nothing.
+
+**What changes in a store.** Only sources that reach the standalone passes
+and measure some position twice. Today those are imzML files with a
+mobility array: their `_mobility` table's `X` holds one entry per (row,
+column), so `X.nnz` drops by the repeated entries. The dense values do not
+change. A Bruker `.tdf` read through the vendor library always takes the
+fused route and does not change. No shipped reader feeds the MS/MS table
+from the standalone passes, so no `_msms` table changes.
+
+**Known limits.**
+
+- No real source with a repeated position was converted for this entry.
+  The synthetic iprm-PASEF copy has a spot holding two frames, but the two
+  share no grid cell and it writes no MS/MS table, so it stores the same
+  either way.
+- The MS/MS builder relies on the converter's count alone, because a row
+  legitimately arrives once per precursor there. A repeat the summed table
+  does not count would still be stored twice. No shipped reader reaches
+  that builder outside the fused route.
+
 ## D41. A plane's table holds the mass-mobility heatmap of its own plane
 
 **Status:** Implemented (2026-10-13). Removes the second known limit of D38

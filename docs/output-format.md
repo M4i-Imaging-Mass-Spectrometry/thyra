@@ -858,8 +858,8 @@ but do not use it as a row index.
 | Bruker rapifleX | Absent. The reader walks the raster, not the acquisition's position log |
 
 A missing column means the order is unknown, not that it is the raster order.
-A position measured twice is one row holding the sum of both spectra, and its
-`acquisition_order` is the earlier one. The sibling tables (`_mobility`,
+A position measured twice is one row holding the sum of both spectra, in
+every table, and its `acquisition_order` is the earlier one. The sibling tables (`_mobility`,
 `_msms`) carry the same column, row for row. Why the column looks like this,
 and what else was considered, is in
 [design decision D26](design-decisions.md#d26-the-acquisition-order-is-an-obs-column-when-the-source-has-one).
