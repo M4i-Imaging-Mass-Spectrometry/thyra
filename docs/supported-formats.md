@@ -182,7 +182,7 @@ instead (below). Two collapses are available through `--tdf-spectrum`:
   the same one behind the TSF line spectrum and SCiLS Lab's import. It
   reports peak areas, merges neighbouring digitizer bins, and drops every
   index bin its picker assigns to no peak, which on measured imaging
-  acquisitions keeps 87 to 96 percent of the raw ion current. Choose it to
+  acquisitions keeps 79 to 99 percent of the raw ion current. Choose it to
   reproduce the vendor software's numbers.
 
 The choice is recorded in the store's processing provenance

@@ -77,9 +77,10 @@ logger = logging.getLogger(__name__)
 #: ``_MARGINAL_TOLERANCE`` because the two are not the same sum reordered:
 #: the heatmap coarsens the mass axis by an integer factor and clips
 #: mobility into the edge channels, so float32 storage of the counts sets
-#: the floor. Measured at 4e-8 under scan_sum and 0.15 under the vendor
-#: centroid, so the gap either side of this is four orders of magnitude
-#: wide.
+#: the floor. Measured at 4e-8 under scan_sum and 0.15 on a vendor
+#: centroid store; the centroid fractions in D1 imply 0.01 to 0.23 per
+#: acquisition, so the gap either side of this is two orders of magnitude
+#: or more.
 _HEATMAP_TOLERANCE = 1e-4
 
 #: PSI-MS ``m/z calibration``, the data processing action the step that
@@ -148,15 +149,16 @@ def serialize_for_zarr(obj: Any) -> Any:
         return obj
 
 
-def record_heatmap_current(adata: Any) -> None:
+def record_heatmap_current(adata: Any, tdf_spectrum: Optional[str] = None) -> None:
     """Say how much of the stored mean spectrum the heatmap holds.
 
     The heatmap's marginal over mobility is the stored mean spectrum
     coarsened to its own m/z bins -- exactly, under the default
     ``--tdf-spectrum scan_sum``, and not at all under the vendor
     centroid, which is a peak-picked spectrum over the same scans
-    while the heatmap is built from the raw points. Measured at 15%
-    off on every vendor_centroid store.
+    while the heatmap is built from the raw points. The centroid keeps
+    79 to 99 percent of the current on the imaging acquisitions
+    measured (D1).
 
     docs/output-format.md says the identity holds only under
     scan_sum, but nothing in the store said which case a given store
@@ -165,9 +167,12 @@ def record_heatmap_current(adata: Any) -> None:
     ``uns["mobility_marginal"]`` has recorded its ratio since it
     existed; this is the same number for the heatmap.
 
-    Both quantities are per-pixel means over the same pixels, so
-    their totals compare directly: the ratio is one scalar and needs
-    nothing materialised.
+    Both quantities are means over the same positions, one per row,
+    so their totals compare directly: the ratio is one scalar and needs
+    nothing materialised. Until D38 the heatmap divided by spectra, so a
+    source with two spectra on one position read low here, and the
+    warning blamed the centroid even under ``scan_sum``. The warning now
+    names the centroid only when ``tdf_spectrum`` says it is in use.
     """
     block = adata.uns.get("mobility_heatmap")
     spectrum = adata.uns.get("average_spectrum")
@@ -188,7 +193,9 @@ def record_heatmap_current(adata: Any) -> None:
         return
     ratio = held / stored
     block["current_ratio"] = ratio
-    if abs(ratio - 1.0) > _HEATMAP_TOLERANCE:
+    if abs(ratio - 1.0) <= _HEATMAP_TOLERANCE:
+        return
+    if tdf_spectrum == "vendor_centroid":
         logger.warning(
             "The mass-mobility heatmap holds %.4fx the stored mean "
             "spectrum's ion current. Its marginal over mobility is that "
@@ -198,6 +205,16 @@ def record_heatmap_current(adata: Any) -> None:
             'uns["mobility_heatmap"]["current_ratio"] records it.',
             ratio,
         )
+        return
+    logger.warning(
+        "The mass-mobility heatmap holds %.4fx the stored mean spectrum's "
+        "ion current, though both are built from the same raw points. A "
+        "spectrum the table has no row for (empty, or off the grid), or a "
+        "store with more than one plane, whose heatmap covers every plane, "
+        'makes them differ. uns["mobility_heatmap"]["current_ratio"] '
+        "records it.",
+        ratio,
+    )
 
 
 @dataclass(frozen=True)
@@ -382,7 +399,7 @@ class UnsAssembler:
         """Apply :meth:`build` to an AnnData about to be written."""
         uns = self.build(ctx)
         adata.uns.update(uns)
-        record_heatmap_current(adata)
+        record_heatmap_current(adata, getattr(self.reader, "tdf_spectrum", None))
         logger.debug("Added MSI metadata to AnnData .uns: %s", sorted(uns))
 
     def fragmentation(self) -> Any:

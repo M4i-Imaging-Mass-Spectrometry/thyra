@@ -121,6 +121,25 @@ class TestSurveyAndFragmentOnOneSpot:
         assert set(tables) == {"iprm_z0"}
         assert tables["iprm_z0"].uns["msms_schedule"]["n_windows"] == 3
 
+    def test_the_heatmap_is_a_mean_over_positions(self, tmp_path, thyra_logs):
+        """Seven frames on six spots: the heatmap divides by the six rows.
+
+        The mean spectrum divides the summed rows by the six positions. A
+        heatmap that divided by the seven frames held 6/7 of its current
+        and was warned about as if the vendor centroid were in use.
+        """
+        make_iprm_pasef_copy(tmp_path / "iprm.d")
+        with thyra_logs("thyra", logging.WARNING) as records:
+            table = _tables(_convert(tmp_path / "iprm.d", tmp_path / "iprm.zarr"))[
+                "iprm_z0"
+            ]
+        messages = [r.getMessage() for r in records]
+
+        assert table.n_obs == 6
+        block = table.uns["mobility_heatmap"]
+        assert float(block["current_ratio"]) == pytest.approx(1.0)
+        assert not any("mass-mobility heatmap" in m for m in messages)
+
     @pytest.mark.xfail(strict=True, reason=LATER_STEP)
     def test_the_spot_row_holds_the_survey_frame_only(self, tmp_path):
         """The MSI row at the shared spot is the survey frame's spectrum.

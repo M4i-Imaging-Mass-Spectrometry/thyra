@@ -16,7 +16,11 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pytest
 
-from thyra.converters.spatialdata.uns_assembler import UnsAssembler, UnsContext
+from thyra.converters.spatialdata.uns_assembler import (
+    UnsAssembler,
+    UnsContext,
+    record_heatmap_current,
+)
 from thyra.core.base_converter import PixelSizeSource
 from thyra.metadata.schema import MSI_METADATA_UNS_KEY
 from thyra.metadata.types import ComprehensiveMetadata, EssentialMetadata
@@ -464,3 +468,43 @@ def test_a_section_the_reader_left_empty_is_omitted(section):
     uns = _assembler(_StubReader(comprehensive=comprehensive)).build(_context())
 
     assert section not in uns
+
+
+def _with_heatmap(held: float) -> SimpleNamespace:
+    """A table whose mean spectrum totals 4 and whose heatmap totals ``held``."""
+    counts = np.zeros((2, 3), dtype=np.float32)
+    counts[0, 0] = held
+    return SimpleNamespace(
+        uns={
+            "average_spectrum": np.array([1.0, 3.0]),
+            "mobility_heatmap": {"counts": counts},
+        }
+    )
+
+
+class TestHeatmapCurrent:
+    def test_equal_currents_record_one_and_say_nothing(self, thyra_logs):
+        adata = _with_heatmap(4.0)
+        with thyra_logs("thyra.converters.spatialdata", logging.WARNING) as records:
+            record_heatmap_current(adata, "scan_sum")
+        assert adata.uns["mobility_heatmap"]["current_ratio"] == pytest.approx(1.0)
+        assert records == []
+
+    def test_the_centroid_is_named_only_when_it_is_in_use(self, thyra_logs):
+        adata = _with_heatmap(5.0)
+        with thyra_logs("thyra.converters.spatialdata", logging.WARNING) as records:
+            record_heatmap_current(adata, "vendor_centroid")
+        assert adata.uns["mobility_heatmap"]["current_ratio"] == pytest.approx(1.25)
+        assert len(records) == 1
+        assert "vendor centroid" in records[0].getMessage()
+
+    @pytest.mark.parametrize("mode", ["scan_sum", None])
+    def test_a_gap_without_the_centroid_does_not_blame_it(self, thyra_logs, mode):
+        adata = _with_heatmap(3.0)
+        with thyra_logs("thyra.converters.spatialdata", logging.WARNING) as records:
+            record_heatmap_current(adata, mode)
+        assert adata.uns["mobility_heatmap"]["current_ratio"] == pytest.approx(0.75)
+        assert len(records) == 1
+        message = records[0].getMessage()
+        assert "0.7500x" in message
+        assert "centroid" not in message

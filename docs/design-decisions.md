@@ -63,6 +63,13 @@ The earlier description of the loss as "single-count noise" was wrong: these
 files contain no single counts, and the dropped current is sub-threshold
 signal.
 
+**Measured again** (2026-10-12; centroid total against `Frames.SummedIntensities`):
+0.813 (0.790 to 0.826 per frame) over 8 frames of a 1,465-pixel MALDI-2 slide,
+0.98 to 0.99 on two MS/MS brain images, and 0.895 on survey frames and 0.971
+on DIA frames of an LC diaPASEF run. Across the imaging acquisitions measured
+the centroid keeps 79 to 99 percent of the current, not the 87 to 96 percent
+first written down.
+
 **Measured on TSF** (2026-09-07; two files from different acquisitions): the
 line spectrum's intensity equals the maximum of the digitizer trace under
 the peak exactly (ratio 1.000 on every peak checked), so TSF intensities are
@@ -3185,3 +3192,71 @@ varies.
 - A file with rows in both `PasefFrameMsMsInfo` and the DIA tables records
   the PASEF windows only. It is still refused, as not constant. No such
   file is known.
+
+## D38. The mass-mobility heatmap is a mean over positions, not spectra
+
+**Status:** Implemented (2026-10-13).
+
+**Decision.** `uns["mobility_heatmap"]["counts"]` is the heatmap's total
+divided by the number of distinct pixel positions it was fed, the rows
+`uns["average_spectrum"]` divides by. Two spectra the source places on one
+position add their points to the total and count as one pixel, as the
+summed table sums them into one row. This holds on every route that builds
+the heatmap: the fused frame pass, the separate mobility pass and the
+fallback built on first demand. The `WARNING` raised when the heatmap and
+the mean spectrum disagree names the vendor centroid as the cause only when
+`--tdf-spectrum vendor_centroid` is in use.
+
+**Why.** The heatmap divided by spectra. Its own notes promise that, under
+`scan_sum`, its marginal over mobility is the stored mean spectrum; with
+two spectra on one position that broke. On the synthetic iprm-PASEF
+fixture (seven frames on six spots, one spot holding a survey and a
+fragment frame) the heatmap held 6/7 of the mean spectrum's current under
+`scan_sum`. The conversion then warned that the vendor centroid keeps only
+part of the current, a centroid the conversion was not using.
+
+No real mobility source with two spectra on one position is known. A
+split Waters run records one stage position twice (D26), but Waters has no
+mobility pass, so no heatmap. The nine local timsTOF imaging sets, MS1 and MS/MS (types 2 and 8), have one frame per
+raster spot. Over each set's own mobility pass the accumulator saw as many
+positions as spectra, so the divisor, and every stored count, is unchanged
+on all of them:
+
+| Set | Spectra | Positions |
+|---|---|---|
+| MS/MS, type 2 | 315 | 315 |
+| MS/MS brain, type 8 | 713 | 713 |
+| MS/MS brain, type 8, second | 668 | 668 |
+| MALDI-2 slide, long ramp | 1,465 | 1,465 |
+| biofilm, MALDI-2, 20 um | 18,838 | 18,838 |
+| biofilm, MALDI, 20 um | 19,562 | 19,562 |
+| MALDI-2 slide, short ramp | 26,087 | 26,087 |
+| glycans, high mass | 65,856 | 65,856 |
+| rat brain, 9,990 scans | 71,249 | 71,249 |
+
+**The objection.** Divide by the row count the summed table ends with,
+handed over by the converter, so the two denominators are one number. It
+did not win. The separate mobility pass covers every plane of a
+multi-plane store, while each plane's table has its own rows, and the
+fallback has no table at all. Counting distinct positions inside the
+heatmap gives the same number wherever a table exists and needs nothing
+from its caller.
+
+**What changes in a store.** Only stores whose source puts two spectra on
+one position, under any spectrum mode: `counts` rises by the ratio of
+spectra to positions, and `current_ratio` with it (from 0.857 to 1.0 on the
+fixture). The misplaced `WARNING` goes. Stores of sources with one spectrum
+per position do not change.
+
+**Known limits.**
+
+- A frame with no points never reaches the heatmap. A position whose
+  points all fall outside the mass axis, or one off the grid, still counts
+  as a pixel while the table gives it no row, as before. Neither has been
+  seen on a real file.
+- On a store with more than one plane, the heatmap covers every plane
+  while each table's mean spectrum covers its own; `current_ratio` there
+  compares the two and is not 1. The new `WARNING` says so.
+- When survey and fragment frames on one spot are kept apart, as D37
+  expects to happen, the heatmap must follow whatever the summed row
+  keeps. Today both go into the row and into the heatmap.

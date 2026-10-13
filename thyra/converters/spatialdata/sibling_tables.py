@@ -897,7 +897,7 @@ class SiblingTables:
         Under ``--tdf-spectrum scan_sum`` that holds exactly; under the
         vendor centroid it cannot, because the centroid is a peak-picked
         spectrum over the same ramp and keeps only the current inside the
-        peaks it picks (87-96% on measured acquisitions) while the grid
+        peaks it picks (79-99% on measured imaging acquisitions) while the grid
         reads raw scans. A store whose two tables disagree
         must say by how much rather than leave a reader to find it by
         subtraction.
