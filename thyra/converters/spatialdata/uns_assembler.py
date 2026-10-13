@@ -241,6 +241,10 @@ class UnsContext:
             actually resolved to, which wins over the requested config in
             the ``mass axis resampling`` step.
         region_info: The acquisition region summary, stored as JSON.
+        mass_axis_fingerprint: The SHA-256 and bin count of the common mass
+            axis, ``{"sha256": ..., "n_bins": ...}``, or ``None`` when the
+            axis was not settled or is empty. Every table of the
+            conversion carries the same value (D42).
         pixel_size_source: Where the in-plane pitch came from; read as
             ``.value``.
         mobility_heatmap: The conversion's mass-mobility heatmap block, as
@@ -253,6 +257,7 @@ class UnsContext:
     mobility_grid: Optional["MobilityGrid"]
     resolved_resampling_plan: Optional[Dict[str, Any]]
     region_info: Optional[list]
+    mass_axis_fingerprint: Optional[Dict[str, Any]]
     pixel_size_source: "PixelSizeSource"
     mobility_heatmap: Callable[[], Optional[Dict[str, Any]]]
 
@@ -546,6 +551,7 @@ class UnsAssembler:
                 ),
                 fragmentation=self._fragmentation_report(),
                 msms_resolved_table=ctx.msms_table_key,
+                mass_axis=ctx.mass_axis_fingerprint,
             )
             uns[MSI_METADATA_UNS_KEY] = meta.to_uns_dict()
         except MALFORMED_METADATA as e:

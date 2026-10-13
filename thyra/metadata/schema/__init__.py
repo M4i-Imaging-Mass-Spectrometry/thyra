@@ -32,6 +32,7 @@ rigorous here". Every one of the fourteen is documented in
 consumer reads to know what it may rely on.
 """
 
+from .axis_fingerprint import mass_axis_sha256
 from .builder import build_metadata_document, build_msi_metadata, forget_resolved_table
 from .metaspace import to_metaspace
 from .models import (
@@ -48,6 +49,7 @@ from .models import (
     Fragmentation,
     IonMobility,
     IsolationWindow,
+    MassAxisFingerprint,
     MobilityGrid,
     MSAnalysis,
     MSIMetadata,
@@ -84,6 +86,7 @@ __all__ = [
     "IonMobility",
     "IsolationWindow",
     "MSAnalysis",
+    "MassAxisFingerprint",
     "MSIMetadata",
     "MobilityGrid",
     "OntologyTerm",
@@ -103,6 +106,7 @@ __all__ = [
     "decode_packed_lists",
     "deep_merge",
     "forget_resolved_table",
+    "mass_axis_sha256",
     "read_msi_metadata_blocks",
     "to_metaspace",
     "validate_document",

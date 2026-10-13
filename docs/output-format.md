@@ -352,7 +352,8 @@ annotation tools add `formula`, `adduct`, `annotation_source` and
 `fdr` -- names fixed by the
 [metadata schema](metadata-schema.md#var-column-conventions) so they
 mean the same thing in every store. `thyra validate` checks the `mz`
-contract on every table.
+contract on every table. `msi_metadata.provenance.mass_axis` holds a
+SHA-256 of this axis, and `thyra validate` checks it.
 
 ### Ion mobility
 
@@ -1152,7 +1153,7 @@ terms, and a schema a validator can hold it to.
 ```python
 block = msi_table.uns["msi_metadata"]
 
-print(block["schema_version"])                    # "0.10.0"
+print(block["schema_version"])                    # "0.11.0"
 print(block["ms_analysis"]["pixel_size_um"])      # {"x": 20.0, "y": 20.0}
 print(block["provenance"]["source_format"])       # "imzml"
 print(block.get("acquisition"))                   # see below; absent for imzML

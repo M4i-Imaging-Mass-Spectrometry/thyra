@@ -3362,3 +3362,53 @@ becomes that plane's mean frame, and `current_ratio` becomes that plane's
 ratio (1.0 under `scan_sum`). Each plane's table stores its own block where
 before all held the same values. Volumes, single-plane sources (every Bruker
 TDF) and sources without mobility do not change.
+
+## D42. A store records a SHA-256 of its mass axis
+
+**Status:** Implemented (2026-10-13).
+
+**Decision.** Every converted store records `msi_metadata.provenance.mass_axis`,
+an object with two members: `sha256` and `n_bins`. `sha256` is the SHA-256 of
+the main MSI table's `var["mz"]`, taken as little-endian float64 bytes whatever
+dtype the array is held or written in, as lower-case hex. `n_bins` is the
+number of values. It is written whether or not the conversion resampled. There
+is one value per store: the sibling tables (`_mobility`, `_msms`) carry the
+main table's value, because their `mz_index` points into that axis (D6), not
+because their own `var["mz"]` hashes to it.
+
+**Why.** Showing that two stores share an axis needed both arrays loaded and
+compared. The recorded settings do not answer it: a tof law is filled from
+detection, numpy and the platform can change a float, and a `--no-resample`
+conversion has no resampling step to read a setting from. A later plan of one
+axis for several sources (issue #449) has to check a conversion against that
+axis, and a hash is the cheapest thing to check against.
+
+**Where it lives and why.** In `provenance`, which is versioned and validated,
+and which every store has. Not on the "mass axis resampling" processing step:
+that step is absent under `--no-resample`, and the axis exists all the same.
+Not in the root attributes or in `uns["essential_metadata"]`: both are outside
+the versioned, validated schema, so a validator could not check the value.
+The field is optional, so a standalone document, which has no axis, stays valid
+without it. It is not bound to a CV term: MS:1003151 (SHA-256) names a file
+checksum, and this is a hash of an array. The gap is listed in
+`CANDIDATE_CV_CONCEPTS`.
+
+**What changes in a store.** Every new store gains `provenance.mass_axis`, and
+the schema version is 0.11.0. No other value changes. Stores written earlier are
+unchanged and still valid. `thyra validate` recomputes the hash from `var["mz"]`
+of each plain MSI table that has the field and reports an error at
+`provenance.mass_axis` when it differs; a store without the field gets no such
+check.
+
+**Known limits.**
+
+- The hash is of the bits. Two axes that differ by one ulp are two axes. This
+  is intended: the use is to show that two stores are bin for bin the same.
+- When the `msi_metadata` block cannot be built, which is logged, the store
+  carries no fingerprint.
+- Sibling tables carry the main axis's value, not the hash of their own
+  `var["mz"]` (D6).
+- `thyra validate` checks every plain table that records the field. A table
+  added to a store later, with a different `var["mz"]` and a copy of the main
+  table's block, fails that check. Its block must drop or replace the field.
+- The field is not a CV term.

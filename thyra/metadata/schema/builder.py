@@ -27,6 +27,7 @@ from .models import (
     Fragmentation,
     IonMobility,
     IsolationWindow,
+    MassAxisFingerprint,
     MobilityGrid,
     MSAnalysis,
     MSIMetadata,
@@ -1038,6 +1039,7 @@ def build_msi_metadata(
     mobility_grid: Optional[Dict[str, Any]] = None,
     fragmentation: Any = None,
     msms_resolved_table: Optional[str] = None,
+    mass_axis: Optional[Dict[str, Any]] = None,
 ) -> MSIMetadata:
     """Build an :class:`MSIMetadata` document from extracted metadata.
 
@@ -1067,6 +1069,10 @@ def build_msi_metadata(
             not the same as "MS1" and leaves the block unset.
         msms_resolved_table: Element key of the demultiplexed MS/MS
             sibling table written beside the summed table, when one was.
+        mass_axis: The store's mass axis fingerprint, ``{"sha256": ...,
+            "n_bins": ...}`` (see
+            :func:`thyra.metadata.schema.axis_fingerprint.mass_axis_sha256`).
+            ``None`` for a standalone document, which has no axis.
 
     Returns:
         The populated document.  Fields the source does not report are
@@ -1117,6 +1123,9 @@ def build_msi_metadata(
             pixel_size_source=cast(
                 Optional[Literal["default", "manual", "automatic"]],
                 pixel_size_source,
+            ),
+            mass_axis=(
+                MassAxisFingerprint(**mass_axis) if mass_axis is not None else None
             ),
         ),
     )

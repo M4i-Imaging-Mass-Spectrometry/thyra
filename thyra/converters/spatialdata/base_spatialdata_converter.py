@@ -62,7 +62,7 @@ from ...core.base_converter import BaseMSIConverter, PixelSizeSource
 from ...core.base_reader import BaseMSIReader
 from ...core.conversion_state import ConversionState
 from ...errors import ConversionRefused
-from ...metadata.schema import MSI_VAR_RESERVED_COLUMNS
+from ...metadata.schema import MSI_VAR_RESERVED_COLUMNS, mass_axis_sha256
 from ...resampling.axis_planner import AxisPlanner, normalize_resampling_config
 from ...resampling.mobility_grid import MOBILITY_CHANNELS
 from ...resampling.strategies import ResamplingStrategy, build_strategy
@@ -290,6 +290,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # consumed by the uns assembler's processing provenance, through
         # _uns_context().
         self._resolved_resampling_plan: Optional[Dict[str, Any]] = None
+        # The identity of the common mass axis (a SHA-256 and the bin
+        # count), taken in _setup_mass_axis() once the axis has passed the
+        # finiteness check, and written into every table's msi_metadata
+        # (issue #444, D42). ``None`` until then.
+        self._mass_axis_fingerprint: Optional[Dict[str, Any]] = None
 
         # The tables written beside the summed one -- the mobility-resolved
         # sibling and the demultiplexed MS/MS sibling -- and everything that
@@ -410,6 +415,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             mobility_grid=self.siblings.mobility_grid,
             resolved_resampling_plan=self._resolved_resampling_plan,
             region_info=getattr(self, "_region_info", None),
+            mass_axis_fingerprint=self._mass_axis_fingerprint,
             pixel_size_source=self.pixel_size_source,
             mobility_heatmap=self._ensure_mobility_heatmap,
         )
@@ -613,6 +619,19 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             )
 
         self._refuse_non_finite_axis()
+        self._mass_axis_fingerprint = self._fingerprint_mass_axis()
+
+    def _fingerprint_mass_axis(self) -> Optional[Dict[str, Any]]:
+        """Hash the adopted axis exactly as ``var["mz"]`` will carry it.
+
+        Returns:
+            ``{"sha256": ..., "n_bins": ...}``, or ``None`` for an empty
+            axis, which holds nothing to identify.
+        """
+        axis = self._common_mass_axis
+        if axis is None or len(axis) == 0:
+            return None
+        return {"sha256": mass_axis_sha256(axis), "n_bins": int(len(axis))}
 
     def _refuse_wide_mass_axis(self, n_bins: int) -> None:
         """Refuse a mass axis whose per-bin cost will not fit in memory.

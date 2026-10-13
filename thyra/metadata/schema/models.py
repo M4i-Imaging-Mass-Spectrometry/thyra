@@ -76,7 +76,11 @@ from pydantic import (
 #        order the spectra were acquired in, written when the reader knows
 #        it (design decision D26).  The document's fields are unchanged,
 #        so a 0.9.0 document is a valid 0.10.0 one.
-MSI_METADATA_SCHEMA_VERSION = "0.10.0"
+# 0.11.0: added the optional ``provenance.mass_axis`` (additive): a SHA-256
+#        of the store's m/z axis and its bin count, written for every
+#        conversion whether or not it resampled (design decision D42,
+#        issue #444).  A 0.10.0 document is a valid 0.11.0 one.
+MSI_METADATA_SCHEMA_VERSION = "0.11.0"
 
 # Where the block lives inside a converted store:
 # ``table.uns["msi_metadata"]``.  This location is a stable contract
@@ -85,7 +89,7 @@ MSI_METADATA_SCHEMA_VERSION = "0.10.0"
 MSI_METADATA_UNS_KEY = "msi_metadata"
 
 # The committed JSON Schema artifact for this schema version.
-SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_10.json"
+SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_11.json"
 
 # Where every published version of the schema is served (issue #385).
 # ``docs/schema/<version>/`` is copied verbatim onto the documentation
@@ -198,6 +202,10 @@ CANDIDATE_CV_CONCEPTS = (
     (
         "mass axis resampling provenance (method, axis law, target bins)",
         "processing steps",
+    ),
+    (
+        "mass axis identity (a hash of the stored m/z values)",
+        "provenance.mass_axis",
     ),
     (
         "acquisition start timestamp (mzML carries it only as the run's "
@@ -1057,6 +1065,26 @@ class ProcessingStep(_SchemaModel):
     )
 
 
+class MassAxisFingerprint(_SchemaModel):
+    """The identity of a store's mass axis: a hash and a bin count."""
+
+    sha256: str = Field(
+        pattern=r"^[0-9a-f]{64}$",
+        description=(
+            "SHA-256 (lower-case hex) of the m/z values of the store's MSI "
+            "tables' var['mz'], taken as little-endian float64 bytes. "
+            "Sibling tables (_mobility, _msms) carry the same value because "
+            "their mz_index points into this axis, not because their own "
+            "var['mz'] hashes to it. Two stores with equal values hold "
+            "bin-for-bin identical axes."
+        ),
+    )
+    n_bins: int = Field(
+        ge=1,
+        description="The number of m/z values the hash covers (the axis length).",
+    )
+
+
 class Provenance(_SchemaModel):
     """Who wrote the block and from what.
 
@@ -1065,7 +1093,9 @@ class Provenance(_SchemaModel):
     type and conversion timestamp.  This section records only what is
     needed to interpret the *metadata block itself*, and contains no
     timestamps so that two conversions of the same input produce an
-    identical block (the uns parity tests rely on this).
+    identical block (the uns parity tests rely on this).  The mass axis
+    fingerprint keeps that true: it is a hash of the axis, so the same
+    axis gives the same block.
     """
 
     thyra_version: str = Field(
@@ -1090,6 +1120,15 @@ class Provenance(_SchemaModel):
             "How the pixel size was determined: read from the source "
             "metadata ('automatic'), supplied by the user ('manual'), or "
             "the 1.0 um fallback ('default')."
+        ),
+    )
+    mass_axis: Optional[MassAxisFingerprint] = Field(
+        default=None,
+        description=(
+            "A SHA-256 of the store's m/z axis and its bin count, written "
+            "for every conversion whether or not it resampled. Absent from "
+            "stores written before 0.11.0 and from a standalone document, "
+            "which has no axis."
         ),
     )
 

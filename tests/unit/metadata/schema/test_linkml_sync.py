@@ -39,6 +39,7 @@ _MODEL_CLASSES = {
     "Alignment": models.Alignment,
     "SoftwareRef": models.SoftwareRef,
     "ProcessingStep": models.ProcessingStep,
+    "MassAxisFingerprint": models.MassAxisFingerprint,
     "Provenance": models.Provenance,
     "MSIMetadata": models.MSIMetadata,
 }
