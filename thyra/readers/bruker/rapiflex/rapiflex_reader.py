@@ -214,6 +214,8 @@ class RapiflexReader(BrukerBaseMSIReader):
         # Parse coordinates from poslog
         self._positions: List[Dict[str, Any]] = []
         self._parse_positions()
+        # Filled by _poslog_regions; {} once computed and empty.
+        self._region_cells_cache: Optional[Dict[Tuple[int, int], int]] = None
 
         # Read .dat file header and offset table
         self._header: Dict[str, int] = {}
@@ -609,6 +611,96 @@ class RapiflexReader(BrukerBaseMSIReader):
 
         finally:
             pbar.close()
+
+    def _poslog_regions(self) -> Optional[Dict[Tuple[int, int], int]]:
+        """Each spectrum's poslog region, keyed by its 0-based raster cell.
+
+        The poslog names every spot ``R{region}X{x}Y{y}`` in absolute
+        raster units; the ``.dat`` offset table, which places the spectra,
+        starts at the header origin. Subtracting that origin, not the
+        smallest poslog value, gives the cell the spectrum is written to.
+
+        Returns:
+            Cell to region for the cells that hold a spectrum, or ``None``
+            when those cells span fewer than two regions, or when a
+            spectrum has no poslog spot or sits under two regions: a map
+            that does not cover every pixel would write region -1 for the
+            gaps. Spots without a spectrum are not looked at.
+
+        Raises:
+            RuntimeError: On a closed reader, which no longer holds the
+                poslog.
+        """
+        if self._region_cells_cache is not None:
+            return self._region_cells_cache or None
+        if self._closed:
+            raise RuntimeError("Reader has been closed")
+        self._region_cells_cache = {}
+        if len({pos["region"] for pos in self._positions}) < 2:
+            return None
+
+        x0 = self._header.get("first_raster_x", 0)
+        y0 = self._header.get("first_raster_y", 0)
+        poslog: Dict[Tuple[int, int], List[int]] = {}
+        for pos in self._positions:
+            cell = (pos["raster_x"] - x0, pos["raster_y"] - y0)
+            poslog.setdefault(cell, []).append(pos["region"])
+
+        width = self._header.get("raster_width", 1)
+        cells: Dict[Tuple[int, int], int] = {}
+        for idx in self._valid_indices.tolist():
+            cell = (idx % width, idx // width)
+            regions = set(poslog.get(cell, ()))
+            if len(regions) != 1:
+                logger.warning(
+                    "Rapiflex spectrum at cell %s has %s; no region map is " "written.",
+                    cell,
+                    "no poslog spot" if not regions else "two regions",
+                )
+                return None
+            cells[cell] = regions.pop()
+        if len(set(cells.values())) < 2:
+            return None
+        self._region_cells_cache = cells
+        return cells
+
+    def get_region_map(self) -> Optional[Dict[Tuple[int, int], int]]:
+        """Map 0-based ``(x, y)`` to the poslog region, or ``None``.
+
+        ``None`` for one region, as the timsTOF reader does, so a
+        single-region store keeps ``region_number`` 1.
+        """
+        cells = self._poslog_regions()
+        return dict(cells) if cells else None
+
+    def get_region_info(self) -> Optional[list]:
+        """Region number, spectrum count, box and name of each region.
+
+        The same keys and box frame as the timsTOF reader. The name is
+        the i-th ``.mis`` Area for poslog region i, the pairing the
+        alignment already uses. ``None`` for one region.
+        """
+        cells = self._poslog_regions()
+        if not cells:
+            return None
+        areas = self._mis_metadata.get("areas", [])
+        by_region: Dict[int, List[Tuple[int, int]]] = {}
+        for cell, region in cells.items():
+            by_region.setdefault(region, []).append(cell)
+        info = []
+        for region, members in by_region.items():
+            xs = [x for x, _ in members]
+            ys = [y for _, y in members]
+            entry: Dict[str, Any] = {
+                "region_number": region,
+                "n_spectra": len(members),
+                "bounds": (min(xs), min(ys), max(xs), max(ys)),
+            }
+            if region < len(areas) and areas[region].get("name"):
+                entry["name"] = areas[region]["name"]
+            info.append(entry)
+        info.sort(key=lambda entry: (-entry["n_spectra"], entry["region_number"]))
+        return info
 
     def close(self) -> None:
         """Close the reader and release resources."""

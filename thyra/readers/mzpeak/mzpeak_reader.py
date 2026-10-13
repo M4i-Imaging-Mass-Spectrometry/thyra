@@ -1492,14 +1492,8 @@ class MzPeakReader(BaseMSIReader):
             **kwargs: Accepted and ignored, for signature parity with the
                 other readers.
         """
-        if kwargs.get("region") is not None:
-            # Accepted and ignored before, which converted every region of
-            # an archive that now reports several.
-            raise ConversionRefused(
-                f"Selecting a region (--region {kwargs['region']}) is not "
-                f"supported for mzPeak archives. Convert the whole archive; "
-                f"obs['region_number'] tells the regions apart."
-            )
+        # ``region`` is refused by the base class, as on every reader that
+        # cannot select one.
         super().__init__(data_path, intensity_threshold=intensity_threshold, **kwargs)
         self._archive: Optional[MzPeakArchive] = None
         self._coordinates: Optional[NDArray[np.int64]] = None

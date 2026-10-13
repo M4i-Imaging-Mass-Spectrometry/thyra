@@ -894,8 +894,9 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         Written on every dataset for a consistent schema, so a consumer
         does not have to branch on whether the acquisition had regions:
         without a region map every pixel is region 1, which is also what
-        ``uns["regions"]`` reports for that case. Only the Bruker timsTOF
-        reader produces a map today; a position missing from it gets -1.
+        ``uns["regions"]`` reports for that case. The timsTOF, rapifleX
+        and mzPeak readers produce a map for two or more regions, the
+        solariX reader always does; a position missing from it gets -1.
 
         Kept as one method because the three write paths that used to
         build an obs table each had their own copy of this rule, and the

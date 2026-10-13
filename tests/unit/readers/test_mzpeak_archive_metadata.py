@@ -603,7 +603,7 @@ class TestRegions:
             ],
         )
 
-        with pytest.raises(ConversionRefused, match="--region 1"):
+        with pytest.raises(ConversionRefused, match="region=1"):
             MzPeakReader(archive, region=1)
 
     def test_an_incomplete_region_stops_the_reading(self, tmp_path, thyra_logs):

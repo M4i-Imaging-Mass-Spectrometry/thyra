@@ -219,6 +219,7 @@ class TestTheLazyNamesStillResolve:
             "MsiPreview",
             "SpatialDataConverter",
             "convert_msi",
+            "list_regions",
             "preview_msi",
             "read_metadata_document",
         ],

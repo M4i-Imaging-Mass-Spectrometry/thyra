@@ -938,7 +938,10 @@ and what else was considered, is in
 ## Regions
 
 Datasets acquired from multi-region slides (e.g., multiple tissue sections on
-one slide) store region information in two places.
+one slide) store region information in two places. The timsTOF, solariX,
+Rapiflex and mzPeak readers record regions; every other format writes region 1
+for each pixel. `thyra.list_regions` gives the same summary from the raw input,
+before converting.
 
 ### Per-Pixel Region Number
 
@@ -952,7 +955,8 @@ print(msi_table.obs["region_number"].value_counts())
 ### Region Summary
 
 Region metadata -- including human-readable names from the instrument's Area
-definitions -- is stored as JSON in `uns`:
+definitions and each region's `bounds` (`x_min, y_min, x_max, y_max`, 0-based,
+in the store's pixel grid) -- is stored as JSON in `uns`:
 
 ```python
 import json

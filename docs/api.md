@@ -80,6 +80,8 @@ success = convert_msi(
 
 Thyra logs the RegionNumber-to-Area-Name mapping at `INFO` when it opens a
 multi-region dataset. See [`--region`](cli.md#conversion) for the detail.
+Only the timsTOF reader can select a region. Every other format refuses
+`region`, and the call returns `False`.
 
 ### Large datasets
 
@@ -186,6 +188,28 @@ mass axis for all of them. The returned `MassAxisPlan` is passed to
       heading_level: 3
 
 ::: thyra.resampling.plan.MassAxisPlan
+    options:
+      show_root_heading: true
+      heading_level: 3
+
+---
+
+## Listing Regions
+
+`list_regions` names the regions of an input without converting it: each
+region's number, `.mis` Area name, spectrum count and box in the store's pixel
+grid. An input with one region, or a format without regions, gives one entry
+for the whole raster. To write one store per region of a timsTOF slide:
+
+```python
+import thyra
+
+for region in thyra.list_regions("data/slide.d"):
+    number = region["region_number"]
+    thyra.convert_msi("data/slide.d", f"output/region_{number}.zarr", region=number)
+```
+
+::: thyra.regions.list_regions
     options:
       show_root_heading: true
       heading_level: 3

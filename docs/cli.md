@@ -73,7 +73,7 @@ thyra input.imzML output.zarr && python analyse.py output.zarr
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--pixel-size FLOAT` | auto-detect | Pixel size in micrometers, applied to **both** axes. Auto-detection keeps the source's own x and y pitch separately, so an anisotropic raster stays anisotropic; passing this declares it square |
-| `--region TEXT` | all | Convert one region, by `.mis` Area Name or by DB RegionNumber. Checked against the dataset's own region list whether it has one region or several; a value that matches no Area Name is read as a RegionNumber, and says so |
+| `--region TEXT` | all | Convert one region of a timsTOF `.d`, by `.mis` Area Name or by DB RegionNumber. Checked against the dataset's own region list whether it has one region or several; a value that matches no Area Name is read as a RegionNumber, and says so. Every other format refuses it; [`list_regions`](api.md#listing-regions) lists the regions of any input |
 | `--resample / --no-resample` | enabled | Mass axis resampling |
 | `--include-optical / --no-optical` | enabled | Include optical images in output |
 | `--mobility-table / --no-mobility-table` | enabled | Also write the mobility-resolved sibling table when the source shares one set of (m/z, ion mobility) features across pixels (see [Output Format](output-format.md#ion-mobility)) |
