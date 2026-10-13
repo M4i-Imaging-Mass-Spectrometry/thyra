@@ -15,11 +15,17 @@ It must:
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from thyra import MsiPreview, preview_msi
-from thyra.preview import _region_summary
+from thyra.preview import _guess_axis_type, _guess_tof_law, _region_summary
+from thyra.resampling.mass_axis.tof_generator import (
+    MRT_TOF_LAW,
+    PHI_NANOTOF_LAW,
+    TIMSTOF_TOF_LAW,
+)
 from thyra.resampling.types import AxisType, ResamplingMethod
 
 
@@ -306,3 +312,68 @@ class TestRegionSummary:
         assert summary[0]["name"] == "01"
         assert summary[0]["bounds"] == (479, 255, 565, 399)
         assert summary[1]["name"] == "02"
+
+
+def _metadata(format_specific=None, instrument_name=None):
+    """The two metadata objects a preview holds, as plain attribute bags."""
+    essential = SimpleNamespace(
+        spectrum_type="centroid spectrum",
+        dimensions=(4, 4, 1),
+        mass_range=(100.0, 1000.0),
+        source_path="sample",
+        total_peaks=None,
+        n_spectra=16,
+    )
+    raw = {"global_metadata": {"InstrumentName": instrument_name}}
+    comprehensive = SimpleNamespace(
+        raw_metadata=raw if instrument_name else {},
+        instrument_info=None,
+        format_specific=format_specific,
+        acquisition_params=None,
+    )
+    return essential, comprehensive
+
+
+class TestTofLaw:
+    """The third detector answer a ``tof`` axis needs (issue #456).
+
+    A ``tof`` conversion without ``tof_a``/``tof_b`` fills the law from
+    each source's own detector, so a caller planning one axis for several
+    sources needs to read it before converting any of them.
+    """
+
+    def test_phi_reports_its_law(self):
+        law = _guess_tof_law(*_metadata({"format": "PHI SmartSoft-TOF raw"}))
+
+        assert law == PHI_NANOTOF_LAW
+
+    def test_waters_mrt_centroid_reports_its_law(self):
+        law = _guess_tof_law(
+            *_metadata({"format": "Waters MassLynx raw", "is_mrt": True})
+        )
+
+        assert law == MRT_TOF_LAW
+
+    def test_a_law_is_reported_whatever_the_axis_type(self):
+        """timsTOF declares a law while its detector picks ``reflector_tof``."""
+        essential, comprehensive = _metadata(instrument_name="timsTOF fleX")
+
+        assert _guess_axis_type(essential, comprehensive) is AxisType.REFLECTOR_TOF
+        assert _guess_tof_law(essential, comprehensive) == TIMSTOF_TOF_LAW
+
+    def test_an_instrument_without_a_law_reports_None(self):
+        assert _guess_tof_law(*_metadata({"format": "Rapiflex"})) is None
+
+    def test_metadata_that_cannot_be_read_reports_None(self):
+        assert _guess_tof_law(SimpleNamespace(), None) is None
+
+    def test_the_preview_carries_it(self, create_minimal_imzml):
+        imzml_path, _ibd_path, _mzs, _intensities = create_minimal_imzml
+
+        result = preview_msi(imzml_path)
+
+        assert result.readable is True
+        assert result.tof_law is None
+
+    def test_an_unreadable_input_carries_None(self, temp_dir):
+        assert preview_msi(temp_dir / "missing.imzML").tof_law is None

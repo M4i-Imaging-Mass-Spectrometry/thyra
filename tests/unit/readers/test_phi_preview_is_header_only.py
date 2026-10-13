@@ -155,3 +155,14 @@ class TestAFullReadIsUnchanged:
         # Header-derived, so still exact.
         assert essential.dimensions == (4, 4, 1)
         assert essential.coordinate_bounds == (0.0, 3.0, 0.0, 3.0)
+
+
+class TestThePreviewReportsTheLaw:
+    def test_a_phi_preview_carries_the_nanotof_law(self, phi_raw):
+        """The pair a ``tof`` conversion of this file would fill in (issue #456)."""
+        from thyra.resampling.mass_axis.tof_generator import PHI_NANOTOF_LAW
+
+        preview = preview_msi(phi_raw)
+
+        assert preview.readable, preview.error
+        assert preview.tof_law == PHI_NANOTOF_LAW
