@@ -166,9 +166,11 @@ def normalize_resampling_config(
 
     Raises:
         ConversionRefused: If ``method`` or ``axis_type`` is not a
-            recognised value.
+            recognised value, or if the config asks for something the
+            planner would otherwise drop (see :func:`_refuse_dropped_settings`).
     """
     if isinstance(config, ResamplingConfig):
+        _refuse_dropped_settings(config)
         return config
 
     # A key this function does not read changes nothing, and used to
@@ -210,7 +212,7 @@ def normalize_resampling_config(
         value = config.get(key)
         return None if value is None else float(value)
 
-    return ResamplingConfig(
+    normalised = ResamplingConfig(
         method=_resolve_config_enum(config.get("method"), method_by_name, "method"),
         axis_type=_resolve_config_enum(
             config.get("axis_type"), axis_type_by_name, "axis_type"
@@ -227,6 +229,43 @@ def normalize_resampling_config(
         tof_b=_optional_float("tof_b"),
         bins_per_fwhm=_optional_float("bins_per_fwhm"),
     )
+    _refuse_dropped_settings(normalised)
+    return normalised
+
+
+def _refuse_dropped_settings(config: ResamplingConfig) -> None:
+    """Refuse a config whose settings the planner could not all honour.
+
+    Both cases used to resample onto an axis the caller did not ask for,
+    without a word (issue #445):
+
+    - a width and a bin count: the width wins and the count is dropped
+      (``AxisPlanner.resolve``). The CLI already refuses this pair.
+    - one half of the TOF width law: the given half is dropped and both
+      come from the detected instrument (:func:`tof_plan`). The CLI takes
+      the law as one pair, so only the API can get here.
+
+    The messages name the dict key first and the dataclass field second,
+    since either may have been passed.
+
+    Raises:
+        ConversionRefused: On either case.
+    """
+    if config.target_bins is not None and config.mass_width_da is not None:
+        raise ConversionRefused(
+            "resampling_config sets both 'target_bins' and 'width_at_mz' "
+            "(ResamplingConfig.mass_width_da); they each fix the bin count, "
+            "so pass only one."
+        )
+    if (config.tof_a is None) != (config.tof_b is None):
+        given, missing = (
+            ("tof_a", "tof_b") if config.tof_b is None else ("tof_b", "tof_a")
+        )
+        raise ConversionRefused(
+            f"resampling_config sets {given!r} without {missing!r}; the TOF "
+            "width law needs both, or neither to take the law the instrument "
+            "declares."
+        )
 
 
 def axis_name(axis_type: Any) -> str:

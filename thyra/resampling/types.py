@@ -173,7 +173,7 @@ class ResamplingConfig:
             spacing is never consulted, so the resulting axis can be
             finer or coarser than the data it will hold.
         mass_width_da: Bin width in Daltons at ``reference_mz``.
-            Alternative to ``target_bins`` -- specify one or the other.
+            Alternative to ``target_bins``: passing both is refused.
         reference_mz: Reference m/z for ``mass_width_da``.  Default
             1000.0 Da, matching the ``--resample-reference-mz`` CLI
             default.
@@ -188,7 +188,8 @@ class ResamplingConfig:
             never invents a bin.  See :mod:`thyra.resampling.gaps`.
         tof_a: ``A`` of the two-term TOF width law ``FWHM(m) = sqrt(A m +
             B m^2)`` (mDa^2/Da), for ``AxisType.TOF``.  ``None`` takes the
-            pair the detected instrument declares, if any.
+            pair the detected instrument declares, if any.  Give both or
+            neither: half a law is refused.
         tof_b: ``B`` of the same law (dimensionless).
         bins_per_fwhm: Bins per peak width for ``AxisType.TOF``.  ``None``
             means 3, or -- when ``mass_width_da`` is set -- whatever puts
