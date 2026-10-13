@@ -110,7 +110,9 @@ from **0** exist too, and a fixed subtraction would put their first column at
 rebased on 0, and a file starting at 1 -- or at 5, because it is a crop of a
 larger slide -- keeps the base of 1 and does not move. z is separate and rebases on
 the smallest plane present, because z has no origin to preserve. Whatever was
-subtracted is recorded in `coordinate_systems.global.coordinate_offsets_px`.
+subtracted is recorded in `coordinate_systems.global.coordinate_offsets_px`,
+and the `"acquisition"` coordinate system puts it back (see
+[Coordinate Systems](coordinate-systems.md#the-acquisition-system)).
 
 **Pixel size.** Read from `IMS:1000046` and `IMS:1000047`, and both have to be
 there. A value with no unit is read as micrometres. Until 2017 `IMS:1000046`
@@ -290,7 +292,8 @@ does, rather than guessing a value.
 The `.dat` header's raster origin reaches the store as
 `coordinate_offsets_px`, with `stage_offset_um` beside it, so a Rapiflex
 store can be placed against its optical image the way a solariX or timsTOF
-one can. The stored pixel coordinates themselves stay 0-based.
+one can. The stored pixel coordinates themselves stay 0-based; the
+`"acquisition"` coordinate system carries the origin.
 
 The optical image is whichever file the `.mis` `<ImageFile>` element names,
 resolved against the acquisition folder. Rapiflex slides commonly hold several
@@ -332,6 +335,12 @@ are refused, naming the axis and how far off the worst reading sits, instead
 of becoming a grid with a pixel per stage wobble. A scan reporting a
 non-finite position is unpositioned; two scans reporting the same position
 are summed into one pixel and the log names it.
+
+The fitted origin, the smallest stage reading on each axis in micrometres,
+is where pixel 0 sits. It is stored as `stage_offset_um` and is the
+translation of the `"acquisition"` coordinate system, so two runs of one
+slide can be placed side by side. It is a stage position, not a raster
+index, so a Waters store has no `coordinate_offsets_px`.
 
 A `.raw` directory is refused when the library declares more functions than
 it has `_FUNC*.DAT` files. MassLynx keeps reporting a function whose data

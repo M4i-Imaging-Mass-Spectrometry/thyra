@@ -24,6 +24,11 @@ In every Thyra-produced zarr,
 
 If you only remember one thing, remember that.
 
+A store in micrometers also carries a second shared frame,
+``"acquisition"``: ``"global"`` moved to where the source put its raster.
+Two stores cut from one slide overlap in ``"global"`` and sit side by side
+there. See [The acquisition system](#the-acquisition-system).
+
 One thing the contract deliberately does **not** cover: ion mobility. A
 TIMS acquisition has a third measured dimension, but it is a coordinate on a
 *feature* -- like m/z, it says what was measured, not where. Thyra never
@@ -52,12 +57,27 @@ zarr.attrs["coordinate_systems"] = {
 
         # Only when the reader reports raw coordinate offsets
         "coordinate_offsets_px": [x, y, z],
-        "stage_offset_um": [x_um, y_um],  # micrometer variant only
+        # Micrometer variant only, when the source states an origin
+        "stage_offset_um": [x_um, y_um],
 
         # Multi-slice volumes only -- see "The z axis" below
         "z_spacing_um": float,
         "z_spacing_source": "manual" | "automatic" | "assumed_isotropic",
-    }
+    },
+
+    # Micrometer variant only, when the source states an origin
+    "acquisition": {
+        "unit": "micrometer",
+        "pixel_size_um_x": float,
+        "pixel_size_um_y": float,
+        "reference_element": None,
+        "convention_version": 1,
+        "produced_by": "thyra/<version>",
+        "origin_um": [x_um, y_um],  # [x_um, y_um, z_um] on a volume
+        "origin_source": "raster_index" | "stage_position",
+        "raster_to_acquisition_affine": [[a, b, tx], [c, d, ty], [0, 0, 1]],
+        "z_spacing_um": float,  # volumes only
+    },
 }
 ```
 
@@ -70,9 +90,52 @@ zarr.attrs["coordinate_systems"] = {
 | ``produced_by`` | ``"thyra/<version>"`` for Thyra-produced zarrs. |
 | ``raster_to_global_affine`` | Explicit 3x3 row-major affine from TIC coordinates to ``"global"`` -- the same mapping the TIC element's transform expresses, duplicated here so a consumer that reads only attrs still gets the full placement. A TIC cell ``i`` spans ``[i, i + 1)``, so to place pixel ``i``, apply the matrix to its centre ``i + 0.5``. In the micrometer variant that lands on ``obs["spatial_x"] = i * pixel_size_um_x``: the matrix is the pixel size with a translation of minus half a pixel. In the pixel variant it is the optical alignment matrix, and the centre lands on the spot. Purely additive (``convention_version`` stays 1, same reasoning as the z fields below). |
 | ``coordinate_offsets_px`` | The source's raw acquisition-index offsets ``[x, y, z]``, which 0-based normalisation otherwise erases. z is 0 when the source states no z. **Only present when the reader reports them.** |
-| ``stage_offset_um`` | ``coordinate_offsets_px`` times the pixel size: where the raster origin sat, in micrometers, relative to the source's index origin. **Only written when ``unit="micrometer"``**, so it cannot be misread in the optical-pixel variant. |
+| ``stage_offset_um`` | Where grid position 0 sits in the source's own frame, in micrometers: ``coordinate_offsets_px`` times the pixel size, or, for Waters, the fitted stage origin. The same numbers as ``acquisition.origin_um``. **Only written when ``unit="micrometer"``**, so it cannot be misread in the optical-pixel variant. |
 | ``z_spacing_um`` | Micrometers between consecutive slices. **Only present on multi-slice volumes.** Always an absolute micrometer distance, even when ``unit="pixel"``: the optical affine governs only x and y, while z is always scaled directly. Slice ``k`` is centred on ``k * z_spacing_um``, the row's ``obs["spatial_z"]``, so it spans ``[(k - 0.5), (k + 0.5)) * z_spacing_um``. ``raster_to_global_affine`` carries no z. |
 | ``z_spacing_source`` | Where ``z_spacing_um`` came from. **Only present on multi-slice volumes.** |
+
+---
+
+## The acquisition system
+
+Readers re-zero the raster: grid position 0 is the first position the
+source acquired, wherever on the slide that was. So ``"global"`` starts
+every store at 0, and two stores cut from one slide land on top of each
+other. Two ``--region`` runs of one ``.d`` are the usual case.
+
+In a store whose ``"global"`` is in micrometers, every TIC image, pixel
+polygon element and optical image placed in micrometers also carries a
+transform to ``"acquisition"``. It is the element's ``"global"`` transform
+followed by a ``Translation`` to the source's origin:
+
+| Source | Origin |
+|--------|--------|
+| Bruker timsTOF, rapifleX, solariX | the raster index of grid position 0 (``coordinate_offsets_px``), times the pitch |
+| imzML, mzPeak | the same; a file numbered from 1 has an origin one pitch from 0 |
+| PHI | 0, which it states |
+| Waters | the fitted stage origin, a measured stage position in micrometers |
+
+``origin_source`` says which kind it is: ``"raster_index"`` or
+``"stage_position"``. A raster index times the pitch is a position in the
+source's own grid, not a measured stage position.
+
+On a volume the TIC volume also moves in z, by the z offset times
+``z_spacing_um``. Pixel polygons stay flat, as in ``"global"``.
+
+The system is **not written**:
+
+- in a store placed in a FlexImaging optical scan's pixels (``unit="pixel"``).
+  There ``"global"`` is already the scan's frame, and the alignment affine
+  absorbs the offset;
+- when the source reports no origin, because a zero there would claim one;
+- on an optical image that is not placed relative to the raster, one with
+  no alignment, which sits at ``Identity``.
+
+A ``dataset_id`` of ``"acquisition"`` is refused, because the per-dataset
+system is named by the id.
+
+Tables carry no transform, so ``obs["spatial_x"]`` and ``["spatial_y"]``
+stay in ``"global"``. Add ``origin_um`` to place them in ``"acquisition"``.
 
 ---
 
@@ -134,6 +197,8 @@ meaningful frame is **physical micrometers of the imaged tissue**.
 - ``zarr.attrs["coordinate_systems"]["global"]`` declares
   ``unit="micrometer"`` and fills ``pixel_size_um_x/y`` with the
   MSI grid pixel size.
+- Every element also carries ``"acquisition"``, the same transform moved
+  to the source's origin, when the source states one.
 
 The two pitches are equal on a square raster and are *not* assumed to be:
 an anisotropic acquisition (a DESI method with ``DesiXStep !=
@@ -207,6 +272,8 @@ pixel grid*, because the photo can be drawn with no transform.
   optical image's **element key**; ``pixel_size_um_x/y`` is typically
   ``None`` because FlexImaging photos do not generally carry a
   um-per-pixel calibration.
+- No ``"acquisition"`` system: the scan's pixel grid is already the
+  frame two stores of one slide share.
 
 ### Mode B with the alignment declined
 
@@ -309,8 +376,10 @@ has a bug. Every Thyra release has a unit-test guard that:
    self-consistent.
 
 See ``tests/unit/converters/test_coordinate_systems.py`` for the
-extents, and ``test_anisotropic_pixel_size.py`` and
-``test_3d_tic_z_spacing.py`` for each cell's centre.
+extents, ``test_anisotropic_pixel_size.py`` and
+``test_3d_tic_z_spacing.py`` for each cell's centre, and
+``test_acquisition_coordinate_system.py`` for the ``"acquisition"``
+system.
 
 A consumer can run the same check at load time. The recommended
 pattern is to compute the bbox at ``"global"`` for every element

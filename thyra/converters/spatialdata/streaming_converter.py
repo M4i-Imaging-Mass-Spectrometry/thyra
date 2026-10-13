@@ -54,6 +54,7 @@ from tqdm import tqdm
 from ...core.conversion_state import ConversionState
 from ...errors import ConversionRefused
 from ...metadata.schema import MSI_OBS_ACQUISITION_ORDER_COLUMN
+from .acquisition_frame import element_transformations
 from .base_spatialdata_converter import BaseSpatialDataConverter
 from .csc_assembly import CscAssembly, index_dtype
 
@@ -1162,7 +1163,12 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             )
             return Image3DModel.parse(
                 xr.DataArray(unit.tic[np.newaxis, ...], dims=("c", "z", "y", "x")),
-                transformations={self.dataset_id: transform, "global": transform},
+                transformations=element_transformations(
+                    self.dataset_id,
+                    transform,
+                    self._acquisition_origin(),
+                    axes=("x", "y", "z"),
+                ),
             )
 
         plane = unit.tic if unit.plane is not None else unit.tic[0]
@@ -1182,5 +1188,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             )
         return Image2DModel.parse(
             xr.DataArray(plane[np.newaxis, ...], dims=("c", "y", "x")),
-            transformations={self.dataset_id: transform, "global": transform},
+            transformations=element_transformations(
+                self.dataset_id, transform, self._acquisition_origin()
+            ),
         )

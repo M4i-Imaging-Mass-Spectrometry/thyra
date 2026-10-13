@@ -71,6 +71,14 @@ def _validate_paths_parameters(
 #: name Thyra let through -- which is exactly today's behaviour.
 _ELEMENT_NAME_EXTRA_CHARS = "_-."
 
+#: Coordinate systems every element is written to besides the per-dataset
+#: one, which the dataset id names. An id equal to one of them would merge
+#: the two. ``"global"`` merging is harmless (both carry the same
+#: transform); ``"acquisition"`` is not, so it is refused (D48). Restated
+#: from ``converters.spatialdata.acquisition_frame`` rather than imported:
+#: importing that package here would load SpatialData with this module.
+_RESERVED_DATASET_IDS = ("acquisition",)
+
 
 def dataset_id_problem(dataset_id: Any) -> Optional[str]:
     """Why ``dataset_id`` cannot name SpatialData elements, or ``None``.
@@ -91,6 +99,11 @@ def dataset_id_problem(dataset_id: Any) -> Optional[str]:
         return f"Dataset ID cannot be {dataset_id!r}"
     if dataset_id.startswith("__"):
         return "Dataset ID cannot start with '__'"
+    if dataset_id in _RESERVED_DATASET_IDS:
+        return (
+            f"Dataset ID cannot be {dataset_id!r}: every store writes a "
+            "coordinate system of that name"
+        )
     bad = sorted(
         {c for c in dataset_id if not (c.isalnum() or c in _ELEMENT_NAME_EXTRA_CHARS)}
     )

@@ -70,6 +70,12 @@ from ...resampling.plan import MassAxisPlan
 from ...resampling.strategies import ResamplingStrategy, build_strategy
 from ...resampling.types import AxisLinearisation, ResamplingConfig
 from ._chunking import table_write_config
+from .acquisition_frame import (
+    ACQUISITION_COORDINATE_SYSTEM,
+    AcquisitionOrigin,
+    acquisition_origin,
+    element_transformations,
+)
 from .optical_image import OpticalImages
 from .root_attrs import RootAttrsBuilder, RootAttrsContext
 from .sibling_tables import SiblingContext, SiblingTables
@@ -241,6 +247,13 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             problem = sample_value_problem(name, value)
             if problem is not None:
                 raise ConversionRefused(problem)
+        # The per-dataset system is named by the id, so this one would
+        # silently replace it on every element (D48).
+        if dataset_id == ACQUISITION_COORDINATE_SYSTEM:
+            raise ConversionRefused(
+                f"Dataset ID cannot be {dataset_id!r}: every store writes a "
+                "coordinate system of that name"
+            )
 
         # Extract pixel_size_detection_info from kwargs if provided
         kwargs_filtered = dict(kwargs)
@@ -287,6 +300,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # whether that has been said yet. See _count_unusable_intensities().
         self._unusable_intensities: int = 0
         self._unusable_intensities_warned: bool = False
+        # Where the source put grid index 0, as its reader reported it.
+        # Settled with the rest of the essential metadata in
+        # _initialize_conversion(); read by _acquisition_origin().
+        self._source_coordinate_offsets: Optional[Tuple[int, int, int]] = None
+        self._source_stage_origin_um: Optional[Tuple[float, float]] = None
         self._pixel_size_detection_info = pixel_size_detection_info
         # ``convert.py`` detects an (x, y) pair, hands the converter the x
         # half as ``pixel_size_um`` and puts both in the detection info.
@@ -364,6 +382,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             include=include_optical,
             apply_alignment=apply_optical_alignment,
             pixel_size_xy=self._resolved_pixel_size_xy,
+            acquisition_origin=self._acquisition_origin,
         )
 
         # The table's ``uns`` block and everything that composes it. Handed
@@ -540,6 +559,8 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             # Store essential metadata for use throughout conversion
             self._coordinate_bounds = essential.coordinate_bounds
             self._n_spectra = essential.n_spectra
+            self._source_coordinate_offsets = essential.coordinate_offsets
+            self._source_stage_origin_um = getattr(essential, "stage_origin_um", None)
 
             # Override pixel size only if using default and metadata is available
             self._adopt_detected_pixel_size(essential)
@@ -1139,9 +1160,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         else:
             gdf = gpd.GeoDataFrame(geometry=geometries, index=adata.obs.index)
 
-        # Set up transform
-        transform = Identity()
-        transformations = {self.dataset_id: transform, "global": transform}
+        # The polygons are already in the frame "global" names, so Identity
+        # there; the acquisition system adds the source's origin.
+        transformations = element_transformations(
+            self.dataset_id, Identity(), self._acquisition_origin()
+        )
 
         # Parse shapes
         shapes = ShapesModel.parse(gdf, transformations=transformations)
@@ -1220,6 +1243,24 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             self._root_attrs_context(), comprehensive_metadata_obj
         )
 
+    def _acquisition_origin(self) -> Optional[AcquisitionOrigin]:
+        """Where grid index 0 sits in the source's frame, in micrometres.
+
+        Composed per call from the settled pitch and slice spacing, so the
+        element transforms and the ``coordinate_systems`` attr are written
+        from the same numbers. ``None`` when the store is placed in optical
+        pixels (D31), where ``"global"`` is already the scan's frame, or
+        when the source reported no origin (D48).
+        """
+        if self.optical.msi_in_pixel_space:
+            return None
+        return acquisition_origin(
+            self._source_coordinate_offsets,
+            self._source_stage_origin_um,
+            self._resolved_pixel_size_xy(),
+            self.z_spacing_um if self._is_volume else None,
+        )
+
     def _root_attrs_context(self) -> RootAttrsContext:
         """What the builder needs that this conversion settled after setup.
 
@@ -1239,6 +1280,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             is_volume=self._is_volume,
             z_spacing_um=self.z_spacing_um,
             z_spacing_source=self.z_spacing_source,
+            acquisition_origin=self._acquisition_origin(),
         )
 
     @abstractmethod

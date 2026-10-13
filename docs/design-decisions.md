@@ -3784,6 +3784,101 @@ long as `mz`.
 
 ---
 
+## D48. A store in micrometres places its raster where the source did
+
+**Status:** Implemented (2026-10-14).
+
+**Decision.** A store whose `"global"` is in micrometres gets one more
+coordinate system, `"acquisition"`. Every TIC image, pixel polygon element
+and optical image placed in micrometres carries a transform to it: the
+element's `"global"` transform followed by a `Translation` to the source's
+origin. The root attribute `coordinate_systems` gains an `"acquisition"`
+entry beside `"global"`, with `origin_um`, `origin_source` and
+`raster_to_acquisition_affine`. `"global"` and the per-dataset system do not
+change.
+
+The origin is where grid position 0 sits in the source's own frame:
+
+- Bruker timsTOF, rapifleX, solariX, imzML, mzPeak: the index the source's
+  own numbering gives grid position 0, times the pitch of each axis (D12).
+  `origin_source` is `"raster_index"`. That index is what the reader
+  records as `coordinate_offsets_px`: the declared imaging area's or the
+  selected region's minimum (timsTOF), the smallest raster index (solariX),
+  the base the file numbers from, 1 or 0 (imzML, D14, so a cropped file
+  keeps its own coordinates), the `.dat` header's first raster position
+  (rapifleX, whose indices are already 0-based), or that base plus the
+  writer's `position_offset` (mzPeak, D29).
+- PHI: 0, which it states.
+- Waters: the fitted lattice origin, the smallest stage reading on each axis,
+  in micrometres. `origin_source` is `"stage_position"`. It is new: Waters
+  stored no origin before. It reaches the converter as
+  `EssentialMetadata.stage_origin_um`, because it is not an integer index and
+  cannot go into `coordinate_offsets`.
+
+On a volume the TIC volume also moves in z, by the z offset times the slice
+pitch. Pixel polygons stay flat, as they are in `"global"`.
+
+**Why.** Readers re-zero the raster. Before this, the subtracted offset
+survived only as two root attributes, `coordinate_offsets_px` and
+`stage_offset_um`, and no element transform carried it. Two stores cut from
+one slide, such as two `--region` runs of one `.d`, landed on top of each
+other in every SpatialData reader. Placing them took Thyra-specific code.
+Now any reader that follows transforms places them.
+
+**The name.** `"acquisition"`, not `"stage"`: on every format but Waters the
+origin is a raster index times the pitch, a position in the source's own
+grid, not a measured stage position. `"raster"` was rejected because it reads
+as pixel indices.
+
+**When it is not written.**
+
+- A store placed in a FlexImaging scan's pixels (D31). There `"global"` is
+  already the scan's frame, and the alignment affine absorbs the offset.
+- A source that reports no origin, such as a Waters grid without a fitted
+  lattice. A zero translation would claim an origin nobody stated.
+- An optical image with no alignment. It sits at `Identity` in `"global"`,
+  which says nothing about where it lies relative to the raster, so moving
+  it by the raster's origin would place it falsely.
+
+**What `stage_offset_um` means now.** It was defined as
+`coordinate_offsets_px` times the pixel size (D12, D32). It is now "where
+grid position 0 sits in the source's frame", the same numbers as
+`acquisition.origin_um`. For every format that has index offsets the value
+is unchanged. Waters stores gain it.
+
+**Objection that did not win.** "Bump `convention_version`; the attribute
+has a new top-level key." The key is additive, like `z_spacing_um` and
+`raster_to_global_affine` before it. A consumer that reads only `"global"`
+is unaffected, and a bump would make every existing consumer warn on every
+store.
+
+**Reserved name.** A `dataset_id` of `"acquisition"` is refused, at the
+front door and by the converter. The per-dataset system is named by the id,
+so it would silently become this one. `"global"` stays allowed: both systems
+would carry the same transform.
+
+**What changes in a store.** Every micrometre store whose source states an
+origin gains the `"acquisition"` transform on its TIC image, pixel polygons
+and placed optical images, and the `coordinate_systems.acquisition` entry.
+Waters stores also gain `stage_offset_um`, and their raw metadata gains
+`imaging_grid.stage_origin_um`. FlexImaging-aligned stores do not change.
+The metadata schema moves to 0.14.0, which reserves the coordinate system
+name, as 0.10.0 reserved an `obs` column (D26). The document's fields do not
+change. Tables carry no transform, so `obs["spatial_x"]` and
+`obs["spatial_y"]` stay in `"global"`.
+
+**Known limits.**
+
+- imzML and mzPeak number from 1 (D14), so most of their stores have an
+  origin one pitch from 0. Two files exported from parts of one acquisition
+  line up only if the exporter kept the acquisition's own numbering.
+- A user-supplied `--pixel-size` scales an index offset like any other
+  pitch. On Waters it does not move the stage origin, which is measured.
+- A volume's z origin uses the slice pitch. When that pitch is
+  `assumed_isotropic`, the z origin is as unreliable as the depth.
+
+---
+
 ## D49. A release is a pull request, and `main` requires passing checks
 
 **Status:** Accepted (2026-10-14). Supersedes D18. The release workflows land

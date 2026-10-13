@@ -123,6 +123,7 @@ from spatialdata.transformations import Translation, set_transformation
 
 from ...alignment import AreaAlignmentResult, TeachingPointAlignment
 from ._chunking import image_chunks
+from .acquisition_frame import AcquisitionOrigin, element_transformations
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ...alignment.teaching_points import RegionMapping
@@ -988,6 +989,7 @@ class OpticalImages:
         include: bool,
         apply_alignment: bool,
         pixel_size_xy: Callable[[], Tuple[float, float]],
+        acquisition_origin: Optional[Callable[[], Optional[AcquisitionOrigin]]] = None,
     ) -> None:
         """Build the optical images of one conversion.
 
@@ -1020,6 +1022,11 @@ class OpticalImages:
                 called when an image is loaded rather than read here: the
                 converter settles its pitch from the reader's metadata after
                 this object is built.
+            acquisition_origin: Where the source put grid index 0, called
+                when an image is loaded, for the same reason. An image
+                carried into the MSI's micrometres gets the
+                ``"acquisition"`` system from it (D48); ``None`` writes
+                none.
         """
         self.reader = reader
         self._output_path = output_path
@@ -1027,6 +1034,7 @@ class OpticalImages:
         self._include = bool(include)
         self._apply_alignment = bool(apply_alignment)
         self._pixel_size_xy = pixel_size_xy
+        self._acquisition_origin = acquisition_origin
         # Optical-MSI alignment (computed from FlexImaging Area definitions)
         self._alignment: Optional[AreaAlignmentResult] = None
         # Affine matrix mapping TIC raster indices to optical image pixels
@@ -1491,6 +1499,25 @@ class OpticalImages:
             output_axes=("x", "y"),
         )
 
+    def _transformations(self, transform: Any, placed_in_um: bool) -> Dict[str, Any]:
+        """An image's transformations, ``"acquisition"`` included when placed.
+
+        Only an image carried into the MSI's micrometres has a place in the
+        source's frame. An optical-pixel store has no acquisition system at
+        all (D31), and an image with no alignment sits at Identity in
+        ``"global"``, which says nothing about where it is relative to the
+        raster, so translating it by the raster's origin would say
+        something false. That includes a second image loaded in micrometre
+        mode when the alignment image itself could not be read: there is no
+        primary grid to scale it into, so it too is at Identity.
+        """
+        origin = (
+            self._acquisition_origin()
+            if placed_in_um and self._acquisition_origin is not None
+            else None
+        )
+        return element_transformations(self.dataset_id, transform, origin)
+
     def _load_single_image(
         self, image_path: Path, images: MutableMapping[str, Any]
     ) -> None:
@@ -1610,10 +1637,9 @@ class OpticalImages:
             name=image_name,
             chunks=image_chunks(2),  # (1, 4096, 4096); sharding seam, see _chunking
             scale_factors=scale_factors,
-            transformations={
-                self.dataset_id: transform,
-                "global": transform,
-            },
+            transformations=self._transformations(
+                transform, um_mode and (is_primary or self._primary_dims is not None)
+            ),
         )
         # Keyed by element name, as the images dict is: a second file that
         # maps to the same name replaces the first, the way the dict

@@ -34,7 +34,7 @@ import spatialdata as sd
 sdata = sd.read_zarr("output.zarr")
 block = sdata.tables["msi_dataset_z0"].uns["msi_metadata"]
 
-print(block["schema_version"])                       # "0.13.0"
+print(block["schema_version"])                       # "0.14.0"
 print(block["ms_analysis"]["pixel_size_um"])         # {"x": 20.0, "y": 20.0}
 print(block["ms_analysis"]["ionisation_source"])     # "MALDI"
 print(block["ms_analysis"]["ionisation_source_term"])
@@ -540,13 +540,14 @@ added), 0.10.0 (the `obs` column `acquisition_order` reserved; the document
 is unchanged), 0.11.0 (`provenance.mass_axis` added), 0.12.0
 (`sample.sample_id`, `sample.sample_name` and
 `ms_analysis.spectrum_representation` added), 0.13.0 (the `var` column
-`ccs` reserved; the document is unchanged).
+`ccs` reserved; the document is unchanged), 0.14.0
+(the coordinate system `"acquisition"` reserved; the document is unchanged).
 
 The JSON Schema rendering is published at a fixed, versioned address,
 which is also its `$id`:
 
 ```
-https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.13.0/msi_metadata.schema.json
+https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.14.0/msi_metadata.schema.json
 ```
 
 Every version from 0.6.0 on has its own folder under that path, and a
@@ -556,7 +557,7 @@ program that writes the document without Thyra validates against that
 address; see [Writing the Metadata Document](writing-the-metadata-document.md).
 
 The same file is committed at
-`thyra/metadata/schema/msi_metadata_schema_v0_13.json` and ships in the
+`thyra/metadata/schema/msi_metadata_schema_v0_14.json` and ships in the
 wheel, so a Python consumer can validate documents offline without
 importing Thyra:
 
@@ -566,7 +567,7 @@ import json
 
 schema = json.loads(
     resources.files("thyra.metadata.schema")
-    .joinpath("msi_metadata_schema_v0_13.json")
+    .joinpath("msi_metadata_schema_v0_14.json")
     .read_text()
 )
 ```

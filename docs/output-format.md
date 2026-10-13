@@ -55,7 +55,9 @@ A converted dataset contains the following elements:
 !!! info "Coordinate systems"
     Every element above carries a transform to the ``"global"``
     coordinate system (and the same transform to a second one named after
-    the dataset id), and Thyra writes a self-describing
+    the dataset id). In a micrometer store, elements also carry
+    ``"acquisition"``: ``"global"`` moved to where the source put its
+    raster, so two stores of one slide line up. Thyra writes a self-describing
     ``coordinate_systems`` metadata attr at the zarr top level so
     consumers know what ``"global"`` is in (micrometers or pixels).
     See [Coordinate Systems](coordinate-systems.md) for the contract
@@ -1217,7 +1219,7 @@ terms, and a schema a validator can hold it to.
 ```python
 block = msi_table.uns["msi_metadata"]
 
-print(block["schema_version"])                    # "0.13.0"
+print(block["schema_version"])                    # "0.14.0"
 print(block["ms_analysis"]["pixel_size_um"])      # {"x": 20.0, "y": 20.0}
 print(block["ms_analysis"].get("spectrum_representation"))  # "profile" / "centroid"
 print(block.get("sample", {}).get("sample_id"))   # only when you named the sample
