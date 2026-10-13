@@ -90,14 +90,22 @@ def tic_support_bins(
     return np.repeat(lo - offsets, lengths) + np.arange(total, dtype=np.int_)
 
 
-def wide_bins(layout: BinLayout, mzs: NDArray[np.float64]) -> NDArray[np.int_]:
+def wide_bins(
+    layout: BinLayout,
+    mzs: NDArray[np.float64],
+    intensities: NDArray[np.float64],
+) -> NDArray[np.int_]:
     """The bins to rebin rather than interpolate, ascending; often none.
 
     Interpolating at a bin's centre reads the two samples either side of
-    it. A bin that holds any other sample -- three samples, or two on the
-    same side of its centre -- loses that sample's ion current to the
-    rescale: that is the defect of issue #442, and a spectrum in which it
-    never happens is left to the interpolating operator, unchanged. On an
+    it. A bin that holds any other sample with intensity -- three samples,
+    or two on the same side of its centre -- loses that sample's ion
+    current to the rescale: that is the defect of issue #442, and a
+    spectrum in which it never happens is left to the interpolating
+    operator, unchanged. A skipped zero loses nothing, so a repeated or
+    closely spaced explicit zero does not count; two samples at the same
+    m/z count when either carries intensity, since interpolation reads
+    only one of them. On an
     evenly sampled source it cannot happen until bins are twice the sample
     spacing, so the default Waters profile route, at 1.14 bins per sample,
     and the default rapifleX one, at 0.2, never come here.
@@ -108,11 +116,10 @@ def wide_bins(layout: BinLayout, mzs: NDArray[np.float64]) -> NDArray[np.int_]:
     puts the two on different footings, and rebinning both was measured
     the more accurate of the two (design decision D44).
 
-    A sample on an inner edge belongs to the bin on its right, the tie rule
-    :func:`~thyra.resampling.binning.nn_map_to_bins` uses; one on the top
-    edge belongs to the last bin. Samples outside the outer edges are
-    nobody's. Zero-intensity samples count: an explicit zero is a
-    measurement.
+    A sample on an inner edge belongs to the bin on its right; one on the
+    top edge belongs to the last bin (:meth:`BinLayout.locate`). Samples
+    outside the outer edges are nobody's. Zero-intensity samples count
+    towards the bins rebinned: an explicit zero is a measurement.
 
     Two samples on the same side of a centre are closer together than half
     the gap between that centre and its neighbour, so a spectrum whose
@@ -123,6 +130,7 @@ def wide_bins(layout: BinLayout, mzs: NDArray[np.float64]) -> NDArray[np.int_]:
     Args:
         layout: The axis's bins.
         mzs: Source m/z values, ascending.
+        intensities: Source intensities, parallel to ``mzs``.
 
     Returns:
         Sorted, unique bin indices: every bin holding two or more samples,
@@ -150,11 +158,18 @@ def wide_bins(layout: BinLayout, mzs: NDArray[np.float64]) -> NDArray[np.int_]:
     if stop - first < 2:
         return none
     inside = mzs[first:stop]
+    held = intensities[first:stop] != 0
     bins = layout.locate(inside)
     # ``mzs`` is ascending, so ``bins`` and the (bin, side of its centre)
-    # pairs are too: a repeat is a neighbour.
-    side = 2 * bins + (inside >= layout.axis[bins])
-    if not (side[1:] == side[:-1]).any():
+    # pairs are too: a repeat is a neighbour. Of two neighbours on one
+    # side, interpolation reads the one nearer the centre and skips the
+    # other: the lower below the centre, the upper at or above it.
+    above = inside >= layout.axis[bins]
+    side = 2 * bins + above
+    same = side[1:] == side[:-1]
+    skipped_held = np.where(above[1:], held[1:], held[:-1])
+    tied = (inside[1:] == inside[:-1]) & (held[1:] | held[:-1])
+    if not (same & (skipped_held | tied)).any():
         return none
     repeated = bins[1:] == bins[:-1]
     return np.unique(bins[1:][repeated]).astype(np.int_)
@@ -229,7 +244,8 @@ def rebin_wide_bins(
         intensities: Source intensities, parallel to ``mzs``.
 
     Returns:
-        The value of each bin in ``wide``, parallel to it.
+        The value of each bin in ``wide``, parallel to it; zeros when no
+        sample lies inside the axis.
     """
     lo, hi = sample_cells(mzs)
     # A sample outside the axis is nobody's; one inside keeps only the part
@@ -241,6 +257,8 @@ def rebin_wide_bins(
     lo = np.clip(lo[inside], layout.lower, layout.upper)
     hi = np.clip(hi[inside], layout.lower, layout.upper)
     weights = intensities[inside]
+    if weights.size == 0:
+        return np.zeros(wide.size)
     before = np.concatenate(([0.0], np.cumsum(weights)))
 
     def total_left_of(edges: NDArray[np.float64]) -> NDArray[np.float64]:
@@ -398,7 +416,7 @@ def tic_preserving_sparse(
     if layout is None and axis.size >= 2:
         layout = BinLayout(axis, kept_range)
     if layout is not None:
-        wide = wide_bins(layout, mzs_sorted)
+        wide = wide_bins(layout, mzs_sorted, intensities_sorted)
 
     indices = tic_support_bins(axis, mzs_sorted, intensities_sorted)
     if wide.size:

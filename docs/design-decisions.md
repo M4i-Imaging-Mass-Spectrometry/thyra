@@ -3527,9 +3527,12 @@ exist. The new check refuses a conversion; it writes nothing.
 **Status:** Implemented (2026-10-13), issue #442.
 
 **Decision.** `tic_preserving` checks each spectrum for a sample that
-interpolation at the bin centres would skip: a bin holding a sample that is
-neither of the two samples around its centre. That is three samples in one
-bin, or two on the same side of its centre.
+interpolation at the bin centres would skip: a bin holding a sample with
+intensity that is neither of the two samples around its centre. That is
+three samples in one bin, or two on the same side of its centre. A skipped
+zero loses nothing and does not count, so a repeated explicit zero leaves a
+spectrum alone; two samples at one m/z count when either has intensity,
+because interpolation reads only one of them.
 
 - A spectrum with no such bin is resampled exactly as before.
 - A spectrum with one is rebinned wherever a bin holds two or more samples.
@@ -3606,17 +3609,19 @@ interpolated bins beside them then hold the wrong share. Once a spectrum is
 rebinned at all, every bin holding two samples is.
 
 **Why cells and not trapezoids.** Spreading the trapezoid between each pair
-of neighbouring samples over the bins it overlaps was measured too. It was
-worse at every width above 1 (0.0229 against 0.0161 at 4 samples per bin).
+of neighbouring samples over the bins it overlaps was measured too. In a
+separate run, rebinning every bin that holds a sample, it was worse at
+every width above 1 bin per sample (0.0229 against 0.0161 at 4.14).
 It also smears a sample over its neighbours' bins even when the axis is the
 source grid; cells reproduce the source exactly there.
 
 **What changes in a store.**
 
-- Conversions whose bins are wide enough to skip samples. That is
+- Conversions whose bins are wide enough to skip samples. For example
   `--resample-method tic_preserving` with a coarse `--resample-bins` or
-  `--resample-width-at-mz`, or a `plan_mass_axis` plan wider than a
-  source's own width (D43). Their values change, and narrow peaks come back.
+  `--resample-width-at-mz`, the method forced onto the default width for a
+  source sampled more finely than half of it, or a `plan_mass_axis` plan
+  wider than a source's own width (D43). Their values change, and narrow peaks come back.
 - Not the Waters profile route, the default for a SELECT SERIES MRT and what
   `--waters-spectrum profile` takes elsewhere. Its bins are 1.14 times the
   sample spacing: some hold two samples, one either side of the centre, and

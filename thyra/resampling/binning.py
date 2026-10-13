@@ -79,9 +79,11 @@ def bin_edges(
 ) -> NDArray[np.float64]:
     """The edges of the bins ``axis`` holds, ``len(axis) + 1`` of them.
 
-    An inner edge is the midpoint between two neighbouring centres, which
-    is the boundary :func:`nn_map_to_bins` draws: a value is in the bin
-    whose centre is nearest it. The outer edges sit half a neighbouring
+    An inner edge is the midpoint between two neighbouring centres: a
+    value is in the bin whose centre is nearest it, and one on an edge is
+    in the bin to its right. :func:`nn_map_to_bins` compares distances
+    instead, so a value within an ulp of a midpoint can land one bin over
+    there; nothing that uses these edges mixes the two. The outer edges sit half a neighbouring
     gap beyond the end centres, pulled in to ``kept_range`` where that is
     narrower -- a constant axis puts its end centres *on* the declared
     bounds, so its two end bins are half bins, and nothing outside the
@@ -223,11 +225,17 @@ class BinLayout:
             if not step.any():
                 return bins
             bins += step
-        inner = 0.5 * (axis[1:] + axis[:-1])
         settled = (values >= self.edges_of(bins)) & (
             (values < self.edges_of(bins + 1)) | (bins == last)
         )
-        bins[~settled] = np.searchsorted(inner, values[~settled], side="right")
+        if not settled.all():
+            # Search the centres, then take the midpoint test: no edge
+            # array the length of the axis is built.
+            stray = values[~settled]
+            found = np.clip(np.searchsorted(axis, stray, side="right") - 1, 0, last)
+            upper = np.minimum(found + 1, last)
+            found += (stray >= 0.5 * (axis[found] + axis[upper])) & (found < last)
+            bins[~settled] = found
         return bins
 
 

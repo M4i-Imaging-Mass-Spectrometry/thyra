@@ -120,13 +120,9 @@ class TestSpectraThatSkipNoSampleAreResampledAsBefore:
             out, self._old_operator(axis, mz, intensity, None), rtol=1e-12, atol=0
         )
 
-    def test_the_default_waters_profile_axis(self):
-        """1.14 bins per sample: some bins hold two, never on one side.
-
-        A zero-suppressed trace on a sqrt(m/z) grid, onto the default
-        linear_tof axis of the Waters profile route, is left exactly as it
-        was -- the route this fix must not move.
-        """
+    @staticmethod
+    def _waters_like_trace():
+        """A zero-suppressed sqrt(m/z) trace and the default 1.14x axis."""
         k_axis = 1.3e-3 / np.sqrt(1000.0)
         k_grid = 1.143e-3 / np.sqrt(1000.0)
         n = int((2.0 / k_axis) * (np.sqrt(1000.0) - np.sqrt(300.0)))
@@ -140,7 +136,16 @@ class TestSpectraThatSkipNoSampleAreResampledAsBefore:
                 -0.5 * (np.arange(-4, 5) / 1.7) ** 2
             )
         keep = (intensity > 0) | np.roll(intensity > 0, 1) | np.roll(intensity > 0, -1)
-        mz, intensity = grid[keep], intensity[keep]
+        return axis, grid[keep], intensity[keep]
+
+    def test_the_default_waters_profile_axis(self):
+        """1.14 bins per sample: some bins hold two, never on one side.
+
+        A zero-suppressed trace on a sqrt(m/z) grid, onto the default
+        linear_tof axis of the Waters profile route, is left exactly as it
+        was -- the route this fix must not move.
+        """
+        axis, mz, intensity = self._waters_like_trace()
         layout = BinLayout(axis, kept_mz_range(axis, None))
         bins = layout.locate(mz[(mz >= layout.lower) & (mz <= layout.upper)])
         assert (bins[1:] == bins[:-1]).any(), "the case needs bins holding two"
@@ -150,6 +155,29 @@ class TestSpectraThatSkipNoSampleAreResampledAsBefore:
         np.testing.assert_allclose(
             out, self._old_operator(axis, mz, intensity, None), rtol=1e-12, atol=0
         )
+
+    def test_a_repeated_explicit_zero_skips_nothing(self):
+        """A grid point stored twice with no intensity loses no ion current."""
+        axis, mz, intensity = self._waters_like_trace()
+        zero = int(np.flatnonzero(intensity == 0)[50])
+        mz = np.insert(mz, zero, mz[zero])
+        intensity = np.insert(intensity, zero, 0.0)
+
+        out = _dense(TICPreservingStrategy(axis, None), mz, intensity)
+
+        np.testing.assert_allclose(
+            out, self._old_operator(axis, mz, intensity, None), rtol=1e-12, atol=0
+        )
+
+    def test_a_repeated_mz_with_intensity_is_rebinned(self):
+        """Interpolation reads one of two samples at one m/z: that one skips."""
+        axis, mz, intensity = self._waters_like_trace()
+        peak = int(np.argmax(intensity))
+        mz = np.insert(mz, peak, mz[peak])
+        intensity = np.insert(intensity, peak, intensity[peak])
+        layout = BinLayout(axis, kept_mz_range(axis, None))
+
+        assert wide_bins(layout, mz, intensity).size > 0
 
     def test_an_axis_on_the_source_grid_returns_the_source(self):
         rng = np.random.default_rng(1)
@@ -217,6 +245,27 @@ class TestMixedSpectra:
         assert out.sum() == pytest.approx(intensity.sum())
 
 
+class TestEdges:
+    def test_samples_on_the_outer_edges_are_kept_once(self):
+        """On the lower edge and the top edge: in the end bins, whole.
+
+        The tolerance stops the bridge across the middle, so the two end
+        bins hold exactly the samples inside them.
+        """
+        axis = np.linspace(100.0, 110.0, 11)
+        mz = np.array([100.0, 100.01, 100.02, 109.98, 109.99, 110.0])
+        intensity = np.array([1.0, 2.0, 3.0, 5.0, 6.0, 7.0])
+
+        out = _dense(
+            TICPreservingStrategy(axis, (100.0, 110.0), gap_tolerance_da=0.1),
+            mz,
+            intensity,
+        )
+
+        assert out[0] == pytest.approx(6.0) and out[-1] == pytest.approx(18.0)
+        assert out.sum() == pytest.approx(intensity.sum())
+
+
 class TestBuildingBlocks:
     def test_bin_edges_are_the_nearest_centre_boundaries(self):
         axis = np.array([1.0, 2.0, 4.0])
@@ -228,13 +277,13 @@ class TestBuildingBlocks:
     def test_two_samples_either_side_of_a_centre_skip_nothing(self):
         layout = BinLayout(np.array([0.5, 1.5, 2.5]), (0.0, 3.0))
         # Bin 1 holds 1.0 (on its lower edge: ties go right) and 1.5.
-        assert wide_bins(layout, np.array([0.5, 1.0, 1.5, 2.5])).size == 0
+        assert wide_bins(layout, np.array([0.5, 1.0, 1.5, 2.5]), np.ones(4)).size == 0
 
     def test_two_samples_on_one_side_rebin_every_bin_holding_two(self):
         layout = BinLayout(np.array([0.5, 1.5, 2.5]), (0.0, 3.0))
         # Bin 2 holds 2.5 and 3.0 (the top edge closes the last bin), both
         # at or past its centre: the spectrum is rebinned, bin 1 included.
-        wide = wide_bins(layout, np.array([0.5, 1.0, 1.5, 2.5, 3.0]))
+        wide = wide_bins(layout, np.array([0.5, 1.0, 1.5, 2.5, 3.0]), np.ones(5))
         assert wide.tolist() == [1, 2]
 
     def test_the_layout_draws_the_same_edges_as_bin_edges(self):
