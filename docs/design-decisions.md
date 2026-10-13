@@ -3529,7 +3529,8 @@ exist. The new check refuses a conversion; it writes nothing.
 **Decision.** `tic_preserving` checks each spectrum for a sample that
 interpolation at the bin centres would skip: a bin holding a sample with
 intensity that is neither of the two samples around its centre. That is
-three samples in one bin, or two on the same side of its centre. A skipped
+three samples in one bin, or two on the same side of its centre; a sample
+exactly on the centre is read alone, so any other in its bin counts. A skipped
 zero loses nothing and does not count, so a repeated explicit zero leaves a
 spectrum alone; two samples at one m/z count when either has intensity,
 because interpolation reads only one of them.

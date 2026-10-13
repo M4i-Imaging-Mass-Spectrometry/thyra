@@ -276,8 +276,21 @@ class TestBuildingBlocks:
 
     def test_two_samples_either_side_of_a_centre_skip_nothing(self):
         layout = BinLayout(np.array([0.5, 1.5, 2.5]), (0.0, 3.0))
-        # Bin 1 holds 1.0 (on its lower edge: ties go right) and 1.5.
-        assert wide_bins(layout, np.array([0.5, 1.0, 1.5, 2.5]), np.ones(4)).size == 0
+        # Bin 1 holds 1.0 (on its lower edge: ties go right) and 1.7.
+        assert wide_bins(layout, np.array([0.5, 1.0, 1.7, 2.5]), np.ones(4)).size == 0
+
+    def test_a_sample_on_the_centre_skips_its_neighbour_below(self):
+        """Interpolation at 2.0 reads the sample on it and nothing else."""
+        axis = np.array([1.0, 2.0, 3.0])
+        layout = BinLayout(axis, (0.5, 3.5))
+        mz = np.array([1.6, 2.0, 3.0])
+        intensity = np.array([10.0, 1.0, 5.0])
+
+        assert wide_bins(layout, mz, intensity).tolist() == [1]
+        out = _dense(TICPreservingStrategy(axis, (0.5, 3.5)), mz, intensity)
+        # Sampled at the centres, bin 1 kept 1 of the 11 it holds.
+        assert out[1] > out[2]
+        assert out.sum() == pytest.approx(intensity.sum())
 
     def test_two_samples_on_one_side_rebin_every_bin_holding_two(self):
         layout = BinLayout(np.array([0.5, 1.5, 2.5]), (0.0, 3.0))

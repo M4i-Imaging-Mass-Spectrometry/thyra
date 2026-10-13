@@ -102,7 +102,9 @@ def wide_bins(
     or two on the same side of its centre -- loses that sample's ion
     current to the rescale: that is the defect of issue #442, and a
     spectrum in which it never happens is left to the interpolating
-    operator, unchanged. A skipped zero loses nothing, so a repeated or
+    operator, unchanged. A sample exactly on a centre is read alone, so
+    every other sample in its bin counts as skipped. A skipped zero loses
+    nothing, so a repeated or
     closely spaced explicit zero does not count; two samples at the same
     m/z count when either carries intensity, since interpolation reads
     only one of them. On an
@@ -163,13 +165,17 @@ def wide_bins(
     # ``mzs`` is ascending, so ``bins`` and the (bin, side of its centre)
     # pairs are too: a repeat is a neighbour. Of two neighbours on one
     # side, interpolation reads the one nearer the centre and skips the
-    # other: the lower below the centre, the upper at or above it.
-    above = inside >= layout.axis[bins]
+    # other: the lower below the centre, the upper at or above it. A
+    # sample exactly on the centre is read alone, so the one just below
+    # it in the same bin is skipped too.
+    centres = layout.axis[bins]
+    above = inside >= centres
     side = 2 * bins + above
     same = side[1:] == side[:-1]
     skipped_held = np.where(above[1:], held[1:], held[:-1])
     tied = (inside[1:] == inside[:-1]) & (held[1:] | held[:-1])
-    if not (same & (skipped_held | tied)).any():
+    on_centre = (bins[1:] == bins[:-1]) & (inside[1:] == centres[1:]) & held[:-1]
+    if not (same & (skipped_held | tied) | on_centre).any():
         return none
     repeated = bins[1:] == bins[:-1]
     return np.unique(bins[1:][repeated]).astype(np.int_)
