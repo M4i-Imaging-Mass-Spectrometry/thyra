@@ -33,6 +33,8 @@ from .core.base_converter import BaseMSIConverter, PixelSizeSource
 from .core.base_reader import BaseMSIReader
 from .core.registry import detect_format, get_converter_class, get_reader_class
 from .errors import ConversionRefused
+from .resampling.plan import MassAxisPlan
+from .resampling.types import ResamplingConfig
 from .utils.windows_paths import prepare_zarr_output_path
 
 logger = logging.getLogger(__name__)
@@ -389,7 +391,9 @@ def _create_converter(
     pixel_size_source: PixelSizeSource,
     handle_3d: bool,
     pixel_size_detection_info: Dict[str, Any],
-    resampling_config: Optional[Dict[str, Any]] = None,
+    resampling_config: Optional[
+        Union[Dict[str, Any], ResamplingConfig, MassAxisPlan]
+    ] = None,
     include_optical: bool = True,
     apply_optical_alignment: bool = True,
     streaming: Union[bool, Literal["auto"]] = "auto",
@@ -465,7 +469,9 @@ def convert_msi(
     pixel_size_um: Optional[float] = None,
     handle_3d: bool = False,
     z_spacing_um: Optional[float] = None,
-    resampling_config: Optional[Dict[str, Any]] = None,
+    resampling_config: Optional[
+        Union[Dict[str, Any], ResamplingConfig, MassAxisPlan]
+    ] = None,
     reader_options: Optional[Dict[str, Any]] = None,
     include_optical: bool = True,
     apply_optical_alignment: bool = True,
@@ -493,7 +499,11 @@ def convert_msi(
             so the guess is not mistaken for a measurement. Supply it
             whenever the section thickness is known -- the in-plane
             pitch matches it only by coincidence.
-        resampling_config: Optional resampling configuration
+        resampling_config: Optional resampling configuration: a dict, a
+            ``ResamplingConfig``, or a ``MassAxisPlan`` from
+            :func:`thyra.plan_mass_axis`. With a plan the conversion
+            builds the planned axis and refuses (returns ``False``,
+            nothing written) when its own axis hashes differently.
         reader_options: Optional format-specific reader options:
             - intensity_threshold: float - Minimum intensity
               to include. Default: None (no filtering).

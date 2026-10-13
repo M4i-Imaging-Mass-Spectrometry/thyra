@@ -65,6 +65,7 @@ from ...errors import ConversionRefused
 from ...metadata.schema import MSI_VAR_RESERVED_COLUMNS, mass_axis_sha256
 from ...resampling.axis_planner import AxisPlanner, normalize_resampling_config
 from ...resampling.mobility_grid import MOBILITY_CHANNELS
+from ...resampling.plan import MassAxisPlan
 from ...resampling.strategies import ResamplingStrategy, build_strategy
 from ...resampling.types import AxisLinearisation, ResamplingConfig
 from ._chunking import table_write_config
@@ -109,7 +110,9 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         handle_3d: bool = False,
         z_spacing_um: Optional[float] = None,
         pixel_size_detection_info: Optional[Dict[str, Any]] = None,
-        resampling_config: Optional[Union[Dict[str, Any], ResamplingConfig]] = None,
+        resampling_config: Optional[
+            Union[Dict[str, Any], ResamplingConfig, MassAxisPlan]
+        ] = None,
         include_optical: bool = True,
         apply_optical_alignment: bool = True,
         write_mobility_table: bool = True,
@@ -139,7 +142,9 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 see :meth:`BaseMSIConverter._resolve_z_spacing`.
             pixel_size_detection_info: Optional metadata about pixel size
                 detection
-            resampling_config: Optional resampling configuration dict
+            resampling_config: Optional resampling configuration: a dict,
+                a ``ResamplingConfig`` or a ``MassAxisPlan``. A plan makes
+                the conversion refuse when its axis differs from the plan's.
             include_optical: Whether to include optical images in output
                 (default: True)
             write_mobility_table: When the reader shares one set of
@@ -620,6 +625,37 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
         self._refuse_non_finite_axis()
         self._mass_axis_fingerprint = self._fingerprint_mass_axis()
+        self._check_planned_mass_axis()
+
+    def _check_planned_mass_axis(self) -> None:
+        """Refuse when the adopted axis is not the one a plan described.
+
+        A :class:`~thyra.resampling.plan.MassAxisPlan` carries the D42
+        fingerprint of the axis it laid. Run here, right after the axis is
+        fingerprinted, the check happens before any spectrum is read or
+        anything is written (issue #449, D43).
+
+        Raises:
+            ConversionRefused: If the config carries a fingerprint and this
+                conversion's axis hashes differently, or is empty.
+        """
+        config = self._resampling_config
+        expected = None if config is None else config.mass_axis_sha256
+        if expected is None:
+            return
+        found = self._mass_axis_fingerprint
+        if found is not None and found["sha256"] == expected:
+            return
+        have = "no bins" if found is None else f"{found['n_bins']} bins"
+        have_hash = "-" if found is None else found["sha256"][:12]
+        raise ConversionRefused(
+            "The mass axis plan does not describe this conversion's axis: the "
+            f"plan expects the axis with hash {expected[:12]}, and this "
+            f"conversion builds one with {have} and hash {have_hash}. The "
+            "source's own settings give a different axis from the plan's; "
+            "plan the axis again with this source among the sources, or "
+            "check the range, axis type and width this conversion was given."
+        )
 
     def _fingerprint_mass_axis(self) -> Optional[Dict[str, Any]]:
         """Hash the adopted axis exactly as ``var["mz"]`` will carry it.

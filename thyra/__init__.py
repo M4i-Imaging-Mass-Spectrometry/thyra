@@ -51,8 +51,10 @@ from typing import TYPE_CHECKING, Any, List
 if TYPE_CHECKING:  # pragma: no cover - for type checkers, not at runtime
     from .convert import convert_msi
     from .converters.spatialdata.converter import SpatialDataConverter
+    from .mass_axis_plan import plan_mass_axis
     from .metadata.document import read_metadata_document
     from .preview import MsiPreview, preview_msi
+    from .resampling.plan import MassAxisPlan
 
 # Suppress remaining dependency warnings
 warnings.filterwarnings("ignore", category=FutureWarning, module="dask")
@@ -71,9 +73,11 @@ __version__ = "4.4.0"
 
 #: Public name -> the module that defines it, imported on first access.
 _LAZY_ATTRS = {
+    "MassAxisPlan": ".resampling.plan",
     "MsiPreview": ".preview",
     "SpatialDataConverter": ".converters.spatialdata.converter",
     "convert_msi": ".convert",
+    "plan_mass_axis": ".mass_axis_plan",
     "preview_msi": ".preview",
     "read_metadata_document": ".metadata.document",
 }
@@ -88,7 +92,9 @@ __all__ = [
     "__version__",
     "convert_msi",
     "preview_msi",
+    "plan_mass_axis",
     "read_metadata_document",
+    "MassAxisPlan",
     "MsiPreview",
     "SpatialDataConverter",
 ]

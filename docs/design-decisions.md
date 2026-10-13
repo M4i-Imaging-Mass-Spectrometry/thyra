@@ -3460,3 +3460,52 @@ check.
   added to a store later, with a different `var["mz"]` and a copy of the main
   table's block, fails that check. Its block must drop or replace the field.
 - The field is not a CV term.
+
+## D43. A plan fixes one mass axis for several sources
+
+**Status:** Implemented (2026-10-13).
+
+**Decision.** `plan_mass_axis(sources)` reads each source's header, as
+`preview_msi` does, and returns a `MassAxisPlan`. The plan holds the axis
+settings only: the axis type, the range, the bin width at one reference m/z
+(or, for a `tof` axis, the width law and the bins per peak width), the bin
+count, and the D42 fingerprint of the axis those settings lay. The resampling
+method is not part of the axis (`AxisPlan`), so each conversion keeps its own
+detector's method unless the caller forces one in the plan. The plan decides
+each setting the caller leaves open:
+
+- The range is the intersection of the sources' ranges.
+- The width is the widest width any source's detector declares (else the
+  axis type's default), each first stated at the reference m/z under the axis law (width grows as
+  m^0 on `constant`, m^0.5 on `linear_tof`, m^1 on `reflector_tof`, m^1.5 on
+  `orbitrap`, m^2 on `fticr`).
+- The plan is refused when the ranges have no m/z in common, when the
+  detectors want different axis types, and when `tof` sources declare
+  different width laws. A caller's value is used as given.
+
+A conversion given a plan builds the axis from the plan's settings and
+refuses, before reading any spectrum, when the fingerprint of the axis it
+built differs from the plan's.
+
+**Why.** Comparing two stores bin for bin needs one `var["mz"]` for both.
+Five settings rebuild the axis, and the D42 fingerprint proves they did. The
+width is the widest because, on an axis finer than a source's own peaks, that
+source's centroids scatter over neighbouring bins from pixel to pixel and one
+ion becomes several features. A coarser axis costs the finer source
+resolution instead, and the plan names it in a warning. The range is the
+intersection so that every bin is measured in every store.
+
+**What changes in a store.** Nothing. A plan only picks settings that already
+exist. The new check refuses a conversion; it writes nothing.
+
+**Known limits.**
+
+- An imzML range is the span of the data observed, not the acquisition window,
+  so an intersection bound set by an imzML source may cut signal near the edge.
+  The plan warns. An mzPeak range is observed data too when the archive states
+  no scan window, but that cannot be told from the header cheaply, so it is
+  not flagged.
+- The source with the finer width loses resolution on the shared axis, and
+  under `tic_preserving` bins coarser than a source's own can merge narrow
+  peaks (#442).
+- There is no plan for "the axis of an existing store" yet.

@@ -50,6 +50,7 @@ from .binning import usable_linearisation
 from .common_axis import CommonAxisBuilder
 from .decision_tree import ResamplingDecisionTree
 from .mass_axis.tof_generator import DEFAULT_BINS_PER_FWHM, TOFAxisGenerator
+from .plan import MassAxisPlan, check_sha256
 from .types import (
     DEFAULT_REFERENCE_MZ,
     AxisLinearisation,
@@ -151,25 +152,52 @@ _RESAMPLING_CONFIG_KEYS = frozenset(
         "tof_a",
         "tof_b",
         "bins_per_fwhm",
+        "mass_axis_sha256",
     }
 )
 
+#: The names the Python API and the CLI accept for each enum, shared by
+#: :func:`normalize_resampling_config` and the mass axis planner. Only the
+#: methods the resampling pipeline implements, and only the axis types
+#: CommonAxisBuilder has a generator for; they match the CLI's
+#: ``click.Choice`` lists.
+METHOD_BY_NAME = {
+    "nearest_neighbor": ResamplingMethod.NEAREST_NEIGHBOR,
+    "tic_preserving": ResamplingMethod.TIC_PRESERVING,
+}
+AXIS_TYPE_BY_NAME = {
+    "constant": AxisType.CONSTANT,
+    "linear_tof": AxisType.LINEAR_TOF,
+    "reflector_tof": AxisType.REFLECTOR_TOF,
+    "tof": AxisType.TOF,
+    "orbitrap": AxisType.ORBITRAP,
+    "fticr": AxisType.FTICR,
+}
+
 
 def normalize_resampling_config(
-    config: Union[Dict[str, Any], ResamplingConfig],
+    config: Union[Dict[str, Any], ResamplingConfig, MassAxisPlan],
 ) -> ResamplingConfig:
     """Normalise a resampling config dict or dataclass to a ResamplingConfig.
 
-    Accepts either a plain dict (as produced by _build_resampling_config in
-    __main__.py) or an already-constructed ResamplingConfig dataclass and
-    returns a ResamplingConfig in both cases.
+    Accepts a plain dict (as produced by _build_resampling_config in
+    __main__.py), an already-constructed ResamplingConfig dataclass, or a
+    :class:`~thyra.resampling.plan.MassAxisPlan` (taken through its
+    :meth:`~thyra.resampling.plan.MassAxisPlan.to_resampling_config`), and
+    returns a ResamplingConfig in every case.
 
     Raises:
         ConversionRefused: If ``method`` or ``axis_type`` is not a
-            recognised value, or if the config asks for something the
-            planner would otherwise drop (see :func:`_refuse_dropped_settings`).
+            recognised value, if ``mass_axis_sha256`` is not a SHA-256,
+            or if the config asks for something the planner would otherwise
+            drop (see :func:`_refuse_dropped_settings`).
     """
+    if isinstance(config, MassAxisPlan):
+        config = config.to_resampling_config()
+
     if isinstance(config, ResamplingConfig):
+        if config.mass_axis_sha256 is not None:
+            check_sha256(config.mass_axis_sha256, "mass_axis_sha256")
         _refuse_dropped_settings(config)
         return config
 
@@ -190,21 +218,9 @@ def normalize_resampling_config(
             ", ".join(sorted(_RESAMPLING_CONFIG_KEYS)),
         )
 
-    # Only the methods the resampling pipeline actually implements, and
-    # only the axis types CommonAxisBuilder has a generator for. These
-    # deliberately match the CLI's click.Choice lists.
-    method_by_name = {
-        "nearest_neighbor": ResamplingMethod.NEAREST_NEIGHBOR,
-        "tic_preserving": ResamplingMethod.TIC_PRESERVING,
-    }
-    axis_type_by_name = {
-        "constant": AxisType.CONSTANT,
-        "linear_tof": AxisType.LINEAR_TOF,
-        "reflector_tof": AxisType.REFLECTOR_TOF,
-        "tof": AxisType.TOF,
-        "orbitrap": AxisType.ORBITRAP,
-        "fticr": AxisType.FTICR,
-    }
+    sha256 = config.get("mass_axis_sha256")
+    if sha256 is not None:
+        check_sha256(sha256, "resampling_config['mass_axis_sha256']")
 
     reference_mz = config.get("reference_mz")
 
@@ -213,9 +229,9 @@ def normalize_resampling_config(
         return None if value is None else float(value)
 
     normalised = ResamplingConfig(
-        method=_resolve_config_enum(config.get("method"), method_by_name, "method"),
+        method=_resolve_config_enum(config.get("method"), METHOD_BY_NAME, "method"),
         axis_type=_resolve_config_enum(
-            config.get("axis_type"), axis_type_by_name, "axis_type"
+            config.get("axis_type"), AXIS_TYPE_BY_NAME, "axis_type"
         ),
         target_bins=config.get("target_bins"),
         mass_width_da=config.get("width_at_mz"),
@@ -228,6 +244,7 @@ def normalize_resampling_config(
         tof_a=_optional_float("tof_a"),
         tof_b=_optional_float("tof_b"),
         bins_per_fwhm=_optional_float("bins_per_fwhm"),
+        mass_axis_sha256=sha256,
     )
     _refuse_dropped_settings(normalised)
     return normalised
