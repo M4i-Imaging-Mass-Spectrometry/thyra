@@ -308,6 +308,19 @@ quantitation. The operator is `TICPreservingStrategy` in
 Use it whenever the total ion count per pixel has to stay comparable before and
 after conversion.
 
+Interpolating at a bin's centre reads only the two source samples either side
+of it. Once bins are wide enough that one holds a sample neither of those is,
+that sample's ion current would be lost. Such a spectrum is **rebinned**
+instead, wherever a bin holds two or more samples: each sample stands for the
+stretch of m/z halfway to its neighbours, and every bin takes the share of
+that stretch it overlaps. A peak narrower than a bin then keeps its ion
+current wherever it falls. The spectrum's other bins are scaled by bin width
+over sample spacing, so both kinds of bin count ions on one scale. On an
+evenly sampled source this starts at about two bins per sample; below that,
+spectra are resampled by interpolation alone, as described above. See
+[D44](design-decisions.md#d44-a-bin-wider-than-the-source-sampling-is-rebinned-not-sampled)
+for the measurements.
+
 The total that is preserved is the share of the spectrum inside the axis range.
 If you crop with `--resample-min-mz` or `--resample-max-mz`, intensity outside
 the window is dropped rather than redistributed over the bins you kept, so the
@@ -341,7 +354,8 @@ thyra data.imzML out.zarr \
 
 Masking happens **before** the TIC rescale, so the intensity returns to the
 bins that do have measurements behind them rather than being deleted; the
-per-pixel total is still preserved.
+per-pixel total is still preserved. A rebinned bin holds measured samples,
+and the tolerance never removes it.
 
 Sizing it: on a source grid of uniform step `s`, no target bin is ever more
 than `s/2` from a source point, so **any tolerance above half the widest gap in

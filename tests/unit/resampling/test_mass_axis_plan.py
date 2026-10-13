@@ -329,7 +329,7 @@ class TestWidth:
 
         assert plan.width_at_mz == pytest.approx(0.010 * 2.0**exponent)
 
-    def test_a_narrower_source_is_named_and_a_tic_preserving_one_is_cautioned(self):
+    def test_a_narrower_source_is_named(self):
         sources = [
             _src("fine", _RAPIFLEX, (100.0, 1100.0)),
             _src("other", _CENTROID, (100.0, 1100.0)),
@@ -338,16 +338,16 @@ class TestWidth:
         plan = _plan_from_metadata(sources, axis_type="constant", width_at_mz=0.05)
 
         by_name = {w.split(":")[0]: w for w in plan.warnings if "bin width" in w}
-        assert "tic_preserving" in by_name["fine"] and "#442" in by_name["fine"]
-        assert "tic_preserving" not in by_name["other"]
+        assert "loses resolution" in by_name["fine"]
+        # tic_preserving rebins bins wider than its samples (D44), so a
+        # coarse plan no longer costs it peaks and draws no extra caution.
+        assert "tic_preserving" not in by_name["fine"]
 
-    def test_a_forced_method_decides_the_caution(self):
+    def test_a_forced_method_is_the_plans_method(self):
         sources = [_src("fine", _RAPIFLEX, (100.0, 1100.0))]
 
         plan = _plan_from_metadata(sources, width_at_mz=0.05, method="nearest_neighbor")
 
-        (warning,) = [w for w in plan.warnings if "bin width" in w]
-        assert "#442" not in warning
         assert plan.method is ResamplingMethod.NEAREST_NEIGHBOR
 
     def test_a_forced_width_at_or_below_every_sources_own_warns_nobody(self):

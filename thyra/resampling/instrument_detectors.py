@@ -48,7 +48,8 @@ WATERS_MRT_PROFILE_WIDTH: ReferenceWidth = (0.0013, 1000.0)
 #: sample spacing, at this ratio, rounded up to the nearest 0.1 mDa. The
 #: ratio is the MRT default's (1.3 / 1.143 = 1.14): bins at or just above
 #: the sample spacing, so interpolation neither skips samples nor spreads
-#: one sample over many bins.
+#: one sample over many bins. A bin that catches two samples has one either
+#: side of its centre, so nothing is rebinned here (design decision D44).
 WATERS_PROFILE_BINS_PER_SAMPLE = 1.14
 
 
@@ -99,6 +100,10 @@ class InstrumentDetector(ABC):
         the diagonal it distorts the ratio between two peaks by exactly
         ``(m_hi / m_lo) ** (p_target - p_source)``, with ``p`` = 0, 0.5, 1,
         1.5, 2 for constant / linear_tof / reflector_tof / orbitrap / fticr.
+        That holds for a spectrum the operator interpolates. One whose bins
+        are wide enough to skip a sample is rebinned and put on an
+        ion-current footing bin by bin (design decision D44), which does not
+        depend on the law.
 
         SCiLS Lab gates its own TIC-preserving resampling on the same
         condition -- "If all axis types are identical, a TIC preserving
@@ -450,7 +455,9 @@ class WatersProfileDetector(InstrumentDetector):
     the sample spacing puts two samples in one bin for ~9% of bins and
     none in others; ``tic_preserving`` interpolates instead, which on a
     fixed grid gives neither, and the explicit zeros mean it never draws a
-    line across an unmeasured gap.
+    line across an unmeasured gap. At 1.14 bins per sample a bin that
+    catches two samples has one either side of its centre, so the
+    interpolation reads both and nothing is rebinned (design decision D44).
 
     This detector is reached by default only on a SELECT SERIES MRT, whose
     reader defaults to the profile trace; every other Waters instrument

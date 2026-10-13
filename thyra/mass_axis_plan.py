@@ -336,25 +336,11 @@ def _own_width_at(source: _Source, kind: AxisType, reference_mz: float) -> float
     return float(width) * scale
 
 
-def _source_method(
-    source: _Source, forced: Optional[ResamplingMethod]
-) -> Optional[ResamplingMethod]:
-    """The method this source converts with: the caller's, else its detector's."""
-    if forced is not None:
-        return forced
-    try:
-        return ResamplingDecisionTree().select_strategy(source.metadata)
-    except Exception as exc:  # advisory only: a source the chain cannot classify
-        logger.debug("No detector method for %s: %s", source.name, exc)
-        return None
-
-
 def _plan_width(
     sources: Sequence[_Source],
     kind: AxisType,
     width_at_mz: Optional[float],
     reference_mz: float,
-    forced_method: Optional[ResamplingMethod],
     notes: _Notes,
 ) -> float:
     """The forced width, else the widest width any source declares."""
@@ -372,17 +358,11 @@ def _plan_width(
     for s, w in own:
         if w >= width * (1.0 - _WIDTH_TOLERANCE):
             continue
-        text = (
+        notes.warnings.append(
             f"{s.name}: its own bin width at m/z {reference_mz:g} is {w:.4g} Da, "
             f"narrower than the planned {width:.4g} Da; it loses resolution in "
             "this store."
         )
-        if _source_method(s, forced_method) is ResamplingMethod.TIC_PRESERVING:
-            text += (
-                " Under tic_preserving, bins coarser than the source's own can "
-                "merge narrow peaks (#442)."
-            )
-        notes.warnings.append(text)
     return width
 
 
@@ -469,9 +449,7 @@ def _plan_from_metadata(
         a, b, k = _plan_tof(srcs, tof_a, tof_b, bins_per_fwhm, width_at_mz, ref, notes)
         fields.update(tof_a=a, tof_b=b, bins_per_fwhm=k)
     else:
-        fields["width_at_mz"] = _plan_width(
-            srcs, kind, width_at_mz, ref, forced_method, notes
-        )
+        fields["width_at_mz"] = _plan_width(srcs, kind, width_at_mz, ref, notes)
     _warn_spectrum_types(srcs, notes)
 
     draft = MassAxisPlan(
