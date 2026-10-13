@@ -105,6 +105,20 @@ class TestContinuousExport:
         )
         assert "mobility" not in sdata.tables["mob_z0"].var.columns
 
+    def test_ccs_is_written_for_an_assumed_charge_of_one(self, tmp_path, streaming):
+        out, sdata = _convert(CONTINUOUS, tmp_path, streaming=streaming)
+        mobility = sdata.tables["mob_z0_mobility"]
+        mz, k0 = np.array(SORTED_MZ), np.array(SORTED_K0)
+        reduced = mz * 28.0134 / (mz + 28.0134)
+        expected = 18509.8632163405 * k0 / np.sqrt(reduced * 305.0)
+        np.testing.assert_allclose(mobility.var["ccs"].to_numpy(), expected, rtol=1e-6)
+        # Two isomers at one m/z: the later one in mobility is the larger.
+        ccs = mobility.var["ccs"].to_numpy()
+        assert ccs[1] > ccs[0] and ccs[4] > ccs[3]
+        assert int(mobility.uns["ccs"]["charge_assumed"]) == 1
+        assert "ccs" not in sdata.tables["mob_z0"].var.columns
+        assert check_store_var_conventions(out)["mob_z0_mobility"] == []
+
     def test_intensities_land_on_their_features(self, tmp_path, streaming):
         _, sdata = _convert(CONTINUOUS, tmp_path, streaming=streaming)
         mobility = sdata.tables["mob_z0_mobility"]

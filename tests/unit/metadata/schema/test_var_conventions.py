@@ -105,6 +105,46 @@ class TestMobilityTableVar:
         assert "non-finite" in _messages(check_store_var_conventions(store)["t"])
 
 
+class TestCcsColumn:
+    """``ccs`` (schema 0.13.0) is an area: numeric, finite and positive."""
+
+    def _store(self, tmp_path, ccs, mobility=(0.95, 1.1, 1.02)):
+        store = _store_with_pairs(tmp_path, [300.0, 300.0, 450.5], list(mobility))
+        root = zarr.open_group(str(store), mode="a")
+        root["tables"]["t"]["var"].create_array("ccs", data=np.asarray(ccs))
+        return store
+
+    def test_positive_values_pass(self, tmp_path):
+        store = self._store(tmp_path, [180.2, 208.7, 191.0])
+        assert check_store_var_conventions(store) == {"t": []}
+
+    def test_a_value_at_or_below_zero_is_an_error(self, tmp_path):
+        store = self._store(tmp_path, [180.2, 0.0, 191.0])
+        issues = check_store_var_conventions(store)["t"]
+        assert [i.location for i in issues] == ["var.ccs"]
+        assert "not positive" in _messages(issues)
+
+    def test_a_non_finite_value_is_an_error(self, tmp_path):
+        store = self._store(tmp_path, [180.2, np.nan, 191.0])
+        assert "non-finite" in _messages(check_store_var_conventions(store)["t"])
+
+    def test_a_length_mismatch_is_an_error(self, tmp_path):
+        store = self._store(tmp_path, [180.2, 208.7])
+        assert "has 2 values for 3" in _messages(
+            check_store_var_conventions(store)["t"]
+        )
+
+    def test_a_non_numeric_column_is_an_error(self, tmp_path):
+        store = self._store(tmp_path, np.array(["a", "b", "c"], dtype="U1"))
+        assert "must be numeric" in _messages(check_store_var_conventions(store)["t"])
+
+    def test_checked_on_a_plain_table_too(self, tmp_path):
+        store = _store_with_var(tmp_path, mz=[100.0, 200.5, 300.0])
+        root = zarr.open_group(str(store), mode="a")
+        root["tables"]["t"]["var"].create_array("ccs", data=np.array([1.0, -2.0, 3.0]))
+        assert "not positive" in _messages(check_store_var_conventions(store)["t"])
+
+
 def _store_with_precursors(tmp_path, precursor_mz, mz, precursor_index=None):
     root = zarr.open_group(str(tmp_path / "store.zarr"), mode="a")
     var = root.create_group("tables").create_group("t").create_group("var")
@@ -211,6 +251,7 @@ class TestReservedColumnNames:
             "precursor_mz",
             "precursor_index",
             "precursor_mobility",
+            "ccs",
             "formula",
             "adduct",
             "annotation_source",

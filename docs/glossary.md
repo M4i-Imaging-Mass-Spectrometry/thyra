@@ -124,8 +124,9 @@ come first, then the mass spectrometry ones.
   spots at one m/z but at different mobility are two different ions.
 
 **CCS (collision cross section)**
-: A size measure of an ion, worked out from its mobility. Thyra does not
-  compute it yet.
+: A size measure of an ion, worked out from its mobility. The mobility
+  table holds it in the column `ccs`, in square angstroms. Thyra assumes
+  each ion has charge 1.
 
 **MS/MS**
 : Tandem mass spectrometry: selected ions are broken into fragments, and the

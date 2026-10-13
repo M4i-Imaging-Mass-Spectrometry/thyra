@@ -282,7 +282,7 @@ class TestSyntheticFixture:
         assert conversion["name"] == "conversion"
         assert conversion["parameters"]["tdf_spectrum"] == "scan_sum"
         assert "resolved_table" not in mobility and "grid" not in mobility
-        assert block["schema_version"] == "0.12.0"
+        assert block["schema_version"] == "0.13.0"
 
     #: What the fixture's calibration.sqlite and analysis database state,
     #: through the schema's ``calibration`` section: the external
@@ -775,6 +775,41 @@ class TestMobilityGridStore:
         assert list(summed.obs.index) == list(grid.obs.index)
         assert "mobility" in grid.var.columns
         assert "mobility" not in summed.var.columns
+
+    def test_ccs_agrees_with_the_vendor_library(self, tmp_path):
+        from thyra.convert import convert_msi
+
+        out = tmp_path / "grid.zarr"
+        assert convert_msi(
+            str(FIXTURE),
+            str(out),
+            dataset_id="tims",
+            pixel_size_um=20.0,
+            mobility_grid=True,
+        )
+        grid = _read_table(out, "tims_z0_mobility")
+        mz = grid.var["mz"].to_numpy()
+        k0 = grid.var["mobility"].to_numpy()
+        # The store holds the formula's values (D47). The library's own
+        # conversion of the same pairs agrees to 1e-6 from m/z 100 up; the
+        # gap grows on lighter ions, to 2.2e-6 at m/z 50, and this fixture
+        # has features down there.
+        with _open("scan_sum") as reader:
+            # Not ccs_from_one_over_k0: without the export it falls back to
+            # the formula, and the comparison would be with itself.
+            if not reader.sdk._bound_conversions.get(
+                "tims_oneoverk0_to_ccs_for_mz", False
+            ):
+                pytest.skip("this Bruker library does not export the CCS conversion")
+            vendor = reader.sdk.oneoverk0_to_ccs(k0, 1, mz)
+        np.testing.assert_allclose(grid.var["ccs"].to_numpy(), vendor, rtol=3e-6)
+        heavy = mz >= 100.0
+        np.testing.assert_allclose(
+            grid.var["ccs"].to_numpy()[heavy], vendor[heavy], rtol=1e-6
+        )
+        assert int(grid.uns["ccs"]["charge_assumed"]) == 1
+        assert _no_colon_keys(grid.uns["ccs"])
+        assert "ccs" not in _read_table(out, "tims_z0").var.columns
 
     def test_the_marginal_reproduces_the_summed_table_per_pixel(self, tmp_path):
         from thyra.convert import convert_msi

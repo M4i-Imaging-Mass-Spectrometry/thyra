@@ -3592,3 +3592,105 @@ earlier are unchanged and still valid.
 - `thyra metadata` and the preview read a timsTOF `.d` with the default
   `scan_sum`, and an imzML without `--spectrum-type`. Their document can
   therefore differ from what a conversion with other options stores.
+
+## D47. A 1/K0 mobility table carries each feature's CCS, for charge 1
+
+**Status:** Implemented (2026-10-13). Reverses the rule, stated in the code
+since the CCS function shipped in v3.13.0, that the converter never writes a
+cross section.
+
+**Decision.** A mobility table whose axis is 1/K0 in V s/cm2 carries
+`var["ccs"]`: each feature's collision cross section in square angstroms,
+float64. It is computed from the feature's own `mz` and `mobility` by the
+Mason-Schamp equation, for a charge of 1, in nitrogen (28.0134 Da) at
+305 K. The same table carries `uns["ccs"]`, which records the quantity and
+unit (`MS:1002954`, `UO:0000324`), the method, the assumed charge, the gas,
+its mass and the temperature, and that these conditions are a convention.
+Keys are plain names and accessions are values, as in the other `uns`
+blocks. One function adds both, where the two mechanisms that fill the
+table meet, so a continuous imzML export and a TDF grid, per plane or as a
+volume, all get them. The schema reserves the column name (0.13.0); the
+document is unchanged.
+
+The axis must say it is 1/K0 (`MS:1002815`) and that its unit is
+`MS:1002814`. A drift-time axis gets neither the column nor the block.
+Neither does an axis whose quantity or unit is not stated.
+
+**Why.** A cross section is what IM-MSI work compares across instruments
+and against libraries. 1/K0 depends on the gas, the temperature and the
+calibration; a CCS is meant to be the ion's own. Every consumer of a TIMS
+table would otherwise repeat the same conversion with the same assumptions,
+and some would get the constants wrong: 28.013 Da instead of 28.0134
+already moves the result by 7e-6, and 304.85 K instead of 305 K by 2.5e-4.
+
+**Where the conditions come from.** From the convention, not from the run.
+Bruker's `tims_oneoverk0_to_ccs_for_mz` takes no gas or temperature; it uses
+nitrogen at 305 K, and the formula reproduces it with these two values. The
+TDF holds no drift-gas or temperature field that Thyra reads: GlobalMetadata
+gives the 1/K0 range, `TimsCalibration` gives unnamed coefficients, and the
+mobility keys of `CalibrationInfo` are zero on the one imaging TDF read.
+`conditions_source: "convention"` says so, so a reader does not take the
+values for the run's conditions.
+
+**Why the formula, never the vendor library.** The same formula fills the
+column on every route and every platform, so a store does not depend on
+whether the machine's library exports the conversion. The library also
+converts one value per call, which is millions of calls on a grid table.
+The two agree to 1e-6 relative from m/z 100 up and to 2.2e-6 at m/z 50,
+measured on the synthetic TDF and on a probe from m/z 50 to 3000. The gap
+grows as the ion gets lighter and no single gas mass removes it.
+
+**The charge.** MALDI ions are almost always singly charged, and no source
+states a feature's charge. Recording 1 as an assumption, in the block
+beside the values, is not the same as storing a value the source does not
+state (the objection D30 answers): the column is derived, and the block
+says from what. A consumer who knows a feature is doubly charged recomputes
+it with `mason_schamp_ccs`. The stored value cannot be rescaled, because
+the charge also changes the ion's mass in the reduced mass.
+
+**Alternatives.**
+
+- *No column; leave it to consumers.* The previous rule. It keeps the store
+  free of an assumption, but every consumer repeats the conversion and
+  chooses its own constants, so two tools give two answers for one store.
+  The function was already public and tested; the gap was that nobody had
+  to call it.
+- *A per-feature charge column.* Honest only if something states the
+  charge. No reader does: isotope spacing would have to be read off each
+  feature, which is annotation, not conversion. A column full of 1s would
+  claim per-feature knowledge the converter does not have; one scalar in
+  `uns` claims only what is true.
+- *One column per charge (`ccs_z1`, `ccs_z2`).* Doubles the column for a
+  case MALDI rarely has, and still leaves the consumer to pick.
+- *Compute through the vendor library on TDF and the formula elsewhere.*
+  Two routes, two sets of values for the same pairs, and a store that
+  depends on the machine. Rejected for the reasons above.
+- *A drift-time CCS.* Needs the cell length, field, pressure and
+  temperature, or single-field calibrants. No source Thyra reads states
+  them, and Waters drift-time data is not read at all.
+
+**Cost.** 8 bytes per feature in `var`, and in the projection D4 makes
+before building a grid table (`VAR_BYTES_PER_FEATURE` is 338 now). The
+values are computed in chunks of about one million features, so the
+formula's temporaries stay a few MB. On a synthetic 8-million-feature grid
+the peak of building and wrapping `var` rose by at most 8 bytes per feature.
+D8 stands: `var` is still the memory peak.
+
+**What changes in a store.** Every mobility table on a 1/K0 axis gains
+`var["ccs"]` and `uns["ccs"]`, and the schema version in every table's
+`msi_metadata` is 0.13.0. Every other array is unchanged. Stores written
+earlier are unchanged and still valid. `thyra validate` checks that a `ccs`
+column, on whatever table carries it, is numeric, finite, positive and as
+long as `mz`.
+
+**Known limits.**
+
+- The value is for charge 1. A multiply charged feature's stored CCS is
+  wrong, and the store cannot tell which features those are.
+- On a grid table the pair is the mass bin and the channel centre, so the
+  value is that cell's, not one peak's. The 1/K0 it rests on can be up to
+  half a channel from a peak's own.
+- A 1/K0 array that states no unit gets no column. If real TIMSCONVERT or
+  TIMSImaging exports turn out to omit the unit, this gate is the place to
+  relax.
+- Processed imzML with a mobility array keeps no mobility table, so no CCS.

@@ -29,6 +29,9 @@ Either way:
   The MSI table never carries it, and its ``mz`` stays strictly
   increasing; this table's ``mz`` is non-decreasing with duplicates, which
   is exactly what mobility splits.
+- on a 1/K0 axis, ``var["ccs"]`` holds each feature's collision cross
+  section for an assumed charge of 1, and ``uns["ccs"]`` says what it
+  rests on (design decision D47). A drift-time axis gets neither.
 
 Both mechanisms are built in two passes over the source through
 :class:`~thyra.converters.spatialdata.csc_assembly.CscAssembly` -- count
@@ -52,6 +55,12 @@ from numpy.typing import NDArray
 from scipy import sparse
 
 from ...core.base_reader import BaseMSIReader
+from ...core.mobility import (
+    CCS_ASSUMED_CHARGE,
+    ccs_applies,
+    ccs_assumptions,
+    mason_schamp_ccs,
+)
 from ...errors import ConversionRefused
 from ...resampling.binning import nn_map_to_bins
 from ...resampling.mobility_grid import MobilityGrid
@@ -465,8 +474,11 @@ MAX_GRID_VAR_ENTRIES = 100_000_000
 
 #: Process memory the ``var`` frame costs per feature while it is built,
 #: AnnData copies included. Measured 2026-09-07 on a real grid: a private
-#: peak 4.4 GB above baseline at 13.27M features.
-VAR_BYTES_PER_FEATURE = 330
+#: peak 4.4 GB above baseline at 13.27M features. Plus 8 for the float64
+#: ``ccs`` column (D47): on a synthetic 8M-feature grid the column and its
+#: chunked computation raised the peak of building and wrapping ``var`` by
+#: at most that (192 to 200 bytes per feature, 2026-10-13).
+VAR_BYTES_PER_FEATURE = 338
 
 #: Fractions of the machine's free memory the projected ``var`` frame may
 #: take before the conversion warns, and before it refuses. Fractions and
@@ -923,7 +935,9 @@ def build_mobility_table(
 
     Returns:
         A ``TableModel``-parsed AnnData, or ``None`` when no table can be
-        written (logged with the reason).
+        written (logged with the reason). On a 1/K0 axis its ``var`` also
+        holds ``ccs`` and its ``uns`` a ``ccs`` block (see
+        :func:`add_ccs_column`).
     """
     if not reader.has_ion_mobility:
         return None
@@ -972,10 +986,51 @@ def build_mobility_table(
     if built is None:
         return None
     matrix, var, assembly = built
-    table = _assemble(matrix, var, obs, region_key, slice_key, uns, grid_uns)
+    ccs_uns = add_ccs_column(reader, var)
+    table = _assemble(matrix, var, obs, region_key, slice_key, uns, grid_uns, ccs_uns)
     if owns_scratch:
         release_when_collected(table, assembly, workdir)
     return table
+
+
+#: Features converted per step when ``var["ccs"]`` is filled, so the
+#: formula's temporaries stay a few MB on a var of tens of millions.
+_CCS_CHUNK = 1 << 20
+
+
+def add_ccs_column(
+    reader: BaseMSIReader, var: pd.DataFrame
+) -> Optional[Dict[str, Any]]:
+    """Add ``var["ccs"]`` in place and return its ``uns`` block, or ``None``.
+
+    Only on an axis :func:`~thyra.core.mobility.ccs_applies` accepts: 1/K0
+    in V s/cm^2. Each feature's ``(mz, mobility)`` pair gives its value by
+    Mason-Schamp for :data:`~thyra.core.mobility.CCS_ASSUMED_CHARGE`, in
+    nitrogen at 305 K. On a grid table the pair is the m/z bin and the
+    channel centre, so the value is that cell's, not one peak's. The pure
+    formula is used on every route, never the vendor library, so a store
+    is the same whichever library the machine has. The two agree to 1e-6
+    relative from m/z 100 up and to 2.2e-6 at m/z 50.
+    """
+    axis = reader.get_mobility_axis()
+    if not ccs_applies(axis):
+        logger.info(
+            "No collision cross sections in the mobility table: they are "
+            "computed from 1/K0 in V s/cm^2 only, and this axis is %s in %s",
+            (axis.kind_name if axis is not None else None) or "an unstated quantity",
+            (axis.unit_name if axis is not None else None) or "an unstated unit",
+        )
+        return None
+    mz = var["mz"].to_numpy(dtype=np.float64, copy=False)
+    mobility = var["mobility"].to_numpy(dtype=np.float64, copy=False)
+    ccs = np.empty(mz.size, dtype=np.float64)
+    for start in range(0, mz.size, _CCS_CHUNK):
+        stop = start + _CCS_CHUNK
+        ccs[start:stop] = mason_schamp_ccs(
+            mobility[start:stop], mz[start:stop], CCS_ASSUMED_CHARGE
+        )
+    var["ccs"] = ccs
+    return ccs_assumptions()
 
 
 def _assemble(
@@ -986,11 +1041,14 @@ def _assemble(
     slice_key: str,
     uns: Dict[str, Any],
     grid_uns: Optional[Dict[str, Any]],
+    ccs_uns: Optional[Dict[str, Any]] = None,
 ) -> Any:
     """Wrap a matrix and its ``var`` as the store's mobility table."""
     extra: Dict[str, Any] = {}
     if grid_uns is not None:
         extra["mobility_grid"] = grid_uns
+    if ccs_uns is not None:
+        extra["ccs"] = ccs_uns
     return assemble_sibling_table(
         matrix, var, obs, region_key, uns, feature_axis_block(slice_key), extra
     )
