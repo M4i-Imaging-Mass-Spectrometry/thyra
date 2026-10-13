@@ -24,7 +24,7 @@ import pytest
 
 from thyra.errors import ConversionRefused
 from thyra.resampling import common_axis
-from thyra.resampling.axis_planner import AxisPlanner
+from thyra.resampling.axis_planner import AxisPlanner, normalize_resampling_config
 from thyra.resampling.mass_axis.tof_generator import (
     DEFAULT_BINS_PER_FWHM,
     PHI_NANOTOF_LAW,
@@ -216,3 +216,51 @@ class TestTheSourcesOwnAxis:
     def test_an_empty_axis_is_refused(self):
         with pytest.raises(ConversionRefused, match="Common mass axis is empty"):
             AxisPlanner(_Reader(axis=())).settle(lambda n_bins: None)
+
+
+class TestARequestIsHonouredWholeOrRefused:
+    """Issue #445: two API requests used to be half-dropped without a word.
+
+    A width with a bin count kept the width; half a TOF law took both
+    halves from the detected instrument. Either way the store held an axis
+    the caller had not asked for. The check sits in
+    ``normalize_resampling_config``, which every conversion goes through
+    for both the dict and the dataclass.
+    """
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"target_bins": 4_000, "width_at_mz": 0.01},
+            ResamplingConfig(target_bins=4_000, mass_width_da=0.01),
+        ],
+        ids=["dict", "dataclass"],
+    )
+    def test_a_width_with_a_bin_count_is_refused(self, config):
+        with pytest.raises(
+            ConversionRefused, match="both 'target_bins' and 'width_at_mz'"
+        ):
+            normalize_resampling_config(config)
+
+    @pytest.mark.parametrize("given, missing", [("tof_a", "tof_b"), ("tof_b", "tof_a")])
+    def test_half_a_law_is_refused_from_a_dict(self, given, missing):
+        with pytest.raises(ConversionRefused, match=f"'{given}' without '{missing}'"):
+            normalize_resampling_config({"axis_type": "tof", given: 0.0185})
+
+    def test_half_a_law_is_refused_from_the_dataclass(self):
+        with pytest.raises(ConversionRefused, match="'tof_b' without 'tof_a'"):
+            normalize_resampling_config(
+                ResamplingConfig(axis_type=AxisType.TOF, tof_b=PHI_NANOTOF_LAW[1])
+            )
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"target_bins": 4_000},
+            {"width_at_mz": 0.01},
+            {"axis_type": "tof"},
+            {"axis_type": "tof", "tof_a": 0.0185, "tof_b": 9.1e-6},
+        ],
+    )
+    def test_a_whole_request_still_passes(self, config):
+        normalize_resampling_config(config)
