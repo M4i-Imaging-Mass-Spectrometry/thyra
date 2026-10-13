@@ -144,6 +144,58 @@ class TestExportMetaspaceCommand:
         assert result.exit_code == 1
 
 
+class TestJsonFilesNotInPlainUtf8:
+    """A JSON input saved by Windows PowerShell is read; another encoding is refused.
+
+    PowerShell 5.1 writes ``thyra metadata src > meta.json`` as UTF-16, and
+    UTF-8 with a byte-order mark when its Out-File default is utf8. Both
+    ended in a UnicodeDecodeError traceback before.
+    """
+
+    def _reencode(self, path, encoding):
+        path.write_bytes(path.read_text(encoding="utf-8").encode(encoding))
+        return path
+
+    @pytest.mark.parametrize("encoding", ["utf-16", "utf-8-sig", "utf-16-be"])
+    def test_validate_reads_it(self, runner, tmp_path, encoding):
+        path = self._reencode(_write_doc(tmp_path), encoding)
+        result = runner.invoke(validate_command, [str(path)])
+        assert result.exit_code == 0, result.output
+        assert "OK" in result.output
+
+    def test_export_metaspace_reads_it(self, runner, tmp_path):
+        path = self._reencode(_write_doc(tmp_path), "utf-16")
+        result = runner.invoke(export_metaspace_command, [str(path), "-o", "-"])
+        assert result.exit_code == 0
+        assert json.loads(result.stdout)["Data_Type"] == "Imaging MS"
+
+    def test_a_merged_overlay_is_read_too(self, runner, tmp_path):
+        path = _write_doc(tmp_path)
+        overlay = tmp_path / "user.json"
+        overlay.write_text(
+            json.dumps({"ms_analysis": {"polarity": "sideways"}}), encoding="utf-16"
+        )
+        result = runner.invoke(validate_command, [str(path), "--merge", str(overlay)])
+        assert result.exit_code == 1
+        assert "polarity" in result.output
+
+    def test_an_ansi_overlay_is_refused_in_one_line(self, runner, tmp_path):
+        """An editor saving in the Windows code page; one degree sign is enough."""
+        path = _write_doc(tmp_path)
+        overlay = tmp_path / "user.json"
+        overlay.write_text(
+            json.dumps({"sample": {"condition": "4 °C"}}, ensure_ascii=False),
+            encoding="cp1252",
+        )
+        result = runner.invoke(validate_command, [str(path), "--merge", str(overlay)])
+        assert result.exit_code == 1
+        assert not isinstance(result.exception, UnicodeDecodeError)
+        message = result.output + (result.stderr or "")
+        assert "Could not read" in message
+        assert "not UTF-8, UTF-16 or UTF-32" in message
+        assert "Traceback" not in message
+
+
 class TestDispatcher:
     def test_subcommands_are_dispatched(self, monkeypatch, capsys):
         from thyra.__main__ import cli
