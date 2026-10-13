@@ -13,8 +13,9 @@
 **Thyra converts imaging mass spectrometry data into one open format.** It
 reads the files your instrument writes (Bruker, Waters, PHI, or imzML from any
 vendor) and saves them in [SpatialData](https://spatialdata.scverse.org/),
-which analysis and viewing tools can read. You do not need to know how to
-program.
+which analysis and viewing tools can read. It keeps ion mobility (TIMS 1/K0)
+and MS/MS (PASEF, iprm-PASEF) data, not only the spectra. You do not need to
+know how to program.
 
 **[Documentation](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra)** | [Install](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/install/) | [Your first conversion](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/getting-started/) | [Tutorial](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/tutorial/) | [Technical reference](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/technical-reference/)
 
@@ -52,6 +53,9 @@ also converts the published example dataset
 | Any instrument that exports imzML | the `.imzML` file, with its `.ibd` file next to it |
 | mzPeak (experimental) | the `.mzpeak` file |
 
+imzML with a mobility array is read too. In continuous mode, as TIMSImaging
+writes it, the mobility is kept as its own table.
+
 Thyra reads timsTOF and Waters data on Windows and Linux; everything else
 also works on macOS. Shimadzu support is in development: until then, export
 imzML from IMAGEREVEAL MS.
@@ -67,11 +71,52 @@ One folder ending in `.zarr`, holding:
 - the spectrum of every pixel, on one shared m/z axis
 - an image of the total ion current (TIC)
 - the optical image of the slide, when the acquisition has one
-- ion mobility and MS/MS data from Bruker timsTOF, when the acquisition has them
+- ion mobility and MS/MS data, when the acquisition has them (below)
 - a validated description of the acquisition, ready for METASPACE
 
 Thyra handles datasets larger than your computer's memory, slides with
 several regions, and 3D data.
+
+## Ion mobility and MS/MS
+
+Thyra keeps the extra dimensions of Bruker timsTOF data instead of dropping
+them.
+
+- **By default** each spectrum is added up over mobility, so every tool can
+  read the main table. The table also carries a mass-mobility heatmap of the
+  whole image, `uns["mobility_heatmap"]`.
+- **`{table}_mobility`** has one column for each (m/z, 1/K0) pair. It is
+  written by itself from continuous imzML with a mobility array, and from
+  Bruker TDF with `--mobility-grid`.
+- **`{table}_msms`** splits PASEF and iprm-PASEF MS/MS by precursor: one
+  block of fragment columns per precursor, so every fragment has its own
+  image.
+
+Two ions at one m/z, told apart by mobility:
+
+```python
+import numpy as np
+import spatialdata as sd
+
+sdata = sd.read_zarr("output/sample.zarr")
+mob = sdata.tables["msi_dataset_z0_mobility"]
+mz, k0 = mob.var["mz"].to_numpy(), mob.var["mobility"].to_numpy()
+near = np.abs(mz - 600.25) < 0.01
+low = np.asarray(mob.X[:, near & (k0 < 1.3)].sum(axis=1)).ravel()   # one value per pixel
+high = np.asarray(mob.X[:, near & (k0 >= 1.3)].sum(axis=1)).ravel()
+```
+
+Tools should recognise these tables by their columns (`"mobility" in
+var.columns`, `"precursor_mz" in var.columns`), not by their names. The
+[Ion mobility and MS/MS guide](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/ion-mobility-and-msms/)
+walks through both, and the output format describes the
+[mobility](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/output-format/#ion-mobility)
+and [MS/MS](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/output-format/#demultiplexed-msms-table)
+tables in full.
+
+Not covered yet: Waters ion mobility (drift time) functions are skipped,
+processed imzML keeps no mobility values, and collision cross sections (CCS)
+are not computed.
 
 ## From Python
 
@@ -123,7 +168,8 @@ If you use Thyra, please cite the paper:
 
 > Visvikis, T.; Vierdag, W.-M.; Marconato, L.; Birmpili, A.; Heeren, R. M. A.;
 > Cuypers, E. Native, Memory-Bounded Conversion of Mass Spectrometry Imaging
-> Data into the SpatialData Ecosystem. *J. Am. Soc. Mass Spectrom.* **2026**.
+> Data into the SpatialData Ecosystem. *J. Am. Soc. Mass Spectrom.* **2026**,
+> *37* (10), 2379-2387.
 > [doi:10.1021/jasms.6c00169](https://doi.org/10.1021/jasms.6c00169)
 
 ```bibtex
@@ -132,6 +178,9 @@ If you use Thyra, please cite the paper:
   author  = {Visvikis, Theodoros and Vierdag, Wouter-Michiel and Marconato, Luca and Birmpili, Angeliki and Heeren, Ron M. A. and Cuypers, Eva},
   journal = {Journal of the American Society for Mass Spectrometry},
   year    = {2026},
+  volume  = {37},
+  number  = {10},
+  pages   = {2379--2387},
   doi     = {10.1021/jasms.6c00169}
 }
 ```
@@ -147,6 +196,16 @@ repository" button reads. To cite the software itself:
   url = {https://github.com/M4i-Imaging-Mass-Spectrometry/thyra}
 }
 ```
+
+### Papers
+
+| Paper | Published | DOI |
+|---|---|---|
+| Native, Memory-Bounded Conversion of Mass Spectrometry Imaging Data into the SpatialData Ecosystem (*J. Am. Soc. Mass Spectrom.*) | 2026-09 | [10.1021/jasms.6c00169](https://doi.org/10.1021/jasms.6c00169) |
+| Thyra: Bridging Mass Spectrometry Imaging and SpatialData for Unified Multi-Modal Analysis (bioRxiv preprint) | 2026-01 | [10.64898/2026.01.26.700792](https://doi.org/10.64898/2026.01.26.700792) |
+
+Ion mobility and MS/MS support came after both papers. If you use them,
+please also name the Thyra version you used.
 
 ## Acknowledgments
 

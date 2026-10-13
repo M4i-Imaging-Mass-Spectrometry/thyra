@@ -55,10 +55,11 @@ WORD_BUDGETS: Dict[str, int] = {
     "look-at-the-result.md": 350,
     "tutorial.md": 1150,
     "troubleshooting.md": 600,
-    "glossary.md": 700,
+    "glossary.md": 800,
     "which-files.md": 700,
     "settings.md": 550,
     "describe-your-data.md": 550,
+    "ion-mobility-and-msms.md": 400,
 }
 
 _FENCE = re.compile(r"^\s*(```|~~~)")

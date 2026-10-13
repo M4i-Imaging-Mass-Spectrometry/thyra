@@ -115,6 +115,27 @@ come first, then the mass spectrometry ones.
   timsTOF instruments measure it with trapped ion mobility spectrometry
   (TIMS).
 
+**1/K0**
+: The unit of ion mobility on a timsTOF: the inverse reduced mobility, in
+  V s/cm2. Larger ions of the same charge have a larger 1/K0.
+
+**Mass-mobility heatmap**
+: A picture of the whole image in two dimensions: m/z against mobility. Two
+  spots at one m/z but at different mobility are two different ions.
+
+**CCS (collision cross section)**
+: A size measure of an ion, worked out from its mobility. Thyra does not
+  compute it yet.
+
 **MS/MS**
 : Tandem mass spectrometry: selected ions are broken into fragments, and the
   fragments are measured.
+
+**Precursor and fragment**
+: In MS/MS, the precursor is the ion the instrument selects. The fragments
+  are the pieces it breaks into.
+
+**PASEF and iprm-PASEF**
+: Bruker timsTOF methods that select precursors one after the other as they
+  leave the mobility separation. In imaging, iprm-PASEF fragments the same
+  list of precursors at every pixel.

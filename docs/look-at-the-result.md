@@ -31,8 +31,9 @@ the values that are there, compressed. That keeps the result small.
 
     Some data adds more. Bruker timsTOF data with ion mobility carries a
     mass-mobility heatmap in the table, and PASEF MS/MS data adds a table
-    ending in `_msms`. [Output format](output-format.md) lists every part,
-    including those for 3D data.
+    ending in `_msms`. [Ion mobility and MS/MS](ion-mobility-and-msms.md)
+    shows how to use them. [Output format](output-format.md) lists every
+    part, including those for 3D data.
 
 ## Keep the folder whole
 
