@@ -569,13 +569,13 @@ carries **`uns["msms_schedule"]`**:
 | key | value |
 |---|---|
 | `ms_level` | `2` for a fragment spectrum; the block is absent for MS1 |
-| `n_windows` | number of isolation windows per pixel: isolation *events*, of which one precursor can own several (the same mass at two collision energies is two windows) |
+| `n_windows` | number of distinct isolation windows in the schedule: isolation *events*, of which one precursor can own several (the same mass at two collision energies is two windows); when `constant_across_pixels` is false, not every pixel has all of them |
 | `merges_precursors` | `True` when the windows isolate more than one distinct precursor (by target m/z and mobility scan range), so the stored spectrum sums them; one precursor fragmented twice does not merge |
 | `constant_across_pixels` | whether every pixel was fragmented on the same schedule |
 | `isolation_window_target` | `float64[n]`: the isolated m/z of each window |
 | `isolation_window_lower_offset` / `_upper_offset` | `float64[n]`: the window spans `target - lower` to `target + upper` |
 | `collision_energy` | `float64[n]`: in electronvolts |
-| `scan_begin` / `scan_end` | `int64[n]`: the mobility scans each window occupies, when the source separates them that way (Bruker PASEF) |
+| `scan_begin` / `scan_end` | `int64[n]`: the mobility scans each window occupies, when the source separates them that way (Bruker PASEF and DIA frames) |
 | `resolved_table` | element key of the demultiplexed sibling table, when one was written |
 
 Field names and CV terms follow
@@ -612,9 +612,10 @@ if "msms_schedule" in msi_table.uns:
 #### Demultiplexed MS/MS table
 
 When the source isolates several precursors per pixel in **disjoint
-mobility scan ranges** (Bruker PASEF -- the targeted MALDI variant is
-Bruker's `iprm-PASEF`, which serially fragments a scheduled list of
-precursors at every pixel), Thyra also writes them split apart as a
+mobility scan ranges** (Bruker PASEF frames, or type-9 frames of one DIA
+window group, the layout MALDI `iprm-PASEF` is reported to use: a scheduled
+list of precursors serially fragmented at every pixel), Thyra also writes
+them split apart as a
 sibling table, `{table}_msms`, by default (`--no-msms-table` opts out; see
 [Design Decisions](design-decisions.md#d2-the-msms-table-is-written-by-default-when-the-schedule-qualifies)).
 Each precursor's block is its **precursor
@@ -712,11 +713,11 @@ the acquisition rather than by how cheap it is to check:
 | the isolation windows overlap, or carry no scan range | they cannot be separated by mobility alone |
 
 The order matters because the last three are facts about what the source
-recorded and the first is a fact about the method. A diaPASEF file puts its
-windows in `DiaFrameMsMsWindows`, which the TDF reader does not read, so it
-arrives with no windows at all *and* survey frames mixed in among the
-fragment ones -- and reporting a count first would describe a run isolating
-32 precursors as one isolating a single precursor. A data-dependent
+recorded and the first is a fact about the method. A diaPASEF file gives each
+fragment frame one of several window groups, which take turns frame by
+frame, and keeps survey frames among the fragment ones. Its windows overlap
+across groups, but only because the groups take turns: the varying schedule
+is the design, and the overlap its consequence. A data-dependent
 (DDA) PASEF run trips the first row and the last at once -- one measured
 holds 14,952 distinct windows, each in one to eight frames, overlapping on
 the ramp -- and the varying schedule is the design while the overlap is
@@ -768,6 +769,13 @@ ion current, one bounded pass over each.
       [Design Decisions](design-decisions.md#d2-the-msms-table-is-written-by-default-when-the-schedule-qualifies)).
       All four come from the same instrument and method family, and none
       exceeds 713 pixels.
+    - **Type-9 (DIA-layout) frames are tested on a synthetic file only.** No
+      MALDI `iprm-PASEF` run has been converted yet, so which frame type it
+      writes is not confirmed. The split of a one-group schedule is checked
+      point by point on the synthetic fixture. A run whose survey frames
+      share spots with fragment frames is refused, and those pixels sum both
+      MS levels (said at `WARNING`). Windows in `PrmFrameMsMsInfo`
+      (prm-PASEF) are not read.
     - **A label means the same bin only when the axes match.** `mz_index`
       is a column of *that store's* mass axis, and the default resampling
       grid follows the acquisition range, so two runs share an axis only

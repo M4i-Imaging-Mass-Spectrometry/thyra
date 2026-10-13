@@ -155,9 +155,10 @@ and carries no arrays.
 
 Bruker `.d` also fills `fragmentation` from `Frames.MsMsType` and whichever
 precursor table the acquisition uses -- `PasefFrameMsMsInfo` for PASEF frames,
-`FrameMsMsInfo` for single-precursor ones -- in a TSF acquisition as well as
-a TDF one. What stays TDF-only is the demultiplexed sibling table, which
-needs the mobility scan ranges only PASEF records. `present: false` records a survey
+`DiaFrameMsMsWindows` for DIA frames (`MsMsType` 9), `FrameMsMsInfo` for
+single-precursor ones -- in a TSF acquisition as well as a TDF one. What
+stays TDF-only is the demultiplexed sibling table, which needs the mobility
+scan ranges only PASEF and DIA frames record. `present: false` records a survey
 acquisition; the field is left unset when the database cannot be asked at all,
 which means "not reported", not "MS1". `windows` is stored as a JSON string
 (a list of objects does not round-trip through AnnData/zarr) and decoded by

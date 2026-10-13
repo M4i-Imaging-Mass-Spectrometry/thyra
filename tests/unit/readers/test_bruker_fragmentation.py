@@ -4,7 +4,9 @@
 survey scan, everything else is MS2 of some flavour -- and which table
 carries the precursor depends on the flavour: PASEF frames list one row
 per isolation window in ``PasefFrameMsMsInfo``, single-precursor frames
-one row per frame in ``FrameMsMsInfo``.
+one row per frame in ``FrameMsMsInfo``. DIA frames (type 9), which take
+their windows from ``DiaFrameMsMsWindows``, have their own file:
+``test_bruker_iprm_pasef.py``.
 
 None of this needs the vendor library, so these run everywhere: the
 committed synthetic fixture is copied and its tables edited, which is

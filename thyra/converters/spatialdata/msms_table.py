@@ -1,6 +1,7 @@
 """The demultiplexed MS/MS table: pixels x (precursor, fragment) features.
 
-A MALDI PASEF acquisition isolates several precursors inside one frame,
+A MALDI PASEF acquisition (or a type-9 one whose frames take their windows
+from one DIA window group) isolates several precursors inside one frame,
 each in its own slice of the mobility ramp, and the MSI table Thyra always
 writes sums that frame into one spectrum per pixel -- so that spectrum
 holds fragments of every precursor at once, with nothing marking which
@@ -108,9 +109,9 @@ def demultiplex_refusal(schedule: Optional[FragmentationSchedule]) -> Optional[s
     acquisition, not in order of how cheap they are to check. A schedule
     that varies is a fact about the method; an empty or one-entry window
     list is a fact about what the source recorded, and reporting either of
-    those first would describe a run whose precursors Thyra simply cannot
-    read -- a diaPASEF file with survey and fragment frames interleaved,
-    say -- as one that isolated a single precursor.
+    those first would describe a run by its storage rather than its method
+    -- a diaPASEF file, whose window groups take turns among interleaved
+    survey frames, as one with overlapping windows, say.
     """
     if schedule is None or not schedule.is_msms:
         return "the acquisition is not MS/MS"

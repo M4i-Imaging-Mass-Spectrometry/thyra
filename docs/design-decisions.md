@@ -268,7 +268,8 @@ refusals no real file had reached before.
   `DiaFrameMsMsWindows`.
 
 **Reading a diaPASEF one found a refusal that lied.**
-`DiaFrameMsMsWindows` is not one of the two tables the TDF reader looks in,
+`DiaFrameMsMsWindows` is not one of the two tables the TDF reader looks in
+(D37 reads it now),
 so such a file yields a schedule with an empty window list, and
 `constant_across_pixels` false because the frame types are mixed.
 `demultiplex_refusal` asked the window count before the constancy and
@@ -3104,3 +3105,83 @@ of every other reader do not change.
   builder it feeds, still return the file's precision. Each current caller
   widens the result or takes only its smallest and largest value, which are
   exact. Nothing stored differs, but a new caller must widen too.
+
+## D37. Type-9 fragment frames take their isolation windows from the DIA tables
+
+**Status:** Implemented (2026-10-12). Supersedes the statement in D2 that
+`DiaFrameMsMsWindows` is not read.
+
+**Decision.** The TDF reader reads the isolation windows of `MsMsType = 9`
+frames. Each such frame names a window group in `DiaFrameMsMsInfo`, and
+`DiaFrameMsMsWindows` lists the group's windows with their scan ranges,
+read as `[ScanNumBegin, ScanNumEnd)` like a PASEF window. The schedule is
+asked of `PasefFrameMsMsInfo`, then of the DIA tables, then of
+`FrameMsMsInfo`; the first with rows is the one the frames use. Three
+things stay as they were, on purpose:
+
+- A file holding survey frames (`MsMsType = 0`) among its fragment frames
+  still records its schedule as varying.
+- A schedule that varies, or whose windows overlap, is never split by scan
+  number. The converter already refused it; now `has_precursor_spectra` is
+  false and `iter_precursor_spectra` refuses it too, so a direct caller
+  cannot get one either.
+- A raster position holding frames of more than one `MsMsType` is still
+  summed into one pixel. The reader now says so at `WARNING`, naming the
+  types.
+
+**Why.** Bruker stores a scheduled precursor list in two layouts. PASEF
+frames (type 8) list their windows per frame in `PasefFrameMsMsInfo`; the
+two positive-mode MS/MS images Thyra was built on are of this kind, written
+by a pre-release MALDI-prm build of the acquisition software. DIA frames
+(type 9) use the DIA tables. diaPASEF writes them, and MALDI iprm-PASEF is
+reported to; no such MALDI run has been measured. One LC diaPASEF run,
+measured read-only: 2,755 survey and
+22,039 type-9 frames, eight window groups of three windows each, the
+groups taking turns frame by frame. Before this, every such file came out
+as MS/MS with no windows at all.
+
+Adjacent windows of one group share a boundary scan (`[76, 521)` and
+`[521, 710)` on that run), which only a half-open range allows. The split
+of a one-group type-9 schedule, through the vendor library on the
+synthetic fixture, reproduces the in-window current of every frame exactly.
+
+**The objection.** Wait for a real MALDI iprm-PASEF run before reading
+anything. It did not win: the table layout is confirmed on a real file, and
+the only split it enables -- one window group, no survey frames -- is
+exact by the same argument as PASEF. A second objection, to stop treating
+survey frames as making the schedule vary, waits for that run. Without
+keeping a spot's survey and fragment frames apart first, the split would
+cut survey frames into precursor blocks by scan range.
+
+**What changes in a store.** Only stores of files with type-9 frames:
+
+- `uns["msms_schedule"]` and `msi_metadata.ms_analysis.fragmentation` gain
+  the windows (targets, offsets, collision energies, scan ranges), the
+  collision-induced dissociation term, and `merges_precursors: true` when
+  the windows isolate more than one precursor.
+- One window group and no survey frames: `{table}_msms` is now written by
+  default. It was refused before ("records no precursor").
+- Survey frames among the fragment frames: still refused, for the same
+  reason as before (not constant). The schedule is recorded.
+- Window groups that take turns, without survey frames: refused as not
+  constant, where it was refused as recording no precursor.
+  `constant_across_pixels` in both blocks goes from true to false.
+
+PASEF, single-precursor, MS1 and TSF stores do not change. The
+merged-precursor `WARNING` names no per-pixel count when the schedule
+varies.
+
+**Known limits.**
+
+- No MALDI iprm-PASEF run has been measured. Whether it writes type 9,
+  keeps survey frames, or uses more than one window group is still open;
+  the split is tested on a synthetic file only.
+- A spot's survey and fragment frames are still summed into one pixel row.
+- The half-open reading of a DIA scan range is inferred from shared
+  boundaries, not compared with the vendor's own per-window output.
+- `PrmFrameMsMsInfo` (prm-PASEF, `MsMsType` 10) is not read. If a MALDI
+  iprm-PASEF run turns out to use it, that run records MS/MS with no
+  windows and is refused, as every type-9 run was before this.
+- A file with rows in both `PasefFrameMsMsInfo` and the DIA tables records
+  the PASEF windows only. It is still refused, as not constant. No such
+  file is known.

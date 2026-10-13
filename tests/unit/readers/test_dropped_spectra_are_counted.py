@@ -91,6 +91,7 @@ class TestTheFrameLoopUsesIt:
         stub = SimpleNamespace(
             _region_frame_ids=None,
             progress_callback=None,
+            _warn_if_positions_mix_ms_levels=lambda: None,
             _get_maldi_frame_ids=lambda: [1, 2, 3, 4, 5],
             _get_coordinate_offsets=lambda: None,
             _get_frame_coordinates_cached=lambda frame_id, offsets: coords_for(

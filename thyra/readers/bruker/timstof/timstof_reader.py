@@ -41,6 +41,7 @@ from ....core.msms import (
     COLLISION_INDUCED_DISSOCIATION_ACCESSION,
     FragmentationSchedule,
     IsolationWindow,
+    windows_overlap,
 )
 from ....core.registry import register_reader
 from ....errors import ConversionRefused
@@ -685,6 +686,7 @@ class BrukerReader(BrukerBaseMSIReader):
         self._fragmentation: Optional[FragmentationSchedule] = None
         self._fragmentation_read: bool = False
         self._mobility_scan_overflow_warned: bool = False
+        self._mixed_ms_levels_checked: bool = False
         # (scan -> window map, window count) for the frame records' precursor
         # view; built once per reader, like iter_precursor_spectra's own.
         self._precursor_scan_map_cache: Optional[Tuple[NDArray[np.int64], int]] = None
@@ -1550,6 +1552,7 @@ class BrukerReader(BrukerBaseMSIReader):
         skipped with a warning. The progress callback fires once per
         frame handed out.
         """
+        self._warn_if_positions_mix_ms_levels()
         if self._region_frame_ids is not None:
             frame_ids: Any = sorted(self._region_frame_ids)
             total = len(frame_ids)
@@ -1575,6 +1578,47 @@ class BrukerReader(BrukerBaseMSIReader):
             if self.progress_callback:
                 self.progress_callback(frame_id, total)
         tally.summarise(total)
+
+    def _warn_if_positions_mix_ms_levels(self) -> None:
+        """Say once when a raster position holds frames of two MS levels.
+
+        A spot can carry a survey frame (``MsMsType`` 0) and a fragment
+        frame (9, say) at once. Both reach the frame loop with the same
+        coordinates, and the converter sums them into the one pixel row,
+        so the stored spectrum mixes MS1 and MS/MS ion current. Nothing in
+        the store marks that, so it is said here, by ``MsMsType``. One SQL
+        aggregate over the selected region; quiet where the database has
+        no raster or no ``MsMsType``.
+        """
+        if self._mixed_ms_levels_checked:
+            return
+        self._mixed_ms_levels_checked = True
+        # ``? IS NULL`` keeps every region when none was selected.
+        try:
+            rows = self.conn.execute(
+                "SELECT COUNT(*), GROUP_CONCAT(DISTINCT kinds) FROM ("
+                "SELECT GROUP_CONCAT(DISTINCT f.MsMsType) AS kinds "
+                "FROM MaldiFrameInfo m JOIN Frames f ON f.Id = m.Frame "
+                "WHERE ? IS NULL OR m.RegionNumber = ? "
+                "GROUP BY m.XIndexPos, m.YIndexPos "
+                "HAVING COUNT(DISTINCT f.MsMsType) > 1)",
+                (self._selected_region, self._selected_region),
+            ).fetchone()
+        except sqlite3.OperationalError as e:
+            logger.debug(f"Could not compare MS levels per position: {e}")
+            return
+        n_positions = int(rows[0] or 0) if rows else 0
+        if not n_positions:
+            return
+        kinds = sorted({int(k) for k in str(rows[1]).split(",") if k.strip()})
+        logger.warning(
+            "%d raster position(s) hold frames of more than one MsMsType (%s). "
+            "Their spectra are summed into one pixel, so those pixels mix "
+            "survey (MS1) and fragment (MS/MS) ion current; Thyra does not "
+            "separate them yet.",
+            n_positions,
+            ", ".join(str(k) for k in kinds),
+        )
 
     # ------------------------------------------------------------------
     # Ion mobility (TDF only)
@@ -1688,26 +1732,45 @@ class BrukerReader(BrukerBaseMSIReader):
     # ``Frames.MsMsType`` says whether a frame fragmented anything: 0 is a
     # survey scan, everything else is MS2 of some flavour. Which table
     # carries the precursor detail depends on the flavour -- PASEF frames
-    # (type 8) list one row per isolation window in ``PasefFrameMsMsInfo``,
-    # while single-precursor frames (type 2) carry one row per frame in
-    # ``FrameMsMsInfo``.
+    # (type 8) list one row per isolation window in ``PasefFrameMsMsInfo``;
+    # DIA frames (type 9: diaPASEF; reportedly MALDI iprm-PASEF) name a window
+    # group in ``DiaFrameMsMsInfo`` whose windows are listed in
+    # ``DiaFrameMsMsWindows``; single-precursor frames (type 2) carry one
+    # row per frame in ``FrameMsMsInfo``.
     # ------------------------------------------------------------------
 
     @property
     def has_precursor_spectra(self) -> bool:
-        """True only when the windows are there and mobility-resolved.
+        """True only when the schedule can be split by scan number.
 
-        The same three conditions :meth:`iter_precursor_spectra` checks
-        before it will run, so the predicate and the iterator cannot
-        disagree. An MS1 TDF reports a schedule with no windows, which is
-        describable but not separable.
+        The same conditions :meth:`iter_precursor_spectra` checks before
+        it will run, so the predicate and the iterator cannot disagree. An
+        MS1 TDF reports a schedule with no windows, which is describable
+        but not separable.
+        """
+        return self._separable_schedule() is not None
+
+    def _separable_schedule(self) -> Optional[FragmentationSchedule]:
+        """The schedule, when every frame can be split by its scan numbers.
+
+        That needs mobility-resolved windows that do not overlap, and the
+        same windows in every frame. A file that varies -- survey frames
+        among the fragment ones, or DIA window groups that take turns --
+        would have its frames cut by windows they never isolated: a survey
+        frame's MS1 ions split into "precursors" by scan range. The
+        converter refuses such a file before it asks (``demultiplex_
+        refusal``); this keeps a direct caller from getting those spectra.
         """
         if self.file_type != "tdf":
-            return False
+            return None
         schedule = self.get_fragmentation()
         if schedule is None or not schedule.windows:
-            return False
-        return all(w.is_mobility_resolved for w in schedule.windows)
+            return None
+        if not all(w.is_mobility_resolved for w in schedule.windows):
+            return None
+        if not schedule.constant_across_pixels or windows_overlap(schedule.windows):
+            return None
+        return schedule
 
     def get_fragmentation(self) -> Optional[FragmentationSchedule]:
         """The precursor schedule of the acquisition, or ``None``.
@@ -1724,7 +1787,7 @@ class BrukerReader(BrukerBaseMSIReader):
         reads as "MS1" to anyone who does not know the gate was there.
         What stays TDF-only is :attr:`has_precursor_spectra`, and with it
         the demultiplexed sibling table: separating precursors needs the
-        mobility scan ranges, which only PASEF records.
+        mobility scan ranges, which only PASEF and DIA frames record.
         """
         if not self._fragmentation_read:
             self._fragmentation = self._build_fragmentation()
@@ -1749,8 +1812,17 @@ class BrukerReader(BrukerBaseMSIReader):
             return FragmentationSchedule(ms_level=1, source=source)
 
         # A file holding both survey and fragment frames has no single
-        # schedule per pixel, whatever the precursor tables say.
+        # schedule per pixel, whatever the precursor tables say. Kept that
+        # way on purpose: the precursor split cuts every frame by the
+        # windows' scan ranges, and a survey frame isolated nothing.
         mixed = counts.get(0, 0) > 0
+        if mixed:
+            logger.info(
+                "The acquisition holds %d survey frames among %d fragment "
+                "frames; the precursor schedule is recorded as varying.",
+                counts[0],
+                msms_frames,
+            )
         windows = self._isolation_windows(msms_frames)
         return FragmentationSchedule(
             ms_level=2,
@@ -1771,20 +1843,44 @@ class BrukerReader(BrukerBaseMSIReader):
         scheduled method repeats the same windows at every pixel, so the
         distinct set *is* the schedule, and its per-window frame count is
         what proves the repetition.
+
+        Three sources, asked in this order: ``PasefFrameMsMsInfo`` (one
+        row per window per frame), the DIA tables (each frame names a
+        window group in ``DiaFrameMsMsInfo``; ``DiaFrameMsMsWindows`` lists
+        the group's windows), and ``FrameMsMsInfo`` (one precursor per
+        frame, no scan range). Acquisition software writes all of these
+        tables and leaves the unused ones empty, so the first one with
+        rows is the one the frames use. A DIA scan range is read like a
+        PASEF one, ``[ScanNumBegin, ScanNumEnd)``: adjacent windows of one
+        group share their boundary scan number, which only a half-open
+        range allows.
         """
+
+        def pasef_window(row: Tuple[Any, ...]) -> IsolationWindow:
+            return IsolationWindow.from_full_width(
+                float(row[0]),
+                _optional_float(row[1]),
+                collision_energy=_optional_float(row[2]),
+                scan_begin=_optional_int(row[3]),
+                scan_end=_optional_int(row[4]),
+            )
+
         for query, build in (
             (
                 "SELECT IsolationMz, IsolationWidth, CollisionEnergy, "
                 "ScanNumBegin, ScanNumEnd, COUNT(DISTINCT Frame) "
                 "FROM PasefFrameMsMsInfo GROUP BY IsolationMz, IsolationWidth, "
                 "CollisionEnergy, ScanNumBegin, ScanNumEnd ORDER BY IsolationMz",
-                lambda row: IsolationWindow.from_full_width(
-                    float(row[0]),
-                    _optional_float(row[1]),
-                    collision_energy=_optional_float(row[2]),
-                    scan_begin=_optional_int(row[3]),
-                    scan_end=_optional_int(row[4]),
-                ),
+                pasef_window,
+            ),
+            (
+                "SELECT w.IsolationMz, w.IsolationWidth, w.CollisionEnergy, "
+                "w.ScanNumBegin, w.ScanNumEnd, COUNT(DISTINCT i.Frame) "
+                "FROM DiaFrameMsMsWindows w JOIN DiaFrameMsMsInfo i "
+                "ON i.WindowGroup = w.WindowGroup "
+                "GROUP BY w.IsolationMz, w.IsolationWidth, w.CollisionEnergy, "
+                "w.ScanNumBegin, w.ScanNumEnd ORDER BY w.IsolationMz",
+                pasef_window,
             ),
             (
                 "SELECT TriggerMass, IsolationWidth, CollisionEnergy, "
@@ -1815,8 +1911,9 @@ class BrukerReader(BrukerBaseMSIReader):
             return windows, everywhere
 
         logger.info(
-            "Frames are marked MS/MS but neither PasefFrameMsMsInfo nor "
-            "FrameMsMsInfo carries a precursor; recording the level only."
+            "Frames are marked MS/MS but none of PasefFrameMsMsInfo, "
+            "DiaFrameMsMsWindows and FrameMsMsInfo carries a precursor; "
+            "recording the level only."
         )
         return (), True
 
@@ -1981,7 +2078,7 @@ class BrukerReader(BrukerBaseMSIReader):
     ]:
         """One fragment spectrum per (pixel, precursor), not per pixel.
 
-        A PASEF frame isolates several precursors, each in its own slice
+        A PASEF or DIA frame isolates several precursors, each in its own slice
         of the mobility ramp, and :meth:`iter_spectra` sums the whole
         frame into one spectrum -- so that spectrum holds fragments of
         every precursor at once. This yields them apart: for each frame,
@@ -2021,6 +2118,11 @@ class BrukerReader(BrukerBaseMSIReader):
                 "The isolation windows carry no mobility scan range, so the "
                 "precursors cannot be separated by scan number"
             )
+        if not schedule.constant_across_pixels or windows_overlap(schedule.windows):
+            raise NotImplementedError(
+                "The isolation windows are not the same in every frame, or "
+                "they overlap, so a frame cannot be split by scan number alone"
+            )
         if getattr(self, "sdk", None) is None or not self.handle:
             raise SDKError(
                 "Splitting a frame by precursor needs the Bruker library; "
@@ -2053,12 +2155,8 @@ class BrukerReader(BrukerBaseMSIReader):
         :meth:`iter_precursor_spectra` would have raised: a record of a
         frame that cannot be split simply has no precursor spectra.
         """
-        if self.file_type != "tdf":
-            return None
-        schedule = self.get_fragmentation()
-        if schedule is None or not schedule.windows:
-            return None
-        if not all(w.is_mobility_resolved for w in schedule.windows):
+        schedule = self._separable_schedule()
+        if schedule is None:
             return None
         if self._precursor_scan_map_cache is None:
             self._precursor_scan_map_cache = (
