@@ -153,7 +153,7 @@ follows semantic versioning:
 
 Each schema version from 0.6.0 on is published as JSON Schema at a fixed
 address, for example
-`https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.11.0/msi_metadata.schema.json`.
+`https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.12.0/msi_metadata.schema.json`.
 A published version is never edited, and there is no `latest`. The same
 file ships inside the `thyra` package. See
 [Metadata schema](metadata-schema.md#versioning).
@@ -178,6 +178,9 @@ To see what made a store:
   that wrote it. Note which versions your tool is tested against.
 - `json.loads(uns["msi_metadata"]["processing"])` lists the processing steps
   and their parameters. The list is stored as a JSON string.
+- `uns["msi_metadata"]["ms_analysis"]["spectrum_representation"]` is
+  `"profile"` or `"centroid"`: what the reader delivered. It is absent when
+  the source does not say.
 - `uns["msi_metadata"]["provenance"]["mass_axis"]` is a SHA-256 of the MSI
   table's `var["mz"]`, with its length. Two stores with equal values share
   the same mass axis, bin for bin. Sibling tables carry their MSI table's
