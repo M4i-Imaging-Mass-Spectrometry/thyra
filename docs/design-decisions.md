@@ -3655,7 +3655,10 @@ channel.
 - The same file with `--mobility-grid`: a `{table}_mobility` table, its
   `uns["mobility_grid"]` and `uns["mobility_marginal"]`,
   `uns["mobility_axis"]["resolved_table"]` on the summed table, and
-  `msi_metadata.ms_analysis.ion_mobility.grid`.
+  `msi_metadata.ms_analysis.ion_mobility.grid`. When the array states 1/K0
+  in `MS:1002814`, the table also carries `var["ccs"]` and `uns["ccs"]`, as
+  every 1/K0 mobility table does (D47). That lifts the last known limit D47
+  lists.
 - A continuous imzML whose shared mobility axis holds a non-finite value:
   the heatmap was refused with an error before (the channel index was
   undefined) and is now written without those points.
