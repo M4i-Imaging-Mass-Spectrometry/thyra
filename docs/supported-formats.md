@@ -670,6 +670,8 @@ states, the store comes out as the store of that file. See
   `coordinate_offsets_px`. Position z, which `mzpeak-convert` writes when
   its source states z, is the z offset; an archive without it records 0
   ([D30](design-decisions.md#d30-a-z-the-source-does-not-state-is-recorded-as-0)).
+  It is read from a z column (0.16.0) or, failing that, from each scan's
+  `parameters` list (0.12.0 and 0.14.0).
 - **The instrument.** The instrument configurations are read as in imzML. An
   Orbitrap or FT-ICR analyzer or model picks its own mass axis, and a timsTOF
   model is known by its name.
