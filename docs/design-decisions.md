@@ -3327,9 +3327,13 @@ pixel 0 measured again last, the standalone route stored 16 entries for
 12 cells in both siblings; the fused route stored 12.
 
 The converter counts the repeats in its first pass and now tells every
-sibling builder, per table. A builder told so sums the repeats with the
-same chunked sort and merge the summed table uses. A source with no repeat
-pays nothing.
+sibling builder, per table. The two mobility builders also notice a row
+reached twice themselves, since one spectrum is one row there. That
+catches a repeat the summed table never saw: the shared feature axis keeps
+features outside the mass range, so a spectrum that resamples to nothing
+still fills the mobility table. A builder that knows of a repeat sums it
+with the same chunked sort and merge the summed table uses. A source with
+no repeat pays nothing.
 
 **What changes in a store.** Only sources that reach the standalone passes
 and measure some position twice. Today those are imzML files with a
@@ -3345,6 +3349,10 @@ from the standalone passes, so no `_msms` table changes.
   The synthetic iprm-PASEF copy has a spot holding two frames, but the two
   share no grid cell and it writes no MS/MS table, so it stores the same
   either way.
+- The MS/MS builder relies on the converter's count alone, because a row
+  legitimately arrives once per precursor there. A repeat the summed table
+  does not count would still be stored twice. No shipped reader reaches
+  that builder outside the fused route.
 
 ## D41. A plane's table holds the mass-mobility heatmap of its own plane
 

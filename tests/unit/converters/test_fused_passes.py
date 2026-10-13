@@ -313,6 +313,25 @@ class SharedAxisRemeasuredStubReader(_SharedAxis, UnfusedRemeasuredStubReader):
     pass
 
 
+class _OutOfRangeRepeat(SharedAxisStubReader):
+    """Pixel 0 measured again, its summed spectrum wholly outside the mass range.
+
+    The summed table never sees the repeat -- the spectrum resamples to
+    nothing, so the position is measured once as far as it knows -- but
+    the shared feature axis keeps every listed feature whatever the range,
+    so the mobility table still reads pixel 0's cloud twice.
+    """
+
+    def iter_spectra(self) -> Generator:
+        yield from super().iter_spectra()
+        yield (0, 0, 0), np.array([900.0]), np.array([5.0])
+
+    def iter_mobility_spectra(self) -> Generator:
+        yield from super().iter_mobility_spectra()
+        mzs, mobility, intensities = _cloud(0)
+        yield (0, 0, 0), mzs, mobility, intensities
+
+
 class IndexedStubReader(FusedStubReader):
     """The same source whose records hand their points over indexed."""
 
@@ -438,6 +457,16 @@ class TestARemeasuredPosition:
             expected = _dense(once[key])
             expected[0] *= 2
             np.testing.assert_allclose(_dense(table), expected, err_msg=key)
+
+    def test_a_repeat_the_summed_table_never_saw_is_summed_too(self, tmp_path):
+        tables = _read(_convert(_OutOfRangeRepeat(), tmp_path / "range.zarr")).tables
+        once = _read(_convert(SharedAxisStubReader(), tmp_path / "once.zarr")).tables
+
+        table = tables["stub_z0_mobility"]
+        assert table.X.nnz == _distinct_entries(table)
+        expected = _dense(once["stub_z0_mobility"])
+        expected[0] *= 2
+        np.testing.assert_allclose(_dense(table), expected)
 
     def test_both_routes_write_the_same_store(self, tmp_path):
         a = _read(_convert(RemeasuredStubReader(), tmp_path / "fused.zarr")).tables

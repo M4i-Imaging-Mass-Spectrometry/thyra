@@ -373,6 +373,10 @@ def _build_from_shared_axis(
     # declared, and a consumer aligning on the list must find it.
     assembly = CscAssembly(features.n_features, n_obs, keep_empty_columns=True)
     assembly.merge_duplicates = merge_duplicates
+    # One spectrum is one row here, so a row reached twice is a repeated
+    # position, whether or not the summed table counted it as one: this
+    # route keeps features the summed table's mass range drops.
+    seen = np.zeros(n_obs, dtype=bool)
     n_skipped = 0
     n_pixels = 0
     for coords, mzs, mobility, intensities in reader.iter_mobility_spectra():
@@ -381,6 +385,9 @@ def _build_from_shared_axis(
             n_skipped += 1
             continue
         n_pixels += 1
+        if seen[row]:
+            assembly.merge_duplicates = True
+        seen[row] = True
         keys, _values = _shared_axis_row(features, coords, mzs, mobility, intensities)
         assembly.count(row, keys)
     if n_skipped:
@@ -605,6 +612,9 @@ class GridDiscovery:
         self.grid = grid
         self.row_for = row_for
         self.assembly = CscAssembly(grid_var_bound(self.axis, grid), n_obs)
+        # The rows a pixel has reached: one pixel is one row, so a second
+        # visit is a repeated position and its cells are summed.
+        self._seen = np.zeros(n_obs, dtype=bool)
         self.n_pixels = 0
         self.n_skipped = 0
         self.n_dropped = 0
@@ -651,6 +661,9 @@ class GridDiscovery:
         if row is None:
             self.n_skipped += 1
             return
+        if self._seen[row]:
+            self.assembly.merge_duplicates = True
+        self._seen[row] = True
         self.n_pixels += 1
         self.n_dropped += int(n_dropped)
         self.n_points += int(bins.size)
@@ -831,8 +844,7 @@ def _build_from_grid(
             description="Mobility grid: scattering",
             linearisation=linearisation,
         )
-    if merge_duplicates:
-        assembly.merge_duplicates = True
+    assembly.merge_duplicates |= merge_duplicates
     matrix = assembly.matrix()
     var = _grid_feature_var(assembly.unique_keys, axis, grid)
     logger.info(
