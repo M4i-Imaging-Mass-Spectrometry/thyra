@@ -28,6 +28,7 @@ from ..ontology.cache import ONTOLOGY
 from .axis_fingerprint import mass_axis_sha256
 from .models import (
     MSI_METADATA_SCHEMA_VERSION,
+    MSI_VAR_CCS_COLUMN,
     MSI_VAR_MOBILITY_COLUMN,
     MSI_VAR_PRECURSOR_COLUMN,
     MSI_VAR_PRECURSOR_INDEX_COLUMN,
@@ -283,6 +284,10 @@ def check_store_var_conventions(
     axis, and a store with no fingerprint (written before schema 0.11.0)
     gets no such check.
 
+    A ``ccs`` column, which the converter writes on a mobility table with
+    a 1/K0 axis (schema 0.13.0), must be numeric, finite, positive and as
+    long as ``mz``, on whichever table carries it.
+
     Args:
         store_path: Path to a converted ``.zarr`` store.
 
@@ -354,7 +359,22 @@ def check_store_var_conventions(
                     )
                 )
             _check_mass_axis_fingerprint(blocks.get(name), mz, issues)
+        if MSI_VAR_CCS_COLUMN in var_group:
+            _check_ccs_var(var_group, mz, issues)
     return results
+
+
+def _check_ccs_var(var_group: Any, mz: Any, issues: List[ValidationIssue]) -> None:
+    """A collision cross section is an area: numeric, finite and above zero."""
+    ccs = _pair_column(var_group, MSI_VAR_CCS_COLUMN, mz, issues)
+    if ccs is not None and ccs.size and not bool((ccs > 0).all()):
+        issues.append(
+            ValidationIssue(
+                "error",
+                f"var.{MSI_VAR_CCS_COLUMN}",
+                f"'{MSI_VAR_CCS_COLUMN}' contains values that are not positive",
+            )
+        )
 
 
 def _check_mass_axis_fingerprint(
@@ -466,7 +486,8 @@ def _pair_column(
 
     Shared by both paired contracts: whatever the pair means, the second
     column has to be numeric, finite and as long as ``mz`` before the
-    ordering of the pairs can be read at all.
+    ordering of the pairs can be read at all. The ``ccs`` check starts
+    from the same three conditions.
     """
     import numpy as np
 

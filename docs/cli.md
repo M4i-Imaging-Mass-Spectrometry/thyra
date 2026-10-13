@@ -191,7 +191,7 @@ thyra tims_data.d output.zarr --mobility-grid --mobility-bins 512     --mobility
     million of the resulting pairs, and a whole 26,000-pixel acquisition
     occupies 21 million. The table is refused when the `var` frame those
     pairs make is projected to take more than half of the machine's free
-    memory (about 330 bytes per pair, measured), and warned about past a
+    memory (about 338 bytes per pair, measured), and warned about past a
     quarter. Reach for `--resample-bins` when the whole image is wanted
     resolved on a smaller machine.
 
