@@ -79,10 +79,14 @@ No table carries both columns.
 | `var["mz"]` | strictly increasing, unique | non-decreasing, repeats | restarts at every precursor |
 | Sorted by | `mz` | `(mz, mobility)` | `(precursor_mz, precursor_mobility, mz)` |
 | Unique key of a column | `mz` | `(mz, mobility)` | `(precursor_index, mz)` |
-| Other `var` columns | none today | `mz_index`, `mobility_index` | `precursor_index`, `mz_index`, `precursor_mobility` |
+| Other `var` columns | none today | `mz_index`, `mobility_index`, `ccs` | `precursor_index`, `mz_index`, `precursor_mobility` |
 
 Only the MSI table has a unique, strictly increasing `var["mz"]`. Code that
 binary-searches the mass axis must only be given the MSI table.
+
+`ccs` is present on a mobility table whose axis is 1/K0. It is the collision
+cross section in square angstroms, for an assumed charge of 1;
+`uns["ccs"]` records the assumptions.
 
 `precursor_mobility` is present only when the source states the precursors'
 mobility. Without it, the MS/MS table is sorted by `(precursor_mz, mz)`.
@@ -135,6 +139,7 @@ blocks, never the matrix.
 | MSI table | `mz` strictly increasing; it matches the mass axis fingerprint, when one is recorded |
 | Mobility table | `mz` non-decreasing; `(mz, mobility)` pairs unique and sorted |
 | MS/MS table | `precursor_mz` non-decreasing; each `precursor_index` is one contiguous block; `mz` strictly increasing inside each block |
+| any table with `ccs` | `ccs` numeric, finite, positive and as long as `mz` |
 
 ## What is stable, and how changes are versioned
 
@@ -153,7 +158,7 @@ follows semantic versioning:
 
 Each schema version from 0.6.0 on is published as JSON Schema at a fixed
 address, for example
-`https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.12.0/msi_metadata.schema.json`.
+`https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.13.0/msi_metadata.schema.json`.
 A published version is never edited, and there is no `latest`. The same
 file ships inside the `thyra` package. See
 [Metadata schema](metadata-schema.md#versioning).
