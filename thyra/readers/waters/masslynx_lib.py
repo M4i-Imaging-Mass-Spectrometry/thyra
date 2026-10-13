@@ -314,6 +314,27 @@ class MassLynxLib:
         ]
         dll.getDataPoints.restype = c_uint32
 
+        # -- Ion mobility (drift bins) --
+        dll.getNumberOfMobilityScans.argtypes = [c_void_p, c_int32]
+        dll.getNumberOfMobilityScans.restype = c_uint32
+
+        dll.getMobility.argtypes = [c_void_p, c_int32]
+        dll.getMobility.restype = c_float
+
+        # Only the raw per-bin read is bound. Its centroiding sibling,
+        # getMobilityScanDataPoints, is about ten times slower and raised
+        # access violations on SYNAPT G1 files (see read_drift_bin).
+        dll.getRawMobilityScanDataPoints.argtypes = [
+            c_void_p,
+            c_int32,
+            c_int32,
+            c_int32,
+            POINTER(c_double),
+            POINTER(c_double),
+            c_uint32,
+        ]
+        dll.getRawMobilityScanDataPoints.restype = c_uint32
+
     def open_file(self, raw_path: str) -> c_void_p:
         """Open a Waters .raw directory. Returns opaque handle.
 
@@ -343,6 +364,16 @@ class MassLynxLib:
     def is_ion_mobility_file(self, handle) -> bool:
         """Check if the file contains ion mobility data."""
         return bool(self._ensure_loaded().isIonMobilityFile(handle) > 0)
+
+    def is_ion_mobility_function(self, handle, function: int) -> bool:
+        """Whether a function carries drift bins.
+
+        Asked separately from :meth:`classify_function`, which reports a
+        function as LOCKMASS before it asks about mobility: the tail chunk
+        of a mobility raster MassLynx split across functions is named the
+        lockmass function and still carries drift bins.
+        """
+        return bool(self._ensure_loaded().isIonMobilityFunction(handle, function) == 1)
 
     def is_dda_file(self, handle) -> bool:
         """Check if the file is a DDA acquisition."""
@@ -450,6 +481,67 @@ class MassLynxLib:
         if num_dp == 0:
             return np.array([], dtype=np.float64), np.array([], dtype=np.float64)
 
+        return mz_buf[:num_dp].copy(), int_buf[:num_dp].copy()
+
+    def get_number_of_drift_bins(self, handle, function: int) -> int:
+        """The number of drift bins (mobility scans) of a function."""
+        return int(self._ensure_loaded().getNumberOfMobilityScans(handle, function))
+
+    def get_drift_times(self, handle, n_bins: int) -> NDArray[np.float64]:
+        """The drift time of each of the first ``n_bins`` bins, in ms.
+
+        ``getMobility`` takes no function argument, and an index past the
+        file's last bin raises a C++ exception inside the library (SEH
+        0xE06D7363, measured), so the caller passes the count it read from
+        :meth:`get_number_of_drift_bins` and nothing beyond it is asked.
+        """
+        api = self._ensure_loaded()
+        return np.array(
+            [api.getMobility(handle, i) for i in range(int(n_bins))],
+            dtype=np.float64,
+        )
+
+    def read_drift_bin(
+        self,
+        handle,
+        function: int,
+        scan: int,
+        drift_bin: int,
+        initial_buf_size: int = 4096,
+    ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """One drift bin's raw points, as ``(mzs, intensities)``.
+
+        ``getRawMobilityScanDataPoints``: the non-zero points of the bin,
+        whatever ``setCentroid`` says. Summed over the bins they give the
+        scan's profile spectrum exactly, measured on SYNAPT G2-Si and XS
+        runs; centroiding each bin instead costs about ten times as much
+        and does not sum to anything the library reports. Same two-call
+        buffer pattern as :meth:`read_spectrum`.
+        """
+        api = self._ensure_loaded()
+        mz_buf = np.empty(initial_buf_size, dtype=np.float64)
+        int_buf = np.empty(initial_buf_size, dtype=np.float64)
+
+        def call() -> int:
+            return int(
+                api.getRawMobilityScanDataPoints(
+                    handle,
+                    function,
+                    scan,
+                    drift_bin,
+                    mz_buf.ctypes.data_as(POINTER(c_double)),
+                    int_buf.ctypes.data_as(POINTER(c_double)),
+                    mz_buf.nbytes,
+                )
+            )
+
+        num_dp = call()
+        if num_dp * 8 > mz_buf.nbytes:
+            mz_buf = np.empty(num_dp * 2, dtype=np.float64)
+            int_buf = np.empty(num_dp * 2, dtype=np.float64)
+            call()
+        if num_dp == 0:
+            return np.array([], dtype=np.float64), np.array([], dtype=np.float64)
         return mz_buf[:num_dp].copy(), int_buf[:num_dp].copy()
 
     def get_acquisition_range(

@@ -16,8 +16,14 @@ from numpy.typing import NDArray
 from tqdm import tqdm
 
 from ...core.base_extractor import MetadataExtractor
-from ...core.base_reader import BaseMSIReader
+from ...core.base_reader import BaseMSIReader, summed_peak_mask
 from ...core.mass_axis import MassAxisAccumulator
+from ...core.mobility import (
+    DRIFT_TIME_ACCESSION,
+    MILLISECOND_UNIT_ACCESSION,
+    MOBILITY_KIND_NAMES,
+    MobilityAxis,
+)
 from ...core.msms import (
     COLLISION_INDUCED_DISSOCIATION_ACCESSION,
     FragmentationSchedule,
@@ -34,6 +40,27 @@ logger = logging.getLogger(__name__)
 
 #: What the fragmentation schedule names as its origin.
 FRAGMENTATION_SOURCE = "waters_masslynx"
+
+#: How far apart two drift steps may be, relative to the step, and still
+#: count as one bin width. The library reports drift times as float32, so
+#: steps of one pusher period differ in the seventh digit (0.06625149 vs
+#: 0.06625150 ms on a Synapt XS run).
+_DRIFT_STEP_TOLERANCE = 1e-4
+
+
+def _equal_step(values: NDArray[np.float64]) -> Optional[float]:
+    """The common step of ascending drift times, or ``None`` when they have none.
+
+    Every Synapt run measured has one: drift bins one pusher period apart
+    from 0 ms. A run that did not would be binned like any continuum.
+    """
+    if values.size < 2:
+        return None
+    steps = np.diff(values)
+    step: float = float(values[-1] - values[0]) / float(values.size - 1)
+    if step <= 0 or not np.all(np.abs(steps - step) <= _DRIFT_STEP_TOLERANCE * step):
+        return None
+    return step
 
 
 @register_reader("waters")
@@ -139,6 +166,11 @@ class WatersReader(BaseMSIReader):
         #: functions describe: index -> pixels they held.
         self._off_raster_functions: Dict[int, int] = {}
         self._common_mass_axis_cache: Optional[NDArray[np.float64]] = None
+        #: Functions MassLynx reports drift bins for, converted or not.
+        self._drift_functions: Set[int] = set()
+        #: The drift axis, read once: ``None`` until asked, then the axis,
+        #: or ``False`` when the converted functions give none.
+        self._mobility_axis: Any = None
         self._use_centroid = use_centroid
         self._closed = False
 
@@ -246,9 +278,23 @@ class WatersReader(BaseMSIReader):
             self._function_types[f] = ft
             logger.debug(f"Function {f}: {ft.name}")
 
-        # Filter to MS functions only (skip lockmass, MRM, IMS, NOT_MS)
+        # Which functions carry drift bins, asked per function rather than
+        # read off the type: classify_function names the lockmass function
+        # before it asks about mobility, and on a mobility raster MassLynx
+        # split across functions that is the raster's tail.
+        self._drift_functions = {
+            f
+            for f in range(n_funcs)
+            if self._ml.is_ion_mobility_function(self._handle, f)
+        }
+
+        # The functions that can hold the image: MS, and MS acquired with
+        # ion mobility on, whose spectrum is the one summed over its drift
+        # bins. Lockmass, MRM and non-MS functions stay out.
         ms_functions = [
-            f for f, ft in self._function_types.items() if ft == FunctionType.MS
+            f
+            for f, ft in self._function_types.items()
+            if ft in (FunctionType.MS, FunctionType.IMS_MS)
         ]
         self._ms_functions = ms_functions
 
@@ -299,6 +345,12 @@ class WatersReader(BaseMSIReader):
             self._imaging_grid, self._ms_functions
         )
 
+        # Nothing so far has read a spectrum: the grid and the function
+        # selection use scan records only. Reading one from a mobility
+        # function the library cannot handle ends the process, so this is
+        # the last point a refusal can be said.
+        self._refuse_unreadable_mobility()
+
         # A single-pixel grid is refused by build_imaging_grid() above rather
         # than warned about here: "this may not be true imaging data,
         # proceeding anyway" produced a 1x1 store with a 0.0 um pitch and
@@ -309,6 +361,52 @@ class WatersReader(BaseMSIReader):
             f"{len(self._ms_functions)} MS functions, "
             f"grid {self._imaging_grid.pixel_count_x}x{self._imaging_grid.pixel_count_y}"
         )
+
+    def _refuse_unreadable_mobility(self) -> None:
+        """Refuse a run whose converted mobility functions the library cannot read.
+
+        Two cases, both found on real files rather than guessed:
+
+        * The run does not declare ``Acquisition Algorithm  ADC Mode``
+          (older Synapt G1 acquisitions). On those the library crashed with
+          an access violation reading spectra from a mobility function, or
+          returned drift bins that do not sum to the spectrum; see
+          :attr:`WatersInstrument.mobility_readable`. Such a run was refused
+          before mobility was read at all, so refusing it here changes
+          nothing it used to convert.
+        * A converted mobility function has lost its ``_FUNCnnn.CDT`` drift
+          file, the mobility counterpart of a missing ``.DAT`` (issue #229).
+        """
+        converted = set(self._ms_functions or ())
+        drift = sorted(converted & self._drift_functions)
+        if not drift:
+            return
+        reason = None
+        if not self._instrument.mobility_readable:
+            reason = (
+                f"{self.data_path.name} was acquired with ion mobility on "
+                f"(function(s) {', '.join(str(f) for f in drift)}), and its "
+                "_extern.inf does not declare 'Acquisition Algorithm: ADC "
+                "Mode', as older Synapt G1 runs do not. The Waters library "
+                "crashes or returns inconsistent data reading these, so Thyra "
+                "does not read them."
+            )
+        else:
+            present = {path.name.upper() for path in self.data_path.iterdir()}
+            missing = [f for f in drift if f"_FUNC{f + 1:03d}.CDT" not in present]
+            if missing:
+                reason = (
+                    f"{self.data_path.name} was acquired with ion mobility on, "
+                    f"but {', '.join(f'_FUNC{f + 1:03d}.CDT' for f in missing)} "
+                    "is missing. That file holds the drift bins; restore it "
+                    "from the acquisition."
+                )
+        if reason is None:
+            return
+        if self._ml is not None and self._handle is not None:
+            self._ml.close_file(self._handle)
+        self._handle = None
+        raise ConversionRefused(reason)
 
     # ------------------------------------------------------------------
     # Which functions become the stored spectrum
@@ -693,6 +791,7 @@ class WatersReader(BaseMSIReader):
             instrument=self._instrument,
             use_centroid=self._use_centroid,
             excluded_functions=self._excluded_functions,
+            mobility_report=self.mobility_report(),
         )
 
     def get_common_mass_axis(self) -> NDArray[np.float64]:
@@ -774,8 +873,9 @@ class WatersReader(BaseMSIReader):
     ]:
         """Iterate through all MS imaging spectra with spatial coordinates.
 
-        Only yields spectra from MS functions (skips LOCKMASS, MRM, IMS, NOT_MS).
-        Skips scans without valid laser positions.
+        Only yields spectra from the converted functions (MS, and MS with
+        ion mobility on, read summed over its drift bins). Skips scans
+        without valid laser positions.
 
         Yields:
             Tuple of ((x, y, z), mzs, intensities) where coordinates are
@@ -868,6 +968,163 @@ class WatersReader(BaseMSIReader):
                             f"Error reading spectrum func={func} scan={scan}: {e}"
                         )
                 first_of_function += n_scans
+
+    # ------------------------------------------------------------------
+    # Ion mobility
+    #
+    # A Waters mobility scan has the shape of a Bruker TDF frame: one
+    # pixel, a fixed list of drift bins shared by every scan, a different
+    # point cloud in each bin. The bins are equal steps of drift time from
+    # 0 ms, one pusher period apart (200 bins on every Synapt run measured).
+    # iter_spectra keeps yielding the spectrum summed over the bins.
+    # ------------------------------------------------------------------
+
+    @property
+    def has_ion_mobility(self) -> bool:
+        """True when every converted function carries drift bins.
+
+        A run that converts a function without drift bins next to one
+        with them -- two functions summed into the same pixels -- has no
+        point cloud that adds up to its stored spectrum, so it reports no
+        mobility rather than half of it.
+        """
+        return self.get_mobility_axis() is not None
+
+    def get_mobility_axis(self) -> Optional[MobilityAxis]:
+        """The drift-time axis, in ms, or ``None`` when there is none.
+
+        ``values[b]`` is the drift time of bin ``b`` as the library reports
+        it, ascending. Read once and cached.
+        """
+        if self._mobility_axis is None:
+            axis = self._build_mobility_axis()
+            self._mobility_axis = axis if axis is not None else False
+        cached = self._mobility_axis
+        return cached if isinstance(cached, MobilityAxis) else None
+
+    def _build_mobility_axis(self) -> Optional[MobilityAxis]:
+        ml, handle, _grid, _types, ms_functions = self._require_initialized()
+        drift = [f for f in ms_functions if f in self._drift_functions]
+        if not drift:
+            return None
+        if len(drift) != len(ms_functions):
+            logger.warning(
+                "Function(s) %s carry drift bins and %s do not, and their "
+                "spectra are summed into the same image. No mobility is "
+                "recorded: the drift bins would not add up to the stored "
+                "spectrum.",
+                ", ".join(str(f) for f in drift),
+                ", ".join(str(f) for f in ms_functions if f not in drift),
+            )
+            return None
+        counts = {f: ml.get_number_of_drift_bins(handle, f) for f in drift}
+        if len(set(counts.values())) != 1 or not counts[drift[0]]:
+            # getMobility takes no function argument, so functions with
+            # different bin counts cannot all be described by its axis.
+            logger.warning(
+                "The mobility functions report different drift bin counts "
+                "(%s); no mobility is recorded.",
+                ", ".join(f"{f}: {n}" for f, n in counts.items()),
+            )
+            return None
+        values = ml.get_drift_times(handle, counts[drift[0]])
+        return MobilityAxis(
+            kind_accession=DRIFT_TIME_ACCESSION,
+            kind_name=MOBILITY_KIND_NAMES[DRIFT_TIME_ACCESSION],
+            unit_accession=MILLISECOND_UNIT_ACCESSION,
+            unit_name="millisecond",
+            values=values,
+            source="waters_raw",
+            bin_width=_equal_step(values),
+        )
+
+    @property
+    def lossless_spectrum_option(self) -> Optional[str]:
+        """The option that makes the stored spectrum the drift bins' sum, when needed.
+
+        The bins are read raw, so they sum to the profile spectrum exactly
+        (measured) and to the vendor centroid not at all: centroiding the
+        sum is not summing the centroids. ``None`` when the profile trace
+        is what is stored.
+        """
+        return "--waters-spectrum profile" if self._use_centroid else None
+
+    def mobility_report(self) -> Optional[Dict[str, Any]]:
+        """What the metadata extractor reports under ``ion_mobility``."""
+        axis = self.get_mobility_axis()
+        if axis is None:
+            return None
+        report = axis.to_extractor_report()
+        if axis.values is not None:
+            report["num_scans"] = int(axis.values.size)
+        return report
+
+    def iter_mobility_spectra(self) -> Generator[
+        Tuple[
+            Tuple[int, int, int],
+            NDArray[np.float64],
+            NDArray[np.float64],
+            NDArray[np.float64],
+        ],
+        None,
+        None,
+    ]:
+        """Each scan's drift bins as one ``(coords, mz, drift_ms, intensity)`` cloud.
+
+        The same scans, coordinates and order as :meth:`iter_spectra`.
+        Each bin is read raw (:meth:`MassLynxLib.read_drift_bin`), so the
+        points summed over the bins are the profile spectrum of the scan,
+        whichever representation the summed table was read as. The
+        intensity threshold, when set, keeps or drops a peak's points
+        across all bins together (D34). No progress bar: the caller's pass
+        draws one.
+
+        Raises:
+            NotImplementedError: When the run carries no drift bins.
+        """
+        axis = self.get_mobility_axis()
+        if axis is None or axis.values is None:
+            raise NotImplementedError(
+                f"{self.data_path.name} carries no readable drift bins"
+            )
+        ml, handle, imaging_grid, _types, ms_functions = self._require_initialized()
+        drift_times = axis.values
+        n_bins = int(drift_times.size)
+        for func in ms_functions:
+            n_scans = ml.get_number_of_scans_in_function(handle, func)
+            for scan in range(n_scans):
+                scan_info = imaging_grid.scan_map.get((func, scan))
+                if scan_info is None or not scan_info.has_position:
+                    continue
+                coords = imaging_grid.get_coordinates(scan_info)
+                if coords is None:
+                    continue
+                # Never past the function's own count: an out-of-range
+                # bin index is the kind of call this library answers
+                # with an exception it raises in C++.
+                bins = min(n_bins, max(0, int(scan_info.drift_scan_count)))
+                mz_parts, mobility_parts, intensity_parts = [], [], []
+                for b in range(bins):
+                    mzs, intensities = ml.read_drift_bin(handle, func, scan, b)
+                    if mzs.size == 0:
+                        continue
+                    mz_parts.append(mzs)
+                    intensity_parts.append(intensities)
+                    mobility_parts.append(np.full(mzs.size, drift_times[b]))
+                if not mz_parts:
+                    continue
+                mzs = np.concatenate(mz_parts)
+                mobility = np.concatenate(mobility_parts)
+                intensities = np.concatenate(intensity_parts)
+                if self._intensity_threshold is not None:
+                    keep = summed_peak_mask(mzs, intensities, self._intensity_threshold)
+                    mzs, mobility, intensities = (
+                        mzs[keep],
+                        mobility[keep],
+                        intensities[keep],
+                    )
+                if mzs.size > 0:
+                    yield coords, mzs, mobility, intensities
 
     def close(self) -> None:
         """Close the file handle and release native resources."""

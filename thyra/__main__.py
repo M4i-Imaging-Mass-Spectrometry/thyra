@@ -143,7 +143,7 @@ def _validate_resampling_params(
 
 
 def _validate_mobility_grid_params(
-    mobility_bins: int,
+    mobility_bins: Optional[int],
     mobility_min: Optional[float],
     mobility_max: Optional[float],
 ) -> None:
@@ -156,7 +156,7 @@ def _validate_mobility_grid_params(
     every other float option here they may be zero or negative; only
     their order and finiteness are checked.
     """
-    if mobility_bins <= 0:
+    if mobility_bins is not None and mobility_bins <= 0:
         raise click.BadParameter(
             "A mobility grid needs at least one channel", param_hint="mobility_bins"
         )
@@ -561,10 +561,10 @@ IGNORED_ELSEWHERE: dict[str, Tuple[str, Tuple[str, ...]]] = {
     "use_recalibrated": ("--use-recalibrated/--no-recalibrated", ("bruker",)),
     "interactive_calibration": ("--interactive-calibration", ("bruker", "solarix")),
     "spectrum_type": ("--spectrum-type", ("imzml",)),
-    "mobility_grid": ("--mobility-grid/--no-mobility-grid", ("bruker",)),
-    "mobility_bins": ("--mobility-bins", ("bruker",)),
-    "mobility_min": ("--mobility-min", ("bruker",)),
-    "mobility_max": ("--mobility-max", ("bruker",)),
+    "mobility_grid": ("--mobility-grid/--no-mobility-grid", ("bruker", "waters")),
+    "mobility_bins": ("--mobility-bins", ("bruker", "waters")),
+    "mobility_min": ("--mobility-min", ("bruker", "waters")),
+    "mobility_max": ("--mobility-max", ("bruker", "waters")),
 }
 
 #: The three options that size the grid ``--mobility-grid`` builds. They
@@ -846,7 +846,8 @@ class GroupedCommand(click.Command):
     default=True,
     help=(
         "When the source has an ion mobility dimension (Bruker TDF with TIMS "
-        "engaged, an imzML export with a mobility array), store the mean "
+        "engaged, an imzML export with a mobility array, a Waters run with "
+        "drift bins), store the mean "
         "mass-mobility frame on the summed table as uns['mobility_heatmap'] "
         "(default: enabled; fed from the summed table's own passes on a "
         "Bruker TDF, one extra pass over any other source)"
@@ -857,12 +858,14 @@ class GroupedCommand(click.Command):
     default=False,
     help=(
         "When the source carries ion mobility per pixel rather than as a "
-        "shared feature list (Bruker TDF), bin the point cloud onto a common "
-        "mobility grid and write the same mobility-resolved sibling table "
-        "(default: disabled; fed from the summed table's own passes, and a "
+        "shared feature list (Bruker TDF, Waters drift time), bin the point "
+        "cloud onto a common mobility grid and write the same "
+        "mobility-resolved sibling table (default: disabled; on a Bruker "
+        "TDF fed from the summed table's own passes, and a "
         "much larger table, built out of core so any acquisition fits). Its "
         "marginal over channels reproduces the summed "
-        "table exactly under the default --tdf-spectrum scan_sum"
+        "table exactly under the default --tdf-spectrum scan_sum, and on "
+        "Waters under --waters-spectrum profile"
     ),
 )
 @click.option(
@@ -888,13 +891,13 @@ class GroupedCommand(click.Command):
 @click.option(
     "--mobility-bins",
     type=int,
-    default=MOBILITY_CHANNELS,
-    show_default=True,
+    default=None,
     help=(
         "Mobility channels the grid divides the range into, for "
-        "--mobility-grid. The default is the mass-mobility heatmap's own "
-        "channel count over the same edges, so a box drawn on the heatmap "
-        "indexes grid channels directly; another value gives that up"
+        "--mobility-grid. Default: the mass-mobility heatmap's own channels "
+        f"over the same edges ({MOBILITY_CHANNELS}, or one per drift bin on a "
+        "Waters run with fewer), so a box drawn on the heatmap indexes grid "
+        "channels directly; a number gives that up"
     ),
 )
 @click.option(
@@ -902,7 +905,8 @@ class GroupedCommand(click.Command):
     type=float,
     default=None,
     help=(
-        "Lower edge of the mobility grid, in the axis unit (1/K0 for TIMS). "
+        "Lower edge of the mobility grid, in the axis unit (1/K0 for TIMS, "
+        "ms for Waters drift time). "
         "Default: the smallest value the source's mobility axis holds, which "
         "is where the heatmap starts"
     ),
@@ -1148,7 +1152,7 @@ def main(
     mobility_table: bool,
     mobility_heatmap: bool,
     mobility_grid: bool,
-    mobility_bins: int,
+    mobility_bins: Optional[int],
     mobility_min: Optional[float],
     mobility_max: Optional[float],
     msms_table: Optional[bool],

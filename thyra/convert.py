@@ -547,12 +547,14 @@ def convert_msi(
             ``mobility_heatmap`` (default True) stores the mean
             mass-mobility frame on the summed table as
             ``uns["mobility_heatmap"]`` whenever the source has an ion
-            mobility dimension (Bruker TDF, imzML with a mobility array).
+            mobility dimension (Bruker TDF, imzML with a mobility array,
+            Waters drift bins).
             ``mobility_grid`` (default False) fills that same sibling for
             a source that carries mobility per pixel rather than as a
-            shared feature axis (Bruker TDF) by binning the point cloud
-            onto a common mobility grid; ``mobility_bins`` (default 256,
-            the heatmap's own channel count), ``mobility_min`` and
+            shared feature axis (Bruker TDF, Waters) by binning the point cloud
+            onto a common mobility grid; ``mobility_bins`` (default: the
+            heatmap's own channels, 256 or one per Waters drift bin),
+            ``mobility_min`` and
             ``mobility_max`` size that grid. Its marginal reproduces the
             summed table exactly under the default
             ``tdf_spectrum="scan_sum"``; an explicit ``"vendor_centroid"``

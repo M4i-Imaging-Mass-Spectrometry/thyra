@@ -312,9 +312,10 @@ converted whole is embedded whole, as before.
 
 A `.raw` **directory** of `_FUNC*.DAT` files, read through the MassLynxRaw and
 MLReader native libraries (bundled for Windows and Linux). The pixel grid is
-reconstructed from the laser X/Y position recorded on each scan; MRM and
-ion-mobility functions are classified and skipped, and which of the rest hold
-the image is decided from those same positions (below).
+reconstructed from the laser X/Y position recorded on each scan; MRM functions
+are classified and skipped, a function acquired with ion mobility on is read
+summed over its drift bins and keeps its drift times (below), and which
+functions hold the image is decided from those same positions.
 
 The grid is a *lattice* fitted to those positions -- an origin, a pitch and a
 count per axis -- not a ranking of the distinct ones. The pitch is the
@@ -457,6 +458,46 @@ A file whose converted functions carry a precursor m/z holds fragment
 spectra and reports them through `ms_analysis.fragmentation`, exactly as a
 Bruker MS/MS acquisition does. A reported MS level with no precursor behind
 it does not: that is the chunk artefact above.
+
+### Ion mobility (drift time)
+
+A Synapt run acquired with ion mobility on stores each scan as a set of
+**drift bins**: 200 on every run measured, equal steps of drift time from
+0 ms, one pusher period apart (0.045 to 0.216 ms; 0.06625 ms on the public
+MassIVE MSV000092638 Synapt XS image). Each bin is a spectrum of its own.
+Thyra reads them the way it reads a TIMS frame:
+
+- The MSI table holds each scan's spectrum summed over its bins, as MassLynx
+  reports it.
+- `uns["mobility_axis"]` is the drift-time axis: `type_accession`
+  `MS:1002476`, unit `UO:0000028` (millisecond), `values` the drift time of
+  each bin, `source` `"waters_raw"`. `uns["mobility_heatmap"]` and, with
+  `--mobility-grid`, the `{table}_mobility` sibling are built from the bins
+  exactly as for a TDF (see [Output Format](output-format.md#ion-mobility)).
+- The bins are read raw (`getRawMobilityScanDataPoints`): their non-zero
+  points, whatever representation the MSI table was read in. Summed over the
+  bins they reproduce the **profile** spectrum exactly. Under the default
+  vendor centroid they do not, since centroiding the sum is not summing
+  centroids, and the store's `current_ratio` says by how much;
+  `--waters-spectrum profile` makes the two agree.
+
+Two things refuse rather than convert:
+
+- **A run that does not declare `Acquisition Algorithm: ADC Mode`** in
+  `_extern.inf`. Over 91 Synapt runs with mobility on, the 56 that declare it
+  read cleanly; the 35 that do not (older Synapt G1 acquisitions) crashed the
+  native library with an access violation (32) or returned drift bins that do
+  not add up to the spectrum (3). A crash inside the library ends the process
+  with no message, so this is decided from the side file before any spectrum
+  is read. Such runs were refused before drift time was read too.
+- **A converted mobility function without its `_FUNCnnn.CDT`** drift file.
+
+A run that converts a function with drift bins next to one without, summed
+into the same image, keeps its spectra and records no mobility: the bins
+would not add up to the stored spectrum. The cost is one library call per bin,
+about 13 ms per scan for 200 bins on a Synapt G2-Si; there is no single-read
+record as there is for TDF, so the heatmap and a grid table each take their
+own pass. `--no-mobility-heatmap` skips the heatmap's.
 
 ## PHI SmartSoft-TOF (ToF-SIMS)
 

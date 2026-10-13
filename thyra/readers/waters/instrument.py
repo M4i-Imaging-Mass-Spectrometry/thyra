@@ -72,6 +72,9 @@ class WatersInstrument:
         effective_voltage_v: ``Veff`` from ``_extern.inf``, if present.
         adc_sample_frequency_ghz: ``ADC Sample Frequency (GHz)`` from
             ``_extern.inf``, if present.
+        acquisition_algorithm: ``Acquisition Algorithm`` from
+            ``_extern.inf`` (``ADC Mode`` on a Synapt G2-Si or XS), if
+            present. See :attr:`mobility_readable`.
     """
 
     is_mrt: bool
@@ -82,11 +85,27 @@ class WatersInstrument:
     flight_path_mm: Optional[float] = None
     effective_voltage_v: Optional[float] = None
     adc_sample_frequency_ghz: Optional[float] = None
+    acquisition_algorithm: Optional[str] = None
 
     @property
     def name(self) -> str:
         """A short label for logs and stored metadata."""
         return "SELECT SERIES MRT" if self.is_mrt else "Waters (not MRT)"
+
+    @property
+    def mobility_readable(self) -> bool:
+        """Whether the native library can read this run's mobility functions.
+
+        True when ``_extern.inf`` declares ``Acquisition Algorithm`` as
+        ``ADC Mode``. Measured over 91 Synapt runs with mobility on: the 56
+        that declare it read cleanly, their drift bins summing exactly to
+        the summed spectrum; the 35 that do not -- older Synapt G1 runs --
+        either crashed the library with an access violation (32) or
+        returned drift bins that do not sum to the spectrum (3). An access
+        violation ends the Python process and cannot be caught, so the
+        reader decides from this field before it calls anything.
+        """
+        return (self.acquisition_algorithm or "").strip().upper() == "ADC MODE"
 
     def profile_sample_spacing_da(self, mz: float) -> Optional[float]:
         """Predicted spacing of the profile trace's samples at ``mz``, in Da.
@@ -217,6 +236,7 @@ def identify_waters_instrument(raw_path: Path) -> WatersInstrument:
         adc_sample_frequency_ghz=_float_or_none(
             extern.get("ADC Sample Frequency (GHz)")
         ),
+        acquisition_algorithm=extern.get("Acquisition Algorithm"),
     )
 
     logger.info(

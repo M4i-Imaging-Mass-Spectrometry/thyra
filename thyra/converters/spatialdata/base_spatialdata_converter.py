@@ -65,7 +65,6 @@ from ...errors import ConversionRefused
 from ...metadata.constants import sample_value_problem
 from ...metadata.schema import MSI_VAR_RESERVED_COLUMNS, mass_axis_sha256
 from ...resampling.axis_planner import AxisPlanner, normalize_resampling_config
-from ...resampling.mobility_grid import MOBILITY_CHANNELS
 from ...resampling.plan import MassAxisPlan
 from ...resampling.strategies import ResamplingStrategy, build_strategy
 from ...resampling.types import AxisLinearisation, ResamplingConfig
@@ -119,7 +118,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         write_mobility_table: bool = True,
         mobility_heatmap: bool = True,
         mobility_grid: bool = False,
-        mobility_bins: int = MOBILITY_CHANNELS,
+        mobility_bins: Optional[int] = None,
         mobility_min: Optional[float] = None,
         mobility_max: Optional[float] = None,
         msms_table: bool = True,
@@ -168,10 +167,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 far larger table). Ignored by a source that already
                 shares a feature axis, which needs no grid.
             mobility_bins: Channels the grid divides the mobility range
-                into (default: 256). The default is the mass-mobility
-                heatmap's own channel count over the same edges, which is
-                what lets a box drawn on the heatmap index grid channels
-                directly; changing it gives that up.
+                into. ``None`` (default) takes the mass-mobility heatmap's
+                own channels over the same edges -- 256, or one per bin on
+                a source whose axis is fewer equal-width bins (Waters drift
+                bins, D49) -- which is what lets a box drawn on the heatmap
+                index grid channels directly; a number gives that up.
             mobility_min: Lower edge of the grid, in the axis unit.
                 ``None`` (default) takes the smallest mobility value the
                 source's axis actually holds, which is also where the

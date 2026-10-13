@@ -38,7 +38,7 @@ Mobility is a feature coordinate. Nothing here knows where a pixel is.
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -63,6 +63,11 @@ MOBILITY_CHANNELS = 256
 #: against this band -- the anchor above is never moved to satisfy it.
 MIN_CHANNEL_WIDTH = 0.002
 MAX_CHANNEL_WIDTH = 0.02
+
+#: The quantity :data:`MIN_CHANNEL_WIDTH` and :data:`MAX_CHANNEL_WIDTH`
+#: are in: inverse reduced ion mobility, 1/K0. The same PSI-MS term as
+#: ``thyra.core.mobility.INVERSE_REDUCED_MOBILITY_ACCESSION``.
+INVERSE_REDUCED_MOBILITY = "MS:1002815"
 
 #: The law a grid follows when the caller names none.
 DEFAULT_MOBILITY_GRID_LAW = "linear"
@@ -213,6 +218,36 @@ MOBILITY_GRID_GENERATORS: Dict[str, BaseMobilityGridGenerator] = {
 }
 
 
+def default_channel_plan(
+    values: Any, bin_width: Optional[float] = None
+) -> Optional[Tuple[float, float, int]]:
+    """The ``(lower, upper, n_channels)`` the heatmap and a default grid share.
+
+    Normally :data:`MOBILITY_CHANNELS` equal-width channels over the span of
+    the axis values. A source whose axis is a list of equal-width bins says
+    so with ``bin_width`` (Waters drift bins). When it has fewer bins than
+    the anchor, the channels are its bins instead: edges half a bin outside
+    the first and last value, one channel per bin, so a value lands in the
+    channel of its own bin. Spread over the anchor, 200 bins would leave 56
+    channels empty in a regular comb (design decision D49).
+
+    ``None`` when the values give no span to bin over.
+    """
+    finite = np.asarray(values, dtype=np.float64)
+    finite = finite[np.isfinite(finite)]
+    if not finite.size:
+        return None
+    lower, upper = float(finite.min()), float(finite.max())
+    if bin_width is not None and np.isfinite(bin_width) and bin_width > 0:
+        n_bins = int(round((upper - lower) / float(bin_width))) + 1
+        if n_bins < MOBILITY_CHANNELS:
+            half = 0.5 * float(bin_width)
+            return lower - half, upper + half, n_bins
+    if upper <= lower:
+        return None
+    return lower, upper, MOBILITY_CHANNELS
+
+
 def build_mobility_grid(
     lower: float,
     upper: float,
@@ -251,14 +286,24 @@ def build_mobility_grid(
     return generator.generate(lower, upper, int(n_channels))
 
 
-def report_channel_width(grid: MobilityGrid, unit: Optional[str] = None) -> None:
+def report_channel_width(
+    grid: MobilityGrid,
+    unit: Optional[str] = None,
+    kind_accession: Optional[str] = None,
+) -> None:
     """Say once whether the realized channel width matches the instrument.
 
     The channel count is an anchor and is never moved to land inside the
     band; what the band decides is whether the grid is worth its size
     (too fine) or is losing separations (too coarse), and that is a thing
     to say out loud rather than leave in a number nobody reads.
+
+    The band is TIMS resolving power in 1/K0, so a grid over another
+    quantity -- drift time in ms, ``kind_accession`` ``MS:1002476`` -- is
+    not measured against it. ``None`` keeps the band, as before.
     """
+    if kind_accession is not None and kind_accession != INVERSE_REDUCED_MOBILITY:
+        return
     width = grid.channel_width
     where = f" {unit}" if unit else ""
     if width > MAX_CHANNEL_WIDTH:

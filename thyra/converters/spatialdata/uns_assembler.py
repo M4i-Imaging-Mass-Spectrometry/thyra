@@ -149,7 +149,11 @@ def serialize_for_zarr(obj: Any) -> Any:
         return obj
 
 
-def record_heatmap_current(adata: Any, tdf_spectrum: Optional[str] = None) -> None:
+def record_heatmap_current(
+    adata: Any,
+    tdf_spectrum: Optional[str] = None,
+    lossless_option: Optional[str] = None,
+) -> None:
     """Say how much of the stored mean spectrum the heatmap holds.
 
     The heatmap's marginal over mobility is the stored mean spectrum
@@ -173,6 +177,11 @@ def record_heatmap_current(adata: Any, tdf_spectrum: Optional[str] = None) -> No
     source with two spectra on one position read low here, and the
     warning blamed the centroid even under ``scan_sum``. The warning now
     names the centroid only when ``tdf_spectrum`` says it is in use.
+
+    ``lossless_option`` is the same statement for another reader: the
+    option that would make the stored spectrum the heatmap's marginal,
+    given when the reader is not delivering it (a Waters run read as the
+    vendor centroid names ``--waters-spectrum profile``).
     """
     block = adata.uns.get("mobility_heatmap")
     spectrum = adata.uns.get("average_spectrum")
@@ -196,14 +205,16 @@ def record_heatmap_current(adata: Any, tdf_spectrum: Optional[str] = None) -> No
     if abs(ratio - 1.0) <= _HEATMAP_TOLERANCE:
         return
     if tdf_spectrum == "vendor_centroid":
+        lossless_option = "--tdf-spectrum scan_sum"
+    if lossless_option is not None:
         logger.warning(
             "The mass-mobility heatmap holds %.4fx the stored mean "
             "spectrum's ion current. Its marginal over mobility is that "
-            "spectrum only under --tdf-spectrum scan_sum; the vendor "
-            "centroid keeps only the current inside the peaks it picks, "
-            "while the heatmap reads raw points. "
-            'uns["mobility_heatmap"]["current_ratio"] records it.',
+            "spectrum only under %s; the vendor centroid keeps only the "
+            "current inside the peaks it picks, while the heatmap reads "
+            'raw points. uns["mobility_heatmap"]["current_ratio"] records it.',
             ratio,
+            lossless_option,
         )
         return
     logger.warning(
@@ -410,7 +421,11 @@ class UnsAssembler:
         """Apply :meth:`build` to an AnnData about to be written."""
         uns = self.build(ctx)
         adata.uns.update(uns)
-        record_heatmap_current(adata, getattr(self.reader, "tdf_spectrum", None))
+        record_heatmap_current(
+            adata,
+            getattr(self.reader, "tdf_spectrum", None),
+            getattr(self.reader, "lossless_spectrum_option", None),
+        )
         logger.debug("Added MSI metadata to AnnData .uns: %s", sorted(uns))
 
     def fragmentation(self) -> Any:

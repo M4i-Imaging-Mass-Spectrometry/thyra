@@ -114,9 +114,9 @@ walks through both, and the output format describes the
 and [MS/MS](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/output-format/#demultiplexed-msms-table)
 tables in full.
 
-Not covered yet: Waters ion mobility (drift time) functions are skipped,
-processed imzML keeps no mobility values, and collision cross sections (CCS)
-are not computed.
+Waters Synapt runs with ion mobility on keep their drift times. Not covered
+yet: older Synapt G1 mobility runs are refused, processed imzML keeps no
+mobility values, and collision cross sections (CCS) are not computed.
 
 ## From Python
 

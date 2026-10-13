@@ -499,6 +499,17 @@ class TestHeatmapCurrent:
         assert len(records) == 1
         assert "vendor centroid" in records[0].getMessage()
 
+    def test_another_reader_names_its_own_option(self, thyra_logs):
+        # A Waters run read as the vendor centroid: the heatmap is built
+        # from raw drift bins, so the fix is the profile trace.
+        adata = _with_heatmap(5.0)
+        with thyra_logs("thyra.converters.spatialdata", logging.WARNING) as records:
+            record_heatmap_current(adata, None, "--waters-spectrum profile")
+        assert len(records) == 1
+        message = records[0].getMessage()
+        assert "--waters-spectrum profile" in message
+        assert "--tdf-spectrum" not in message
+
     @pytest.mark.parametrize("mode", ["scan_sum", None])
     def test_a_gap_without_the_centroid_does_not_blame_it(self, thyra_logs, mode):
         adata = _with_heatmap(3.0)

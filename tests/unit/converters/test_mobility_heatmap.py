@@ -492,6 +492,67 @@ class TestBuildFromReader:
         assert occupied[0] == 0 and occupied[-1] == 255  # 1/K0 1.1 and 1.5
 
 
+#: Three Waters-style drift bins, 0.2 ms apart from 0 ms.
+DRIFT_BINS_MS = np.array([0.0, 0.2, 0.4])
+
+
+class _DriftBinReader(MobilityStubReader):
+    """The stub's cloud on a drift-time axis the source declares as bins."""
+
+    def get_mobility_axis(self) -> Optional[MobilityAxis]:
+        return MobilityAxis(
+            kind_accession="MS:1002476",
+            kind_name="ion mobility drift time",
+            unit_accession="UO:0000028",
+            unit_name="millisecond",
+            values=DRIFT_BINS_MS.copy(),
+            source="stub",
+            bin_width=0.2,
+        )
+
+    def iter_mobility_spectra(self) -> Generator:
+        # Scan s of the 1/K0 stub is drift bin s here.
+        to_bin = {float(k0): DRIFT_BINS_MS[s] for s, k0 in enumerate(SCAN_K0)}
+        for coords, mzs, k0, it in super().iter_mobility_spectra():
+            yield coords, mzs, np.array([to_bin[float(v)] for v in k0]), it
+
+
+class TestNativeChannels:
+    """D49: a short list of declared bins is its own channel set."""
+
+    def test_each_bin_is_one_channel(self):
+        block = build_mobility_heatmap(_DriftBinReader(), MASS_AXIS)
+
+        assert block["counts"].shape == (4, 3)
+        np.testing.assert_allclose(block["mobility_edges"], [-0.1, 0.1, 0.3, 0.5])
+        # m/z 100 splits over bins 0 and 2, as it split over scans 0 and 2.
+        np.testing.assert_array_equal(np.flatnonzero(block["counts"][0]), [0, 2])
+
+    def test_the_marginal_is_unchanged(self):
+        block = build_mobility_heatmap(_DriftBinReader(), MASS_AXIS)
+        reference = build_mobility_heatmap(MobilityStubReader(), MASS_AXIS)
+
+        np.testing.assert_allclose(
+            block["counts"].sum(axis=1), reference["counts"].sum(axis=1)
+        )
+
+    def test_the_default_grid_has_the_heatmap_edges(self):
+        from thyra.converters.spatialdata.mobility_table import mobility_grid_plan
+        from thyra.resampling.mobility_grid import build_mobility_grid
+
+        block = build_mobility_heatmap(_DriftBinReader(), MASS_AXIS)
+        grid = build_mobility_grid(*mobility_grid_plan(_DriftBinReader()))
+
+        np.testing.assert_allclose(grid.edges, block["mobility_edges"])
+        np.testing.assert_allclose(grid.centres, DRIFT_BINS_MS, atol=1e-12)
+
+    def test_a_continuum_keeps_the_anchor(self):
+        # The 1/K0 stub has three equal steps too, but declares no bins.
+        from thyra.converters.spatialdata.mobility_table import mobility_grid_plan
+
+        assert mobility_grid_plan(MobilityStubReader())[2] == 256
+
+
 # ----------------------------------------------------------------------
 # End to end: the block on the summed table, on a real store.
 # ----------------------------------------------------------------------

@@ -77,8 +77,8 @@ thyra input.imzML output.zarr && python analyse.py output.zarr
 | `--resample / --no-resample` | enabled | Mass axis resampling |
 | `--include-optical / --no-optical` | enabled | Include optical images in output |
 | `--mobility-table / --no-mobility-table` | enabled | Also write the mobility-resolved sibling table when the source shares one set of (m/z, ion mobility) features across pixels (see [Output Format](output-format.md#ion-mobility)) |
-| `--mobility-heatmap / --no-mobility-heatmap` | enabled | When the source has an ion mobility dimension, store the mean mass-mobility frame on the summed table as `uns["mobility_heatmap"]`; on a Bruker TDF it is fed from the summed table's own passes, on other sources it is one extra pass (see [Output Format](output-format.md#ion-mobility)) |
-| `--mobility-grid / --no-mobility-grid` | **disabled** | When the source carries ion mobility per pixel rather than as a shared feature list (Bruker TDF), bin the point cloud onto a common mobility grid and write the same mobility-resolved sibling table; fed from the summed table's own two passes (no extra read of the source), a much larger table built out of core so any acquisition fits; its marginal reproduces the summed table exactly under the default `--tdf-spectrum scan_sum` (see [Output Format](output-format.md#the-same-table-from-a-common-mobility-grid)) |
+| `--mobility-heatmap / --no-mobility-heatmap` | enabled | When the source has an ion mobility dimension, store the mean mass-mobility frame on the summed table as `uns["mobility_heatmap"]`; on a Bruker TDF it is fed from the summed table's own passes, on other sources (imzML, Waters drift time) it is one extra pass (see [Output Format](output-format.md#ion-mobility)) |
+| `--mobility-grid / --no-mobility-grid` | **disabled** | When the source carries ion mobility per pixel rather than as a shared feature list (Bruker TDF, Waters drift time), bin the point cloud onto a common mobility grid and write the same mobility-resolved sibling table; on a Bruker TDF fed from the summed table's own two passes (no extra read of the source), on Waters two extra passes; a much larger table built out of core so any acquisition fits; its marginal reproduces the summed table exactly under the default `--tdf-spectrum scan_sum`, and on Waters under `--waters-spectrum profile` (see [Output Format](output-format.md#the-same-table-from-a-common-mobility-grid)) |
 | `--msms-table / --no-msms-table` | enabled | When the source isolates several precursors per pixel in disjoint mobility slices (Bruker PASEF), also write them split apart as a demultiplexed sibling table; fed from the summed table's own two passes (no extra read of the source); the split adds back up to the summed table exactly under the default `--tdf-spectrum scan_sum` (see [Output Format](output-format.md#demultiplexed-msms-table)) |
 
 !!! warning "`--format` is deprecated"
@@ -154,8 +154,8 @@ and passing one without it is logged at `WARNING`.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--mobility-bins INTEGER` | `256` | Mobility channels the grid divides the range into. At least 1 |
-| `--mobility-min FLOAT` | axis minimum | Lower edge of the grid, in the axis unit (1/K0 for TIMS). May be zero or negative -- it is a position on an axis, not a quantity -- but must be below `--mobility-max` |
+| `--mobility-bins INTEGER` | the heatmap's channels | Mobility channels the grid divides the range into. At least 1. Unset, the grid takes the heatmap's own channels: 256, or one per drift bin on a Waters run (200 bins measured) |
+| `--mobility-min FLOAT` | axis minimum | Lower edge of the grid, in the axis unit (1/K0 for TIMS, ms for Waters drift time). May be zero or negative -- it is a position on an axis, not a quantity -- but must be below `--mobility-max` |
 | `--mobility-max FLOAT` | axis maximum | Upper edge of the grid |
 
 ### Examples
@@ -186,7 +186,7 @@ thyra tims_data.d output.zarr --mobility-grid --mobility-bins 512     --mobility
 
 !!! note "A mobility-resolved table wants a coarser mass axis than the default"
     The table's features are `(m/z bin, mobility channel)` pairs, so the mass
-    axis' width is multiplied by 256. A default resampled timsTOF axis is
+    axis' width is multiplied by the channel count (256 on a timsTOF). A default resampled timsTOF axis is
     around 140,000 bins; 200 frames of one measured acquisition filled 3.9
     million of the resulting pairs, and a whole 26,000-pixel acquisition
     occupies 21 million. The table is refused when the `var` frame those
@@ -196,9 +196,10 @@ thyra tims_data.d output.zarr --mobility-grid --mobility-bins 512     --mobility
     resolved on a smaller machine.
 
 !!! warning "The defaults are an alignment, and the grid changes the TIC"
-    256 channels over the mobility axis' own value range is exactly what
-    `uns["mobility_heatmap"]` bins over, so a box drawn on the heatmap
-    selects grid channels by integer index. `--mobility-bins`,
+    The default channels are exactly what `uns["mobility_heatmap"]` bins
+    over -- 256 over the mobility axis' own value range, or one per Waters
+    drift bin -- so a box drawn on the heatmap selects grid channels by
+    integer index. `--mobility-bins` (even `--mobility-bins 256`),
     `--mobility-min` and `--mobility-max` each give that up.
 
     The grid is built from raw scans, and its marginal over channels

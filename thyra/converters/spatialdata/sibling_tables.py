@@ -204,7 +204,7 @@ class SiblingTables:
         write_mobility_table: bool = True,
         mobility_heatmap: bool = True,
         mobility_grid: bool = False,
-        mobility_bins: int = MOBILITY_CHANNELS,
+        mobility_bins: Optional[int] = None,
         mobility_min: Optional[float] = None,
         mobility_max: Optional[float] = None,
         write_msms_table: bool = True,
@@ -241,7 +241,8 @@ class SiblingTables:
                 onto a common grid (opt in; a source that already shares a
                 feature axis needs no grid and ignores this).
             mobility_bins: Channels that grid divides the mobility range
-                into.
+                into, or ``None`` for the heatmap's own channels: 256, or
+                one per bin on a source with fewer equal-width bins (D49).
             mobility_min: Lower edge of the grid, or ``None`` for the
                 smallest value the source's axis holds.
             mobility_max: Upper edge, or ``None`` for the largest.
@@ -262,7 +263,7 @@ class SiblingTables:
         # _plan_mobility_table, so the MSI table's metadata block and the
         # sibling describe the same grid.
         self._mobility_grid_enabled = bool(mobility_grid)
-        self._mobility_bins = int(mobility_bins)
+        self._mobility_bins = None if mobility_bins is None else int(mobility_bins)
         self._mobility_bounds = (mobility_min, mobility_max)
         self._mobility_grid: Optional[MobilityGrid] = None
         self._mobility_grid_resolved = False
@@ -467,6 +468,7 @@ class SiblingTables:
             MAX_GRID_VAR_ENTRIES,
             grid_refusal,
             grid_var_bound,
+            mobility_grid_plan,
             mobility_grid_range,
         )
 
@@ -490,13 +492,22 @@ class SiblingTables:
                 "--mobility-min and --mobility-max to bin over a stated range."
             )
             return None
-        span = measured or (0.0, 0.0)
-        try:
-            grid = build_mobility_grid(
-                span[0] if lower is None else float(lower),
-                span[1] if upper is None else float(upper),
-                self._mobility_bins,
+        plan = mobility_grid_plan(self.reader)
+        if lower is None and upper is None and self._mobility_bins is None and plan:
+            # Nothing overridden: the heatmap's own channels, which on a
+            # short list of drift bins are the bins themselves (D49).
+            plan_lower, plan_upper, n_channels = plan
+        else:
+            span = measured or (0.0, 0.0)
+            plan_lower = span[0] if lower is None else float(lower)
+            plan_upper = span[1] if upper is None else float(upper)
+            n_channels = (
+                MOBILITY_CHANNELS
+                if self._mobility_bins is None
+                else self._mobility_bins
             )
+        try:
+            grid = build_mobility_grid(plan_lower, plan_upper, n_channels)
         except ValueError as e:
             logger.warning("No mobility-resolved table: %s", str(e))
             return None
@@ -516,7 +527,9 @@ class SiblingTables:
             grid.upper,
             "" if unit is None else f" {unit}",
         )
-        report_channel_width(grid)
+        report_channel_width(
+            grid, kind_accession=None if axis is None else axis.kind_accession
+        )
         bound = grid_var_bound(ctx.mass_axis, grid)
         if bound > MAX_GRID_VAR_ENTRIES:
             # A bound above the ceiling settles nothing -- real occupancy
@@ -999,9 +1012,10 @@ class SiblingTables:
         log(
             "The mobility grid table holds %.4fx the summed table's ion "
             "current (per pixel %.4f to %.4f). They agree exactly only "
-            "under --tdf-spectrum scan_sum; the vendor centroid is a "
-            "peak-picked spectrum over the same scans and keeps less of "
-            "the current.",
+            "when the summed table holds the same raw points "
+            "(--tdf-spectrum scan_sum on Bruker, --waters-spectrum profile "
+            "on Waters); a vendor centroid is a peak-picked spectrum over "
+            "the same scans and keeps less of the current.",
             block["current_ratio"],
             block["current_ratio_pixel_min"],
             block["current_ratio_pixel_max"],
