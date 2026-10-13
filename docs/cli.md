@@ -422,9 +422,9 @@ thyra tims_data.d output.zarr --tdf-spectrum vendor_centroid
     Every scan of a TIMS frame is read. `scan_sum` (default) sums every scan
     per digitizer index and keeps all of the ion current, which is also
     Bruker's own per-frame total; `vendor_centroid` is Bruker's frame-level
-    peak picker over the full ramp (parity with TSF line spectra and SCiLS
-    Lab), at 79 to 99 percent of the current and a third to two thirds of
-    the points. See [Supported Formats](supported-formats.md#bruker-timstof)
+    peak picker over the full ramp (the same peaks as TSF line spectra and
+    SCiLS Lab's import), at 79 to 99 percent of the current and a third to
+    two thirds of the points. See [Supported Formats](supported-formats.md#bruker-timstof)
     and [Design Decisions](design-decisions.md#d1-which-spectrum-a-reader-takes).
 
 !!! warning "Intensity threshold"

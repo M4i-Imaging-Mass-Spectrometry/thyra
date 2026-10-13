@@ -51,10 +51,22 @@ def _resolve_store_path(path: Path) -> Path:
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
-    """Parse a JSON file into a mapping, with a CLI-friendly error."""
+    """Parse a JSON file into a mapping, with a CLI-friendly error.
+
+    The bytes go to ``json.loads``, which tells UTF-8, UTF-16 and UTF-32
+    apart and skips a byte-order mark. Windows PowerShell 5.1 writes
+    ``thyra metadata src > meta.json`` as UTF-16, and with its Out-File
+    default set to utf8 it writes UTF-8 with a mark. Text in any other
+    encoding, an ANSI code page for instance, is refused in one line.
+    """
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        document = json.loads(path.read_bytes())
+    except UnicodeDecodeError as exc:
+        raise click.ClickException(
+            f"Could not read {path}: it is not UTF-8, UTF-16 or UTF-32 text "
+            f"({exc.reason} at byte {exc.start}). Save it as UTF-8."
+        ) from exc
+    except (OSError, ValueError) as exc:
         raise click.ClickException(f"Could not read {path}: {exc}") from exc
     if not isinstance(document, dict):
         raise click.ClickException(f"{path} does not contain a JSON object")
