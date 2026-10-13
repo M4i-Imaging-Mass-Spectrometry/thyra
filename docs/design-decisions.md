@@ -3517,3 +3517,78 @@ exist. The new check refuses a conversion; it writes nothing.
   under `tic_preserving` bins coarser than a source's own can merge narrow
   peaks (#442).
 - There is no plan for "the axis of an existing store" yet.
+
+## D45. The metadata block names the sample and the spectrum representation
+
+**Status:** Implemented (2026-10-13).
+
+**Decision.** Schema 0.12.0 adds three optional facts to `msi_metadata`:
+
+- `sample.sample_id` (MS:1000001 sample number) and `sample.sample_name`
+  (MS:1000002 sample name). Only the person converting fills them, through
+  `convert_msi(sample_id=..., sample_name=...)` or `--sample-id`. Thyra never
+  reads them from the source.
+- `ms_analysis.spectrum_representation`, `"profile"` or `"centroid"`, with its
+  term (MS:1000128 / MS:1000127, under MS:1000525 spectrum representation).
+  It is the representation the reader delivered, the same fact
+  `uns["essential_metadata"]["spectrum_type"]` records. That key stays.
+
+The Bruker timsTOF extractor now states the representation too. It used to
+state none. TSF is `centroid` (the vendor line spectrum, D1). TDF read with
+`vendor_centroid` is `centroid`. TDF read with `scan_sum`, the default, is
+`profile`: the summed digitizer indices are unpicked and equal Bruker's own
+quasi-profile export (D1), the same reasoning that labels PHI `profile`.
+
+**Why.** Code that combines stores of one study had two problems. Whether two
+stores can be combined depended on the spectrum representation, which sat
+outside the versioned block. For example, profile and centroid stores should
+not share a `tic_preserving` axis. And the stores could be told apart only by
+a file path, which is not a sample. The `Provenance` docstring said the root
+attributes recorded the representation; they never did. That text is
+corrected.
+
+**Where it lives and why.** The representation sits in `ms_analysis`, beside
+polarity, because it describes the acquired spectra. Resampling does not
+change it: Thyra never picks peaks (D1), and the resampling step is recorded
+in `processing`. The sample fields sit in `sample`, the section METASPACE and
+SDRF both use for sample identity.
+
+**What is left unset.** An imzML file that declares neither MS:1000127 nor
+MS:1000128 gets a guess: processed mode is taken as centroid, with a warning.
+The guess still picks the resampling method, and it is still written to
+`uns["essential_metadata"]["spectrum_type"]`. The block leaves the field
+unset, by the builder's rule that unset beats guessed. The sample fields are
+never filled from a vendor `SampleName`, an imzML sample list, or
+`dataset_id`. Any of these can hold a placeholder or a person's identifier,
+and the block is copied into every metadata document Thyra writes.
+
+**Objection that did not win.** "Take the sample from the file." Bruker
+`GlobalMetadata.SampleName` and imzML `sampleList` exist, but both hold free
+text typed at the instrument or written by the exporting software, which can
+be a placeholder or a person's identifier. Promoting that text into a field
+named "sample id" would present it as a curated identifier.
+
+**What changes in a store.** Every new store has schema version 0.12.0 and
+`ms_analysis.spectrum_representation` wherever the reader states one. Bruker
+timsTOF stores also gain `uns["essential_metadata"]["spectrum_type"]`, which
+was `None`. Their resampling defaults do not change when the instrument name
+is read: the timsTOF detector matches on it before any spectrum type is
+consulted. A `.d` whose name cannot be read, or lacks "timsTOF", used to fall
+to the default detector (constant axis). Read as centroid (TSF, or TDF with
+`vendor_centroid`), it now reaches the centroid detector, whose reflector-TOF
+axis is the one the timsTOF detector would have chosen. When the Bruker
+library cannot centroid, the reader falls back to `scan_sum` with a warning;
+the processing step and the representation now say `scan_sum` and `profile`,
+where the step used to repeat the request. A store
+converted with a sample id or name carries them in `sample`. Stores written
+earlier are unchanged and still valid.
+
+**Known limits.**
+
+- One conversion names one sample, even when the slide holds several
+  regions. Each region has its own name in `uns["regions"]`.
+- The sample id and name are stored as typed. Thyra cannot tell a patient
+  identifier from a code, so the documentation says not to use one.
+- `thyra metadata` and the preview read a timsTOF `.d` with the default
+  `scan_sum`, and an imzML without `--spectrum-type`. Their document can
+  therefore differ from what a conversion with other options stores.

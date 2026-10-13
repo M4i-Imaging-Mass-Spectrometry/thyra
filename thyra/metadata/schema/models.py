@@ -80,7 +80,16 @@ from pydantic import (
 #        of the store's m/z axis and its bin count, written for every
 #        conversion whether or not it resampled (design decision D42,
 #        issue #444).  A 0.10.0 document is a valid 0.11.0 one.
-MSI_METADATA_SCHEMA_VERSION = "0.11.0"
+# 0.12.0: ``sample`` gained ``sample_id`` and ``sample_name`` and
+#        ``ms_analysis`` gained ``spectrum_representation`` and its term
+#        (additive).  The sample fields are filled only from what the user
+#        gives the conversion, never from the source; the representation is
+#        what the reader delivered, left unset when Thyra could only guess
+#        it.  The ``Provenance`` docstring claimed that root attributes
+#        record the spectrum type; they never did, and it is corrected.  A
+#        0.11.0 document is a valid 0.12.0 one (design decision D45,
+#        issue #447).
+MSI_METADATA_SCHEMA_VERSION = "0.12.0"
 
 # Where the block lives inside a converted store:
 # ``table.uns["msi_metadata"]``.  This location is a stable contract
@@ -89,7 +98,7 @@ MSI_METADATA_SCHEMA_VERSION = "0.11.0"
 MSI_METADATA_UNS_KEY = "msi_metadata"
 
 # The committed JSON Schema artifact for this schema version.
-SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_11.json"
+SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_12.json"
 
 # Where every published version of the schema is served (issue #385).
 # ``docs/schema/<version>/`` is copied verbatim onto the documentation
@@ -197,7 +206,7 @@ CANDIDATE_CV_CONCEPTS = (
     ("missing / empty pixel semantics", "obs row filtering"),
     (
         "continuous-vs-processed source provenance after conversion",
-        "uns['essential_metadata'].spectrum_type",
+        "uns['format_specific'].file_mode (imzML only)",
     ),
     (
         "mass axis resampling provenance (method, axis law, target bins)",
@@ -370,8 +379,36 @@ class ResolvingPower(_SchemaModel):
 
 
 class SampleInformation(_SchemaModel):
-    """What the sample is (METASPACE ``Sample_Information``)."""
+    """What the sample is (METASPACE ``Sample_Information``).
 
+    Every field is user-supplied. ``sample_id`` and ``sample_name`` are set
+    only from what the user gives the conversion, never read from the
+    source: a vendor sample name can be a patient identifier, so Thyra
+    does not carry one into a store on its own.
+    """
+
+    sample_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "The user's identifier for the sample, to tell it apart from "
+            "the others in a study. Supplied by the user, never read from "
+            "the source. One conversion stamps the same value on every "
+            "region it converts."
+        ),
+        json_schema_extra=_cv("MS:1000001", "sample number"),
+    )
+    sample_name: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "The user's name for the sample, to tell it apart from the "
+            "others in a study. Supplied by the user, never read from the "
+            "source. One conversion stamps the same value on every region "
+            "it converts."
+        ),
+        json_schema_extra=_cv("MS:1000002", "sample name"),
+    )
     organism: Optional[str] = Field(
         default=None, description="Species, e.g. 'Mus musculus'."
     )
@@ -671,6 +708,20 @@ class MSAnalysis(_SchemaModel):
     so it is the one required field of the section.
     """
 
+    spectrum_representation: Optional[Literal["profile", "centroid"]] = Field(
+        default=None,
+        description=(
+            "Whether the stored spectra are profile or centroid, as the "
+            "reader delivered them. Resampling does not change it: Thyra "
+            "never peak-picks. Unset when the source does not state it and "
+            "Thyra could only guess."
+        ),
+        json_schema_extra=_cv("MS:1000525", "spectrum representation"),
+    )
+    spectrum_representation_term: Optional[OntologyTerm] = Field(
+        default=None,
+        description="PSI-MS spectrum representation term (MS:1000128 / MS:1000127).",
+    )
     polarity: Optional[Literal["positive", "negative"]] = Field(
         default=None,
         description="Ion polarity mode.",
@@ -756,6 +807,26 @@ class MSAnalysis(_SchemaModel):
             "which precursors; unset when the source does not say."
         ),
     )
+
+    @model_validator(mode="after")
+    def _representation_and_term_agree(self) -> "MSAnalysis":
+        """A representation string and term that contradict are worse than either."""
+        if (
+            self.spectrum_representation is not None
+            and self.spectrum_representation_term is not None
+        ):
+            expected = {
+                "profile": "MS:1000128",
+                "centroid": "MS:1000127",
+            }[self.spectrum_representation]
+            if self.spectrum_representation_term.accession != expected:
+                raise ValueError(
+                    f"spectrum_representation '{self.spectrum_representation}' "
+                    "contradicts spectrum_representation_term "
+                    f"{self.spectrum_representation_term.accession} "
+                    f"(expected {expected})"
+                )
+        return self
 
     @model_validator(mode="after")
     def _polarity_and_term_agree(self) -> "MSAnalysis":
@@ -1088,12 +1159,12 @@ class MassAxisFingerprint(_SchemaModel):
 class Provenance(_SchemaModel):
     """Who wrote the block and from what.
 
-    Deliberately small: the store's ``uns["essential_metadata"]`` and
-    root attributes already record dimensions, mass range, spectrum
-    type and conversion timestamp.  This section records only what is
-    needed to interpret the *metadata block itself*, and contains no
-    timestamps so that two conversions of the same input produce an
-    identical block (the uns parity tests rely on this).  The mass axis
+    Deliberately small: the store's ``uns["essential_metadata"]`` already
+    records the source's dimensions, mass range and spectrum type, and the
+    spectrum representation is also a field of ``ms_analysis``.  This
+    section records only what is needed to interpret the *metadata block
+    itself*, and contains no timestamps so that two conversions of the
+    same input produce an identical block (the uns parity tests rely on this).  The mass axis
     fingerprint keeps that true: it is a hash of the axis, so the same
     axis gives the same block.
     """
@@ -1137,11 +1208,12 @@ class MSIMetadata(_SchemaModel):
     """The versioned MSI metadata document.
 
     ``sample`` and ``preparation`` cannot be auto-populated from raw
-    files and default to empty; ``ms_analysis`` and ``provenance`` are
-    written by the converter for every store; ``acquisition``,
-    ``calibration`` and ``alignment`` are each written when the reader
-    reports at least one of their facts and are absent -- not empty --
-    otherwise.
+    files and default to empty; Thyra fills ``sample.sample_id`` and
+    ``sample.sample_name`` only when the conversion was given them;
+    ``ms_analysis`` and ``provenance`` are written by the converter for
+    every store; ``acquisition``, ``calibration`` and ``alignment`` are
+    each written when the reader reports at least one of their facts and
+    are absent -- not empty -- otherwise.
 
     The emitted JSON Schema carries ``$id`` and ``$schema`` so that the
     committed artifact names its own published address; they are added
@@ -1165,7 +1237,10 @@ class MSIMetadata(_SchemaModel):
     )
     sample: SampleInformation = Field(
         default_factory=SampleInformation,
-        description="What the sample is; user-supplied.",
+        description=(
+            "What the sample is; user-supplied. Thyra fills its id and "
+            "name only when the conversion was given them."
+        ),
     )
     preparation: SamplePreparation = Field(
         default_factory=SamplePreparation,

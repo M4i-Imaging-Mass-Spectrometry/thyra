@@ -53,6 +53,9 @@ class MockMSIConfig:
     sparsity: float = 0.0  # Fraction of empty pixels (0-1)
     seed: Optional[int] = 42
     pixel_size_um: float = 10.0
+    # The CV name the mock reports as its spectrum type; "profile spectrum"
+    # makes a profile mock.
+    spectrum_type: str = "centroid spectrum"
 
 
 PRESETS = {
@@ -94,7 +97,7 @@ class _MockMetadataExtractor(MetadataExtractor):
             # fixture used to say "processed" too -- so every test agreed
             # with the bug and none of them could see it.  Keep these two
             # different.
-            spectrum_type="centroid spectrum",
+            spectrum_type=cfg.spectrum_type,
         )
 
     def _extract_comprehensive_impl(self) -> ComprehensiveMetadata:

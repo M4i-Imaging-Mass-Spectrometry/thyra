@@ -14,7 +14,10 @@ yaml = pytest.importorskip("yaml")
 from pathlib import Path  # noqa: E402
 
 from thyra.metadata.schema import models  # noqa: E402
-from thyra.metadata.schema.vocab import POLARITY_ACCESSIONS  # noqa: E402
+from thyra.metadata.schema.vocab import (  # noqa: E402
+    POLARITY_ACCESSIONS,
+    SPECTRUM_REPRESENTATION_ACCESSIONS,
+)
 
 _LINKML_PATH = Path(models.__file__).resolve().parent / "msi_metadata.linkml.yaml"
 
@@ -98,6 +101,13 @@ def test_polarity_enum_meanings_match(linkml_schema):
     assert {
         name: entry.get("meaning") for name, entry in values.items()
     } == POLARITY_ACCESSIONS
+
+
+def test_spectrum_representation_enum_meanings_match(linkml_schema):
+    values = linkml_schema["enums"]["SpectrumRepresentationEnum"]["permissible_values"]
+    assert {
+        name: entry.get("meaning") for name, entry in values.items()
+    } == SPECTRUM_REPRESENTATION_ACCESSIONS
 
 
 def test_tree_root_is_the_document(linkml_schema):

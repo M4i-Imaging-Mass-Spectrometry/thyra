@@ -493,6 +493,7 @@ thyra synapt_run.raw output.zarr --waters-spectrum profile
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--dataset-id TEXT` | `msi_dataset` | Dataset identifier used in element keys. Letters, digits, underscores, dots and hyphens only, and not `.`, `..` or a leading `__`: it names every element in the store, so SpatialData's naming rule applies to it. Checked before any pass over the source |
+| `--sample-id TEXT` | none | Names the sample in the store's metadata (`msi_metadata.sample.sample_id`). Never read from the file, and not part of any element name. Stored as typed, so never a patient's name. Checked before any pass over the source |
 | `--handle-3d` | off | Process as 3D volume instead of 2D slices |
 | `--z-spacing FLOAT` | in-plane pixel size (x) | Distance between consecutive slices, in um. Only used with `--handle-3d` |
 

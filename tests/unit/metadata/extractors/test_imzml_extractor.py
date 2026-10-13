@@ -355,6 +355,21 @@ class TestSpectrumTypeDetection:
 
         assert any("Assuming centroid" in message for message in records)
 
+    def test_the_storage_mode_guess_is_flagged_as_a_guess(self):
+        extractor = self._extractor({"processed": True})
+        assert extractor._detect_centroid_spectrum() == "centroid spectrum"
+        assert extractor._spectrum_type_guessed is True
+
+    def test_a_declared_type_is_not_flagged(self):
+        extractor = self._extractor({"profile spectrum": True, "processed": True})
+        assert extractor._detect_centroid_spectrum() == "profile spectrum"
+        assert extractor._spectrum_type_guessed is False
+
+    def test_an_unknown_type_is_not_flagged(self):
+        extractor = self._extractor({"continuous": True})
+        assert extractor._detect_centroid_spectrum() is None
+        assert extractor._spectrum_type_guessed is False
+
     def test_undeclared_continuous_is_unknown(self):
         """The guess is only defensible for processed mode; otherwise say nothing."""
         extractor = self._extractor({"continuous": True})
@@ -376,6 +391,7 @@ class TestSpectrumTypeDetection:
             extractor = ImzMLMetadataExtractor(parser, path)
             assert extractor._detect_centroid_spectrum() == expected
             assert extractor.get_essential().spectrum_type == expected
+            assert extractor.get_essential().spectrum_type_guessed is False
 
     def test_profile_file_routes_to_nearest_neighbor_not_tic_preserving(self, tmp_path):
         """A correctly-detected profile file must not reach the interpolating path.
@@ -457,6 +473,11 @@ class TestSpectrumTypeOverride:
             {"centroid spectrum": True, "processed": True}, spectrum_type="profile"
         )
         assert extractor._detect_centroid_spectrum() == "profile spectrum"
+
+    def test_an_override_is_not_a_guess(self):
+        extractor = self._extractor({"processed": True}, spectrum_type="profile")
+        assert extractor._detect_centroid_spectrum() == "profile spectrum"
+        assert extractor._spectrum_type_guessed is False
 
     def test_override_replaces_the_storage_mode_guess(self):
         """With nothing declared, the override stands in for the guess."""

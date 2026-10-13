@@ -45,6 +45,7 @@ from ....core.msms import (
 )
 from ....core.registry import register_reader
 from ....errors import ConversionRefused
+from ....metadata.constants import SpectrumType
 from ....metadata.extractors.bruker_extractor import BrukerMetadataExtractor
 from ....utils.bruker_exceptions import DataError, FileFormatError, SDKError
 from ..base_bruker_reader import BrukerBaseMSIReader
@@ -979,6 +980,13 @@ class BrukerReader(BrukerBaseMSIReader):
             self.sdk = SDKFunctions(
                 self.dll_manager, self.file_type, tdf_spectrum=self.tdf_spectrum
             )
+            # A library without the centroid export falls back to scan_sum
+            # (with a warning). Adopt the mode it will actually deliver, so
+            # the store's processing step and spectrum representation
+            # describe the data rather than the request.
+            delivered = getattr(self.sdk, "tdf_spectrum", None)
+            if delivered in TDF_SPECTRUM_MODES:
+                self.tdf_spectrum = delivered
 
             # Open the data file
             self.handle = self.sdk.open_file(
@@ -1077,6 +1085,21 @@ class BrukerReader(BrukerBaseMSIReader):
             "to write that out as a metadata document."
         )
 
+    def _delivered_spectrum_type(self) -> str:
+        """The spectrum representation this reader yields, as a CV name.
+
+        TSF holds line spectra, so it is centroid. For TDF it depends on how
+        the TIMS scans are collapsed: ``vendor_centroid`` is Bruker's own
+        centroiding, while ``scan_sum`` sums the unpicked intensities on the
+        TOF grid and so stays profile (sparse, but not peak-picked), the same
+        call PHI makes.
+        """
+        if self.file_type == "tsf":
+            return SpectrumType.CENTROID
+        if self.tdf_spectrum == "vendor_centroid":
+            return SpectrumType.CENTROID
+        return SpectrumType.PROFILE
+
     def _create_metadata_extractor(self) -> MetadataExtractor:
         """Create Bruker metadata extractor."""
         if not hasattr(self, "conn") or self.conn is None:
@@ -1092,6 +1115,7 @@ class BrukerReader(BrukerBaseMSIReader):
             region=region_for_extractor,
             skip_total_peaks=self._metadata_only,
             mis_metadata=self._mis_metadata,
+            spectrum_type=self._delivered_spectrum_type(),
         )
 
     def _detect_regions(self) -> List[Tuple[int, int]]:

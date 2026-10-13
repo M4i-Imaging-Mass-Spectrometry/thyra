@@ -12,6 +12,7 @@ Thyra fills in whatever your files state:
 - the pixel size, and whether it came from the file or from `--pixel-size`
 - the instrument: polarity, ion source, analyser, model, maker and serial
   number
+- whether the spectra are profile or centroid
 - the acquisition settings, such as the start time, laser power, repetition
   rate, shots per pixel and method file
 - the calibration, for Bruker timsTOF, PHI and Waters data
@@ -25,12 +26,16 @@ Thyra cannot know about your sample: the organism, the organ or tissue, the
 condition, and the matrix and how it was applied. You add those when you
 prepare a submission (see below).
 
+To tell your samples apart, name each one when you convert, for example
+`--sample-id mouse3_liver`. Thyra stores that name with the result.
+
 !!! note "Before you share a result"
     Thyra leaves out people's names and e-mail addresses, and shortens
     folder paths recorded by the instrument to the file name. It keeps two
     things you may want to check: the location of the source file on your
     computer, and any free text typed into the instrument software, such as
-    sample or method names.
+    sample or method names. A sample id you give is stored as you typed it,
+    so never use a patient's name.
 
 ## See the description of a dataset
 

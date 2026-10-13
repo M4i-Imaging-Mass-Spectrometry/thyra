@@ -33,7 +33,7 @@ import os  # noqa: E402
 import warnings  # noqa: E402
 from math import isfinite  # noqa: E402
 from pathlib import Path  # noqa: E402
-from typing import Literal, Optional, Tuple  # noqa: E402
+from typing import Any, Dict, Literal, Optional, Tuple  # noqa: E402
 from uuid import uuid4  # noqa: E402
 
 import click  # noqa: E402
@@ -739,7 +739,7 @@ class GroupedCommand(click.Command):
             "--tdf-spectrum",
         ],
         "Waters-specific": ["--waters-spectrum"],
-        "Other": ["--dataset-id", "--handle-3d", "--z-spacing"],
+        "Other": ["--dataset-id", "--sample-id", "--handle-3d", "--z-spacing"],
         "General": ["--version", "--help"],
     }
 
@@ -1094,6 +1094,15 @@ class GroupedCommand(click.Command):
     help="Dataset identifier (default: msi_dataset)",
 )
 @click.option(
+    "--sample-id",
+    type=str,
+    default=None,
+    help=(
+        "Name the sample in the store's metadata (default: none). "
+        "Never read from the file."
+    ),
+)
+@click.option(
     "--handle-3d",
     is_flag=True,
     help="Process as 3D data instead of 2D slices (see --z-spacing)",
@@ -1114,6 +1123,7 @@ def main(
     output: Path,
     format: str,
     dataset_id: str,
+    sample_id: Optional[str],
     pixel_size: Optional[float],
     handle_3d: bool,
     z_spacing: Optional[float],
@@ -1262,6 +1272,10 @@ def main(
         waters_spectrum,
     )
 
+    msms_table_option: Dict[str, Any] = (
+        {} if msms_table is None else {"msms_table": msms_table}
+    )
+
     # Perform conversion. ``convert_msi`` catches its own interrupt, but
     # this catches one that lands anywhere else between here and the
     # quarantine below -- so however the run is stopped, the exit status
@@ -1281,6 +1295,7 @@ def main(
             include_optical=include_optical,
             streaming=_parse_streaming_option(streaming),
             region=region,
+            sample_id=sample_id,
             write_mobility_table=mobility_table,
             mobility_heatmap=mobility_heatmap,
             mobility_grid=mobility_grid,
@@ -1290,7 +1305,7 @@ def main(
             # Passed only when given: the converter's own default applies
             # otherwise, and an explicit request is what the lossless-spectrum
             # check in convert.py reacts to.
-            **({} if msms_table is None else {"msms_table": msms_table}),
+            **msms_table_option,
         )
     except KeyboardInterrupt:
         logger.error("Interrupted.")

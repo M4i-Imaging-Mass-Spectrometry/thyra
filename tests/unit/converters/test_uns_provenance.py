@@ -474,3 +474,107 @@ def test_read_lazy_sees_the_block(stores, shape):
 
     assert set(essential) == _EXPECTED_ESSENTIAL_KEYS
     assert essential["spectrum_type"] == _EXPECTED_SPECTRUM_TYPE
+
+
+# -- msi_metadata: representation and sample (issue #447) -------------------
+
+
+def _msi_metadata(table_path) -> Dict[str, Any]:
+    return _plain(_read_uns(table_path)["msi_metadata"])
+
+
+def _convert_with(tmp_path_factory, *, name: str, config=None, **converter_kwargs):
+    output_path = tmp_path_factory.mktemp(name) / "out.zarr"
+    converter = SpatialDataConverter(
+        reader=MockMSIReader(config or _config()),
+        output_path=output_path,
+        dataset_id=_DATASET_ID,
+        pixel_size_um=10.0,
+        **converter_kwargs,
+    )
+    assert converter.convert() is True
+    return output_path
+
+
+@pytest.mark.parametrize("shape", list(TABLE_SHAPES))
+def test_the_delivered_representation_is_in_msi_metadata(stores, shape):
+    """It is the same fact as essential_metadata.spectrum_type, now schema-bound."""
+    analysis = _msi_metadata(_table_path(stores, shape))["ms_analysis"]
+
+    assert analysis["spectrum_representation"] == "centroid"
+    assert analysis["spectrum_representation_term"]["accession"] == "MS:1000127"
+    stored = _plain(_read_uns(_table_path(stores, shape)))["essential_metadata"]
+    assert stored["spectrum_type"] == _EXPECTED_SPECTRUM_TYPE
+
+
+@pytest.mark.parametrize("shape", list(TABLE_SHAPES))
+def test_a_profile_source_is_stated_as_profile(tmp_path_factory, shape):
+    handle_3d, table = TABLE_SHAPES[shape]
+    config = _config()
+    config.spectrum_type = "profile spectrum"
+    store = _convert_with(
+        tmp_path_factory, name=f"profile_{shape}", config=config, handle_3d=handle_3d
+    )
+
+    analysis = _msi_metadata(store / "tables" / table)["ms_analysis"]
+    assert analysis["spectrum_representation"] == "profile"
+    assert analysis["spectrum_representation_term"]["accession"] == "MS:1000128"
+
+
+def test_no_sample_is_recorded_unless_given(stores):
+    block = _msi_metadata(_table_path(stores, "per_plane"))
+    assert "sample" not in block
+
+
+def test_a_given_sample_lands_in_msi_metadata_and_nowhere_else(tmp_path_factory):
+    store = _convert_with(
+        tmp_path_factory,
+        name="sample",
+        sample_id="S1",
+        sample_name="liver section 3",
+    )
+
+    block = _msi_metadata(store / "tables" / f"{_DATASET_ID}_z0")
+    assert block["sample"] == {"sample_id": "S1", "sample_name": "liver section 3"}
+    assert "sample_id" not in _root_attrs(store)["conversion_options"]
+    assert "sample_name" not in _root_attrs(store)["conversion_options"]
+
+
+def test_convert_msi_hands_the_sample_to_the_store(
+    create_minimal_imzml, tmp_path_factory
+):
+    from thyra.convert import convert_msi
+
+    imzml_path, _, _, _ = create_minimal_imzml
+    output = tmp_path_factory.mktemp("api_sample") / "out.zarr"
+
+    assert convert_msi(
+        str(imzml_path),
+        str(output),
+        dataset_id=_DATASET_ID,
+        pixel_size_um=10.0,
+        sample_id="S1",
+        sample_name="liver section 3",
+    )
+
+    block = _msi_metadata(output / "tables" / f"{_DATASET_ID}_z0")
+    assert block["sample"] == {"sample_id": "S1", "sample_name": "liver section 3"}
+    options = _root_attrs(output)["conversion_options"]
+    assert "sample_id" not in options and "sample_name" not in options
+
+
+@pytest.mark.parametrize("value", ["", "   ", 7, "two\nlines"])
+def test_a_converter_built_directly_refuses_an_unusable_sample(tmp_path, value):
+    # convert_msi checks this up front; a caller building the converter
+    # itself must be refused too, because the metadata model would reject
+    # the value at write time and drop the whole msi_metadata block.
+    from thyra.errors import ConversionRefused
+
+    with pytest.raises(ConversionRefused, match="sample_id"):
+        SpatialDataConverter(
+            reader=MockMSIReader(_config()),
+            output_path=tmp_path / "out.zarr",
+            dataset_id=_DATASET_ID,
+            pixel_size_um=10.0,
+            sample_id=value,
+        )

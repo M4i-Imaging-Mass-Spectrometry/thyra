@@ -34,7 +34,7 @@ import spatialdata as sd
 sdata = sd.read_zarr("output.zarr")
 block = sdata.tables["msi_dataset_z0"].uns["msi_metadata"]
 
-print(block["schema_version"])                       # "0.11.0"
+print(block["schema_version"])                       # "0.12.0"
 print(block["ms_analysis"]["pixel_size_um"])         # {"x": 20.0, "y": 20.0}
 print(block["ms_analysis"]["ionisation_source"])     # "MALDI"
 print(block["ms_analysis"]["ionisation_source_term"])
@@ -51,12 +51,16 @@ written by the converter for every store; `acquisition`, `calibration` and
 `alignment` are each written when the reader reports at least one of their
 facts and are absent otherwise; `sample` and `preparation` describe things no raw file
 records (what the tissue was, how it was prepared) and are supplied by you --
-see [Completing the metadata](#completing-the-metadata).
+see [Completing the metadata](#completing-the-metadata). The one exception is
+the sample's id and name, which a conversion writes when it is given them
+(`convert_msi(sample_id=..., sample_name=...)` or `--sample-id`).
 
 | Section | Field | Type | Ontology |
 |---------|-------|------|----------|
 | (root) | `schema_version` | `MAJOR.MINOR.PATCH` string; `thyra validate` requires it, the published JSON Schema does not | -- |
-| `sample` | `organism`, `organism_term` | text + term | NCBITaxon |
+| `sample` | `sample_id` | text, your identifier for the sample; never read from the source | PSI-MS (`MS:1000001`) |
+| | `sample_name` | text, your name for the sample; never read from the source | PSI-MS (`MS:1000002`) |
+| | `organism`, `organism_term` | text + term | NCBITaxon |
 | | `organism_part`, `organism_part_term` | text + term | UBERON |
 | | `condition` | text | -- |
 | | `sample_growth_conditions` | text | -- |
@@ -66,6 +70,7 @@ see [Completing the metadata](#completing-the-metadata).
 | | `matrix_application` | text | -- |
 | | `solvent` | text | -- |
 | `ms_analysis` | `polarity`, `polarity_term` | `"positive"`/`"negative"` + term | PSI-MS |
+| | `spectrum_representation`, `spectrum_representation_term` | `"profile"`/`"centroid"` + term, the representation the reader delivered | PSI-MS (`MS:1000525`; `MS:1000128` / `MS:1000127`) |
 | | `ionisation_source`, `ionisation_source_term` | text + term | PSI-MS |
 | | `analyzer`, `analyzer_term` | text + term | PSI-MS |
 | | `instrument_model` | text | -- |
@@ -132,6 +137,22 @@ from the format itself.
 | Bruker Rapiflex | -- | -- | -- | -- |
 | PHI ToF-SIMS | from the header | SIMS | TOF | platform name |
 | Waters `.raw` | -- | -- | -- | `SELECT SERIES MRT` on an MRT, Thyra's own label; otherwise unset |
+
+`spectrum_representation` is the representation the reader delivers, so
+resampling never changes it:
+
+| Source | spectrum representation |
+|--------|-------------------------|
+| imzML | from the file's declaration (`MS:1000127` / `MS:1000128`), or `--spectrum-type` |
+| mzPeak | `centroid` when read from the peaks member, `profile` when the archive fills both members, else the file's declaration |
+| Bruker timsTOF `.d` | `centroid` for TSF and for TDF read with `vendor_centroid`; `profile` for TDF read with `scan_sum` (the default) |
+| Bruker solariX `.d` | `centroid` |
+| Bruker Rapiflex, PHI ToF-SIMS | `profile` |
+| Waters `.raw` | what the reader returns (`--waters-spectrum`) |
+
+An imzML that declares neither term leaves the field unset. Thyra still
+guesses centroid for a processed-mode file, to pick a resampling method, but
+that guess stays in `uns["essential_metadata"]["spectrum_type"]`.
 
 A timsTOF `.d` also fills `ion_mobility`: `present: true` for a TDF acquisition
 (TIMS engaged), with the acquired 1/K0 range and the ramp length in scans,
@@ -358,7 +379,10 @@ artifact alone:
 |-------|-----------|
 | `ms_analysis.pixel_size_um.x` | `IMS:1000046` pixel size (x) |
 | `ms_analysis.pixel_size_um.y` | `IMS:1000047` pixel size y |
+| `sample.sample_id` | `MS:1000001` sample number |
+| `sample.sample_name` | `MS:1000002` sample name |
 | `ms_analysis.polarity` | `MS:1000465` scan polarity |
+| `ms_analysis.spectrum_representation` | `MS:1000525` spectrum representation |
 | `ms_analysis.ionisation_source` | `MS:1000008` ionization type |
 | `ms_analysis.analyzer` | `MS:1000443` mass analyzer type |
 | `ms_analysis.instrument_model` | `MS:1000031` instrument model |
@@ -512,13 +536,15 @@ added), 0.7.0 (`ms_analysis.manufacturer` and `ms_analysis.serial_number`
 added), 0.8.0 (the `calibration` section, `ms_analysis.n_spectra` and
 the processing steps' `action_term` added), 0.9.0 (the `alignment` section
 added), 0.10.0 (the `obs` column `acquisition_order` reserved; the document
-is unchanged), 0.11.0 (`provenance.mass_axis` added).
+is unchanged), 0.11.0 (`provenance.mass_axis` added), 0.12.0
+(`sample.sample_id`, `sample.sample_name` and
+`ms_analysis.spectrum_representation` added).
 
 The JSON Schema rendering is published at a fixed, versioned address,
 which is also its `$id`:
 
 ```
-https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.11.0/msi_metadata.schema.json
+https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.12.0/msi_metadata.schema.json
 ```
 
 Every version from 0.6.0 on has its own folder under that path, and a
@@ -528,7 +554,7 @@ program that writes the document without Thyra validates against that
 address; see [Writing the Metadata Document](writing-the-metadata-document.md).
 
 The same file is committed at
-`thyra/metadata/schema/msi_metadata_schema_v0_11.json` and ships in the
+`thyra/metadata/schema/msi_metadata_schema_v0_12.json` and ships in the
 wheel, so a Python consumer can validate documents offline without
 importing Thyra:
 
@@ -538,7 +564,7 @@ import json
 
 schema = json.loads(
     resources.files("thyra.metadata.schema")
-    .joinpath("msi_metadata_schema_v0_11.json")
+    .joinpath("msi_metadata_schema_v0_12.json")
     .read_text()
 )
 ```
@@ -682,7 +708,10 @@ thyra export-metaspace output.zarr --merge sample.json
 
 The overlay merges key-by-key over the stored block, so it only needs the
 fields you are adding. Keep it next to the store; it applies unchanged to
-every dataset from the same study.
+every dataset from the same study. Name each sample at conversion instead
+(`--sample-id`, or `sample_id` and `sample_name` in `convert_msi`): that
+name is stored, so it tells stores of one study apart. One conversion names
+one sample, even when the slide holds several regions.
 
 ## Python API
 

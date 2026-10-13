@@ -62,6 +62,7 @@ from ...core.base_converter import BaseMSIConverter, PixelSizeSource
 from ...core.base_reader import BaseMSIReader
 from ...core.conversion_state import ConversionState
 from ...errors import ConversionRefused
+from ...metadata.constants import sample_value_problem
 from ...metadata.schema import MSI_VAR_RESERVED_COLUMNS, mass_axis_sha256
 from ...resampling.axis_planner import AxisPlanner, normalize_resampling_config
 from ...resampling.mobility_grid import MOBILITY_CHANNELS
@@ -122,6 +123,8 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         mobility_min: Optional[float] = None,
         mobility_max: Optional[float] = None,
         msms_table: bool = True,
+        sample_id: Optional[str] = None,
+        sample_name: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the base SpatialData converter.
@@ -196,11 +199,18 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 MSI into FlexImaging's optical frame).  When False the
                 MSI elements land in pure micrometer coordinates at
                 ``"global"``.
+            sample_id: The user's sample identifier, written to
+                ``msi_metadata.sample.sample_id``. Never read from the
+                source. An explicit parameter, so it does not reach
+                ``conversion_options`` through ``**kwargs``.
+            sample_name: The user's sample name, written to
+                ``msi_metadata.sample.sample_name``; same rules.
             **kwargs: Additional keyword arguments
 
         Raises:
             ConversionRefused: If pixel_size_um is not positive, dataset_id
-                is empty, or ``sparse_format`` is passed
+                is empty, a sample id or name is not a usable label, or
+                ``sparse_format`` is passed
         """
         # ``sparse_format`` chose between CSC and CSR until v3.22. CSC is now
         # the only layout written, so the keyword has nothing left to select --
@@ -221,6 +231,13 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             )
         if not dataset_id.strip():
             raise ConversionRefused("dataset_id cannot be empty")
+        # convert_msi has checked these already; a caller building the
+        # converter directly has not, and a value the metadata model refuses
+        # at write time would drop the whole msi_metadata block.
+        for name, value in (("sample_id", sample_id), ("sample_name", sample_name)):
+            problem = sample_value_problem(name, value)
+            if problem is not None:
+                raise ConversionRefused(problem)
 
         # Extract pixel_size_detection_info from kwargs if provided
         kwargs_filtered = dict(kwargs)
@@ -357,6 +374,8 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             pixel_size_xy=self._resolved_pixel_size_xy,
             pixel_size_detection_info=self._pixel_size_detection_info,
             resampling_config=self._resampling_config,
+            sample_id=sample_id,
+            sample_name=sample_name,
         )
 
         # The store's own attrs, the assembler's sibling. The optical

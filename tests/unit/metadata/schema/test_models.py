@@ -10,6 +10,7 @@ from thyra.metadata.schema import (
     OntologyTerm,
     PixelSizeUm,
     Provenance,
+    SampleInformation,
 )
 
 
@@ -72,6 +73,63 @@ class TestMSIMetadata:
         assert analysis.polarity == "negative"
 
 
+class TestSampleAndRepresentation:
+    """Issue #447: user-supplied sample ids and the delivered representation."""
+
+    def test_sample_id_and_name_are_accepted(self):
+        meta = MSIMetadata(
+            sample=SampleInformation(sample_id="S1", sample_name="liver section 3"),
+            ms_analysis=MSAnalysis(pixel_size_um=PixelSizeUm(x=20.0, y=20.0)),
+            provenance=Provenance(thyra_version="1.0.0"),
+        )
+        assert meta.to_uns_dict()["sample"] == {
+            "sample_id": "S1",
+            "sample_name": "liver section 3",
+        }
+
+    @pytest.mark.parametrize("field", ["sample_id", "sample_name"])
+    def test_an_empty_sample_value_is_rejected(self, field):
+        with pytest.raises(ValidationError):
+            SampleInformation(**{field: ""})
+
+    def test_representation_and_term_are_accepted(self):
+        analysis = MSAnalysis(
+            pixel_size_um=PixelSizeUm(x=20.0, y=20.0),
+            spectrum_representation="profile",
+            spectrum_representation_term=OntologyTerm(
+                accession="MS:1000128", name="profile spectrum"
+            ),
+        )
+        assert analysis.spectrum_representation == "profile"
+
+    def test_a_contradicting_term_is_rejected(self):
+        with pytest.raises(ValidationError, match="contradicts"):
+            MSAnalysis(
+                pixel_size_um=PixelSizeUm(x=20.0, y=20.0),
+                spectrum_representation="centroid",
+                spectrum_representation_term=OntologyTerm(
+                    accession="MS:1000128", name="profile spectrum"
+                ),
+            )
+
+    def test_an_unknown_representation_is_rejected(self):
+        with pytest.raises(ValidationError):
+            MSAnalysis(
+                pixel_size_um=PixelSizeUm(x=20.0, y=20.0),
+                spectrum_representation="continuum",
+            )
+
+    def test_a_0_11_0_document_still_validates(self):
+        document = {
+            "schema_version": "0.11.0",
+            "ms_analysis": {"pixel_size_um": {"x": 20.0, "y": 20.0}},
+            "provenance": {"thyra_version": "4.0.0"},
+        }
+        meta = MSIMetadata.model_validate(document)
+        assert meta.ms_analysis.spectrum_representation is None
+        assert meta.sample.sample_id is None
+
+
 class TestCvBindings:
     def test_bound_fields_are_exactly_the_expected_set(self):
         from thyra.metadata.schema.models import field_cv_bindings
@@ -81,6 +139,9 @@ class TestCvBindings:
             "IMS:1000046",  # pixel size (x)
             "IMS:1000047",  # pixel size y
             "MS:1000465",  # scan polarity
+            "MS:1000525",  # spectrum representation
+            "MS:1000001",  # sample number
+            "MS:1000002",  # sample name
             "MS:1000008",  # ionization type
             "MS:1000443",  # mass analyzer type
             "MS:1000031",  # instrument model

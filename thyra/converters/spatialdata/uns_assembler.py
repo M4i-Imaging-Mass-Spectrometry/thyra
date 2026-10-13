@@ -290,6 +290,8 @@ class UnsAssembler:
         pixel_size_xy: Callable[[], Tuple[float, float]],
         pixel_size_detection_info: Optional[Dict[str, Any]],
         resampling_config: Optional["ResamplingConfig"],
+        sample_id: Optional[str] = None,
+        sample_name: Optional[str] = None,
     ) -> None:
         """Build the ``uns`` assembler of one conversion.
 
@@ -311,11 +313,17 @@ class UnsAssembler:
             resampling_config: The requested resampling configuration, or
                 ``None`` when the mass axis is left as the source has it.
                 Serialised field by field into the processing provenance.
+            sample_id: The user's sample identifier, or ``None``. Written
+                to ``msi_metadata.sample`` and nowhere else; never read
+                from the source.
+            sample_name: The user's sample name, or ``None``; same rule.
         """
         self.reader = reader
         self._pixel_size_xy = pixel_size_xy
         self._pixel_size_detection_info = pixel_size_detection_info
         self._resampling_config = resampling_config
+        self._sample_id = sample_id
+        self._sample_name = sample_name
         # The reader's fragmentation schedule, read once per conversion.
         # ``_read`` distinguishes "not yet" from "asked, nothing to say".
         self._fragmentation_schedule: Any = None
@@ -552,6 +560,8 @@ class UnsAssembler:
                 fragmentation=self._fragmentation_report(),
                 msms_resolved_table=ctx.msms_table_key,
                 mass_axis=ctx.mass_axis_fingerprint,
+                sample_id=self._sample_id,
+                sample_name=self._sample_name,
             )
             uns[MSI_METADATA_UNS_KEY] = meta.to_uns_dict()
         except MALFORMED_METADATA as e:

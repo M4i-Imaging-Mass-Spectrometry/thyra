@@ -184,3 +184,35 @@ def normalize_analyzer(value: object) -> Optional[Tuple[str, OntologyTerm]]:
     if canonical is None:
         return None
     return canonical, term_from_accession(ANALYZER_ACCESSIONS[canonical])
+
+
+SPECTRUM_REPRESENTATION_ACCESSIONS: Dict[str, str] = {
+    "centroid": "MS:1000127",  # centroid spectrum
+    "profile": "MS:1000128",  # profile spectrum
+}
+
+_SPECTRUM_REPRESENTATION_ALIASES: Dict[str, str] = {
+    "centroid": "centroid",
+    "centroid spectrum": "centroid",
+    "profile": "profile",
+    "profile spectrum": "profile",
+}
+
+
+def normalize_spectrum_representation(
+    value: object,
+) -> Optional[Tuple[str, OntologyTerm]]:
+    """Map a spectrum type to ``("centroid"|"profile", term)``.
+
+    Accepts the bare words and the CV names the readers report
+    (``"centroid spectrum"``). Anything else returns ``None`` and never
+    raises: this runs inside the metadata builder, where an exception drops
+    the whole ``msi_metadata`` block.
+    """
+    key = _normalize(value)
+    if key is None:
+        return None
+    canonical = _SPECTRUM_REPRESENTATION_ALIASES.get(key)
+    if canonical is None:
+        return None
+    return canonical, term_from_accession(SPECTRUM_REPRESENTATION_ACCESSIONS[canonical])

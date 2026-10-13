@@ -74,6 +74,7 @@ class ImzMLHeaderExtractor(ImzMLMetadataExtractor):
         n_x, n_y = self._declared_raster()
         mass_range = self._recorded_mass_range()
         n_spectra = self.header.n_spectra
+        spectrum_type = self._detect_centroid_spectrum()
 
         return EssentialMetadata(
             dimensions=(n_x, n_y, 1),
@@ -88,7 +89,8 @@ class ImzMLHeaderExtractor(ImzMLMetadataExtractor):
             total_peaks=0,
             source_path=str(self.imzml_path),
             coordinate_offsets=None,
-            spectrum_type=self._detect_centroid_spectrum(),
+            spectrum_type=spectrum_type,
+            spectrum_type_guessed=self._spectrum_type_guessed,
         )
 
     def _declared_raster(self) -> Tuple[int, int]:

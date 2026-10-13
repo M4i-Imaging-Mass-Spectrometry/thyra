@@ -1257,3 +1257,74 @@ class TestAlignmentSection:
             pixel_size_um=(20.0, 20.0),
         )
         assert document["alignment"] == _SECTION
+
+
+class TestSpectrumRepresentation:
+    """Issue #447: the representation the reader delivered, never a guess."""
+
+    def _analysis(self, **essential):
+        comprehensive = _comprehensive()
+        comprehensive = replace(
+            comprehensive, essential=replace(comprehensive.essential, **essential)
+        )
+        return build_msi_metadata(comprehensive, pixel_size_um=(20.0, 20.0)).ms_analysis
+
+    def test_centroid_is_stated_with_its_term(self):
+        analysis = self._analysis(spectrum_type="centroid spectrum")
+        assert analysis.spectrum_representation == "centroid"
+        assert analysis.spectrum_representation_term.accession == "MS:1000127"
+
+    def test_profile_is_stated_with_its_term(self):
+        analysis = self._analysis(spectrum_type="profile spectrum")
+        assert analysis.spectrum_representation == "profile"
+        assert analysis.spectrum_representation_term.accession == "MS:1000128"
+
+    def test_an_unreported_type_stays_unset(self):
+        analysis = self._analysis(spectrum_type=None)
+        assert analysis.spectrum_representation is None
+        assert analysis.spectrum_representation_term is None
+
+    def test_a_guessed_type_stays_unset(self):
+        analysis = self._analysis(
+            spectrum_type="centroid spectrum", spectrum_type_guessed=True
+        )
+        assert analysis.spectrum_representation is None
+        assert analysis.spectrum_representation_term is None
+
+    def test_an_unknown_string_stays_unset_and_does_not_raise(self):
+        analysis = self._analysis(spectrum_type="processed")
+        assert analysis.spectrum_representation is None
+
+
+class TestUserSuppliedSample:
+    """Issue #447: the sample is the user's to name, never the source's."""
+
+    def test_no_sample_is_written_unless_given(self):
+        meta = build_msi_metadata(_comprehensive(), pixel_size_um=(20.0, 20.0))
+        assert meta.sample.sample_id is None
+        assert "sample" not in meta.to_uns_dict()
+
+    def test_an_id_and_a_name_land_in_the_sample(self):
+        meta = build_msi_metadata(
+            _comprehensive(),
+            pixel_size_um=(20.0, 20.0),
+            sample_id="S1",
+            sample_name="liver section 3",
+        )
+        assert meta.to_uns_dict()["sample"] == {
+            "sample_id": "S1",
+            "sample_name": "liver section 3",
+        }
+
+    def test_an_id_alone_is_written(self):
+        meta = build_msi_metadata(
+            _comprehensive(), pixel_size_um=(20.0, 20.0), sample_id="S1"
+        )
+        assert meta.to_uns_dict()["sample"] == {"sample_id": "S1"}
+
+    def test_a_document_carries_the_same_values(self):
+        document = build_metadata_document(
+            _comprehensive(), pixel_size_um=(20.0, 20.0), sample_name="slide 7"
+        )
+        assert document["sample"] == {"sample_name": "slide 7"}
+        assert document["ms_analysis"]["spectrum_representation"] == "centroid"
