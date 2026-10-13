@@ -89,7 +89,12 @@ from pydantic import (
 #        record the spectrum type; they never did, and it is corrected.  A
 #        0.11.0 document is a valid 0.12.0 one (design decision D45,
 #        issue #447).
-MSI_METADATA_SCHEMA_VERSION = "0.12.0"
+# 0.13.0: reserved the ``var`` column ``ccs`` (additive): a feature's
+#        collision cross section in square angstroms, written on a
+#        mobility table whose axis is 1/K0, for an assumed charge of 1
+#        (design decision D47).  The document's fields are unchanged, so
+#        a 0.12.0 document is a valid 0.13.0 one.
+MSI_METADATA_SCHEMA_VERSION = "0.13.0"
 
 # Where the block lives inside a converted store:
 # ``table.uns["msi_metadata"]``.  This location is a stable contract
@@ -98,7 +103,7 @@ MSI_METADATA_SCHEMA_VERSION = "0.12.0"
 MSI_METADATA_UNS_KEY = "msi_metadata"
 
 # The committed JSON Schema artifact for this schema version.
-SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_12.json"
+SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_13.json"
 
 # Where every published version of the schema is served (issue #385).
 # ``docs/schema/<version>/`` is copied verbatim onto the documentation
@@ -138,6 +143,7 @@ MSI_VAR_RESERVED_COLUMNS = (
     "precursor_mz",
     "precursor_index",
     "precursor_mobility",
+    "ccs",
     "formula",
     "adduct",
     "annotation_source",
@@ -148,6 +154,13 @@ MSI_VAR_RESERVED_COLUMNS = (
 # features). The MSI table never carries it; a table that does has a
 # non-decreasing ``mz`` with duplicates, validated by the pair instead.
 MSI_VAR_MOBILITY_COLUMN = "mobility"
+
+# A feature's collision cross section, in square angstroms (0.13.0). The
+# converter writes it on a mobility table whose axis is 1/K0, computed for
+# an assumed charge of 1, and records that assumption in the table's
+# ``uns["ccs"]``. Any table may carry it; ``thyra validate`` holds it to
+# numeric, finite and positive.
+MSI_VAR_CCS_COLUMN = "ccs"
 
 # The column that marks a demultiplexed MS/MS table (pixels x (precursor,
 # fragment) features). The MSI table never carries it; a table that does
