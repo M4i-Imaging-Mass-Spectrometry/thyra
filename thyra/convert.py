@@ -71,6 +71,14 @@ def _validate_paths_parameters(
 #: name Thyra let through -- which is exactly today's behaviour.
 _ELEMENT_NAME_EXTRA_CHARS = "_-."
 
+#: Coordinate systems every element is written to besides the per-dataset
+#: one, which the dataset id names. An id equal to one of them would merge
+#: the two. ``"global"`` merging is harmless (both carry the same
+#: transform); ``"acquisition"`` is not, so it is refused (D48). Restated
+#: from ``converters.spatialdata.acquisition_frame`` rather than imported:
+#: importing that package here would load SpatialData with this module.
+_RESERVED_DATASET_IDS = ("acquisition",)
+
 
 def dataset_id_problem(dataset_id: Any) -> Optional[str]:
     """Why ``dataset_id`` cannot name SpatialData elements, or ``None``.
@@ -91,6 +99,11 @@ def dataset_id_problem(dataset_id: Any) -> Optional[str]:
         return f"Dataset ID cannot be {dataset_id!r}"
     if dataset_id.startswith("__"):
         return "Dataset ID cannot start with '__'"
+    if dataset_id in _RESERVED_DATASET_IDS:
+        return (
+            f"Dataset ID cannot be {dataset_id!r}: every store writes a "
+            "coordinate system of that name"
+        )
     bad = sorted(
         {c for c in dataset_id if not (c.isalnum() or c in _ELEMENT_NAME_EXTRA_CHARS)}
     )
@@ -551,12 +564,13 @@ def convert_msi(
             Waters drift bins).
             ``mobility_grid`` (default False) fills that same sibling for
             a source that carries mobility per pixel rather than as a
-            shared feature axis (Bruker TDF, Waters) by binning the point cloud
+            shared feature axis (Bruker TDF, processed imzML, Waters) by
+            binning the point cloud
             onto a common mobility grid; ``mobility_bins`` (default: the
             heatmap's own channels, 256 or one per Waters drift bin),
             ``mobility_min`` and
-            ``mobility_max`` size that grid. Its marginal reproduces the
-            summed table exactly under the default
+            ``mobility_max`` size that grid. On a Bruker TDF its marginal
+            reproduces the summed table exactly under the default
             ``tdf_spectrum="scan_sum"``; an explicit ``"vendor_centroid"``
             is kept, with a warning, and the mismatch recorded.
             ``msms_table`` (default True) writes the demultiplexed MS/MS

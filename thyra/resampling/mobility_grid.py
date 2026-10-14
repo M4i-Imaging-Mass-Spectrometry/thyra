@@ -219,32 +219,32 @@ MOBILITY_GRID_GENERATORS: Dict[str, BaseMobilityGridGenerator] = {
 
 
 def default_channel_plan(
-    values: Any, bin_width: Optional[float] = None
+    span: Optional[Tuple[float, float]], bin_width: Optional[float] = None
 ) -> Optional[Tuple[float, float, int]]:
     """The ``(lower, upper, n_channels)`` the heatmap and a default grid share.
 
-    Normally :data:`MOBILITY_CHANNELS` equal-width channels over the span of
-    the axis values. A source whose axis is a list of equal-width bins says
-    so with ``bin_width`` (Waters drift bins). When it has fewer bins than
-    the anchor, the channels are its bins instead: edges half a bin outside
-    the first and last value, one channel per bin, so a value lands in the
+    ``span`` is the smallest and largest mobility value the source holds
+    (:meth:`~thyra.core.base_reader.BaseMSIReader.get_mobility_value_range`).
+    Normally :data:`MOBILITY_CHANNELS` equal-width channels over it. A
+    source whose axis is a list of equal-width bins says so with
+    ``bin_width`` (Waters drift bins). When it has fewer bins than the
+    anchor, the channels are its bins instead: edges half a bin outside the
+    first and last value, one channel per bin, so a value lands in the
     channel of its own bin. Spread over the anchor, 200 bins would leave 56
-    channels empty in a regular comb (design decision D50).
+    channels empty in a regular comb (design decision D52).
 
-    ``None`` when the values give no span to bin over.
+    ``None`` when there is no span to bin over.
     """
-    finite = np.asarray(values, dtype=np.float64)
-    finite = finite[np.isfinite(finite)]
-    if not finite.size:
+    if span is None:
         return None
-    lower, upper = float(finite.min()), float(finite.max())
+    lower, upper = float(span[0]), float(span[1])
+    if not (np.isfinite(lower) and np.isfinite(upper)) or upper <= lower:
+        return None
     if bin_width is not None and np.isfinite(bin_width) and bin_width > 0:
         n_bins = int(round((upper - lower) / float(bin_width))) + 1
         if n_bins < MOBILITY_CHANNELS:
             half = 0.5 * float(bin_width)
             return lower - half, upper + half, n_bins
-    if upper <= lower:
-        return None
     return lower, upper, MOBILITY_CHANNELS
 
 

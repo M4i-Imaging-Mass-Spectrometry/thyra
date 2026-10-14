@@ -124,7 +124,20 @@ class WatersMetadataExtractor(MetadataExtractor):
             total_peaks=total_peaks,
             source_path=str(self._data_path),
             spectrum_type=spectrum_type,
+            stage_origin_um=self._stage_origin_um(),
         )
+
+    def _stage_origin_um(self) -> Optional[Tuple[float, float]]:
+        """Where grid index ``(0, 0)`` sits on the stage, in um.
+
+        The grid is re-zeroed on the fitted lattice origin, the smallest
+        reading on each axis, so index 0 is that reading. A hand-built grid
+        has no fitted lattice and so no origin to report.
+        """
+        grid = self._imaging_grid
+        if grid.x_lattice is None or grid.y_lattice is None:
+            return None
+        return (float(grid.x_lattice.origin), float(grid.y_lattice.origin))
 
     def _axis_mass_range(self, observed: Tuple[float, float]) -> Tuple[float, float]:
         """The range the resampled axis is built over.
@@ -530,5 +543,6 @@ class WatersMetadataExtractor(MetadataExtractor):
                 "pixel_size_y_um": self._imaging_grid.pixel_size_y,
                 "lateral_width_um": self._imaging_grid.lateral_width,
                 "lateral_height_um": self._imaging_grid.lateral_height,
+                "stage_origin_um": self._stage_origin_um(),
             },
         }

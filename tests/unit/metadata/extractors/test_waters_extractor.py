@@ -1,5 +1,6 @@
 """Tests for the Waters metadata extractor."""
 
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -7,7 +8,7 @@ import numpy as np
 import pytest
 
 from thyra.metadata.extractors.waters_extractor import WatersMetadataExtractor
-from thyra.readers.waters.imaging_grid import ImagingGrid
+from thyra.readers.waters.imaging_grid import AxisLattice, ImagingGrid
 from thyra.readers.waters.masslynx_lib import FunctionType, ScanInfoData
 
 
@@ -295,6 +296,53 @@ class TestWatersMetadataExtractorComprehensive:
         assert "imaging_grid" in raw
         assert raw["imaging_grid"]["pixel_count_x"] == 3
         assert raw["imaging_grid"]["pixel_count_y"] == 2
+
+
+class TestTheStageOrigin:
+    """Where index 0 sits on the stage: the fitted lattice origin (D48).
+
+    Waters re-zeroes on it, in micrometres, and nothing stored it, so a
+    store could not be placed back on the slide.
+    """
+
+    @staticmethod
+    def _extractor(grid, ml, handle, ft, ms):
+        return WatersMetadataExtractor(ml, handle, Path("/test/data.raw"), grid, ft, ms)
+
+    def test_a_fitted_grid_reports_its_origin(self):
+        mock_ml, handle, grid, ft, ms = _make_grid_and_ml(n_x=3, n_y=2)
+        # DESI runs start at a negative stage position.
+        fitted = replace(
+            grid,
+            x_lattice=AxisLattice(origin=-11400.25, pitch=100.0, count=3),
+            y_lattice=AxisLattice(origin=3050.5, pitch=100.0, count=2),
+        )
+        essential = self._extractor(fitted, mock_ml, handle, ft, ms).get_essential()
+
+        assert essential.stage_origin_um == (-11400.25, 3050.5)
+        # Not an integer index, so not reported as one.
+        assert essential.coordinate_offsets is None
+
+    def test_a_hand_built_grid_reports_none(self):
+        mock_ml, handle, grid, ft, ms = _make_grid_and_ml()
+        essential = self._extractor(grid, mock_ml, handle, ft, ms).get_essential()
+
+        assert essential.stage_origin_um is None
+
+    def test_the_raw_metadata_records_it(self):
+        mock_ml, handle, grid, ft, ms = _make_grid_and_ml(n_x=3, n_y=2)
+        fitted = replace(
+            grid,
+            x_lattice=AxisLattice(origin=100.0, pitch=100.0, count=3),
+            y_lattice=AxisLattice(origin=100.0, pitch=100.0, count=2),
+        )
+        raw = (
+            self._extractor(fitted, mock_ml, handle, ft, ms)
+            .get_comprehensive()
+            .raw_metadata
+        )
+
+        assert raw["imaging_grid"]["stage_origin_um"] == (100.0, 100.0)
 
 
 class TestWatersMetadataExtractorEdgeCases:

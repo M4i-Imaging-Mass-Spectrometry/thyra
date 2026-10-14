@@ -73,6 +73,180 @@ def kept_mz_range(
     )
 
 
+def bin_edges(
+    axis: NDArray[np.float64],
+    kept_range: Tuple[float, float],
+) -> NDArray[np.float64]:
+    """The edges of the bins ``axis`` holds, ``len(axis) + 1`` of them.
+
+    An inner edge is the midpoint between two neighbouring centres: a
+    value is in the bin whose centre is nearest it, and one on an edge is
+    in the bin to its right. :func:`nn_map_to_bins` compares distances
+    instead, so a value within an ulp of a midpoint can land one bin over
+    there; nothing that uses these edges mixes the two. The outer edges sit half a neighbouring
+    gap beyond the end centres, pulled in to ``kept_range`` where that is
+    narrower -- a constant axis puts its end centres *on* the declared
+    bounds, so its two end bins are half bins, and nothing outside the
+    range is anyone's bin.
+
+    Args:
+        axis: The target mass axis, ascending, at least two points.
+        kept_range: What :func:`kept_mz_range` returns for this axis.
+
+    Returns:
+        The bin edges, ascending.
+    """
+    edges = np.empty(axis.size + 1, dtype=np.float64)
+    edges[1:-1] = 0.5 * (axis[1:] + axis[:-1])
+    edges[0], edges[-1] = _outer_edges(axis, kept_range)
+    return edges
+
+
+def _outer_edges(
+    axis: NDArray[np.float64], kept_range: Tuple[float, float]
+) -> Tuple[float, float]:
+    """The lower edge of the first bin and the upper edge of the last."""
+    return (
+        max(float(axis[0] - 0.5 * (axis[1] - axis[0])), kept_range[0]),
+        min(float(axis[-1] + 0.5 * (axis[-1] - axis[-2])), kept_range[1]),
+    )
+
+
+class BinLayout:
+    """The bins of one axis, as :func:`bin_edges` draws them, without the array.
+
+    A conversion resamples every spectrum onto one axis, so what is a
+    property of the axis is worked out once, here. The edges themselves are
+    not stored: an axis can hold 10^8 bins, and an inner edge is one
+    midpoint, computed for the few bins a spectrum touches by
+    :meth:`edges_of`, to the same bits :func:`bin_edges` gives.
+
+    Args:
+        axis: The target mass axis, ascending, at least two points.
+        kept_range: What :func:`kept_mz_range` returns for this axis.
+
+    Attributes:
+        axis: The target mass axis.
+        lower: The lower edge of the first bin.
+        upper: The upper edge of the last bin.
+        widest: An upper bound on any bin's width: the widest gap between
+            neighbouring centres. Two samples closer together than no bin
+            is wide can never share one.
+    """
+
+    def __init__(
+        self, axis: NDArray[np.float64], kept_range: Tuple[float, float]
+    ) -> None:
+        """Lay the bins of ``axis`` once."""
+        self.axis = axis
+        self.lower, self.upper = _outer_edges(axis, kept_range)
+        # Every stride-th centre and its index: the guide :meth:`locate`
+        # interpolates a first guess from.
+        stride = max(1, -(-axis.size // _LAYOUT_CHUNK))
+        guide = np.arange(0, axis.size, stride)
+        if guide[-1] != axis.size - 1:
+            guide = np.append(guide, axis.size - 1)
+        self._guide_mz = axis[guide]
+        self._guide_index = guide.astype(np.float64)
+        # The widest gap between neighbouring centres in each stretch
+        # between two guide centres. Chunked: np.diff of a 10^8-bin axis is
+        # a second axis-sized array.
+        widest = np.empty(guide.size - 1)
+        block = max(1, (1 << 20) // stride)
+        for k0 in range(0, widest.size, block):
+            k1 = min(k0 + block, widest.size)
+            gaps = np.diff(axis[guide[k0] : guide[k1] + 1])
+            widest[k0:k1] = np.maximum.reduceat(gaps, guide[k0:k1] - guide[k0])
+        self.widest = float(widest.max())
+        # At each guide centre, the widest gap in either stretch it bounds:
+        # interpolating between two of these never falls below the widest
+        # gap of the stretch between them. Then the running maximum, so the
+        # bound never falls with m/z: on every axis a law lays it changes
+        # nothing, and it lets one value at the top of a run of samples
+        # bound the whole run (:meth:`gap_near`).
+        self._guide_gap = np.maximum.accumulate(
+            np.concatenate(
+                (widest[:1], np.maximum(widest[:-1], widest[1:]), widest[-1:])
+            )
+        )
+
+    def gap_near(self, values: NDArray[np.float64]) -> NDArray[np.float64]:
+        """At least the widest gap between neighbouring centres at or below each value.
+
+        A bound, not the gap itself: it is the widest gap anywhere in the
+        stretch of axis between the two guide centres around the value, in
+        the stretches either side of those, and anywhere below. It never
+        falls as the value rises.
+        """
+        return np.interp(values, self._guide_mz, self._guide_gap)
+
+    def edges_of(self, bins: NDArray[np.int_]) -> NDArray[np.float64]:
+        """The lower edge of each bin in ``bins``; ``len(axis)`` gives the top."""
+        last = self.axis.size - 1
+        lower = self.axis[np.clip(bins - 1, 0, last)]
+        upper = self.axis[np.clip(bins, 0, last)]
+        edges = 0.5 * (lower + upper)
+        edges[bins <= 0] = self.lower
+        edges[bins > last] = self.upper
+        return edges
+
+    def locate(self, values: NDArray[np.float64]) -> NDArray[np.int_]:
+        """The bin each value lies in, by the edges :meth:`edges_of` draws.
+
+        A value on an inner edge is in the bin to its right, and one on the
+        top edge in the last bin. Values must lie within the outer edges.
+
+        A binary search into a 10^6-bin axis costs about 2.7 ms per 15,000
+        values here, which on a Waters MRT run is longer than reading the
+        spectrum. Instead the position is interpolated from every
+        stride-th centre -- ``np.interp`` walks sorted values in about a
+        tenth of that -- and corrected against the exact edges, one bin at
+        a time; anything still off after a few steps is searched.
+
+        Args:
+            values: m/z values within the outer edges.
+
+        Returns:
+            The bin of each value.
+        """
+        axis = self.axis
+        last = axis.size - 1
+        guess = np.interp(values, self._guide_mz, self._guide_index)
+        bins = np.clip(np.rint(guess).astype(np.int_), 0, last)
+        for _ in range(_LOCATE_STEPS):
+            centre = axis[bins]
+            # Past its centre, a value can only belong further right, and
+            # short of it, further left: one edge to test, never both.
+            rightward = values >= centre
+            neighbour = np.clip(bins + np.where(rightward, 1, -1), 0, last)
+            edge = 0.5 * (centre + axis[neighbour])
+            moves = (neighbour != bins) & (rightward == (values >= edge))
+            step = np.where(rightward, moves, -moves.astype(np.int_)).astype(np.int_)
+            if not step.any():
+                return bins
+            bins += step
+        settled = (values >= self.edges_of(bins)) & (
+            (values < self.edges_of(bins + 1)) | (bins == last)
+        )
+        if not settled.all():
+            # Search the centres, then take the midpoint test: no edge
+            # array the length of the axis is built.
+            stray = values[~settled]
+            found = np.clip(np.searchsorted(axis, stray, side="right") - 1, 0, last)
+            upper = np.minimum(found + 1, last)
+            found += (stray >= 0.5 * (axis[found] + axis[upper])) & (found < last)
+            bins[~settled] = found
+        return bins
+
+
+#: Entries per chunk when :class:`BinLayout` scans an axis, and the most
+#: centres its locating guide holds.
+_LAYOUT_CHUNK = 1 << 16
+
+#: Single-bin corrections :meth:`BinLayout.locate` makes before searching.
+_LOCATE_STEPS = 3
+
+
 #: How far, in bins, a resampled axis may deviate from its own linearisation
 #: before the converter stops computing bin indices and searches for them
 #: instead. The +-1 repair in :func:`nn_map_to_bins` is exact below 0.5

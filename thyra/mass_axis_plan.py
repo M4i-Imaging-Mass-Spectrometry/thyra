@@ -18,6 +18,13 @@ The decision is split in two. :func:`_plan_from_metadata` takes what the
 detector chain is told about each source and reads no file, so every rule
 can be exercised without one. :func:`plan_mass_axis` reads the sources and
 calls it.
+
+An imzML header states its observed m/z range as rounded text, so the
+stated low bound can sit above the source's first sample. A conversion keeps
+only the m/z inside its declared bounds, inclusive, so a range taken from such
+a header as it stands drops the edge samples (issue #473, D51). The planner
+therefore moves each imzML bound out by one unit of the last digit its text
+states before using it.
 """
 
 from __future__ import annotations
@@ -43,6 +50,7 @@ from .resampling.axis_planner import (
 )
 from .resampling.decision_tree import ResamplingDecisionTree
 from .resampling.mass_axis.tof_generator import DEFAULT_BINS_PER_FWHM, TOFAxisGenerator
+from .resampling.memory_guard import mass_axis_refusal
 from .resampling.plan import MassAxisPlan
 from .resampling.types import (
     DEFAULT_REFERENCE_MZ,
@@ -81,12 +89,15 @@ class _Source:
         range_known: Whether the source states a mass range at all.
         source_format: The registry format name (``"imzml"``, ``"phi"``,
             ...), or ``None`` when unknown.
+        range_is_header: Whether the range was read from an imzML header's
+            text and moved out by the precision that text states (D51).
     """
 
     name: str
     metadata: Dict[str, Any]
     range_known: bool = True
     source_format: Optional[str] = None
+    range_is_header: bool = False
 
     @property
     def mass_range(self) -> Tuple[float, float]:
@@ -204,28 +215,43 @@ def _plan_range(
             "No mass range is stated by " + ", ".join(unknown) + ", and finding "
             "one would mean decoding spectra. Pass both min_mz and max_mz."
         )
-    low = min_mz if min_mz is not None else max(s.mass_range[0] for s in known)
-    high = max_mz if max_mz is not None else min(s.mass_range[1] for s in known)
+    ranges_of = {s.name: s.mass_range for s in known}
+    low = min_mz if min_mz is not None else max(r[0] for r in ranges_of.values())
+    high = max_mz if max_mz is not None else min(r[1] for r in ranges_of.values())
     if not low < high:
         ranges = _fmt_each(
-            [(s.name, f"[{s.mass_range[0]:g}, {s.mass_range[1]:g}]") for s in known]
+            [(n, f"[{lo:g}, {hi:g}]") for n, (lo, hi) in ranges_of.items()]
         )
         if min_mz is not None and max_mz is not None:
             raise ConversionRefused(
                 f"The range [{low:g}, {high:g}] m/z is empty: the minimum has "
                 "to be below the maximum."
             )
+        if min_mz is not None:
+            raise ConversionRefused(
+                f"The forced min_mz {low:g} is not below the planned max_mz "
+                f"{high:g} (the sources' ranges: {ranges}). Pass a lower "
+                "min_mz, or pass max_mz too."
+            )
+        if max_mz is not None:
+            raise ConversionRefused(
+                f"The forced max_mz {high:g} is not above the planned min_mz "
+                f"{low:g} (the sources' ranges: {ranges}). Pass a higher "
+                "max_mz, or pass min_mz too."
+            )
         raise ConversionRefused(
             f"The sources have no m/z in common: the planned range "
             f"[{low:g}, {high:g}] is empty ({ranges}). Pass min_mz and max_mz "
             "to plan a range anyway."
         )
-    notes.origins["min_mz"] = (
-        "forced" if min_mz is not None else "intersection of the sources' ranges"
-    )
-    notes.origins["max_mz"] = (
-        "forced" if max_mz is not None else "intersection of the sources' ranges"
-    )
+    derived = "intersection of the sources' ranges"
+    if any(s.range_is_header for s in known):
+        derived += (
+            "; an imzML range is its header text moved out by one unit of "
+            "the last digit it states, because the text is rounded"
+        )
+    notes.origins["min_mz"] = "forced" if min_mz is not None else derived
+    notes.origins["max_mz"] = "forced" if max_mz is not None else derived
     _warn_range(known, low, high, min_mz is None, max_mz is None, notes)
     return float(low), float(high)
 
@@ -336,25 +362,11 @@ def _own_width_at(source: _Source, kind: AxisType, reference_mz: float) -> float
     return float(width) * scale
 
 
-def _source_method(
-    source: _Source, forced: Optional[ResamplingMethod]
-) -> Optional[ResamplingMethod]:
-    """The method this source converts with: the caller's, else its detector's."""
-    if forced is not None:
-        return forced
-    try:
-        return ResamplingDecisionTree().select_strategy(source.metadata)
-    except Exception as exc:  # advisory only: a source the chain cannot classify
-        logger.debug("No detector method for %s: %s", source.name, exc)
-        return None
-
-
 def _plan_width(
     sources: Sequence[_Source],
     kind: AxisType,
     width_at_mz: Optional[float],
     reference_mz: float,
-    forced_method: Optional[ResamplingMethod],
     notes: _Notes,
 ) -> float:
     """The forced width, else the widest width any source declares."""
@@ -372,17 +384,11 @@ def _plan_width(
     for s, w in own:
         if w >= width * (1.0 - _WIDTH_TOLERANCE):
             continue
-        text = (
+        notes.warnings.append(
             f"{s.name}: its own bin width at m/z {reference_mz:g} is {w:.4g} Da, "
             f"narrower than the planned {width:.4g} Da; it loses resolution in "
             "this store."
         )
-        if _source_method(s, forced_method) is ResamplingMethod.TIC_PRESERVING:
-            text += (
-                " Under tic_preserving, bins coarser than the source's own can "
-                "merge narrow peaks (#442)."
-            )
-        notes.warnings.append(text)
     return width
 
 
@@ -395,6 +401,27 @@ def _warn_spectrum_types(sources: Sequence[_Source], notes: _Notes) -> None:
             + "); a centroid and a profile source on one axis are each placed "
             "by their own method."
         )
+
+
+def _refuse_wide_axis(n_bins: int) -> None:
+    """Refuse an axis whose per-bin cost will not fit in memory (issue #473).
+
+    The guard a conversion applies, asked before the axis is built, with the
+    levers a plan has instead of the CLI's.
+
+    Raises:
+        ConversionRefused: When the projection exceeds the fraction of free
+            memory a conversion may take.
+    """
+    refusal = mass_axis_refusal(
+        int(n_bins),
+        levers=(
+            "pass a wider width_at_mz or fewer bins_per_fwhm, or a narrower "
+            "min_mz / max_mz"
+        ),
+    )
+    if refusal is not None:
+        raise ConversionRefused(refusal)
 
 
 def _lay_axis(first: _Source, plan: MassAxisPlan) -> Tuple[int, str]:
@@ -411,7 +438,7 @@ def _lay_axis(first: _Source, plan: MassAxisPlan) -> Tuple[int, str]:
     essential["mass_range"] = (plan.min_mz, plan.max_mz)
     metadata["essential_metadata"] = essential
     planner = AxisPlanner.from_metadata(metadata, normalize_resampling_config(config))
-    axis = planner.settle(lambda n_bins: None).axis
+    axis = planner.settle(_refuse_wide_axis).axis
     return int(len(axis)), mass_axis_sha256(axis)
 
 
@@ -469,9 +496,7 @@ def _plan_from_metadata(
         a, b, k = _plan_tof(srcs, tof_a, tof_b, bins_per_fwhm, width_at_mz, ref, notes)
         fields.update(tof_a=a, tof_b=b, bins_per_fwhm=k)
     else:
-        fields["width_at_mz"] = _plan_width(
-            srcs, kind, width_at_mz, ref, forced_method, notes
-        )
+        fields["width_at_mz"] = _plan_width(srcs, kind, width_at_mz, ref, notes)
     _warn_spectrum_types(srcs, notes)
 
     draft = MassAxisPlan(
@@ -517,10 +542,15 @@ def _source_names(paths: Sequence[Path]) -> List[str]:
         if names.count(name) > 1:
             name = f"{path.parent.name}/{name}"
         out.append(name)
-    for i, name in enumerate(out):
-        if out.count(name) > 1:
-            out[i] = f"{name} ({i + 1})"
-    return out
+    counts = {name: out.count(name) for name in out}
+    seen: Dict[str, int] = {}
+    numbered = []
+    for name in out:
+        if counts[name] > 1:
+            seen[name] = seen.get(name, 0) + 1
+            name = f"{name} ({seen[name]})"
+        numbered.append(name)
+    return numbered
 
 
 def _read_source(path: Path, name: str) -> _Source:
@@ -547,7 +577,44 @@ def _read_source(path: Path, name: str) -> _Source:
         source_format: Optional[str] = detect_format(path)
     except Exception:
         source_format = None
-    return _Source(name, metadata, range_known=known, source_format=source_format)
+    from_header = known and (source_format or "").lower() == "imzml"
+    if from_header:
+        metadata = _with_outward_range(path, metadata)
+    return _Source(
+        name,
+        metadata,
+        range_known=known,
+        source_format=source_format,
+        range_is_header=from_header,
+    )
+
+
+def _with_outward_range(path: Path, metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """An imzML source's range moved out by the precision of its header text.
+
+    The header states the lowest and highest observed m/z as rounded text:
+    ``100.123457`` for a first sample at ``100.12345678``. A conversion
+    reads the exact range from the ``.ibd``, but a plan reads no spectra. A
+    plan bound taken from the rounded text can sit inside the data, and a
+    conversion given the plan then drops every sample beyond it (#473). So
+    the header is read again for bounds moved out by one unit of the last
+    digit each states. On a continuous file that read stops after the first
+    spectra, as the metadata read does.
+    """
+    from .metadata.constants import BinaryDataType
+    from .readers.imzml.header import scan_observed_mz_range
+
+    mode = (metadata.get("format_specific") or {}).get("file_mode")
+    outward = scan_observed_mz_range(
+        path, shared_axis=mode == BinaryDataType.CONTINUOUS, outward=True
+    )
+    if outward is None:
+        return metadata
+    essential = dict(metadata.get("essential_metadata") or {})
+    essential["mass_range"] = outward
+    moved = dict(metadata)
+    moved["essential_metadata"] = essential
+    return moved
 
 
 def plan_mass_axis(
@@ -571,7 +638,10 @@ def plan_mass_axis(
     from in ``origins`` and what it costs a source in ``warnings``.
 
     * Axis type: every source's detector agrees, else refused.
-    * Range: the intersection of the sources' ranges.
+    * Range: the intersection of the sources' ranges. An imzML source's
+      range is its header text moved out by one unit of the last digit it
+      states (``100.123457`` by 1e-6, ``1000`` by 1), because the
+      header rounds it and would otherwise cut the source's edge samples.
     * Width (non-``tof`` axes): the widest width any source declares, each
       first stated at ``reference_mz`` under the axis law, so that on the
       shared axis no source's peaks scatter over bins finer than they are.
@@ -603,7 +673,8 @@ def plan_mass_axis(
         ConversionRefused: If a source cannot be read or states no m/z range
             (and ``min_mz`` and ``max_mz`` were not both given), if the ranges
             have no m/z in common, if the detectors want different axis types
-            or TOF laws and none was forced, or if the axis cannot be built.
+            or TOF laws and none was forced, or if the axis cannot be built
+            (including when its bin count would not fit in memory).
     """
     if isinstance(sources, (str, Path)):
         sources = [sources]

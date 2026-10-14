@@ -9,12 +9,16 @@ does not enter it. A :class:`MassAxisPlan` therefore holds those settings
 and the fingerprint of the axis they lay (D42), and leaves each source's
 method to its own detector unless the caller forced one.
 
-This module is pure data: it imports no reader and no converter, so a plan
-can be saved, loaded and passed around without either. Deciding the
+This module is data: it imports no reader and no converter, so a plan can
+be saved, loaded and passed around without either. The one calculation it
+makes is on load, where :meth:`MassAxisPlan.from_dict` asks the axis
+planner's bin count function whether ``n_bins`` still follows from the
+settings, so a hand edit of one without the other is refused. Deciding the
 settings from several sources is :func:`thyra.mass_axis_plan.plan_mass_axis`.
 """
 
 import json
+import logging
 import math
 import re
 from dataclasses import dataclass, field
@@ -29,6 +33,29 @@ PLAN_FORMAT = "thyra-mass-axis-plan"
 PLAN_VERSION = 1
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+
+#: The keys :meth:`MassAxisPlan.to_dict` writes, and so the only ones a plan
+#: file may hold. An edit under any other key would change nothing.
+_PLAN_KEYS = frozenset(
+    {
+        "format",
+        "version",
+        "axis_type",
+        "min_mz",
+        "max_mz",
+        "reference_mz",
+        "width_at_mz",
+        "tof_a",
+        "tof_b",
+        "bins_per_fwhm",
+        "method",
+        "n_bins",
+        "sha256",
+        "origins",
+        "warnings",
+        "sources",
+    }
+)
 
 
 def check_sha256(value: Any, where: str) -> str:
@@ -93,6 +120,43 @@ def _strings(data: Dict[str, Any], key: str) -> Tuple[str, ...]:
             f"The mass axis plan's {key!r} must be a list of strings."
         )
     return tuple(value)
+
+
+def _check_layout(data: Any) -> None:
+    """Refuse what is not a plan of this layout: format, version and keys.
+
+    A plan file is edited by hand, so what would be ignored is refused: a key
+    :meth:`MassAxisPlan.to_dict` does not write, and a ``version`` that is
+    not the whole number 1 (``True`` and ``1.0`` compare equal to 1).
+    """
+    if not isinstance(data, dict) or data.get("format") != PLAN_FORMAT:
+        raise ConversionRefused(
+            f"Not a mass axis plan: the 'format' key must be {PLAN_FORMAT!r}."
+        )
+    version = data.get("version")
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version != PLAN_VERSION
+    ):
+        raise ConversionRefused(
+            f"Unsupported mass axis plan version {version!r}; "
+            f"this Thyra reads version {PLAN_VERSION}."
+        )
+    unknown = sorted(str(key) for key in set(data) - _PLAN_KEYS)
+    if unknown:
+        raise ConversionRefused(
+            "The mass axis plan holds "
+            + ", ".join(repr(k) for k in unknown)
+            + ", which no plan has and which would change nothing. "
+            "Known keys: " + ", ".join(sorted(_PLAN_KEYS)) + "."
+        )
+    required = ("axis_type", "min_mz", "max_mz", "reference_mz", "n_bins", "sha256")
+    missing = [key for key in required if data.get(key) is None]
+    if missing:
+        raise ConversionRefused(
+            "The mass axis plan lacks " + ", ".join(repr(k) for k in missing) + "."
+        )
 
 
 @dataclass(frozen=True)
@@ -184,25 +248,17 @@ class MassAxisPlan:
     def from_dict(cls, data: Dict[str, Any]) -> "MassAxisPlan":
         """Rebuild a plan from :meth:`to_dict` output.
 
+        A plan file is edited by hand, so what would be ignored is refused:
+        a key :meth:`to_dict` does not write, a ``version`` that is not the
+        whole number 1, an inverted range, and an ``n_bins`` that the
+        settings do not lay (it is a result, not a setting).
+
         Raises:
-            ConversionRefused: If ``data`` is not a plan of this layout, or
-                lacks a setting every plan holds.
+            ConversionRefused: If ``data`` is not a plan of this layout, lacks
+                a setting every plan holds, holds a key no plan has, or is
+                inconsistent in the ways above.
         """
-        if not isinstance(data, dict) or data.get("format") != PLAN_FORMAT:
-            raise ConversionRefused(
-                f"Not a mass axis plan: the 'format' key must be {PLAN_FORMAT!r}."
-            )
-        if data.get("version") != PLAN_VERSION:
-            raise ConversionRefused(
-                f"Unsupported mass axis plan version {data.get('version')!r}; "
-                f"this Thyra reads version {PLAN_VERSION}."
-            )
-        required = ("axis_type", "min_mz", "max_mz", "reference_mz", "n_bins", "sha256")
-        missing = [key for key in required if data.get(key) is None]
-        if missing:
-            raise ConversionRefused(
-                "The mass axis plan lacks " + ", ".join(repr(k) for k in missing) + "."
-            )
+        _check_layout(data)
         try:
             axis_type = AxisType(data["axis_type"])
             raw_method = data.get("method")
@@ -226,7 +282,7 @@ class MassAxisPlan:
             raise ConversionRefused(
                 "The mass axis plan's 'origins' must map setting names to text."
             )
-        return cls(
+        plan = cls(
             axis_type=axis_type,
             min_mz=_positive_number(data, "min_mz"),
             max_mz=_positive_number(data, "max_mz"),
@@ -242,6 +298,60 @@ class MassAxisPlan:
             warnings=_strings(data, "warnings"),
             sources=_strings(data, "sources"),
         )
+        plan._check_settings(data)
+        plan._check_n_bins()
+        return plan
+
+    def _check_settings(self, data: Dict[str, Any]) -> None:
+        """Refuse an inverted range, or an axis without the settings it needs."""
+        if not self.min_mz < self.max_mz:
+            raise ConversionRefused(
+                f"The mass axis plan's 'min_mz' ({self.min_mz:g}) must be "
+                f"below its 'max_mz' ({self.max_mz:g})."
+            )
+        if self.axis_type is AxisType.TOF:
+            needs: Tuple[str, ...] = ("tof_a", "tof_b", "bins_per_fwhm")
+        else:
+            needs = ("width_at_mz",)
+        missing = [k for k in needs if data.get(k) is None]
+        if missing:
+            raise ConversionRefused(
+                f"The mass axis plan's {self.axis_type.value} axis needs "
+                + ", ".join(repr(k) for k in missing)
+                + "."
+            )
+
+    def _check_n_bins(self) -> None:
+        """Refuse an ``n_bins`` the settings do not lay.
+
+        The count comes from the function a conversion uses, with every
+        setting explicit, so no detected value enters it.
+        """
+        # Deferred: axis_planner imports this module at its top level.
+        from .axis_planner import bin_count_for_width, normalize_resampling_config
+
+        config = self.to_resampling_config()
+        config.pop("mass_axis_sha256")
+        # The count is logged at INFO when a conversion lays its axis; on
+        # load it is only a check, so keep it out of the log.
+        planner_log = logging.getLogger(bin_count_for_width.__module__)
+        level = planner_log.level
+        planner_log.setLevel(logging.WARNING)
+        try:
+            expected = bin_count_for_width(
+                normalize_resampling_config(config),
+                self.min_mz,
+                self.max_mz,
+                self.axis_type,
+            )
+        finally:
+            planner_log.setLevel(level)
+        if expected != self.n_bins:
+            raise ConversionRefused(
+                f"The mass axis plan's 'n_bins' ({self.n_bins:,}) does not "
+                f"match its settings, which lay {expected:,} bins. n_bins is a "
+                "result: change the range or width, or plan again."
+            )
 
     def save(self, path: Union[str, Path]) -> None:
         """Write the plan as UTF-8 JSON."""
@@ -252,12 +362,22 @@ class MassAxisPlan:
     def load(cls, path: Union[str, Path]) -> "MassAxisPlan":
         """Read a plan written by :meth:`save`.
 
+        The bytes go to ``json.loads``, which tells UTF-8, UTF-16 and UTF-32
+        apart and skips a byte-order mark, as a plan saved through Windows
+        PowerShell 5.1 may carry. Text in any other encoding is refused.
+
         Raises:
-            ConversionRefused: If the file cannot be read, is not JSON, or
-                is not a plan.
+            ConversionRefused: If the file cannot be read, is not JSON in one
+                of those encodings, or is not a plan.
         """
         try:
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            data = json.loads(Path(path).read_bytes())
+        except UnicodeDecodeError as exc:
+            raise ConversionRefused(
+                f"Could not read the mass axis plan {Path(path).name}: it is "
+                f"not UTF-8, UTF-16 or UTF-32 text ({exc.reason} at byte "
+                f"{exc.start}). Save it as UTF-8."
+            ) from exc
         except (OSError, ValueError) as exc:
             raise ConversionRefused(
                 f"Could not read the mass axis plan {Path(path).name}: {exc}"

@@ -55,7 +55,9 @@ A converted dataset contains the following elements:
 !!! info "Coordinate systems"
     Every element above carries a transform to the ``"global"``
     coordinate system (and the same transform to a second one named after
-    the dataset id), and Thyra writes a self-describing
+    the dataset id). In a micrometer store, elements also carry
+    ``"acquisition"``: ``"global"`` moved to where the source put its
+    raster, so two stores of one slide line up. Thyra writes a self-describing
     ``coordinate_systems`` metadata attr at the zarr top level so
     consumers know what ``"global"`` is in (micrometers or pixels).
     See [Coordinate Systems](coordinate-systems.md) for the contract
@@ -382,7 +384,7 @@ Windows), numpy arrays rather than lists:
 | `acq_range` | `float64[2]`, `[lower, upper]`: the acquired range as declared, else the span of `values` |
 | `calibration` | `{model_type, coefficients}`: the vendor `TimsCalibration` row, provenance only |
 | `source` | `"bruker_tdf"`, `"imzml"` or `"waters_raw"` |
-| `bin_width` | `float`, only where the source defines its own equal-width bins (Waters drift bins): the width of one, in the axis unit. Its presence is what gives the heatmap one channel per bin (D50) |
+| `bin_width` | `float`, only where the source defines its own equal-width bins (Waters drift bins): the width of one, in the axis unit. Its presence is what gives the heatmap one channel per bin (D52) |
 | `resolved_table` | element key of the mobility-resolved sibling table, when one was written |
 
 **`uns["mobility_heatmap"]`** is the table's mean mass-mobility frame: the
@@ -398,7 +400,7 @@ plane's heatmap.
 | key | value |
 |---|---|
 | `mz_edges` | `float64[m + 1]`: bin edges on the common m/z axis, which is coarsened by an integer factor to about 4,000 bins (`m` is the axis length itself when it is shorter) |
-| `mobility_edges` | `float64[k + 1]`, **`k = 256`**: equal-width bins in the axis unit, ascending, spanning the axis `values`. A source whose axis is fewer than 256 equal-width bins of its own (Waters drift bins, `uns["mobility_axis"]["bin_width"]` set) gets one channel per bin instead, edges half a bin outside the first and last value (D50) |
+| `mobility_edges` | `float64[k + 1]`, **`k = 256`**: equal-width bins in the axis unit, ascending, spanning the smallest to the largest mobility value the source holds (the axis `values` when shared; every pixel's own values on a processed imzML, read once for this). A source whose axis is fewer than 256 equal-width bins of its own (Waters drift bins, `uns["mobility_axis"]["bin_width"]` set) gets one channel per bin instead, edges half a bin outside the first and last value (D52) |
 | `counts` | `float32[m, k]`: mean intensity per bin over pixel positions, the rows `uns["average_spectrum"]` divides by |
 | `current_ratio` | `float`: the heatmap's ion current over `uns["average_spectrum"]`'s -- 1.0 under `scan_sum`; above 1 under `vendor_centroid` (about 1.01 to 1.23), whose picked peaks keep only part of the raw current the heatmap holds |
 
@@ -506,7 +508,8 @@ an m/z keep the order of their mobility: the larger 1/K0 has the larger CCS.
 
 A source whose mobility values differ per pixel -- a Bruker TDF, where a
 frame is a point cloud and no two pixels are promised the same `(m/z, 1/K0)`
-pairs -- has no shared feature axis to read off. `--mobility-grid` fills the
+pairs, or a processed imzML export with a mobility array, as TIMSCONVERT
+writes it -- has no shared feature axis to read off. `--mobility-grid` fills the
 **same** `{table}_mobility` element for it by binning: every pixel's points
 go onto one set of mobility channels shared across the conversion, and
 `(m/z bin, channel)` becomes the feature axis.
@@ -520,7 +523,7 @@ to tell them apart to read either. What says which one filled it is
 |---|---|
 | `law` | how the channel edges are spaced; `"linear"` (equal width in the axis unit) is the only law today |
 | `lower`, `upper` | the range the channels span, in the axis unit |
-| `n_channels` | how many channels: by default the heatmap's own, **256**, or one per bin on a source with fewer equal-width bins (D50) |
+| `n_channels` | how many channels: by default the heatmap's own, **256**, or one per bin on a source with fewer equal-width bins (D52) |
 | `channel_width` | `(upper - lower) / n_channels`, recorded so a reader can see it without arithmetic |
 | `edges` | `float64[n_channels + 1]`, the channel edges themselves |
 
@@ -529,11 +532,13 @@ and `n_channels` too, so a consumer reading only the summed table finds them.
 
 Three things are worth knowing before asking for one:
 
-- **The edges come from the axis values, never the declared acquisition
-  range.** A real file's per-scan 1/K0 overhangs its declared
-  `OneOverK0AcqRange` by a few scans (1.00003 to 1.29133 against a declared
-  1.0 to 1.29 on one measured acquisition), and `uns["mobility_heatmap"]`
-  already bins over the values. `--mobility-min` / `--mobility-max` override
+- **The edges come from the values, never a declared range.** A real
+  TDF's per-scan 1/K0 overhangs its declared `OneOverK0AcqRange` by a few
+  scans (1.00003 to 1.29133 against a declared 1.0 to 1.29 on one measured
+  acquisition), and `uns["mobility_heatmap"]` already bins over the values.
+  A processed imzML has no shared axis, so its values are read from every
+  pixel, once, before the heatmap's pass
+  ([D46](design-decisions.md#d46-a-processed-imzml-with-mobility-gets-the-heatmap-and-the-grid-when-asked)). `--mobility-min` / `--mobility-max` override
   them, at the cost of the alignment below.
 - **The default channels are an alignment anchor, not a tuning knob.** They
   are the heatmap's own channels over the heatmap's own edges (256, or one
@@ -547,7 +552,9 @@ Three things are worth knowing before asking for one:
 - **Its marginal reproduces the summed table under the default
   `--tdf-spectrum scan_sum`.** A grid table is built from raw scans, so its
   marginal reproduces the summed table only when the summed table was built
-  from the same scans, which the default is. An explicit `vendor_centroid`,
+  from the same scans, which the default is. On an imzML that means each
+  point placed on its nearest mass bin: no resampling, or
+  `nearest_neighbor`. An explicit `vendor_centroid`,
   a peak-picked spectrum over the same ramp, is kept and said at `WARNING`;
   `uns["mobility_marginal"]` then records by how much the two differ.
 
@@ -581,7 +588,7 @@ A grid is refused, at `INFO` or `WARNING` and never as an exception, when:
 |---|---|
 | the source has no mobility dimension | there is nothing to bin |
 | `--mobility-grid` was not given | binning is opt in: it costs a pass over the source and a much larger table |
-| the mobility axis carries no per-scan values | a reader opened without its vendor library cannot supply them, and the declared range is not a substitute |
+| the source gives no mobility values to bin over | a Bruker reader opened without its vendor library cannot supply them, and the declared range is not a substitute |
 | the grid spans more pairs than the counting pass can hold (a raw, unresampled axis of millions of bins) | the count array is `4 bytes x bins x channels`, capped at 1 GB; resample to fewer mass bins |
 | the `var` frame of the occupied `(m/z bin, channel)` pairs is projected to take more than half of the machine's free memory (338 bytes per pair: 330 measured, plus the `ccs` column), or the pairs pass an absolute cap of 100,000,000 | the count, the projection and the free memory are printed; resample to fewer mass bins or ask for fewer channels. A projection past a quarter of free memory is attempted with a `WARNING`. See [Design Decisions](design-decisions.md#d4-the-grids-feature-ceiling-is-a-memory-guard-not-a-format-limit) |
 
@@ -598,6 +605,9 @@ the summed table's own: the converter reads each frame once per pass
 and derives the summed spectrum, the heatmap's points, the grid's cells and
 the MS/MS split from that one read, so none of the siblings adds a read of
 the source (see [Design Decisions](design-decisions.md#d5-one-raw-read-per-frame-per-pass-serves-every-table)).
+On a processed imzML the two passes are the heatmap's pass, which also
+counts, and one more for the scatter, after a read of the mobility arrays
+alone for the range.
 Every point is mapped onto the mass axis once per pass and shared between
 the heatmap and the grid, since the mapping costs more than the vendor read.
 
@@ -609,10 +619,12 @@ span would turn away conversions that fit ninefold over. The span is said at
 moment the first pass ends and before a single value has been scattered, so a
 refusal costs one read and no memory.
 
-Bruker TDF is the only source that gets a grid today. A continuous imzML
-export with a mobility array already has a shared feature axis and is read
-off it. A processed imzML export with a mobility array has neither: its
-table is summed over mobility, with no heatmap and no mobility table.
+Bruker TDF and processed imzML exports with a mobility array get a grid. A
+continuous imzML export with a mobility array already has a shared feature
+axis and is read off it; `--mobility-grid` is ignored there, with a
+`WARNING`. A point whose mobility value is not a finite number has no
+channel: the heatmap and the grid leave it out, the summed table keeps it,
+and a `WARNING` gives the count.
 
 ### Fragmentation (MS/MS)
 
@@ -691,13 +703,17 @@ corresponding column of the summed table are the same m/z bin. One
 precursor's fragments are therefore a contiguous column block whose row
 sums are its ion image, and **the blocks add back up**: summing all
 fragment columns of every precursor reproduces the summed table's TIC per
-pixel, because each recorded point falls in exactly one isolation window.
+pixel, when every scan that carries current lies in an isolation window.
 Exactly, under the default `--tdf-spectrum scan_sum`: the split is built
 from the raw scans, and only a summed spectrum built from the same scans
-can add back up to it. An explicit `vendor_centroid` keeps only the current
-inside the peaks it picks (79 to 99 percent on the imaging acquisitions measured),
-so the two tables of one store would genuinely not agree; that is said at
-`WARNING` and recorded in `uns["demultiplexed_current"]`.
+can add back up to it. Two things break the identity, and both are said at
+`WARNING` and recorded in `uns["demultiplexed_current"]`. An explicit
+`vendor_centroid` keeps only the current inside the peaks it picks (79 to
+99 percent on the imaging acquisitions measured), so the split holds more
+than the summed table. A schedule whose windows leave out scans that carry
+current puts that current in no block, so the split holds less. Every
+acquired PASEF schedule measured so far covers all of it (see
+[Design Decisions](design-decisions.md#d2-the-msms-table-is-written-by-default-when-the-schedule-qualifies)).
 
 ```python
 msms = sdata.tables["msi_dataset_z0_msms"]
@@ -785,7 +801,10 @@ split needs today.
 **`uns["demultiplexed_current"]`** records how much of the summed table's
 ion current the split holds: `current_ratio` over the whole image, and
 `current_ratio_pixel_min` / `_max` across pixels. Under the default
-`--tdf-spectrum scan_sum` it is exactly `1.0`.
+`--tdf-spectrum scan_sum` it is exactly `1.0` when the windows cover every
+scan that carries current, and **below** 1 when they do not: the synthetic
+type-9 test fixture, whose three windows span scans 60 to 180 of a
+240-scan ramp, gives 0.92.
 Under an explicit `--tdf-spectrum vendor_centroid` it is **above** 1 -- the
 vendor peak picker drops the index bins it assigns to no peak while the
 split reads raw scans,
@@ -1212,7 +1231,7 @@ terms, and a schema a validator can hold it to.
 ```python
 block = msi_table.uns["msi_metadata"]
 
-print(block["schema_version"])                    # "0.13.0"
+print(block["schema_version"])                    # "0.14.0"
 print(block["ms_analysis"]["pixel_size_um"])      # {"x": 20.0, "y": 20.0}
 print(block["ms_analysis"].get("spectrum_representation"))  # "profile" / "centroid"
 print(block.get("sample", {}).get("sample_id"))   # only when you named the sample

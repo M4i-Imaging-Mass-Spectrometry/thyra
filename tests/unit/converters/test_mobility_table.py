@@ -4,10 +4,13 @@
 four pixels; two m/z values repeat because mobility splits them. The summed
 MSI table must merge those, the sibling table must keep them apart, and the
 two must agree on rows, region and provenance. ``mobility_processed.imzML``
-has mobility per pixel and gets the summed table only.
+has mobility per pixel: by default it gets the summed table and the
+mass-mobility heatmap over the values its pixels hold, and with
+``mobility_grid`` the same sibling table, binned onto the heatmap's channels.
 """
 
 import json
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +23,7 @@ from thyra.metadata.schema import (  # noqa: E402
     check_store_var_conventions,
     read_msi_metadata_blocks,
 )
+from thyra.resampling.mobility_grid import MOBILITY_CHANNELS  # noqa: E402
 from thyra.resampling.types import ResamplingConfig, ResamplingMethod  # noqa: E402
 from thyra.utils.windows_paths import prepare_zarr_read_path  # noqa: E402
 
@@ -235,8 +239,176 @@ class TestProcessedExport:
         assert axis_block["type_accession"] == "MS:1002815"
         assert "values" not in axis_block
         assert "resolved_table" not in axis_block
-        # Per-pixel mobility with no shared axis gives no range to bin over.
-        assert "mobility_heatmap" not in summed.uns
         block = read_msi_metadata_blocks(out)["mob_z0"]
         assert block["ms_analysis"]["ion_mobility"]["present"] is True
         assert check_store_var_conventions(out) == {"mob_z0": []}
+
+    def test_the_heatmap_bins_over_the_values_the_pixels_hold(
+        self, tmp_path, streaming
+    ):
+        """No shared axis and no declared range: the pixels' own values decide."""
+        _, sdata = _convert(PROCESSED, tmp_path, streaming=streaming)
+        heat = sdata.tables["mob_z0"].uns["mobility_heatmap"]
+        edges = np.asarray(heat["mobility_edges"])
+        assert edges.size == MOBILITY_CHANNELS + 1
+        assert edges[0] == pytest.approx(0.8) and edges[-1] == pytest.approx(1.1)
+        counts = np.asarray(heat["counts"])
+        # The mean over four pixels holding 100, 200, 300 and 400.
+        assert float(counts.sum()) == pytest.approx(250.0)
+        assert float(heat["current_ratio"]) == pytest.approx(1.0)
+        # Each 1/K0 lands in its own channel: 0.8 in the first, 1.1 (the
+        # upper edge) in the last.
+        per_channel = counts.sum(axis=0)
+        expected = {0: 25.0, 85: 75.0, 170: 100.0, MOBILITY_CHANNELS - 1: 50.0}
+        assert set(np.flatnonzero(per_channel).tolist()) == set(expected)
+        for channel, mean in expected.items():
+            assert per_channel[channel] == pytest.approx(mean)
+
+    def test_no_table_without_the_grid_and_the_log_says_how(
+        self, tmp_path, streaming, thyra_logs
+    ):
+        with thyra_logs("thyra.converters.spatialdata.sibling_tables") as records:
+            _, sdata = _convert(PROCESSED, tmp_path, streaming=streaming)
+        assert "mob_z0_mobility" not in sdata.tables
+        assert any("--mobility-grid" in r.getMessage() for r in records)
+
+
+#: Each fixture point as (m/z base index, 1/K0, intensity at pixel 0); the
+#: intensity scales with the pixel, as the fixture builder writes it.
+PROCESSED_POINTS = [(0, 0.8, 10.0), (0, 1.1, 20.0), (1, 0.9, 30.0), (2, 1.0, 40.0)]
+PROCESSED_MZ_BASES = (100.0, 250.5, 400.0)
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["in-memory", "streaming"])
+class TestProcessedExportOnAGrid:
+    """``mobility_grid`` on a processed imzML: the contract the TDF grid keeps."""
+
+    def test_the_grid_table_is_written_on_the_heatmap_channels(
+        self, tmp_path, streaming
+    ):
+        out, sdata = _convert(
+            PROCESSED, tmp_path, streaming=streaming, mobility_grid=True
+        )
+        assert set(sdata.tables) == {"mob_z0", "mob_z0_mobility"}
+        summed = sdata.tables["mob_z0"]
+        block = sdata.tables["mob_z0_mobility"].uns["mobility_grid"]
+        assert str(block["law"]) == "linear"
+        assert int(block["n_channels"]) == MOBILITY_CHANNELS
+        assert float(block["lower"]) == pytest.approx(0.8)
+        assert float(block["upper"]) == pytest.approx(1.1)
+        np.testing.assert_array_equal(
+            np.asarray(block["edges"]),
+            np.asarray(summed.uns["mobility_heatmap"]["mobility_edges"]),
+        )
+        assert summed.uns["mobility_axis"]["resolved_table"] == "mob_z0_mobility"
+        assert check_store_var_conventions(out) == {
+            "mob_z0": [],
+            "mob_z0_mobility": [],
+        }
+
+    def test_the_grid_table_carries_ccs_like_every_1_k0_table(
+        self, tmp_path, streaming
+    ):
+        """The fixture states 1/K0 in MS:1002814, so D47 applies (D46)."""
+        _, sdata = _convert(
+            PROCESSED, tmp_path, streaming=streaming, mobility_grid=True
+        )
+        grid = sdata.tables["mob_z0_mobility"]
+        ccs = grid.var["ccs"].to_numpy()
+        assert ccs.shape == (grid.n_vars,) and np.all(np.isfinite(ccs))
+        assert int(grid.uns["ccs"]["charge_assumed"]) == 1
+        # Same m/z: the higher-mobility channel has the larger cross section.
+        mz = grid.var["mz"].to_numpy()
+        at_100 = np.flatnonzero(mz == 100.0)
+        order = np.argsort(grid.var["mobility"].to_numpy()[at_100])
+        assert np.all(np.diff(ccs[at_100][order]) > 0)
+
+    def test_each_point_lands_in_its_cell(self, tmp_path, streaming):
+        _, sdata = _convert(
+            PROCESSED, tmp_path, streaming=streaming, mobility_grid=True
+        )
+        grid = sdata.tables["mob_z0_mobility"]
+        mz = grid.var["mz"].to_numpy()
+        channel = grid.var["mobility_index"].to_numpy().astype(int)
+        edges = np.asarray(grid.uns["mobility_grid"]["edges"])
+        for i, (x, y) in enumerate([(0, 0), (1, 0), (0, 1), (1, 1)]):
+            row = _row(grid, x, y)
+            assert row.sum() == pytest.approx(100.0 * (i + 1))
+            for base, k0, intensity in PROCESSED_POINTS:
+                want = min(
+                    int(np.searchsorted(edges, k0, side="right")) - 1,
+                    MOBILITY_CHANNELS - 1,
+                )
+                cell = np.flatnonzero(
+                    (mz == PROCESSED_MZ_BASES[base] + i) & (channel == want)
+                )
+                assert cell.size == 1
+                assert row[cell[0]] == pytest.approx(intensity * (i + 1))
+
+    def test_the_marginal_reproduces_the_summed_table(self, tmp_path, streaming):
+        _, sdata = _convert(
+            PROCESSED, tmp_path, streaming=streaming, mobility_grid=True
+        )
+        block = sdata.tables["mob_z0_mobility"].uns["mobility_marginal"]
+        assert str(block["summed_table"]) == "mob_z0"
+        assert float(block["current_ratio"]) == pytest.approx(1.0)
+        assert float(block["current_ratio_pixel_min"]) == pytest.approx(1.0)
+        assert float(block["current_ratio_pixel_max"]) == pytest.approx(1.0)
+
+    def test_a_stated_range_overrides_the_values(self, tmp_path, streaming):
+        _, sdata = _convert(
+            PROCESSED,
+            tmp_path,
+            streaming=streaming,
+            mobility_grid=True,
+            mobility_bins=3,
+            mobility_min=0.7,
+            mobility_max=1.3,
+        )
+        block = sdata.tables["mob_z0_mobility"].uns["mobility_grid"]
+        assert int(block["n_channels"]) == 3
+        np.testing.assert_allclose(np.asarray(block["edges"]), [0.7, 0.9, 1.1, 1.3])
+
+    def test_the_grid_needs_no_heatmap(self, tmp_path, streaming):
+        """The range is the reader's, not something the heatmap's pass leaves."""
+        _, sdata = _convert(
+            PROCESSED,
+            tmp_path,
+            streaming=streaming,
+            mobility_grid=True,
+            mobility_heatmap=False,
+        )
+        assert "mobility_heatmap" not in sdata.tables["mob_z0"].uns
+        block = sdata.tables["mob_z0_mobility"].uns["mobility_grid"]
+        assert float(block["lower"]) == pytest.approx(0.8)
+        assert float(block["upper"]) == pytest.approx(1.1)
+
+
+class TestAnUnreadableRange:
+    def test_the_conversion_keeps_its_summed_table(self, tmp_path, monkeypatch):
+        """No range costs the heatmap and the grid, not the conversion."""
+        from thyra.errors import ConversionRefused
+        from thyra.readers.imzml.imzml_reader import ImzMLReader
+
+        def _refuse(self):
+            raise ConversionRefused("ion mobility array truncated in the .ibd")
+
+        monkeypatch.setattr(ImzMLReader, "_scan_mobility_span", _refuse)
+        _, sdata = _convert(PROCESSED, tmp_path, mobility_grid=True)
+        assert set(sdata.tables) == {"mob_z0"}
+        summed = sdata.tables["mob_z0"]
+        assert "mobility_heatmap" not in summed.uns
+        assert "resolved_table" not in summed.uns["mobility_axis"]
+        assert summed.X.sum() == pytest.approx(1000.0)
+
+
+class TestTheGridOnASharedAxis:
+    def test_the_grid_is_ignored_and_said_to_be(self, tmp_path, thyra_logs):
+        """A continuous export is read off its features; the flag changes nothing."""
+        with thyra_logs(
+            "thyra.converters.spatialdata.sibling_tables", logging.WARNING
+        ) as records:
+            _, sdata = _convert(CONTINUOUS, tmp_path, mobility_grid=True)
+        assert "mobility_grid" not in sdata.tables["mob_z0_mobility"].uns
+        messages = [r.getMessage() for r in records]
+        assert sum("--mobility-grid is ignored" in m for m in messages) == 1

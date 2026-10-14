@@ -94,7 +94,13 @@ from pydantic import (
 #        mobility table whose axis is 1/K0, for an assumed charge of 1
 #        (design decision D47).  The document's fields are unchanged, so
 #        a 0.12.0 document is a valid 0.13.0 one.
-MSI_METADATA_SCHEMA_VERSION = "0.13.0"
+# 0.14.0: reserved the coordinate system ``"acquisition"`` (additive): in a
+#        store in micrometres, every placed element also carries a
+#        transform that moves ``"global"`` to the source's own origin, and
+#        the ``coordinate_systems`` root attribute describes it (design
+#        decision D48, issue #446).  The document's fields are unchanged,
+#        so a 0.13.0 document is a valid 0.14.0 one.
+MSI_METADATA_SCHEMA_VERSION = "0.14.0"
 
 # Where the block lives inside a converted store:
 # ``table.uns["msi_metadata"]``.  This location is a stable contract
@@ -103,7 +109,7 @@ MSI_METADATA_SCHEMA_VERSION = "0.13.0"
 MSI_METADATA_UNS_KEY = "msi_metadata"
 
 # The committed JSON Schema artifact for this schema version.
-SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_13.json"
+SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_14.json"
 
 # Where every published version of the schema is served (issue #385).
 # ``docs/schema/<version>/`` is copied verbatim onto the documentation
@@ -213,7 +219,8 @@ CANDIDATE_CV_CONCEPTS = (
     ),
     (
         "stage offset of the raster origin",
-        "root attrs coordinate_systems.global.stage_offset_um",
+        "root attrs coordinate_systems.global.stage_offset_um and the "
+        "'acquisition' coordinate system",
     ),
     ("ROI / acquisition region identity", "uns['regions']"),
     ("missing / empty pixel semantics", "obs row filtering"),

@@ -20,6 +20,10 @@ from typing import Any, Dict, Optional
 import numpy as np
 import pytest
 
+from thyra.converters.spatialdata.acquisition_frame import (
+    ORIGIN_FROM_STAGE_POSITION,
+    acquisition_origin,
+)
 from thyra.converters.spatialdata.root_attrs import RootAttrsBuilder, RootAttrsContext
 from thyra.core.base_converter import ZSpacingSource
 from thyra.metadata.types import ComprehensiveMetadata, EssentialMetadata
@@ -296,25 +300,53 @@ class TestTheCoordinateContract:
 
 
 class TestTheSourceOffsets:
+    # What the converter hands over for offsets (3, 4, 0) at 30 x 50 um.
+    ORIGIN = acquisition_origin((3, 4, 0), None, (30.0, 50.0), None)
+
     def test_they_are_recorded_with_their_physical_equivalent(self):
         reader = _StubReader(essential=_essential(coordinate_offsets=(3, 4, 0)))
 
-        global_cs = _builder(reader).build(_context())["coordinate_systems"]["global"]
+        systems = _builder(reader).build(_context(acquisition_origin=self.ORIGIN))[
+            "coordinate_systems"
+        ]
 
-        assert global_cs["coordinate_offsets_px"] == [3, 4, 0]
-        assert global_cs["stage_offset_um"] == [3 * 30.0, 4 * 50.0]
+        assert systems["global"]["coordinate_offsets_px"] == [3, 4, 0]
+        assert systems["global"]["stage_offset_um"] == [3 * 30.0, 4 * 50.0]
+        assert systems["acquisition"]["origin_um"] == [3 * 30.0, 4 * 50.0]
 
     def test_in_pixel_space_the_micrometre_offset_is_not_written(self):
         # It would be read as optical pixels, which it is not.
         reader = _StubReader(essential=_essential(coordinate_offsets=(3, 4, 0)))
         optical = _StubOptical(apply_alignment=True, tic_to_image=np.eye(3))
 
-        global_cs = _builder(reader).build(_context(optical=optical))[
-            "coordinate_systems"
-        ]["global"]
+        systems = _builder(reader).build(
+            _context(optical=optical, acquisition_origin=self.ORIGIN)
+        )["coordinate_systems"]
 
-        assert global_cs["coordinate_offsets_px"] == [3, 4, 0]
-        assert "stage_offset_um" not in global_cs
+        assert systems["global"]["coordinate_offsets_px"] == [3, 4, 0]
+        assert "stage_offset_um" not in systems["global"]
+        assert "acquisition" not in systems
+
+    def test_a_stage_origin_is_written_without_index_offsets(self):
+        """Waters reports a stage origin and no index offsets.
+
+        ``coordinate_offsets_px`` comes from the reader's offsets alone, so it
+        is absent here because the stub reports none, as Waters does.
+        """
+        origin = acquisition_origin(None, (-11400.25, 3050.5), (30.0, 50.0), None)
+
+        systems = _builder(_StubReader(essential=_essential())).build(
+            _context(acquisition_origin=origin)
+        )["coordinate_systems"]
+
+        assert "coordinate_offsets_px" not in systems["global"]
+        assert systems["global"]["stage_offset_um"] == [-11400.25, 3050.5]
+        assert systems["acquisition"]["origin_source"] == ORIGIN_FROM_STAGE_POSITION
+
+    def test_no_origin_writes_no_acquisition_entry(self):
+        systems = _builder().build(_context())["coordinate_systems"]
+
+        assert set(systems) == {"global"}
 
     def test_a_reader_that_cannot_say_costs_only_the_offsets(self):
         attrs = _builder(_StubReader(essential=None)).build(_context())

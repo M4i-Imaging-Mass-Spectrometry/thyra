@@ -42,13 +42,15 @@ def zero_across_gaps(
 
     Modifies ``resampled`` in place and returns it.
 
-    A bin survives when some source m/z lies within ``tolerance`` of it. On a
-    source grid of uniform step ``s`` the farthest any target point can be
-    from a source point is ``s / 2``, so any tolerance of at least half the
-    source spacing leaves such a spectrum untouched -- which is what makes it
-    safe to switch on for continuous profile data. Half the *widest* source
-    gap is the rule to size it by; exactly half is a floating-point knife
-    edge, so give it a hair of margin.
+    A bin survives when some source m/z lies within ``tolerance`` of it.
+    ``tic_preserving`` never passes a bin it rebinned: that bin holds
+    samples and is measured (D50). On a source grid of uniform step ``s``
+    the farthest any target point can be from a source point is ``s / 2``,
+    so any tolerance of at least half the source spacing leaves such a
+    spectrum untouched -- which is what makes it safe to switch on for
+    continuous profile data. Half the *widest* source gap is the rule to
+    size it by; exactly half is a floating-point knife edge, so give it a
+    hair of margin.
 
     Args:
         resampled: Interpolated intensities on ``axis``, modified in place.

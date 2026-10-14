@@ -54,6 +54,7 @@ from tqdm import tqdm
 from ...core.conversion_state import ConversionState
 from ...errors import ConversionRefused
 from ...metadata.schema import MSI_OBS_ACQUISITION_ORDER_COLUMN
+from .acquisition_frame import element_transformations
 from .base_spatialdata_converter import BaseSpatialDataConverter
 from .csc_assembly import CscAssembly, index_dtype
 
@@ -760,11 +761,20 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         usable = peaks_in - self._unusable_intensities
         if self._resampler is not None and self._resampler.out_of_range_peaks >= usable:
             lo_mz, hi_mz = self._resampler.kept_range
+            config = self._resampling_config
+            if config is not None and config.mass_axis_sha256 is not None:
+                fix = (
+                    "plan again with this source among the sources, or widen "
+                    "the plan's range, to keep them"
+                )
+            else:
+                fix = (
+                    "widen the resampling range (--resample-min-mz / "
+                    "--resample-max-mz) to keep them"
+                )
             return (
                 "every peak fell outside the target mass range "
-                f"[{lo_mz:.4f}, {hi_mz:.4f}] m/z -- widen the "
-                "resampling range (--resample-min-mz / --resample-max-mz) to "
-                "keep them"
+                f"[{lo_mz:.4f}, {hi_mz:.4f}] m/z -- {fix}"
             )
         return "every intensity in the source is zero"
 
@@ -1162,7 +1172,12 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             )
             return Image3DModel.parse(
                 xr.DataArray(unit.tic[np.newaxis, ...], dims=("c", "z", "y", "x")),
-                transformations={self.dataset_id: transform, "global": transform},
+                transformations=element_transformations(
+                    self.dataset_id,
+                    transform,
+                    self._acquisition_origin(),
+                    axes=("x", "y", "z"),
+                ),
             )
 
         plane = unit.tic if unit.plane is not None else unit.tic[0]
@@ -1182,5 +1197,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             )
         return Image2DModel.parse(
             xr.DataArray(plane[np.newaxis, ...], dims=("c", "y", "x")),
-            transformations={self.dataset_id: transform, "global": transform},
+            transformations=element_transformations(
+                self.dataset_id, transform, self._acquisition_origin()
+            ),
         )

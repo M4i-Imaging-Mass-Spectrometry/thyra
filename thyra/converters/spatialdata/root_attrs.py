@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Tuple
 
 import pandas as pd
 
+from .acquisition_frame import ACQUISITION_COORDINATE_SYSTEM, AcquisitionOrigin
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ...core.base_reader import BaseMSIReader
     from .optical_image import OpticalImages
@@ -67,6 +69,10 @@ class RootAttrsContext:
             flag alone.
         z_spacing_um: Slice pitch, meaningful only for a volume.
         z_spacing_source: Where that pitch came from; read as ``.value``.
+        acquisition_origin: Where the source put grid index 0, in
+            micrometres; the same value the element transforms of the
+            ``"acquisition"`` system are built from. ``None`` when the
+            store has no such system (D48).
     """
 
     optical: "OpticalImages"
@@ -77,6 +83,7 @@ class RootAttrsContext:
     is_volume: bool
     z_spacing_um: float
     z_spacing_source: Any
+    acquisition_origin: Optional[AcquisitionOrigin] = None
 
 
 class RootAttrsBuilder:
@@ -317,10 +324,12 @@ class RootAttrsBuilder:
         # spot (D31), or on obs["spatial_x"] = i * px in micrometres
         # (D32).  `coordinate_offsets_px` preserves the
         # source's raw acquisition-index offsets, which 0-based
-        # normalisation otherwise erases; `stage_offset_um` is their
-        # physical equivalent, written only when "global" is in
-        # micrometers so it cannot be misread in the optical-pixel
-        # variant.
+        # normalisation otherwise erases; `stage_offset_um` is where grid
+        # index 0 sits in the source's frame, in micrometers: those
+        # offsets times the pitch, or a fitted stage origin (Waters,
+        # D48). It is written only when "global" is in micrometers so it
+        # cannot be misread in the optical-pixel variant, and it is the
+        # translation of the "acquisition" system below.
         if ctx.optical.msi_in_pixel_space:
             global_cs["raster_to_global_affine"] = [
                 [float(v) for v in row] for row in ctx.optical.tic_to_image
@@ -334,17 +343,54 @@ class RootAttrsBuilder:
         offsets = self._source_coordinate_offsets()
         if offsets is not None:
             global_cs["coordinate_offsets_px"] = [int(v) for v in offsets]
-            if unit == "micrometer":
-                global_cs["stage_offset_um"] = [
-                    float(offsets[0]) * float(px),
-                    float(offsets[1]) * float(py),
-                ]
+        origin = ctx.acquisition_origin if unit == "micrometer" else None
+        if origin is not None:
+            global_cs["stage_offset_um"] = [origin.x_um, origin.y_um]
 
         if ctx.is_volume:
             global_cs["z_spacing_um"] = float(ctx.z_spacing_um)
             global_cs["z_spacing_source"] = ctx.z_spacing_source.value
 
-        return {"global": global_cs}
+        systems: Dict[str, Any] = {"global": global_cs}
+        if origin is not None:
+            systems[ACQUISITION_COORDINATE_SYSTEM] = self._acquisition_attr(
+                ctx, origin, thyra_version
+            )
+        return systems
+
+    @staticmethod
+    def _acquisition_attr(
+        ctx: RootAttrsContext, origin: AcquisitionOrigin, thyra_version: str
+    ) -> Dict[str, Any]:
+        """The ``"acquisition"`` entry: ``"global"`` moved to the source's origin.
+
+        Written beside ``"global"`` rather than in it, because it is a
+        coordinate system of its own: every element of a micrometre store
+        carries a transformation to it (D48). Additive, so
+        ``convention_version`` stays 1 for the reason given for
+        ``z_spacing_um``.
+        """
+        px, py = ctx.pixel_size_xy
+        attr: Dict[str, Any] = {
+            "unit": "micrometer",
+            "pixel_size_um_x": float(px),
+            "pixel_size_um_y": float(py),
+            "reference_element": None,
+            "convention_version": COORDINATE_SYSTEMS_SCHEMA_VERSION,
+            "produced_by": f"thyra/{thyra_version}",
+            "origin_um": [origin.x_um, origin.y_um],
+            "origin_source": origin.source,
+            # The raster_to_global_affine with the origin added.
+            "raster_to_acquisition_affine": [
+                [float(px), 0.0, -0.5 * float(px) + origin.x_um],
+                [0.0, float(py), -0.5 * float(py) + origin.y_um],
+                [0.0, 0.0, 1.0],
+            ],
+        }
+        if ctx.is_volume:
+            attr["origin_um"].append(origin.z_um)
+            attr["z_spacing_um"] = float(ctx.z_spacing_um)
+        return attr
 
     def _source_coordinate_offsets(self) -> Optional[Tuple[int, int, int]]:
         """The reader's raw coordinate offsets, if it reported any."""

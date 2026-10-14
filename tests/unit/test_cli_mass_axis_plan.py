@@ -8,6 +8,8 @@ converting with it are tested with the planner and the converter.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from click.testing import CliRunner
 
@@ -131,8 +133,6 @@ def test_the_method_the_plan_forces_may_be_repeated(run):
 def test_a_hand_edited_plan_is_a_usage_error_not_a_traceback(
     create_minimal_imzml, temp_dir
 ):
-    import json
-
     imzml_path, _, _, _ = create_minimal_imzml
     data = _plan().to_dict()
     data["min_mz"] = "abc"
@@ -147,6 +147,45 @@ def test_a_hand_edited_plan_is_a_usage_error_not_a_traceback(
     assert result.exit_code == 2, result.output
     assert "min_mz" in result.output
     assert not isinstance(result.exception, ValueError)
+
+
+def test_a_plan_file_saved_with_a_byte_order_mark_is_read(
+    create_minimal_imzml, temp_dir, monkeypatch
+):
+    imzml_path, _, _, _ = create_minimal_imzml
+    monkeypatch.setattr("thyra.convert.convert_msi", lambda *a, **k: True)
+    plan_file = temp_dir / "bom.json"
+    plan_file.write_bytes(json.dumps(_plan().to_dict()).encode("utf-8-sig"))
+
+    result = CliRunner().invoke(
+        main,
+        [
+            str(imzml_path),
+            str(temp_dir / "out.zarr"),
+            "--mass-axis-plan",
+            str(plan_file),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+
+
+def test_a_plan_with_an_inverted_range_is_a_usage_error_naming_the_keys(
+    create_minimal_imzml, temp_dir
+):
+    imzml_path, _, _, _ = create_minimal_imzml
+    data = _plan().to_dict()
+    data["min_mz"], data["max_mz"] = data["max_mz"], data["min_mz"]
+    bad = temp_dir / "inverted.json"
+    bad.write_text(json.dumps(data), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        main,
+        [str(imzml_path), str(temp_dir / "out.zarr"), "--mass-axis-plan", str(bad)],
+    )
+
+    assert result.exit_code == 2, result.output
+    assert "min_mz" in result.output and "max_mz" in result.output
 
 
 def test_a_gap_tolerance_travels_with_the_plan(run):

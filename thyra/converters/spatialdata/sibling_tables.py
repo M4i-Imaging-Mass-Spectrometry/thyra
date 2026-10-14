@@ -242,9 +242,9 @@ class SiblingTables:
                 feature axis needs no grid and ignores this).
             mobility_bins: Channels that grid divides the mobility range
                 into, or ``None`` for the heatmap's own channels: 256, or
-                one per bin on a source with fewer equal-width bins (D50).
+                one per bin on a source with fewer equal-width bins (D52).
             mobility_min: Lower edge of the grid, or ``None`` for the
-                smallest value the source's axis holds.
+                smallest value the source holds.
             mobility_max: Upper edge, or ``None`` for the largest.
             write_msms_table: Whether a demultiplexed MS/MS sibling is
                 wanted.
@@ -439,6 +439,17 @@ class SiblingTables:
         from .mobility_table import mobility_table_key
 
         if shared:
+            if self._mobility_grid_enabled and not self._mobility_grid_resolved:
+                # Said once per conversion, not once per plane.
+                self._mobility_grid_resolved = True
+                logger.warning(
+                    "--mobility-grid is ignored: %s shares one set of (m/z, "
+                    "mobility) features across pixels, so the mobility table "
+                    "is written from those features rather than binned onto "
+                    "a grid; --mobility-bins, --mobility-min and "
+                    "--mobility-max are ignored with it.",
+                    type(self.reader).__name__,
+                )
             return mobility_table_key(table_key)
         if not self._mobility_grid_enabled:
             logger.info(
@@ -458,11 +469,11 @@ class SiblingTables:
     def _resolve_mobility_grid(self, ctx: SiblingContext) -> Optional[MobilityGrid]:
         """The common mobility grid this conversion bins onto, or ``None``.
 
-        Bounds come from the axis values unless the caller overrode them:
-        the per-scan 1/K0 of a real file overhangs its declared
-        acquisition range, and the mass-mobility heatmap already bins over
-        the values, so anything else breaks the index-for-index mapping
-        between the two. Every refusal is said by name.
+        Bounds come from the source's mobility values unless the caller
+        overrode them: the per-scan 1/K0 of a real file overhangs its
+        declared acquisition range, and the mass-mobility heatmap already
+        bins over the values, so anything else breaks the index-for-index
+        mapping between the two. Every refusal is said by name.
         """
         from .mobility_table import (
             MAX_GRID_VAR_ENTRIES,
@@ -486,16 +497,16 @@ class SiblingTables:
         lower, upper = self._mobility_bounds
         if measured is None and (lower is None or upper is None):
             logger.warning(
-                "No mobility-resolved table: the source's mobility axis "
-                "carries no per-scan values to bin over (a reader opened "
-                "without its vendor library cannot supply them). Give "
-                "--mobility-min and --mobility-max to bin over a stated range."
+                "No mobility-resolved table: the source gives no mobility "
+                "values to bin over (a Bruker reader opened without its "
+                "vendor library cannot supply them). Give --mobility-min and "
+                "--mobility-max to bin over a stated range."
             )
             return None
         plan = mobility_grid_plan(self.reader)
         if lower is None and upper is None and self._mobility_bins is None and plan:
             # Nothing overridden: the heatmap's own channels, which on a
-            # short list of drift bins are the bins themselves (D50).
+            # short list of drift bins are the bins themselves (D52).
             plan_lower, plan_upper, n_channels = plan
         else:
             span = measured or (0.0, 0.0)
@@ -619,7 +630,16 @@ class SiblingTables:
         from .mobility_heatmap import scan_mobility
 
         per_plane = z_value is not None
-        heatmap = self._pending_heatmap(ctx, per_plane=per_plane)
+        try:
+            # Sizing it reads the reader's mobility range, which on a
+            # processed imzML is a pass over the mobility arrays: a file
+            # that fails there loses its heatmap, not its conversion.
+            heatmap = self._pending_heatmap(ctx, per_plane=per_plane)
+        except Exception as e:
+            logger.error("Could not size the mass-mobility heatmap: %s", str(e))
+            heatmap = None
+            self._mobility_heatmap_built = True
+            self._mobility_heatmap_blocks = {}
         if heatmap is None and per_plane and self._mobility_heatmap_enabled:
             # Nothing to build (prepare_plane_heatmaps said why, once);
             # without this every later plane would ask again and log it
@@ -979,7 +999,9 @@ class SiblingTables:
         Summing a grid table's channels within one m/z bin must reproduce
         that bin's column of the summed table: both are the same points,
         binned the same way, differing only in whether mobility was kept.
-        Under ``--tdf-spectrum scan_sum`` that holds exactly; under the
+        Under ``--tdf-spectrum scan_sum`` that holds exactly, as it does on
+        an imzML whose summed table places each point on its nearest bin
+        (no resampling, or ``nearest_neighbor``); under the
         vendor centroid it cannot, because the centroid is a peak-picked
         spectrum over the same ramp and keeps only the current inside the
         peaks it picks (79-99% on measured imaging acquisitions) while the grid
@@ -1011,11 +1033,13 @@ class SiblingTables:
         log = logger.info if exact else logger.warning
         log(
             "The mobility grid table holds %.4fx the summed table's ion "
-            "current (per pixel %.4f to %.4f). They agree exactly only "
-            "when the summed table holds the same raw points "
-            "(--tdf-spectrum scan_sum on Bruker, --waters-spectrum profile "
-            "on Waters); a vendor centroid is a peak-picked spectrum over "
-            "the same scans and keeps less of the current.",
+            "current (per pixel %.4f to %.4f). They agree exactly only when "
+            "the summed table places the same raw points on their nearest "
+            "bin: on a Bruker TDF, under the default --tdf-spectrum "
+            "scan_sum, and on Waters under --waters-spectrum profile. A "
+            "peak-picked spectrum (the vendor centroid) keeps "
+            "less of the current, and a resampling that spreads a point "
+            "over bins (tic_preserving) moves it.",
             block["current_ratio"],
             block["current_ratio_pixel_min"],
             block["current_ratio_pixel_max"],

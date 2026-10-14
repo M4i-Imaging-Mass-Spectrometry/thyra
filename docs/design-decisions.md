@@ -3517,7 +3517,7 @@ exist. The new check refuses a conversion; it writes nothing.
   not flagged.
 - The source with the finer width loses resolution on the shared axis, and
   under `tic_preserving` bins coarser than a source's own can merge narrow
-  peaks (#442).
+  peaks (#442). D50 fixes the second part.
 - There is no plan for "the axis of an existing store" yet.
 
 ## D45. The metadata block names the sample and the spectrum representation
@@ -3594,6 +3594,89 @@ earlier are unchanged and still valid.
 - `thyra metadata` and the preview read a timsTOF `.d` with the default
   `scan_sum`, and an imzML without `--spectrum-type`. Their document can
   therefore differ from what a conversion with other options stores.
+
+## D46. A processed imzML with mobility gets the heatmap, and the grid when asked
+
+**Status:** Implemented (2026-10-13).
+
+**Decision.** The range a per-pixel mobility source is binned over is the
+smallest and largest finite mobility value it holds. A reader states it
+through one method, `get_mobility_value_range()`. A source with a shared
+axis (Bruker TDF, a continuous imzML export) reads it off the axis values,
+as before. An imzML whose pixels carry their own mobility values (processed
+mode, as TIMSCONVERT writes it, or a continuous file whose arrays differ)
+reads it in one pass over its mobility arrays, and only those arrays, the
+first time anything asks. The result is cached, so the heatmap and the grid
+get the same two numbers. From this:
+
+- Such a file gets `uns["mobility_heatmap"]` by default, like every other
+  mobility source (D3).
+- `--mobility-grid`, `--mobility-bins`, `--mobility-min` and
+  `--mobility-max` are accepted on imzML. On a per-pixel file they write
+  `{table}_mobility` with the grid's contract: `uns["mobility_grid"]`, 256
+  channels on the heatmap's own edges, and `uns["mobility_marginal"]`.
+- On a continuous file with a shared axis the table is read off the shared
+  features, as before. `--mobility-grid` is ignored there, and a `WARNING`
+  now says so.
+- A point whose mobility value is not a finite number has no channel. The
+  imzML reader leaves it out of the mobility point cloud and says how many
+  at `WARNING`. The summed table keeps it.
+
+**Why.** Before this, a processed imzML with a mobility array kept no
+mobility at all. The log told the user to pass `--mobility-grid`, and the
+CLI then called that flag ignored on imzML. Processed mode is how
+TIMSCONVERT writes timsTOF imaging data, and a recent review of ion mobility
+imaging names unread mobility in such files as a bottleneck of the field
+(doi:10.1021/acsmeasuresciau.6c00282). Nothing in the converter was specific
+to TDF except where the range came from.
+
+The range comes from the values because only they are sure to contain every
+point. TDF uses its values for the same reason: its per-scan 1/K0 overhangs
+the declared acquisition range. PSI-MS has terms for a lowest and highest
+observed mobility (`MS:1003437`, `MS:1003438`), but Thyra reads neither, and
+a stated range narrower than the data would pile points into an edge
+channel.
+
+**Objections considered.**
+
+- *A whole extra read for a range.* It reads the mobility arrays only: a
+  third of a 64-bit `.ibd`. The heatmap itself is already one more full pass
+  on any source other than TDF. `--no-mobility-heatmap` without a grid reads
+  nothing extra.
+- *A range stated in the file would be free.* It would be, when present and
+  right. Neither can be checked without reading the values.
+
+**What changes in a store.**
+
+- A processed imzML (or a continuous one with differing arrays) with a
+  mobility array: the summed table gains `uns["mobility_heatmap"]`.
+  `uns["mobility_axis"]` is unchanged and records no range: the range is in
+  the heatmap's `mobility_edges` and the grid's `edges`.
+- The same file with `--mobility-grid`: a `{table}_mobility` table, its
+  `uns["mobility_grid"]` and `uns["mobility_marginal"]`,
+  `uns["mobility_axis"]["resolved_table"]` on the summed table, and
+  `msi_metadata.ms_analysis.ion_mobility.grid`. When the array states 1/K0
+  in `MS:1002814`, the table also carries `var["ccs"]` and `uns["ccs"]`, as
+  every 1/K0 mobility table does (D47). That lifts the last known limit D47
+  lists.
+- A continuous imzML whose shared mobility axis holds a non-finite value:
+  the heatmap was refused with an error before (the channel index was
+  undefined) and is now written without those points.
+- Bruker TDF and continuous imzML with a finite shared axis: nothing.
+
+**Known limits.**
+
+- The grid's marginal reproduces the summed table only when the summed
+  table puts the same points on their nearest bin: no resampling, or
+  `nearest_neighbor`. Under `tic_preserving` it does not. On a resampled
+  axis a point exactly at the data's m/z edge can also lie just outside the
+  first or last bin centre; the heatmap and the grid drop it while the
+  summed table folds it into the edge bin (#347). `current_ratio` records
+  both.
+- A multi-plane imzML converted as 2D reads the whole file once per plane
+  for the grid's discovery pass.
+- With `--no-resample` the raw union axis times 256 channels can pass the
+  grid's size ceiling (D4).
 
 ---
 
@@ -3701,11 +3784,106 @@ long as `mz`.
 
 ---
 
+## D48. A store in micrometres places its raster where the source did
+
+**Status:** Implemented (2026-10-14).
+
+**Decision.** A store whose `"global"` is in micrometres gets one more
+coordinate system, `"acquisition"`. Every TIC image, pixel polygon element
+and optical image placed in micrometres carries a transform to it: the
+element's `"global"` transform followed by a `Translation` to the source's
+origin. The root attribute `coordinate_systems` gains an `"acquisition"`
+entry beside `"global"`, with `origin_um`, `origin_source` and
+`raster_to_acquisition_affine`. `"global"` and the per-dataset system do not
+change.
+
+The origin is where grid position 0 sits in the source's own frame:
+
+- Bruker timsTOF, rapifleX, solariX, imzML, mzPeak: the index the source's
+  own numbering gives grid position 0, times the pitch of each axis (D12).
+  `origin_source` is `"raster_index"`. That index is what the reader
+  records as `coordinate_offsets_px`: the declared imaging area's or the
+  selected region's minimum (timsTOF), the smallest raster index (solariX),
+  the base the file numbers from, 1 or 0 (imzML, D14, so a cropped file
+  keeps its own coordinates), the `.dat` header's first raster position
+  (rapifleX, whose indices are already 0-based), or that base plus the
+  writer's `position_offset` (mzPeak, D29).
+- PHI: 0, which it states.
+- Waters: the fitted lattice origin, the smallest stage reading on each axis,
+  in micrometres. `origin_source` is `"stage_position"`. It is new: Waters
+  stored no origin before. It reaches the converter as
+  `EssentialMetadata.stage_origin_um`, because it is not an integer index and
+  cannot go into `coordinate_offsets`.
+
+On a volume the TIC volume also moves in z, by the z offset times the slice
+pitch. Pixel polygons stay flat, as they are in `"global"`.
+
+**Why.** Readers re-zero the raster. Before this, the subtracted offset
+survived only as two root attributes, `coordinate_offsets_px` and
+`stage_offset_um`, and no element transform carried it. Two stores cut from
+one slide, such as two `--region` runs of one `.d`, landed on top of each
+other in every SpatialData reader. Placing them took Thyra-specific code.
+Now any reader that follows transforms places them.
+
+**The name.** `"acquisition"`, not `"stage"`: on every format but Waters the
+origin is a raster index times the pitch, a position in the source's own
+grid, not a measured stage position. `"raster"` was rejected because it reads
+as pixel indices.
+
+**When it is not written.**
+
+- A store placed in a FlexImaging scan's pixels (D31). There `"global"` is
+  already the scan's frame, and the alignment affine absorbs the offset.
+- A source that reports no origin, such as a Waters grid without a fitted
+  lattice. A zero translation would claim an origin nobody stated.
+- An optical image with no alignment. It sits at `Identity` in `"global"`,
+  which says nothing about where it lies relative to the raster, so moving
+  it by the raster's origin would place it falsely.
+
+**What `stage_offset_um` means now.** It was defined as
+`coordinate_offsets_px` times the pixel size (D12, D32). It is now "where
+grid position 0 sits in the source's frame", the same numbers as
+`acquisition.origin_um`. For every format that has index offsets the value
+is unchanged. Waters stores gain it.
+
+**Objection that did not win.** "Bump `convention_version`; the attribute
+has a new top-level key." The key is additive, like `z_spacing_um` and
+`raster_to_global_affine` before it. A consumer that reads only `"global"`
+is unaffected, and a bump would make every existing consumer warn on every
+store.
+
+**Reserved name.** A `dataset_id` of `"acquisition"` is refused, at the
+front door and by the converter. The per-dataset system is named by the id,
+so it would silently become this one. `"global"` stays allowed: both systems
+would carry the same transform.
+
+**What changes in a store.** Every micrometre store whose source states an
+origin gains the `"acquisition"` transform on its TIC image, pixel polygons
+and placed optical images, and the `coordinate_systems.acquisition` entry.
+Waters stores also gain `stage_offset_um`, and their raw metadata gains
+`imaging_grid.stage_origin_um`. FlexImaging-aligned stores do not change.
+The metadata schema moves to 0.14.0, which reserves the coordinate system
+name, as 0.10.0 reserved an `obs` column (D26). The document's fields do not
+change. Tables carry no transform, so `obs["spatial_x"]` and
+`obs["spatial_y"]` stay in `"global"`.
+
+**Known limits.**
+
+- imzML and mzPeak number from 1 (D14), so most of their stores have an
+  origin one pitch from 0. Two files exported from parts of one acquisition
+  line up only if the exporter kept the acquisition's own numbering.
+- A user-supplied `--pixel-size` scales an index offset like any other
+  pitch. On Waters it does not move the stage origin, which is measured.
+- A volume's z origin uses the slice pitch. When that pitch is
+  `assumed_isotropic`, the z origin is as unreliable as the depth.
+
+---
+
 ## D49. A release is a pull request, and `main` requires passing checks
 
-**Status:** Accepted (2026-10-14). Supersedes D18. The release workflows land
-first; the ruleset and auto-merge follow once a release pull request has
-been seen running its checks.
+**Status:** Implemented (2026-10-14), #474. Supersedes D18. The first release
+pull request, #478, opened on the merge and ran its checks; the required-checks
+ruleset and auto-merge were turned on after it.
 
 **Decision.** release-please replaces python-semantic-release. After every
 merge it keeps one release pull request open, `chore(main): release X.Y.Z`,
@@ -3770,7 +3948,191 @@ it forever; and `complexity-check`, which is advisory.
 
 ---
 
-## D50. Waters drift time is read as a mobility axis, and a short list of bins is its own channel set
+## D50. A bin wider than the source sampling is rebinned, not sampled
+
+**Status:** Implemented (2026-10-13), issue #442.
+
+**Decision.** `tic_preserving` checks each spectrum for a sample that
+interpolation at the bin centres would skip: a bin holding a sample with
+intensity that is neither of the two samples around its centre. That is
+three samples in one bin, or two on the same side of its centre; a sample
+exactly on the centre is read alone, so any other in its bin counts. A skipped
+zero loses nothing and does not count, so a repeated explicit zero leaves a
+spectrum alone; two samples at one m/z count when either has intensity,
+because interpolation reads only one of them.
+
+- A spectrum with no such bin is resampled exactly as before.
+- A spectrum with one is rebinned wherever a bin holds two or more samples.
+  Each sample stands for its cell, the stretch of m/z from the midpoint with
+  the sample before it to the midpoint with the sample after it. Every bin
+  takes the share of each cell it overlaps. Where the spacing jumps by more
+  than a factor of two, at the edge of a gap, the cell side facing the gap is
+  cut back to the width of the other side.
+- The spectrum's other bins are still interpolated at their centres, then
+  scaled by their width over the spacing of the two samples around the
+  centre, so both kinds of bin hold ion current.
+
+The rescale to the preserved TIC then runs as before. The gap tolerance
+applies only to interpolated bins: a rebinned bin holds samples and is
+measured.
+
+**The defect this replaces.** The operator evaluated the linear interpolant
+at each bin centre and rescaled the result to the TIC. Once bins are wider
+than the source spacing that is sampling, not binning. A peak narrower than a
+bin that falls between two centres is mostly lost, and the rescale hands its
+ion current to whatever the centres land on. The TIC still balances, so
+nothing downstream can see it. A spectrum sampled every 0.01 Da with two
+peaks of 0.05 Da FWHM, onto 0.73 Da bins, against every sample summed into
+its nearest bin:
+
+| | total | within 1 Da of 167.05 | within 1 Da of 333.10 |
+|---|---|---|---|
+| samples summed into bins | 56,886.4 | 20,788 | 6,536 |
+| before | 56,886.4 | 421 | 415 |
+| after | 56,886.4 | 20,788 | 6,536 |
+
+On `imzml_processed_profile_a` (2,965 pixels, sampled every 0.011 Da) onto a
+constant axis of 2,600 bins (0.731 Da), the mean spectrum against every
+source spectrum summed into the same bins:
+
+| | Pearson r | rel. L1 | sum ratio |
+|---|---|---|---|
+| before | 0.132 | 1.47 | 1.000 |
+| after | 1.000 | 0.057 | 1.000 |
+| after, without the gap cut | 1.000 | 0.076 | 1.000 |
+
+The file is processed and has gaps without an explicit zero at their edges,
+which is what the gap cut is for.
+
+**Why this rule.** Synthetic profiles were built whose samples are the
+integral of a known peak shape over each sample's cell, so the ion current
+each bin should hold is known exactly. Error is rel. L1 against that. The
+sqrt rows are a zero-suppressed trace on a `sqrt(m/z)` grid onto `linear_tof`
+bins, like the Waters profile route; the constant rows are a constant grid
+onto constant bins, like rapifleX.
+
+| bins per sample | before | after | rebin every bin holding two |
+|---|---|---|---|
+| 0.2 (constant) | 0.2768 | 0.2768 | 0.2768 |
+| 1.08 (sqrt) | 0.0244 | 0.0244 | 0.0245 |
+| 1.32 (sqrt) | 0.0188 | 0.0188 | 0.0202 |
+| 1.40 (constant) | 0.0920 | 0.0920 | 0.0943 |
+| 1.90 (sqrt) | 0.0210 | 0.0254 | 0.0254 |
+| 2.01 (constant) | 0.0778 | 0.0925 | 0.0925 |
+| 2.32 (sqrt) | 0.0464 | 0.0253 | 0.0253 |
+| 2.49 (constant) | 0.1773 | 0.0707 | 0.0707 |
+| 3.31 (sqrt) | 0.1226 | 0.0198 | 0.0198 |
+| 4.14 (sqrt) | 0.1939 | 0.0163 | 0.0163 |
+| 8.02 (constant) | 0.7637 | 0.0128 | 0.0128 |
+| 29.3 (constant) | 1.7784 | 0.0029 | 0.0029 |
+
+Sampling at the centres is as good or better while no sample is skipped,
+which on an even grid holds below two bins per sample. Past that it falls
+apart. Rebinning every bin that holds two samples, whatever the spectrum, was
+measured too (last column): it changes spectra that lose nothing, and costs
+up to 0.0023 there. Rebinning only the bins that skip a sample was worse
+between two and three bins per sample (0.1315 against 0.0707 at 2.49): the
+interpolated bins beside them then hold the wrong share. Once a spectrum is
+rebinned at all, every bin holding two samples is.
+
+**Why cells and not trapezoids.** Spreading the trapezoid between each pair
+of neighbouring samples over the bins it overlaps was measured too. In a
+separate run, rebinning every bin that holds a sample, it was worse at
+every width above 1 bin per sample (0.0229 against 0.0161 at 4.14).
+It also smears a sample over its neighbours' bins even when the axis is the
+source grid; cells reproduce the source exactly there.
+
+**What changes in a store.**
+
+- Conversions whose bins are wide enough to skip samples. For example
+  `--resample-method tic_preserving` with a coarse `--resample-bins` or
+  `--resample-width-at-mz`, the method forced onto the default width for a
+  source sampled more finely than half of it, or a `plan_mass_axis` plan
+  wider than a source's own width (D43). Their values change, and narrow peaks come back.
+- Not the Waters profile route, the default for a SELECT SERIES MRT and what
+  `--waters-spectrum profile` takes elsewhere. Its bins are 1.14 times the
+  sample spacing: some hold two samples, one either side of the centre, and
+  none skips one. Measured on `waters_desi_profile_a` with
+  `--waters-spectrum profile` (2,436 pixels, 210,636 bins, about 50,000
+  samples per spectrum): 0 of 87,507,157 stored values changed. The MRT
+  reference run was not on hand; it shares the ratio and the `sqrt(m/z)`
+  grid, and a synthetic zero-suppressed MRT trace at 1.14 bins per sample is
+  unchanged bit for bit (`test_tic_preserving_wide_bins.py`).
+- Not the default rapifleX and Bruker MALDI-TOF route. The source is sampled
+  every 24.9 mDa onto a 5 mDa axis, so no bin holds two samples.
+- Not `nearest_neighbor`, nor any sibling table: they never use this method.
+
+**Cost.** Deciding that a spectrum skips nothing takes one pass over its
+sample spacings, against a bound on the bin widths laid once per axis and
+read once per 64 samples. On a real `waters_desi_profile_a` spectrum of
+46,490 samples that is 0.18 ms of a 2.75 ms resample, and 0.08 ms of 0.80 ms
+on a 15,000-sample MRT-like trace onto a 1.05M-bin axis. A spectrum that is
+rebinned costs a few milliseconds more.
+
+**Objection: the rule depends on the data (D15).** D15 refused an automatic
+gap tolerance because the stored numbers would depend on a heuristic no flag
+records. This rule has no setting to record. Whether a centre skips a sample
+is a fact of the axis and the source, the same in every run. The method name
+and the Thyra version in the processing step say which operator ran.
+
+**Known limits.**
+
+- Between about 1.9 and 2 bins per sample, rebinning is slightly less
+  accurate than sampling (0.0254 against 0.0210; 0.0925 against 0.0778). On
+  an uneven grid a few bins there already skip a sample, and the spectrum is
+  rebinned.
+- A spectrum that is not rebinned keeps the old operator, with its known
+  error when the source and target spacing laws differ
+  (`_gate_tic_preserving`).
+- The gap cut uses a fixed factor of two. A source whose spacing changes by
+  more than that between neighbouring samples without a gap would have its
+  cells trimmed.
+
+## D51. A mass axis plan moves an imzML header range out by the precision its text states
+
+**Status:** Implemented (2026-10-14).
+
+**Decision.** When `plan_mass_axis` takes a range from an imzML source, it
+moves each header bound out by one unit of the last digit its text states:
+`100.123457` by 1e-6, `1000` by 1, `1.2E3` by 100. When two texts give the
+same extreme, the coarser step is used. A low bound that would reach 0 or
+below is halved instead. This supersedes D43's range rule for imzML sources
+only; the intersection, the forced bounds and every other format are as D43
+describes. A bound the caller forces is used exactly as given. The plan's
+`origins` for a derived bound say that an imzML range is its header text
+moved out.
+
+**Why.** An imzML header states the lowest and highest observed m/z
+(MS:1000528 and MS:1000527) as rounded text. The rounded low bound can sit
+above the source's first sample, and the rounded high bound below its last.
+A conversion keeps the m/z inside its declared bounds, inclusive, so a plan
+built from the header as it stands dropped those samples in every spectrum
+and reported nothing. Measured: on `imzml_continuous_profile_a` a one-source
+plan lost one sample per spectrum (620 of 3.4e7 counts); with the step, the
+planned and unplanned stores both hold 34,446,401.7. A synthetic file lost
+15%. The step is read from the text, not the parsed number: `1000` and
+`1000.000000` parse to the same float, but only the first can hide a sample
+at 1000.4. A fixed relative margin (1 ppm was tried first) covers six-decimal
+headers and misses coarser ones. The same file converted without a plan reads
+the exact extremes of the decoded data and loses nothing.
+
+**What changes in a store.** A planned conversion of imzML sources lays an
+axis up to one stated digit wider at a header-derived end and keeps its edge
+samples; the extra bins are zero in every store. Stores converted without a
+plan do not change. Nothing released changes: plans are new since 4.4.0.
+
+**Known limits.**
+
+- The step bounds rounding and truncation of the stated text. A header whose
+  value is wrong by more than that still cuts samples; the plan cannot tell
+  without decoding spectra.
+- Only imzML sources are moved. Every other format's plan range comes from
+  the same values its conversion uses, so a plan cuts nothing the conversion
+  keeps.
+
+---
+
+## D52. Waters drift time is read as a mobility axis, and a short list of bins is its own channel set
 
 **Status:** Implemented (2026-10-14).
 

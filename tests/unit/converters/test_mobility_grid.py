@@ -168,12 +168,12 @@ class TestChannelWidthBand:
 
 
 class TestDefaultChannelPlan:
-    """D50: the channels the heatmap and a default grid share."""
+    """D52: the channels the heatmap and a default grid share."""
 
     def test_a_continuum_gets_the_anchor_over_its_values(self):
         from thyra.resampling.mobility_grid import default_channel_plan
 
-        assert default_channel_plan(np.array([1.5, 1.3, 1.1])) == (
+        assert default_channel_plan((1.1, 1.5)) == (
             pytest.approx(1.1),
             pytest.approx(1.5),
             MOBILITY_CHANNELS,
@@ -185,7 +185,8 @@ class TestDefaultChannelPlan:
         # Float32 drift times one pusher period apart, as a Synapt XS reports.
         values = (np.arange(200) * np.float32(0.06625149)).astype(np.float32)
         width = float(values[-1] - values[0]) / 199
-        lower, upper, n = default_channel_plan(values.astype(np.float64), width)
+        span = (float(values[0]), float(values[-1]))
+        lower, upper, n = default_channel_plan(span, width)
 
         assert n == 200
         assert lower == pytest.approx(-width / 2)
@@ -204,13 +205,15 @@ class TestDefaultChannelPlan:
         from thyra.resampling.mobility_grid import default_channel_plan
 
         values = np.arange(400) * 0.01
-        assert default_channel_plan(values, 0.01)[2] == MOBILITY_CHANNELS
+        span = (float(values[0]), float(values[-1]))
+        assert default_channel_plan(span, 0.01)[2] == MOBILITY_CHANNELS
 
     def test_no_values_no_plan(self):
         from thyra.resampling.mobility_grid import default_channel_plan
 
-        assert default_channel_plan(np.array([np.nan])) is None
-        assert default_channel_plan(np.array([1.0])) is None
+        assert default_channel_plan(None) is None
+        assert default_channel_plan((1.0, 1.0)) is None
+        assert default_channel_plan((np.nan, 1.0)) is None
 
 
 class TestLinearChannel:
@@ -776,7 +779,7 @@ class TestGridTable:
             assert [i for i in issues if i.severity == "error"] == []
 
     def test_drift_bins_are_the_default_channels(self, tmp_path):
-        # D50: a source whose axis is nine declared bins gets nine
+        # D52: a source whose axis is nine declared bins gets nine
         # channels, on the heatmap and the grid alike.
         sdata = _read(
             _convert(_DriftBinGridReader(), tmp_path / "s.zarr", mobility_grid=True)

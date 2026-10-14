@@ -122,7 +122,7 @@ warns you once.
       every axis type.
     - `tic_preserving` spreads the signal between bins and keeps the total
       ion current. It is exact only on an axis spaced like your instrument's
-      own sampling.
+      own sampling. Bins wider than that sampling still keep narrow peaks.
 
     `--mass-axis-type` chooses how the bin width changes across the mass
     range. If you change it and leave the method on automatic, Thyra
@@ -182,8 +182,9 @@ run.
       during the acquisition, instead of the newest recalibration.
     - `--tdf-spectrum vendor_centroid` (Bruker timsTOF with ion mobility):
       use Bruker's own peak-picked spectrum instead of the sum of all scans.
-    - `--mobility-grid` (Bruker timsTOF with ion mobility): add a table that
-      keeps the ion mobility of every pixel.
+    - `--mobility-grid` (Bruker timsTOF with ion mobility, or processed
+      imzML with a mobility array): add a table that keeps the ion mobility
+      of every pixel.
     - `--no-msms-table` (Bruker timsTOF PASEF MS/MS): leave out the table
       that splits the fragments by precursor.
     - `--waters-spectrum profile` or `centroid` (Waters): profile keeps close

@@ -561,10 +561,13 @@ IGNORED_ELSEWHERE: dict[str, Tuple[str, Tuple[str, ...]]] = {
     "use_recalibrated": ("--use-recalibrated/--no-recalibrated", ("bruker",)),
     "interactive_calibration": ("--interactive-calibration", ("bruker", "solarix")),
     "spectrum_type": ("--spectrum-type", ("imzml",)),
-    "mobility_grid": ("--mobility-grid/--no-mobility-grid", ("bruker", "waters")),
-    "mobility_bins": ("--mobility-bins", ("bruker", "waters")),
-    "mobility_min": ("--mobility-min", ("bruker", "waters")),
-    "mobility_max": ("--mobility-max", ("bruker", "waters")),
+    "mobility_grid": (
+        "--mobility-grid/--no-mobility-grid",
+        ("bruker", "imzml", "waters"),
+    ),
+    "mobility_bins": ("--mobility-bins", ("bruker", "imzml", "waters")),
+    "mobility_min": ("--mobility-min", ("bruker", "imzml", "waters")),
+    "mobility_max": ("--mobility-max", ("bruker", "imzml", "waters")),
 }
 
 #: The three options that size the grid ``--mobility-grid`` builds. They
@@ -850,7 +853,8 @@ class GroupedCommand(click.Command):
         "drift bins), store the mean "
         "mass-mobility frame on the summed table as uns['mobility_heatmap'] "
         "(default: enabled; fed from the summed table's own passes on a "
-        "Bruker TDF, one extra pass over any other source)"
+        "Bruker TDF, one extra pass over any other source, and on a "
+        "processed imzML a first read of its mobility values for the range)"
     ),
 )
 @click.option(
@@ -858,14 +862,14 @@ class GroupedCommand(click.Command):
     default=False,
     help=(
         "When the source carries ion mobility per pixel rather than as a "
-        "shared feature list (Bruker TDF, Waters drift time), bin the point "
-        "cloud onto a common mobility grid and write the same "
-        "mobility-resolved sibling table (default: disabled; on a Bruker "
-        "TDF fed from the summed table's own passes, and a "
-        "much larger table, built out of core so any acquisition fits). Its "
-        "marginal over channels reproduces the summed "
-        "table exactly under the default --tdf-spectrum scan_sum, and on "
-        "Waters under --waters-spectrum profile"
+        "shared feature list (Bruker TDF, processed imzML, Waters drift "
+        "time), bin the point cloud onto a common mobility grid and write "
+        "the same mobility-resolved sibling table (default: disabled; a "
+        "much larger table, built out of core so any acquisition fits; fed "
+        "from the summed table's own passes on a Bruker TDF, extra passes "
+        "over other sources). Its marginal over channels reproduces the "
+        "summed table exactly under the default --tdf-spectrum scan_sum, "
+        "and on Waters under --waters-spectrum profile"
     ),
 )
 @click.option(

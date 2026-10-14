@@ -7,7 +7,10 @@ that class; it used to be two (an inline copy on the converter and a
 public strategy that shared nothing with it), they drifted, the converter
 lost its rescaling step, and keeping the rule in this module is what
 stopped that happening again and what the one remaining strategy is built
-on (issue #277).
+on (issue #277). On a spectrum whose bins are wide enough to skip a
+sample, that function rebins instead of interpolating (design decision
+D50); the rule below then sets the total exactly as it does for
+interpolated bins.
 
 Why rescaling is needed at all
 ------------------------------

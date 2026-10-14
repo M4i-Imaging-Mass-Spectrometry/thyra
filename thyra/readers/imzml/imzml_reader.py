@@ -26,7 +26,7 @@ from ...core.mass_axis import (
     MassAxisAccumulator,
     validate_max_mass_axis_length,
 )
-from ...core.mobility import MobilityAxis, classify_mobility_array
+from ...core.mobility import MobilityAxis, classify_mobility_array, value_span
 from ...core.registry import register_reader
 from ...errors import ConversionRefused
 from ...metadata.constants import (
@@ -453,6 +453,11 @@ class ImzMLReader(BaseMSIReader):
         ] = None
         self._mobility_shared: Optional[NDArray[np.float64]] = None
         self._mobility_uniform: Optional[bool] = None
+        # The smallest and largest mobility value of a per-pixel export,
+        # found by one pass over the mobility arrays on first demand;
+        # ``_mobility_span_read`` tells "not yet" from "read, spans nothing".
+        self._mobility_span: Optional[Tuple[float, float]] = None
+        self._mobility_span_read = False
 
         # Store path but don't initialize parser yet - wait for first use
         if data_path is not None:
@@ -1708,6 +1713,62 @@ class ImzMLReader(BaseMSIReader):
             source="imzml",
         )
 
+    def get_mobility_value_range(self) -> Optional[Tuple[float, float]]:
+        """The smallest and largest mobility value in the file, or ``None``.
+
+        A shared axis has them in its values. A per-pixel export (processed
+        mode, as TIMSCONVERT writes) has no shared axis, so the values are
+        read: one pass over every spectrum's mobility array, and only that
+        array, the first time anything asks, cached so every caller gets
+        the same two floats. A range the file might state is not used in
+        their place: only the values are sure to hold every point, and the
+        heatmap and the mobility grid both bin over this range, so a box on
+        the one indexes the other (design decision D46).
+
+        A file whose mobility arrays cannot be read has no range: that is
+        said once, at ``WARNING``, and not retried, so the heatmap and the
+        grid each decline by name rather than failing the conversion.
+        """
+        if not self.has_ion_mobility:
+            return None
+        if self._mobility_span_read:
+            return self._mobility_span
+        try:
+            if self.is_continuous and self._mobility_axis_is_shared():
+                self._mobility_span = super().get_mobility_value_range()
+            else:
+                self._mobility_span = self._scan_mobility_span()
+        except Exception as e:
+            logger.warning("Could not read the ion mobility values: %s", str(e))
+            self._mobility_span = None
+        self._mobility_span_read = True
+        return self._mobility_span
+
+    def _scan_mobility_span(self) -> Optional[Tuple[float, float]]:
+        """Read every spectrum's mobility array for its finite extremes."""
+        offsets, _, _ = self._ensure_mobility_offsets()
+        lower, upper = np.inf, -np.inf
+        for idx in tqdm(
+            range(int(offsets.size)),
+            desc="Mobility range",
+            unit="spectrum",
+            disable=getattr(self, "_quiet_mode", False),
+        ):
+            values = self._read_mobility_array(idx)
+            finite = values[np.isfinite(values)]
+            if finite.size:
+                lower = min(lower, float(finite.min()))
+                upper = max(upper, float(finite.max()))
+        span = value_span(np.array([lower, upper]))
+        if span is None:
+            logger.info(
+                "The ion mobility values of this imzML span no range "
+                "(no finite value, or a single one)"
+            )
+        else:
+            logger.info("Ion mobility values of this imzML span [%.5f, %.5f]", *span)
+        return span
+
     def get_shared_mobility_features(
         self,
     ) -> Optional[Tuple[NDArray[np.float64], NDArray[np.float64]]]:
@@ -1743,7 +1804,11 @@ class ImzMLReader(BaseMSIReader):
 
         The three arrays are parallel; the intensity threshold, when set,
         masks all three together so they stay parallel, keeping every point
-        of a peak whose intensity summed over the spectrum reaches it.
+        of a peak whose intensity summed over the spectrum reaches it. A
+        point whose mobility is not a finite number has no channel to go
+        to, so it is left out of the cloud (after the threshold, which
+        tests the peak the summed table keeps) and counted once at the end;
+        the summed table still holds it.
         """
         self._ensure_parser_initialized()
         if self._mobility is None:
@@ -1764,6 +1829,7 @@ class ImzMLReader(BaseMSIReader):
             disable=getattr(self, "_quiet_mode", False),
         ) as pbar:
             tally = DropTally(logger, "mobility spectra that could not be read")
+            n_unplaced = 0
             for idx in range(total_spectra):
                 try:
                     coords = self._get_spectrum_coordinates(parser, idx)
@@ -1786,6 +1852,14 @@ class ImzMLReader(BaseMSIReader):
                             mobility[keep],
                             intensities[keep],
                         )
+                    placed = np.isfinite(mobility)
+                    if not placed.all():
+                        n_unplaced += int(placed.size - np.count_nonzero(placed))
+                        mzs, mobility, intensities = (
+                            mzs[placed],
+                            mobility[placed],
+                            intensities[placed],
+                        )
                     if mzs.size > 0:
                         yield coords, mzs, mobility, intensities
                 except ConversionRefused:
@@ -1800,6 +1874,13 @@ class ImzMLReader(BaseMSIReader):
                 finally:
                     pbar.update(1)
             tally.summarise(total_spectra)
+            if n_unplaced:
+                logger.warning(
+                    "%d point(s) carry a mobility value that is not a finite "
+                    "number; the summed table keeps them, the mass-mobility "
+                    "heatmap and the mobility grid cannot place them",
+                    n_unplaced,
+                )
 
     def read(self) -> Dict[str, Any]:
         """Read the entire imzML file and return a structured data dictionary.

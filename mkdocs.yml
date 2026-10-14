@@ -126,6 +126,7 @@ nav:
       - Coordinate systems: coordinate-systems.md
       - Metadata schema: metadata-schema.md
       - Writing the metadata document: writing-the-metadata-document.md
+      - For tool developers: for-tool-developers.md
       - Python API: api.md
       - Design decisions: design-decisions.md
       - Format notes:

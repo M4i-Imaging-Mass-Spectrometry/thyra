@@ -76,6 +76,21 @@ _UNIT_TO_KIND: Dict[str, str] = {
 }
 
 
+def value_span(values: NDArray[np.float64]) -> Optional[Tuple[float, float]]:
+    """``(min, max)`` of the finite ``values``, or ``None`` when they span nothing.
+
+    The one rule for turning mobility values into a range to bin over:
+    a NaN or an infinity is not a position on the axis, and a range whose
+    edges coincide has no width to divide into channels.
+    """
+    values = np.asarray(values, dtype=np.float64)
+    finite = values[np.isfinite(values)]
+    if not finite.size:
+        return None
+    lower, upper = float(finite.min()), float(finite.max())
+    return (lower, upper) if upper > lower else None
+
+
 def classify_mobility_array(
     array_accession: Optional[str], unit_accession: Optional[str]
 ) -> Tuple[Optional[str], Optional[str]]:

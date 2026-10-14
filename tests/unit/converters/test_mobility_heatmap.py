@@ -518,7 +518,7 @@ class _DriftBinReader(MobilityStubReader):
 
 
 class TestNativeChannels:
-    """D50: a short list of declared bins is its own channel set."""
+    """D52: a short list of declared bins is its own channel set."""
 
     def test_each_bin_is_one_channel(self):
         block = build_mobility_heatmap(_DriftBinReader(), MASS_AXIS)
@@ -578,6 +578,33 @@ def _read(out: Path):
     from thyra.utils.windows_paths import prepare_zarr_read_path
 
     return spatialdata.read_zarr(prepare_zarr_read_path(out))
+
+
+class _UnreadableRangeReader(MobilityStubReader):
+    """A reader whose mobility range raises instead of declining."""
+
+    def get_mobility_value_range(self):
+        raise RuntimeError("mobility values could not be read")
+
+
+class TestARangeThatRaises:
+    def test_the_heatmap_is_lost_not_the_conversion(self, tmp_path, thyra_logs):
+        """Sizing the heatmap reads the range; a reader that raises there
+        costs the block, and the summed table is still written."""
+        reader = _UnreadableRangeReader()
+        with thyra_logs(
+            "thyra.converters.spatialdata.sibling_tables", logging.ERROR
+        ) as records:
+            out = _convert(reader, tmp_path / "stub.zarr")
+        table = _read(out).tables["stub_z0"]
+        assert "mobility_heatmap" not in table.uns
+        assert table.n_obs == len(PIXELS)
+        assert reader.mobility_passes == 0
+        messages = [r.getMessage() for r in records]
+        assert messages == [
+            "Could not size the mass-mobility heatmap: "
+            "mobility values could not be read"
+        ]
 
 
 class TestStoredBlock:

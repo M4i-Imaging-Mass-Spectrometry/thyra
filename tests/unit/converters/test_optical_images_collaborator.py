@@ -31,12 +31,16 @@ import numpy as np
 import pytest
 import tifffile
 import zarr
-from spatialdata.transformations import Affine, Identity
+from spatialdata.transformations import Affine, Identity, Sequence
 
 from thyra.alignment.teaching_points import (
     AreaAlignmentResult,
     LatticeFit,
     RegionMapping,
+)
+from thyra.converters.spatialdata.acquisition_frame import (
+    ORIGIN_FROM_RASTER_INDEX,
+    AcquisitionOrigin,
 )
 from thyra.converters.spatialdata.optical_image import (
     OpticalImages,
@@ -339,6 +343,94 @@ def test_declining_the_alignment_carries_the_photo_into_micrometers(
     )
     # Both coordinate systems get the same transform object, as ever.
     assert optical.pending["ds_optical_highres"].transformations["ds"] is transform
+
+
+#: Where the stub's raster started, for the acquisition system (D48).
+ORIGIN = AcquisitionOrigin(40.0, 60.0, 0.0, ORIGIN_FROM_RASTER_INDEX)
+
+
+def test_a_photo_in_micrometers_is_placed_in_the_acquisition_system(
+    tmp_path: Path, tiff: Path
+) -> None:
+    """The opt-out route's photo moves with the raster's origin."""
+    optical = _optical(
+        tmp_path,
+        _StubReader([tiff]),
+        apply_alignment=False,
+        acquisition_origin=lambda: ORIGIN,
+    )
+    optical.compute_alignment()
+    optical.build_tic_to_image_affine()
+    optical.add_images({})
+
+    transformations = optical.pending["ds_optical_highres"].transformations
+    assert isinstance(transformations["acquisition"], Sequence)
+    axes = ("x", "y")
+    delta = transformations["acquisition"].to_affine_matrix(
+        input_axes=axes, output_axes=axes
+    ) - transformations["global"].to_affine_matrix(input_axes=axes, output_axes=axes)
+    np.testing.assert_allclose(delta[:2, 2], [ORIGIN.x_um, ORIGIN.y_um])
+    np.testing.assert_allclose(delta[:2, :2], 0.0)
+
+
+def test_a_photo_in_optical_pixels_has_no_acquisition_system(
+    tmp_path: Path, tiff: Path
+) -> None:
+    """The store lives in the scan's pixels; the scan is the shared frame (D31)."""
+    optical = _optical(tmp_path, _StubReader([tiff]), acquisition_origin=lambda: ORIGIN)
+    optical.compute_alignment()
+    optical.build_tic_to_image_affine()
+    optical.add_images({})
+
+    transformations = optical.pending["ds_optical_highres"].transformations
+    assert set(transformations) == {"ds", "global"}
+
+
+def test_an_unplaced_photo_has_no_acquisition_system(
+    tmp_path: Path, tiff: Path
+) -> None:
+    """No alignment: Identity in global says nothing about the raster."""
+    optical = _optical(
+        tmp_path,
+        _StubReader([tiff], areas=[]),
+        apply_alignment=False,
+        acquisition_origin=lambda: ORIGIN,
+    )
+    optical.compute_alignment()
+    optical.build_tic_to_image_affine()
+    optical.add_images({})
+
+    assert optical.tic_to_image is None
+    transformations = optical.pending["ds_optical_highres"].transformations
+    assert set(transformations) == {"ds", "global"}
+
+
+def test_a_photo_with_no_readable_alignment_scan_has_no_acquisition_system(
+    tmp_path: Path, tiff: Path
+) -> None:
+    """Micrometre mode, but the scan every other image scales into is unreadable.
+
+    The second image then has no grid to scale into and lands at Identity,
+    which places nothing; it must not be moved by the raster's origin.
+    """
+    other = tmp_path / "SlideA_overview.tif"
+    other.write_bytes(tiff.read_bytes())
+    tiff.write_bytes(b"not a tiff")  # the .mis-named alignment scan
+    optical = _optical(
+        tmp_path,
+        _StubReader([tiff, other]),
+        apply_alignment=False,
+        acquisition_origin=lambda: ORIGIN,
+    )
+    optical.compute_alignment()
+    optical.build_tic_to_image_affine()
+    optical.add_images({})
+
+    assert optical.tic_to_image is not None  # micrometre mode, alignment known
+    (name,) = optical.pending
+    transformations = optical.pending[name].transformations
+    assert isinstance(transformations["global"], Identity)
+    assert set(transformations) == {"ds", "global"}
 
 
 def test_excluded_optical_images_leave_every_piece_of_state_empty(

@@ -8,8 +8,9 @@ filled by whichever of two mechanisms the source allows:
   array (TIMSImaging, TIMSCONVERT) hands every pixel the same set of
   (m/z, mobility) pairs, so the pairs are already a feature list and
   nothing is binned.
-- **a common mobility grid.** A Bruker TDF pixel is its own point cloud
-  with no pairs shared across pixels, so the continuum is binned onto the
+- **a common mobility grid.** A Bruker TDF pixel, or a pixel of a
+  processed imzML export (TIMSCONVERT), is its own point cloud with no
+  pairs shared across pixels, so the continuum is binned onto the
   channels of a :class:`~thyra.resampling.mobility_grid.MobilityGrid`
   and ``(m/z bin, channel)`` becomes the feature axis.
 
@@ -569,9 +570,9 @@ def grid_refusal(
         return "the source has no ion mobility dimension"
     if grid is None:
         return (
-            "the source's mobility axis gives no range to bin over; a grid "
-            "needs the per-scan mobility values, which a reader opened "
-            "without its vendor library cannot supply"
+            "the source's mobility values give no range to bin over; a grid "
+            "needs them, and a Bruker reader opened without its vendor "
+            "library cannot supply them"
         )
     if int(np.asarray(common_mass_axis).size) == 0:
         return "the common mass axis is empty"
@@ -1102,30 +1103,26 @@ def mobility_grid_plan(reader: BaseMSIReader) -> Optional[Tuple[float, float, in
     The mass-mobility heatmap's own channels, from the same
     :func:`default_channel_plan`, so a heatmap box indexes the default grid
     whether the axis is a TIMS ramp (256 channels over the values) or a
-    short list of drift bins (one channel per bin, D50). ``None`` when the
-    reader supplies no per-scan values.
+    short list of drift bins (one channel per bin, D52). ``None`` when the
+    source has no values to read.
     """
     axis = reader.get_mobility_axis()
-    if axis is None or axis.values is None:
-        return None
-    return default_channel_plan(axis.values, axis.bin_width)
+    return default_channel_plan(
+        reader.get_mobility_value_range(),
+        None if axis is None else axis.bin_width,
+    )
 
 
 def mobility_grid_range(reader: BaseMSIReader) -> Optional[Tuple[float, float]]:
     """The range to bin a per-pixel source's mobility over, or ``None``.
 
-    The axis *values* decide, and only the values: the per-scan 1/K0 of a
-    real Bruker file overhangs its declared ``OneOverK0AcqRange`` by a few
-    scans, the mass-mobility heatmap already bins over the values, and a
-    grid that used the declared range instead would not index the heatmap.
-    A reader that cannot supply per-scan values (opened without its vendor
-    library) has no grid, which is a refusal rather than a fallback.
+    The values decide, and only the values
+    (:meth:`~thyra.core.base_reader.BaseMSIReader.get_mobility_value_range`):
+    the per-scan 1/K0 of a real Bruker file overhangs its declared
+    ``OneOverK0AcqRange`` by a few scans, the mass-mobility heatmap
+    already bins over the values, and a grid that used the declared range
+    instead would not index the heatmap. A source with no values to read
+    (a Bruker reader opened without its vendor library) has no grid, which
+    is a refusal rather than a fallback.
     """
-    axis = reader.get_mobility_axis()
-    if axis is None or axis.values is None:
-        return None
-    finite = axis.values[np.isfinite(axis.values)]
-    if not finite.size:
-        return None
-    lower, upper = float(finite.min()), float(finite.max())
-    return (lower, upper) if upper > lower else None
+    return reader.get_mobility_value_range()
