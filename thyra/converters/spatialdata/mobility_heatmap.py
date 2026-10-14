@@ -482,23 +482,22 @@ class PlaneHeatmaps:
 
 
 def _mobility_range(reader: BaseMSIReader) -> Optional[Tuple[float, float]]:
-    """The range to bin mobility over, from the reader's axis.
+    """The range to bin mobility over, from the values the source holds.
 
-    The axis values decide when there are any: on a Bruker file the
-    per-scan 1/K0 overhangs the declared acquisition range by a few
-    scans, and binning over the declared range would pile those scans
-    into an edge channel. The declared range is the fallback for an axis
-    that has no values.
+    The values decide when there are any
+    (:meth:`~thyra.core.base_reader.BaseMSIReader.get_mobility_value_range`:
+    the axis values of a shared axis, or every pixel's own values on a
+    processed imzML): on a Bruker file the per-scan 1/K0 overhangs the
+    declared acquisition range by a few scans, and binning over the
+    declared range would pile those scans into an edge channel. The
+    declared range is the fallback for a source with no values to read.
     """
+    span = reader.get_mobility_value_range()
+    if span is not None:
+        return span
     axis = reader.get_mobility_axis()
     if axis is None:
         return None
-    if axis.values is not None and axis.values.size:
-        finite = axis.values[np.isfinite(axis.values)]
-        if finite.size:
-            lower, upper = float(finite.min()), float(finite.max())
-            if upper > lower:
-                return lower, upper
     if axis.acq_range is not None:
         lower, upper = float(axis.acq_range[0]), float(axis.acq_range[1])
         if upper > lower:
@@ -511,9 +510,8 @@ def prepare_mobility_heatmap(
 ) -> Optional[MobilityHeatmap]:
     """An empty heatmap sized for ``reader``, or ``None`` with the reason logged.
 
-    ``None`` when the reader has no mobility dimension or its axis gives
-    no range to bin over (a per-pixel mobility source without a shared
-    axis), or when the common mass axis is empty.
+    ``None`` when the reader has no mobility dimension or its values give
+    no range to bin over, or when the common mass axis is empty.
     """
     mobility_range = _checked_range(reader, mass_axis)
     if mobility_range is None:
@@ -540,8 +538,8 @@ def _checked_range(
     mobility_range = _mobility_range(reader)
     if mobility_range is None:
         logger.info(
-            "No mass-mobility heatmap: the source's mobility axis has no "
-            "range to bin over (per-pixel mobility values without a shared axis)"
+            "No mass-mobility heatmap: the source's mobility values span no "
+            "range to bin over, and it declares none"
         )
         return None
     if np.asarray(mass_axis).size == 0:
@@ -624,8 +622,7 @@ def build_mobility_heatmap(
 
     One pass over :meth:`BaseMSIReader.iter_mobility_spectra`. Returns
     ``None``, with the reason logged, when the reader has no mobility
-    dimension or its axis gives no range to bin over (a per-pixel mobility
-    source without a shared axis).
+    dimension or its values give no range to bin over.
     """
     heatmap = prepare_mobility_heatmap(reader, mass_axis)
     if heatmap is None:

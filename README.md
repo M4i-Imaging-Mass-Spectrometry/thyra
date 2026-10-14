@@ -54,7 +54,8 @@ also converts the published example dataset
 | mzPeak (experimental) | the `.mzpeak` file |
 
 imzML with a mobility array is read too. In continuous mode, as TIMSImaging
-writes it, the mobility is kept as its own table.
+writes it, the mobility is kept as its own table. In processed mode, as
+TIMSCONVERT writes it, add `--mobility-grid` for that table.
 
 Thyra reads timsTOF and Waters data on Windows and Linux; everything else
 also works on macOS. Shimadzu support is in development: until then, export
@@ -87,9 +88,9 @@ them.
   whole image, `uns["mobility_heatmap"]`.
 - **`{table}_mobility`** has one column for each (m/z, 1/K0) pair. It is
   written by itself from continuous imzML with a mobility array, and from
-  Bruker TDF with `--mobility-grid`. `var["ccs"]` holds each pair's
-  collision cross section (CCS) in square angstroms, for an assumed charge
-  of 1; `uns["ccs"]` records the assumptions.
+  Bruker TDF and processed imzML with `--mobility-grid`. `var["ccs"]`
+  holds each pair's collision cross section (CCS) in square angstroms, for
+  an assumed charge of 1; `uns["ccs"]` records the assumptions.
 - **`{table}_msms`** splits PASEF and iprm-PASEF MS/MS by precursor: one
   block of fragment columns per precursor, so every fragment has its own
   image.
@@ -116,9 +117,8 @@ walks through both, and the output format describes the
 and [MS/MS](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/output-format/#demultiplexed-msms-table)
 tables in full.
 
-Not covered yet: Waters ion mobility (drift time) functions are skipped, and
-processed imzML keeps no mobility values. CCS is computed from 1/K0 only, never
-from a drift time.
+Not covered yet: Waters ion mobility (drift time) functions are skipped.
+CCS is computed from 1/K0 only, never from a drift time.
 
 ## From Python
 

@@ -170,6 +170,102 @@ class TestProcessedExport:
         np.testing.assert_array_equal(axis, expected)
 
 
+class TestMobilityValueRange:
+    """The range the heatmap and the grid bin over (design decision D46)."""
+
+    def test_a_processed_export_reads_it_from_its_pixels(self):
+        with ImzMLReader(PROCESSED) as reader:
+            assert reader.get_mobility_value_range() == (0.8, 1.1)
+            # The axis description is unchanged: a range read from the
+            # pixels is not a shared axis and not a declared range.
+            axis = reader.get_mobility_axis()
+        assert axis is not None and axis.values is None and axis.acq_range is None
+
+    def test_the_pass_runs_once(self, monkeypatch):
+        with ImzMLReader(PROCESSED) as reader:
+            first = reader.get_mobility_value_range()
+
+            def _no_second_read(idx):
+                raise AssertionError("the mobility arrays were read twice")
+
+            monkeypatch.setattr(reader, "_read_mobility_array", _no_second_read)
+            assert reader.get_mobility_value_range() == first
+
+    def test_a_continuous_export_takes_it_from_its_shared_axis(self):
+        with ImzMLReader(CONTINUOUS) as reader:
+            assert reader.get_mobility_value_range() == (0.95, 1.35)
+
+    def test_a_file_without_mobility_has_none(self):
+        with ImzMLReader(PLAIN) as reader:
+            assert reader.get_mobility_value_range() is None
+
+    def test_non_finite_values_are_not_part_of_it(self, monkeypatch):
+        with ImzMLReader(PROCESSED) as reader:
+            original = reader._read_mobility_array
+
+            def _with_nan(idx):
+                values = original(idx).copy()
+                values[0] = np.nan
+                values[1] = np.inf
+                return values
+
+            monkeypatch.setattr(reader, "_read_mobility_array", _with_nan)
+            assert reader.get_mobility_value_range() == (0.9, 1.0)
+
+    def test_values_that_span_nothing_give_none(self, monkeypatch):
+        with ImzMLReader(PROCESSED) as reader:
+            monkeypatch.setattr(
+                reader, "_read_mobility_array", lambda idx: np.full(4, 1.0)
+            )
+            assert reader.get_mobility_value_range() is None
+
+    def test_an_unreadable_file_declines_once_and_says_so(
+        self, monkeypatch, thyra_logs
+    ):
+        calls = []
+
+        def _refuse(idx):
+            calls.append(idx)
+            raise ConversionRefused(f"Spectrum {idx}: ion mobility array truncated")
+
+        with ImzMLReader(PROCESSED) as reader:
+            # Opening the file checks the offsets; a read fails later.
+            assert reader.has_ion_mobility
+            monkeypatch.setattr(reader, "_read_mobility_array", _refuse)
+            with thyra_logs("thyra.readers.imzml.imzml_reader") as records:
+                assert reader.get_mobility_value_range() is None
+                assert reader.get_mobility_value_range() is None
+        assert len(calls) == 1
+        messages = [r.getMessage() for r in records]
+        assert sum("Could not read the ion mobility values" in m for m in messages) == 1
+
+
+class TestNonFiniteMobility:
+    def test_unplaceable_points_leave_the_cloud_and_are_counted(
+        self, monkeypatch, thyra_logs
+    ):
+        with ImzMLReader(PROCESSED) as reader:
+            original = reader._read_mobility_array
+
+            def _with_nan(idx):
+                values = original(idx).copy()
+                values[0] = np.nan
+                return values
+
+            monkeypatch.setattr(reader, "_read_mobility_array", _with_nan)
+            with thyra_logs("thyra.readers.imzml.imzml_reader") as records:
+                items = list(reader.iter_mobility_spectra())
+        assert len(items) == 4
+        for i, (_, mzs, mobility, intensities) in enumerate(items):
+            np.testing.assert_array_equal(mobility, [1.1, 0.9, 1.0])
+            np.testing.assert_array_equal(mzs, [100.0 + i, 250.5 + i, 400.0 + i])
+            np.testing.assert_array_equal(
+                intensities, np.array([20.0, 30.0, 40.0]) * (i + 1)
+            )
+        messages = [r.getMessage() for r in records]
+        assert any(m.startswith("4 point(s)") for m in messages), messages
+
+
 class TestPlainFilesAreUntouched:
     def test_two_array_file_reports_no_mobility(self):
         with ImzMLReader(PLAIN) as reader:

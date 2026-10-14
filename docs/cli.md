@@ -77,8 +77,8 @@ thyra input.imzML output.zarr && python analyse.py output.zarr
 | `--resample / --no-resample` | enabled | Mass axis resampling |
 | `--include-optical / --no-optical` | enabled | Include optical images in output |
 | `--mobility-table / --no-mobility-table` | enabled | Also write the mobility-resolved sibling table when the source shares one set of (m/z, ion mobility) features across pixels (see [Output Format](output-format.md#ion-mobility)) |
-| `--mobility-heatmap / --no-mobility-heatmap` | enabled | When the source has an ion mobility dimension, store the mean mass-mobility frame on the summed table as `uns["mobility_heatmap"]`; on a Bruker TDF it is fed from the summed table's own passes, on other sources it is one extra pass (see [Output Format](output-format.md#ion-mobility)) |
-| `--mobility-grid / --no-mobility-grid` | **disabled** | When the source carries ion mobility per pixel rather than as a shared feature list (Bruker TDF), bin the point cloud onto a common mobility grid and write the same mobility-resolved sibling table; fed from the summed table's own two passes (no extra read of the source), a much larger table built out of core so any acquisition fits; its marginal reproduces the summed table exactly under the default `--tdf-spectrum scan_sum` (see [Output Format](output-format.md#the-same-table-from-a-common-mobility-grid)) |
+| `--mobility-heatmap / --no-mobility-heatmap` | enabled | When the source has an ion mobility dimension, store the mean mass-mobility frame on the summed table as `uns["mobility_heatmap"]`; on a Bruker TDF it is fed from the summed table's own passes, on other sources it is one extra pass, and a processed imzML first reads its mobility values for the range (see [Output Format](output-format.md#ion-mobility)) |
+| `--mobility-grid / --no-mobility-grid` | **disabled** | When the source carries ion mobility per pixel rather than as a shared feature list (Bruker TDF, processed imzML), bin the point cloud onto a common mobility grid and write the same mobility-resolved sibling table, a much larger table built out of core so any acquisition fits. On a Bruker TDF it is fed from the summed table's own two passes (no extra read of the source) and its marginal reproduces the summed table exactly under the default `--tdf-spectrum scan_sum`; on a processed imzML it takes extra passes, and its marginal is exact when points stay on their nearest mass bin. Ignored, with a warning, on a continuous imzML, which has a shared feature list (see [Output Format](output-format.md#the-same-table-from-a-common-mobility-grid)) |
 | `--msms-table / --no-msms-table` | enabled | When the source isolates several precursors per pixel in disjoint mobility slices (Bruker PASEF), also write them split apart as a demultiplexed sibling table; fed from the summed table's own two passes (no extra read of the source); the split adds back up to the summed table exactly under the default `--tdf-spectrum scan_sum` (see [Output Format](output-format.md#demultiplexed-msms-table)) |
 
 !!! warning "`--format` is deprecated"
@@ -150,7 +150,9 @@ thyra input.imzML output.zarr --log-file conversion.log
 ## Ion Mobility Grid (Advanced)
 
 These size the grid `--mobility-grid` bins onto. They do nothing without it,
-and passing one without it is logged at `WARNING`.
+and passing one without it is logged at `WARNING`. A continuous imzML
+with a shared feature list needs no grid: there `--mobility-grid` and these
+are ignored, with a `WARNING`.
 
 | Option | Default | Description |
 |--------|---------|-------------|

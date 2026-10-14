@@ -242,6 +242,20 @@ class TestCapabilityConventions:
             with pytest.raises(NotImplementedError):
                 next(iter(reader.iter_mobility_spectra()), None)
 
+    def test_mobility_value_range_declines_without_mobility(self, reader):
+        """``None`` where there is no mobility; any pair given is ordered.
+
+        A reader with mobility may still decline (a Bruker reader opened
+        without its vendor library has no values), so only the shape of a
+        given pair is checked there.
+        """
+        span = reader.get_mobility_value_range()
+        if not reader.has_ion_mobility:
+            assert span is None
+        elif span is not None:
+            lower, upper = span
+            assert np.isfinite(lower) and np.isfinite(upper) and lower < upper
+
     def test_shared_mobility_features_need_a_shared_axis(self, reader):
         if not reader.has_shared_mobility_axis:
             assert reader.get_shared_mobility_features() is None

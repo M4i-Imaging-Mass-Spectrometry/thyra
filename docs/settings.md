@@ -182,8 +182,9 @@ run.
       during the acquisition, instead of the newest recalibration.
     - `--tdf-spectrum vendor_centroid` (Bruker timsTOF with ion mobility):
       use Bruker's own peak-picked spectrum instead of the sum of all scans.
-    - `--mobility-grid` (Bruker timsTOF with ion mobility): add a table that
-      keeps the ion mobility of every pixel.
+    - `--mobility-grid` (Bruker timsTOF with ion mobility, or processed
+      imzML with a mobility array): add a table that keeps the ion mobility
+      of every pixel.
     - `--no-msms-table` (Bruker timsTOF PASEF MS/MS): leave out the table
       that splits the fragments by precursor.
     - `--waters-spectrum profile` or `centroid` (Waters): profile keeps close

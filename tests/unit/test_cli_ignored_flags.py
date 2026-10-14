@@ -14,6 +14,7 @@ even on a source where the options do apply.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 
 import click
@@ -24,6 +25,13 @@ from thyra.__main__ import (
     IGNORED_ELSEWHERE,
     _validate_mobility_grid_params,
     _warn_ignored_flags,
+)
+
+PROCESSED = (
+    Path(__file__).resolve().parents[1]
+    / "data"
+    / "fixtures"
+    / "mobility_processed.imzML"
 )
 
 
@@ -102,9 +110,43 @@ class TestGridSizingWithoutAGrid:
         assert not warnings.records
 
     def test_it_is_not_said_twice_on_a_format_that_ignores_them(self, warnings):
-        """On imzML the option is already reported as ignored outright."""
-        _warn_ignored_flags(_Ctx("mobility_bins"), "imzml", mobility_grid=False)
+        """On Waters the option is already reported as ignored outright."""
+        _warn_ignored_flags(_Ctx("mobility_bins"), "waters", mobility_grid=False)
         assert len(warnings.records) == 1
+        assert "is ignored on Waters .raw input" in warnings.records[0].getMessage()
+
+
+class TestTheGridOnImzML:
+    """A processed imzML carries mobility per pixel, as a Bruker TDF does (D46).
+
+    The converter told such a file's user to pass ``--mobility-grid`` and the
+    CLI then called the flag ignored on imzML, which it was not quite: the
+    flag reached the converter, which had no range to bin over.
+    """
+
+    @pytest.mark.parametrize("name", ["mobility_grid", *GRID_SIZING_FLAGS])
+    def test_no_grid_option_is_called_ignored_on_imzml(self, name, warnings):
+        _warn_ignored_flags(_Ctx(name), "imzml", mobility_grid=True)
+        assert not warnings.records
+
+    def test_the_grid_table_is_written_from_the_command_line(
+        self, tmp_path, thyra_logs
+    ):
+        from click.testing import CliRunner
+
+        from thyra.__main__ import main
+        from thyra.utils.windows_paths import prepare_zarr_read_path
+
+        out = tmp_path / "grid.zarr"
+        with thyra_logs("thyra.cli", logging.WARNING) as records:
+            result = CliRunner().invoke(
+                main,
+                [str(PROCESSED), str(out), "--mobility-grid", "--no-resample"],
+            )
+        assert result.exit_code == 0, result.output
+        assert not [r for r in records if "ignored" in r.getMessage()]
+        tables = prepare_zarr_read_path(out) / "tables"
+        assert (tables / "msi_dataset_z0_mobility").is_dir()
 
 
 class TestGridNumbers:

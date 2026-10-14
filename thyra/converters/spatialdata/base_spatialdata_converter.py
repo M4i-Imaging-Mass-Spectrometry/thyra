@@ -159,9 +159,12 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 dimension, accumulate the mean mass-mobility frame from
                 the raw scan read and store it on the summed table as
                 ``uns["mobility_heatmap"]`` (default: True). Costs one
-                extra pass over the source; see ``mobility_heatmap.py``.
+                extra pass over the source, and on a processed imzML a
+                first read of its mobility values for the range; see
+                ``mobility_heatmap.py``.
             mobility_grid: When the reader carries mobility per pixel
-                rather than as a shared feature axis (Bruker TDF), bin
+                rather than as a shared feature axis (Bruker TDF, processed
+                imzML), bin
                 the point cloud onto a common mobility grid and write the
                 result as the same ``{table}_mobility`` sibling
                 (default: False -- opt in, it costs an extra pass and a
@@ -174,10 +177,10 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 directly; changing it gives that up.
             mobility_min: Lower edge of the grid, in the axis unit.
                 ``None`` (default) takes the smallest mobility value the
-                source's axis actually holds, which is also where the
-                heatmap starts.
+                source actually holds, which is also where the heatmap
+                starts.
             mobility_max: Upper edge of the grid; ``None`` takes the
-                largest value the axis holds.
+                largest value the source holds.
             msms_table: When the source isolates several precursors per
                 pixel in disjoint mobility slices (Bruker PASEF), also
                 write them split apart as a demultiplexed sibling table

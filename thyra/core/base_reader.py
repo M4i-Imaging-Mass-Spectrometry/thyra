@@ -541,6 +541,25 @@ class BaseMSIReader(ABC):
         """Describe the mobility dimension, or ``None`` when there is none."""
         return None
 
+    def get_mobility_value_range(self) -> Optional[Tuple[float, float]]:
+        """The smallest and largest mobility value the source holds, or ``None``.
+
+        What the mass-mobility heatmap and the mobility grid bin over: the
+        values a point can actually take, not a range the source declares
+        (a Bruker file's per-scan 1/K0 overhangs its declared acquisition
+        range by a few scans). The default reads them off the axis
+        ``values``; a reader whose pixels each carry their own values, and
+        so has none there, overrides this to find them in the pixels.
+        ``None`` when there is no mobility, no value to read, or the values
+        span nothing.
+        """
+        axis = self.get_mobility_axis()
+        if axis is None or axis.values is None:
+            return None
+        from .mobility import value_span
+
+        return value_span(axis.values)
+
     def get_shared_mobility_features(
         self,
     ) -> Optional[Tuple[NDArray[np.float64], NDArray[np.float64]]]:
