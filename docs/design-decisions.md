@@ -3517,7 +3517,7 @@ exist. The new check refuses a conversion; it writes nothing.
   not flagged.
 - The source with the finer width loses resolution on the shared axis, and
   under `tic_preserving` bins coarser than a source's own can merge narrow
-  peaks (#442).
+  peaks (#442). D50 fixes the second part.
 - There is no plan for "the axis of an existing store" yet.
 
 ## D45. The metadata block names the sample and the spectrum representation
@@ -3767,3 +3767,145 @@ Windows for Python 3.12 to 3.14, `clean-venv-install` for 3.12 to 3.14, and
 `Conventional commit title`. Not required: `Build the site (strict)`, because
 `docs-check.yml` is path-filtered and a code-only pull request would wait for
 it forever; and `complexity-check`, which is advisory.
+
+---
+
+## D50. A bin wider than the source sampling is rebinned, not sampled
+
+**Status:** Implemented (2026-10-13), issue #442.
+
+**Decision.** `tic_preserving` checks each spectrum for a sample that
+interpolation at the bin centres would skip: a bin holding a sample with
+intensity that is neither of the two samples around its centre. That is
+three samples in one bin, or two on the same side of its centre; a sample
+exactly on the centre is read alone, so any other in its bin counts. A skipped
+zero loses nothing and does not count, so a repeated explicit zero leaves a
+spectrum alone; two samples at one m/z count when either has intensity,
+because interpolation reads only one of them.
+
+- A spectrum with no such bin is resampled exactly as before.
+- A spectrum with one is rebinned wherever a bin holds two or more samples.
+  Each sample stands for its cell, the stretch of m/z from the midpoint with
+  the sample before it to the midpoint with the sample after it. Every bin
+  takes the share of each cell it overlaps. Where the spacing jumps by more
+  than a factor of two, at the edge of a gap, the cell side facing the gap is
+  cut back to the width of the other side.
+- The spectrum's other bins are still interpolated at their centres, then
+  scaled by their width over the spacing of the two samples around the
+  centre, so both kinds of bin hold ion current.
+
+The rescale to the preserved TIC then runs as before. The gap tolerance
+applies only to interpolated bins: a rebinned bin holds samples and is
+measured.
+
+**The defect this replaces.** The operator evaluated the linear interpolant
+at each bin centre and rescaled the result to the TIC. Once bins are wider
+than the source spacing that is sampling, not binning. A peak narrower than a
+bin that falls between two centres is mostly lost, and the rescale hands its
+ion current to whatever the centres land on. The TIC still balances, so
+nothing downstream can see it. A spectrum sampled every 0.01 Da with two
+peaks of 0.05 Da FWHM, onto 0.73 Da bins, against every sample summed into
+its nearest bin:
+
+| | total | within 1 Da of 167.05 | within 1 Da of 333.10 |
+|---|---|---|---|
+| samples summed into bins | 56,886.4 | 20,788 | 6,536 |
+| before | 56,886.4 | 421 | 415 |
+| after | 56,886.4 | 20,788 | 6,536 |
+
+On `imzml_processed_profile_a` (2,965 pixels, sampled every 0.011 Da) onto a
+constant axis of 2,600 bins (0.731 Da), the mean spectrum against every
+source spectrum summed into the same bins:
+
+| | Pearson r | rel. L1 | sum ratio |
+|---|---|---|---|
+| before | 0.132 | 1.47 | 1.000 |
+| after | 1.000 | 0.057 | 1.000 |
+| after, without the gap cut | 1.000 | 0.076 | 1.000 |
+
+The file is processed and has gaps without an explicit zero at their edges,
+which is what the gap cut is for.
+
+**Why this rule.** Synthetic profiles were built whose samples are the
+integral of a known peak shape over each sample's cell, so the ion current
+each bin should hold is known exactly. Error is rel. L1 against that. The
+sqrt rows are a zero-suppressed trace on a `sqrt(m/z)` grid onto `linear_tof`
+bins, like the Waters profile route; the constant rows are a constant grid
+onto constant bins, like rapifleX.
+
+| bins per sample | before | after | rebin every bin holding two |
+|---|---|---|---|
+| 0.2 (constant) | 0.2768 | 0.2768 | 0.2768 |
+| 1.08 (sqrt) | 0.0244 | 0.0244 | 0.0245 |
+| 1.32 (sqrt) | 0.0188 | 0.0188 | 0.0202 |
+| 1.40 (constant) | 0.0920 | 0.0920 | 0.0943 |
+| 1.90 (sqrt) | 0.0210 | 0.0254 | 0.0254 |
+| 2.01 (constant) | 0.0778 | 0.0925 | 0.0925 |
+| 2.32 (sqrt) | 0.0464 | 0.0253 | 0.0253 |
+| 2.49 (constant) | 0.1773 | 0.0707 | 0.0707 |
+| 3.31 (sqrt) | 0.1226 | 0.0198 | 0.0198 |
+| 4.14 (sqrt) | 0.1939 | 0.0163 | 0.0163 |
+| 8.02 (constant) | 0.7637 | 0.0128 | 0.0128 |
+| 29.3 (constant) | 1.7784 | 0.0029 | 0.0029 |
+
+Sampling at the centres is as good or better while no sample is skipped,
+which on an even grid holds below two bins per sample. Past that it falls
+apart. Rebinning every bin that holds two samples, whatever the spectrum, was
+measured too (last column): it changes spectra that lose nothing, and costs
+up to 0.0023 there. Rebinning only the bins that skip a sample was worse
+between two and three bins per sample (0.1315 against 0.0707 at 2.49): the
+interpolated bins beside them then hold the wrong share. Once a spectrum is
+rebinned at all, every bin holding two samples is.
+
+**Why cells and not trapezoids.** Spreading the trapezoid between each pair
+of neighbouring samples over the bins it overlaps was measured too. In a
+separate run, rebinning every bin that holds a sample, it was worse at
+every width above 1 bin per sample (0.0229 against 0.0161 at 4.14).
+It also smears a sample over its neighbours' bins even when the axis is the
+source grid; cells reproduce the source exactly there.
+
+**What changes in a store.**
+
+- Conversions whose bins are wide enough to skip samples. For example
+  `--resample-method tic_preserving` with a coarse `--resample-bins` or
+  `--resample-width-at-mz`, the method forced onto the default width for a
+  source sampled more finely than half of it, or a `plan_mass_axis` plan
+  wider than a source's own width (D43). Their values change, and narrow peaks come back.
+- Not the Waters profile route, the default for a SELECT SERIES MRT and what
+  `--waters-spectrum profile` takes elsewhere. Its bins are 1.14 times the
+  sample spacing: some hold two samples, one either side of the centre, and
+  none skips one. Measured on `waters_desi_profile_a` with
+  `--waters-spectrum profile` (2,436 pixels, 210,636 bins, about 50,000
+  samples per spectrum): 0 of 87,507,157 stored values changed. The MRT
+  reference run was not on hand; it shares the ratio and the `sqrt(m/z)`
+  grid, and a synthetic zero-suppressed MRT trace at 1.14 bins per sample is
+  unchanged bit for bit (`test_tic_preserving_wide_bins.py`).
+- Not the default rapifleX and Bruker MALDI-TOF route. The source is sampled
+  every 24.9 mDa onto a 5 mDa axis, so no bin holds two samples.
+- Not `nearest_neighbor`, nor any sibling table: they never use this method.
+
+**Cost.** Deciding that a spectrum skips nothing takes one pass over its
+sample spacings, against a bound on the bin widths laid once per axis and
+read once per 64 samples. On a real `waters_desi_profile_a` spectrum of
+46,490 samples that is 0.18 ms of a 2.75 ms resample, and 0.08 ms of 0.80 ms
+on a 15,000-sample MRT-like trace onto a 1.05M-bin axis. A spectrum that is
+rebinned costs a few milliseconds more.
+
+**Objection: the rule depends on the data (D15).** D15 refused an automatic
+gap tolerance because the stored numbers would depend on a heuristic no flag
+records. This rule has no setting to record. Whether a centre skips a sample
+is a fact of the axis and the source, the same in every run. The method name
+and the Thyra version in the processing step say which operator ran.
+
+**Known limits.**
+
+- Between about 1.9 and 2 bins per sample, rebinning is slightly less
+  accurate than sampling (0.0254 against 0.0210; 0.0925 against 0.0778). On
+  an uneven grid a few bins there already skip a sample, and the spectrum is
+  rebinned.
+- A spectrum that is not rebinned keeps the old operator, with its known
+  error when the source and target spacing laws differ
+  (`_gate_tic_preserving`).
+- The gap cut uses a fixed factor of two. A source whose spacing changes by
+  more than that between neighbouring samples without a gap would have its
+  cells trimmed.
