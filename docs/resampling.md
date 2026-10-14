@@ -391,6 +391,9 @@ channels in every pixel.
 bounds. `--no-resample` is unaffected too -- the axis there is the source's own
 values.
 
+The mass-mobility heatmap, the mobility table and the MS/MS table keep the
+same range, so they hold the same edge peaks as the summed table.
+
 Dropping is deliberate and is reported once per conversion:
 
 ```

@@ -386,7 +386,7 @@ RESAMPLED = {
 }
 
 
-def _convert(reader, out: Path, **kwargs) -> Path:
+def _convert(reader, out: Path, resampling=RESAMPLED, **kwargs) -> Path:
     from thyra.converters.spatialdata.streaming_converter import (
         StreamingSpatialDataConverter,
     )
@@ -398,7 +398,7 @@ def _convert(reader, out: Path, **kwargs) -> Path:
         out,
         dataset_id="stub",
         pixel_size_um=10.0,
-        resampling_config=RESAMPLED,
+        resampling_config=resampling,
         mobility_grid=True,
         **kwargs,
     )
@@ -602,3 +602,58 @@ class TestRepeatedPosition:
             pytest.approx(1.0)
         )
         assert not any("mass-mobility heatmap" in m for m in messages)
+
+
+#: A laid non-constant axis over the range the clouds span (100 to 500).
+#: Its first and last centre sit inside that range, so the clouds' m/z 100
+#: and 500 points are in the half-bin margin the summed table keeps.
+PHYSICS = {
+    "method": "nearest_neighbor",
+    "axis_type": "linear_tof",
+    "target_bins": 40,
+    "min_mz": 100.0,
+    "max_mz": 500.0,
+}
+
+
+class TestPointsInTheEdgeMargin:
+    """Every sibling keeps the points the summed table keeps (the kept range).
+
+    On a constant axis the first and last centre are the range, so the
+    margin is empty. On a physics axis they are half a bin inside it, and a
+    sink that tested the strict axis span dropped the file's first and last
+    samples: its marginals then fell short of the summed table.
+    """
+
+    @pytest.mark.parametrize(
+        "reader_type",
+        [FusedStubReader, IndexedStubReader, UnfusedStubReader],
+        ids=["fused", "indexed", "unfused"],
+    )
+    def test_the_marginals_and_the_summed_table_hold_every_point(
+        self, tmp_path, reader_type
+    ):
+        sdata = _read(_convert(reader_type(), tmp_path / "s.zarr", resampling=PHYSICS))
+        summed = sdata.tables["stub_z0"]
+        axis = summed.var["mz"].to_numpy()
+        # The premise: both end samples are past the end centres.
+        assert axis[0] > 100.0 and axis[-1] < 500.0
+
+        every_point = sum(_cloud(p)[2].sum() for p in range(len(PIXELS)))
+        assert float(_dense(summed).sum()) == pytest.approx(every_point)
+
+        heatmap = summed.uns["mobility_heatmap"]
+        assert float(heatmap["current_ratio"]) == pytest.approx(1.0)
+        assert np.asarray(heatmap["counts"]).sum() * len(PIXELS) == pytest.approx(
+            every_point, rel=1e-5
+        )
+
+        grid = sdata.tables["stub_z0_mobility"]
+        assert float(_dense(grid).sum()) == pytest.approx(every_point)
+        marginal = grid.uns["mobility_marginal"]
+        assert float(marginal["current_ratio"]) == pytest.approx(1.0)
+        assert float(marginal["current_ratio_pixel_min"]) == pytest.approx(1.0)
+        assert float(marginal["current_ratio_pixel_max"]) == pytest.approx(1.0)
+
+        split = sdata.tables["stub_z0_msms"].uns["demultiplexed_current"]
+        assert float(split["current_ratio"]) == pytest.approx(1.0)
