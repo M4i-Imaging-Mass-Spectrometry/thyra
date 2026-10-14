@@ -145,7 +145,10 @@ one column -- and, for a continuous export (one shared feature list), the
 table; see [Output Format](output-format.md#ion-mobility). A processed export
 (per-pixel point cloud) gets the summed table only -- `--mobility-grid`
 covers per-pixel mobility for Bruker TDF, not yet for imzML. A mobility array declared
-with zlib compression is refused like the other two.
+with zlib compression is refused like the other two. When the array states 1/K0
+in `MS:1002814`, the sibling table also carries each feature's collision cross
+section, `var["ccs"]`, for an assumed charge of 1; see
+[Output Format](output-format.md#collision-cross-section).
 
 See [imzML Parser Notes](imzml-parser-notes.md) for the hazards Thyra works
 around in the underlying library.
@@ -217,7 +220,10 @@ every table, so the grid adds no read of the source -- and it is a table
 with 1.3 to 4 times the summed table's non-zeros, built out of core, so a
 whole acquisition converts whatever its size. Under the default `--tdf-spectrum scan_sum` the table's
 marginal over channels reproduces the summed table exactly; an explicit
-`vendor_centroid` is accepted with a `WARNING` and the mismatch recorded. See
+`vendor_centroid` is accepted with a `WARNING` and the mismatch recorded. The
+table also carries each feature's collision cross section, `var["ccs"]`, for an
+assumed charge of 1 (see
+[Output Format](output-format.md#collision-cross-section)). See
 [Output Format](output-format.md#the-same-table-from-a-common-mobility-grid).
 
 **MS/MS acquisitions convert, and say so.** `Frames.MsMsType` tells a survey

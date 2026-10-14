@@ -84,6 +84,20 @@ high = np.asarray(mob.X[:, near & (k0 >= 1.3)].sum(axis=1)).ravel()
 `low` and `high` hold one value per pixel. Turn them into images with the
 pixel positions, as in [Look at the result](look-at-the-result.md#open-it-in-python).
 
+## Collision cross section
+
+The mobility table also gives each column's collision cross section (CCS),
+in square angstroms:
+
+```python
+print(mob.var[["mz", "mobility", "ccs"]].head())
+```
+
+Thyra assumes every ion has charge 1, which is almost always true for MALDI.
+`mob.uns["ccs"]` lists this and the other assumptions. See
+[Output format](output-format.md#collision-cross-section) for how to redo it
+for another charge.
+
 ## One ion's fragments
 
 In an MS/MS run, the instrument picks a list of ions, called precursors. It
@@ -118,7 +132,7 @@ precursor 0, one value per pixel.
 - Older Waters Synapt G1 runs with ion mobility on are refused. The Waters
   library cannot read them safely.
 - From processed imzML, Thyra keeps the spectra but not the mobility values.
-- Thyra does not compute collision cross sections (CCS).
+- CCS is computed from 1/K0 only, never from a drift time.
 - diaPASEF and data-dependent PASEF runs give the spectra table only. Their
   list of precursors changes from pixel to pixel.
 - MALDI iprm-PASEF runs from the released Bruker software have been tested

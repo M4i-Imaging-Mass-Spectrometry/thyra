@@ -1,240 +1,104 @@
-# .github/workflows/release.yml
+name: Publish to PyPI
 
-name: Create Release & Publish to PyPI
-
+# Build and publish one tagged version (D49).
+#
+# This workflow cuts nothing. The version, the tag and the GitHub Release come
+# from merging the release pull request (release-please.yml), and that
+# workflow dispatches this one at the new tag. It runs only on a dispatch,
+# because a tag created with GITHUB_TOKEN starts no workflow on its own.
+#
+# To publish a tag again by hand (for example after a PyPI outage):
+#
+#   gh workflow run release.yml --ref v4.5.0
+#
+# PyPI refuses a second upload of a file it already holds, and `skip-existing`
+# turns that into a green step, so a repeat run is harmless.
+#
+# The file name is load-bearing: PyPI's Trusted Publishing entry names
+# `release.yml`. Renaming the file breaks publishing until PyPI is updated too.
 on:
-  # Deliberately NOT `push: [main]`. `semantic-release version` computes the
-  # bump from every commit since the last tag, so it batches by nature; the
-  # push trigger was the only thing turning one merge into one release. Ten
-  # fixes merged over a week now ship as one patch version with ten changelog
-  # lines under one heading, instead of ten versions and ten PyPI uploads.
-  # Merge cadence and release cadence are independent now, which is the point.
-  #
-  # The cron is the safety net, not the mechanism: it releases whatever has
-  # accumulated and no-ops (released=false) when nothing since the last tag was
-  # a feat/fix/perf. Cut a release the moment you want one instead of waiting
-  # for it -- `gh workflow run release.yml`, or the Run workflow button.
-  #
-  # GitHub disables `schedule` on a repository with no activity for 60 days.
-  # If releases ever go quiet for that long, check this trigger first.
-  schedule:
-    - cron: '0 6 * * 1'  # Mondays, 06:00 UTC
-  release:
-    types: [published]
   workflow_dispatch:
-    inputs:
-      publish_only:
-        description: 'Skip semantic-release and publish current version'
-        required: false
-        default: false
-        type: boolean
 
-# Two merges landing close together used to race: each run checked out main,
-# spent ~25s installing semantic-release, and then both tried to push a version
-# commit. Run 30708175547 (merge of #138) died at exactly that -- "[LOCAL SHA]
-# != [UPSTREAM SHA]. Upstream branch 'origin/main' has changed!" -- because #139
-# pushed 29 seconds earlier. Serialising the whole workflow is what fixes it.
-#
-# cancel-in-progress MUST stay false. `semantic-release version` creates the
-# version commit and the tag and then pushes them; cancelling between those
-# steps leaves the repo tagged-but-not-bumped, which is far worse than a queued
-# run. Nothing here is safe to interrupt.
-#
-# The group used to be keyed on the event as well as the ref, so a publish-only
-# workflow_dispatch would not queue behind a push run. That key is now WRONG and
-# must not come back: a workflow_dispatch without `publish_only` calls
-# semantic-release, exactly as a scheduled run does, so keying on the event puts
-# two version-creating runs in different groups and lets them race -- the very
-# failure this block exists to prevent. One group, everything serialises.
-#
-# The cost is that a publish-only dispatch can queue behind a release run. It is
-# small and getting smaller: with the push trigger gone, a run's Tests gate is
-# satisfied on the first poll (main's tip merged hours ago and its test run has
-# long since finished) rather than waiting minutes for a run that started at the
-# same instant, so a release run now takes about as long as it takes to install
-# semantic-release.
+# One run per tag. Two dispatches of the same tag queue rather than race.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Create Release
+  gate:
+    name: Check the tag
     runs-on: ubuntu-latest
-    # Cut a version from whatever has accumulated on main: on the cron, or on
-    # demand. Never on the `release` event, where the tag already exists, and
-    # never on a publish-only dispatch, which exists precisely to skip this job.
-    if: |
-      github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_dispatch' && inputs.publish_only != true)
     permissions:
-      contents: write
-      pull-requests: write
-      # Needed by the test gate below, which reads this commit's workflow runs.
-      # Declaring `permissions` at all makes every unlisted scope `none`, so
-      # omitting this denies it rather than falling back to a default.
+      contents: read
+      # Needed to read this commit's workflow runs. Declaring `permissions` at
+      # all makes every unlisted scope `none`.
       actions: read
     outputs:
-      released: ${{ steps.release.outputs.released }}
-      # `released` tells the downstream jobs apart -- it is set only by a run that
-      # actually cut a tag, so it is what decides whether the dist comes from this
-      # job's artifact or has to be built. `version` is the bare number the
-      # publish job asserts the artifact against.
-      #
-      # There is deliberately no `tag` output. One existed briefly, to pin the
-      # publish job's checkout to an immutable ref instead of the name 'main'.
-      # That checkout is gone -- the publish job downloads a dist rather than
-      # building one -- and with it the only consumer. What the tag was
-      # establishing is now established earlier and more directly: the artifact
-      # is built by the job that decided what to release, so there is no second
-      # resolution of "which tree" left to pin.
-      version: ${{ steps.release.outputs.version }}
-
+      version: ${{ steps.tag.outputs.version }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      # semantic-release's build_command starts with `uv lock` so the release
-      # commit carries a lockfile matching the version it stamps (see
-      # [tool.semantic_release] in pyproject.toml). This step is what puts uv
-      # on the PATH that build_command inherits. Same SHA pin as tests.yml; no
-      # python-version input, because setup-python above already provides the
-      # interpreter and `uv lock` resolves from requires-python, not from
-      # whichever Python is installed.
-      - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-
-      - name: Install dependencies
+      # A dispatch can be aimed at any ref. Only a version tag is a release:
+      # dispatching at a branch must publish nothing.
+      - name: Refuse anything but a version tag
+        id: tag
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          python -m pip install --upgrade pip
-          # Both pins are load-bearing. GitPython 3.1.60 removed
-          # Actor.name_email_regex, which semantic-release <= 10.6.1 reads at
-          # config load, so the fresh unpinned install this used to do died on
-          # every invocation the day 3.1.60 shipped -- and the --print gate
-          # below read the resulting empty output as "no release" and went
-          # green (runs 32957432684 and 32957823551). Move both pins together,
-          # to a semantic-release that handles current GitPython, after
-          # verifying `semantic-release version --print` against a clone.
-          pip install "python-semantic-release==10.6.1" "gitpython==3.1.59"
-
-      - name: Configure Git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Create Release
-        id: release
-        run: |
-          # Release main's tip, not the commit that triggered this run.
-          #
-          # The concurrency group at the top of this file serialises release
-          # RUNS. It cannot stop a MERGE landing while one is running, because a
-          # merge is a push, not a workflow run -- so it does not fix the
-          # "[LOCAL SHA] != [UPSTREAM SHA] / Upstream branch 'origin/main' has
-          # changed!" failure it was added for. That failure recurred eight
-          # minutes after #144 shipped, in a run whose own checkout contained the
-          # concurrency block: run 30806223426 checked out b5c3d8c, spent ~50s
-          # installing semantic-release, and by the time it pushed, two further
-          # merges had moved main to 9b9fd81.
-          #
-          # Any merge landing inside this job's ~60-90s window does that. The
-          # window cannot be closed by scheduling, only by not caring where main
-          # was when the run started.
-          #
-          # Re-pointing at the tip is also right on its own terms: what is on
-          # main is what ships, and semantic-release computes the bump from every
-          # commit since the last tag, so nothing is skipped by releasing a newer
-          # commit than the one that triggered us. It is what makes a replaced
-          # queue entry harmless -- GitHub keeps only one pending run per group,
-          # and the survivor now covers the replaced run's commits too.
-          #
-          # Explicit refspec rather than `git fetch origin main`, so that
-          # refs/remotes/origin/main is definitely updated and not just
-          # FETCH_HEAD.
-          git fetch origin +refs/heads/main:refs/remotes/origin/main
-          git checkout -B main refs/remotes/origin/main
-          RELEASE_SHA=$(git rev-parse HEAD)
-          echo "releasing from origin/main tip $RELEASE_SHA (this run was triggered by $GITHUB_SHA)"
-
-          # `--print` reports the version semantic-release WOULD release. When
-          # nothing on main is releasable -- a ci:/chore:/docs:/test: commit --
-          # it prints the CURRENT version, not an empty string. So an emptiness
-          # test can never fire on a healthy no-op, and what actually stopped
-          # the no-op release was the already-tagged guard below, reporting a
-          # concurrent run that never happened. Compare against the last
-          # released version instead, which is the thing "is there a release
-          # to cut?" really asks.
-          #
-          # stderr goes to a file rather than /dev/null: an empty print means
-          # semantic-release itself crashed before deciding anything, and the
-          # discarded stderr held the only evidence. The GitPython 3.1.60
-          # break was exactly this -- two runs reported "no release" with a
-          # green check while a fix commit sat unreleased on main.
-          NEXT=$(semantic-release version --print 2>"$RUNNER_TEMP/psr-print.log" || true)
-          LAST=$(semantic-release version --print-last-released 2>>"$RUNNER_TEMP/psr-print.log" || true)
-          echo "next=${NEXT:-<none>} last-released=${LAST:-<none>}"
-
-          if [ -z "$NEXT" ]; then
-            # Not a no-op: a healthy no-op prints the current version (see
-            # above). Fail the job so the crash is seen, instead of skipping
-            # the release with a green check.
-            cat "$RUNNER_TEMP/psr-print.log"
-            echo "semantic-release produced no version -- it crashed rather than declined. Failing."
+          if [ "$REF_TYPE" != "tag" ] || [[ ! "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::release.yml publishes a version tag (vX.Y.Z); this run is on $REF_TYPE '$REF_NAME'."
             exit 1
           fi
+          echo "version=${REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-          if [ "$NEXT" = "$LAST" ]; then
-            echo "No release: nothing releasable since v$LAST (no feat/fix/perf commits)."
-            echo "released=false" >> $GITHUB_OUTPUT
-            exit 0
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: pyproject.toml
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      # release-please tags the commit that bumped the version, so a mismatch
+      # means a tag was pushed by hand at the wrong commit. Publishing it would
+      # put a tree on PyPI under a version it does not claim.
+      - name: Tag matches pyproject.toml
+        env:
+          EXPECTED: ${{ steps.tag.outputs.version }}
+        run: |
+          ACTUAL=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Tag v$EXPECTED points at a commit whose pyproject.toml says $ACTUAL."
+            exit 1
           fi
+          echo "OK: v$EXPECTED matches pyproject.toml."
 
-          # Past this point a release is actually going to be cut, so this is
-          # where the commit has to earn it.
-          #
-          # Nothing has ever stood between a merge and PyPI: this workflow and
-          # tests.yml both fire on the same push and run alongside each other,
-          # so a red suite never stopped a publish. v3.0.0 went out from a
-          # commit no test job had even seen.
-          #
-          # Branch protection is the obvious gate and it is a MEASURED dead
-          # end -- see handouts/loose-ends-after-scils-alignment.md. A
-          # secrets.GITHUB_TOKEN push cannot bypass required status checks, so
-          # turning them on blocks this workflow's own version commit while the
-          # tag still lands, leaving the repo tagged-but-not-bumped. This gate
-          # needs no bypass: rather than stop the merge, refuse to release from
-          # it.
-          #
-          # The gate is on tests specifically, not on "every check for this
-          # commit". Waiting on every check sounds safer and is worse: it makes
-          # advisory workflows (complexity monitoring) able to veto a release,
-          # and "some check finished and none are pending" can be satisfied by
-          # one fast unrelated check that completed before the test run had
-          # even registered. Naming the workflow also means this can never wait
-          # on itself -- this workflow has a different name, so no self
-          # exclusion is needed.
-          #
-          # It gates $RELEASE_SHA, NOT $GITHUB_SHA. Those are usually the same
-          # commit and deliberately are not always: the checkout above releases
-          # main's tip rather than the commit that triggered this run. Gating
-          # the trigger would check one commit's tests and publish a different
-          # one -- the exact vacuous gate this exists to prevent.
+      # Nothing reaches PyPI from a commit the suite has not passed on. v3.0.0
+      # once shipped from a commit no test job had seen.
+      #
+      # The gate is on the workflow named `Tests` specifically, not on "every
+      # check for this commit". Waiting on every check would let an advisory
+      # workflow (complexity monitoring) veto a release. `Tests` includes lint,
+      # so lint can veto one (D19). Naming the workflow also means this can
+      # never wait on itself.
+      #
+      # Where that run comes from: a release pull request merged by a person is
+      # a push to main, which starts Tests on the merge commit -- the tagged
+      # commit. One merged by the Monday cron is made with GITHUB_TOKEN and
+      # starts nothing, so release-please.yml dispatches Tests at the tag.
+      #
+      # The wait is long because the run usually starts with this one: Tests
+      # takes 25 to 40 minutes. Fail closed on every branch. A refused publish
+      # is not a lost one: re-dispatch at the same tag once Tests is green.
+      - name: Wait for Tests to pass on the tagged commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ github.sha }}
+        run: |
           GATE_WORKFLOW="Tests"
-
-          echo "Gate: waiting for '$GATE_WORKFLOW' on $RELEASE_SHA"
+          echo "Gate: waiting for '$GATE_WORKFLOW' on $SHA"
           STATUS=absent
           CONCLUSION=none
-          for attempt in $(seq 1 60); do
+          for attempt in $(seq 1 180); do
             RUN=$(gh api \
-                    "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$RELEASE_SHA&per_page=100" \
+                    "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$SHA&per_page=100" \
                   | jq --arg wf "$GATE_WORKFLOW" \
                       '[.workflow_runs[] | select(.name == $wf)]
                        | sort_by(.created_at) | last')
@@ -245,140 +109,37 @@ jobs:
             sleep 30
           done
 
-          # Fail closed on every branch. A blocked release is not a lost one:
-          # the commits stay on main and the next push releases them together.
           if [ "$STATUS" != "completed" ]; then
-            echo "REFUSING TO RELEASE: '$GATE_WORKFLOW' is '$STATUS' for $RELEASE_SHA after 30 minutes."
-            echo "If it never ran at all, tests.yml has lost its 'push: [main]' trigger"
-            echo "and this gate would otherwise be vacuous."
+            echo "REFUSING TO PUBLISH: '$GATE_WORKFLOW' is '$STATUS' for $SHA after 90 minutes."
+            echo "If it never ran at all, nothing started Tests on this commit."
+            echo "Start it with: gh workflow run tests.yml --ref $GITHUB_REF_NAME"
+            echo "then re-dispatch this workflow at the same tag."
             exit 1
           fi
           if [ "$CONCLUSION" != "success" ]; then
-            echo "REFUSING TO RELEASE: '$GATE_WORKFLOW' concluded '$CONCLUSION' for $RELEASE_SHA."
+            echo "REFUSING TO PUBLISH: '$GATE_WORKFLOW' concluded '$CONCLUSION' for $SHA."
             exit 1
           fi
           echo "Gate: '$GATE_WORKFLOW' passed."
 
-          # Waiting for a test run takes minutes, where the window this job
-          # previously had between reading the tip and pushing was ~60-90s. If
-          # main moved while we waited then $RELEASE_SHA is no longer the tip,
-          # the checkout is stale, and `semantic-release version` would die on
-          # "Upstream branch 'origin/main' has changed!" -- the failure the tip
-          # checkout above was added to end. Stand down cleanly instead.
-          #
-          # Yielding used to be self-healing: the merge that moved main was a
-          # push, so it queued its own release run behind this one. Without the
-          # push trigger nothing queues, so a yield here means no release until
-          # the next cron or the next `gh workflow run release.yml`. That is a
-          # delay, never a loss -- the commits stay on main and semantic-release
-          # bumps from every commit since the last tag, so the next run covers
-          # them. The window is also far narrower than it was: the gate above
-          # now clears on its first poll, so main has to move inside this job's
-          # first minute for the yield to fire at all.
-          git fetch origin +refs/heads/main:refs/remotes/origin/main
-          TIP=$(git rev-parse refs/remotes/origin/main)
-          if [ "$TIP" != "$RELEASE_SHA" ]; then
-            echo "No release: main moved $RELEASE_SHA -> $TIP while waiting for tests."
-            echo "Nothing is queued to pick these up -- re-run this workflow to"
-            echo "release $TIP, or leave them for the Monday cron."
-            echo "released=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # $NEXT is a genuine bump, so an existing tag really does mean
-          # another run got there first.
-          #
-          # Re-fetch before asking. Checkout does fetch every tag (fetch-depth: 0
-          # fetches refs/tags/* regardless of fetch-tags), but it did so before
-          # the ~25s pip install above, so the local tag list is a stale
-          # snapshot. A sibling run that tagged inside that window is invisible
-          # here, and the guard waves it through. --force because a tag that
-          # moved must not be silently kept at its old value.
-          git fetch --tags --force origin
-
-          if git rev-parse -q --verify "refs/tags/v$NEXT" >/dev/null; then
-            echo "No release: v$NEXT is a new version but is already tagged -- a concurrent run created it."
-            echo "released=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          echo "Creating release: v${LAST:-<none>} -> v$NEXT"
-
-          # Run semantic-release (creates commit, tag, and GitHub release)
-          semantic-release version
-          echo "released=true" >> $GITHUB_OUTPUT
-          echo "version=$NEXT" >> $GITHUB_OUTPUT
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # Carry this job's OWN build forward instead of reconstructing it later.
-      #
-      # `build_command` (pyproject.toml) already ran `python -m build` inside
-      # `semantic-release version` above, and that hook is, in that file's own
-      # words, "the only hook that executes AFTER semantic-release stamps the new
-      # version into pyproject.toml and BEFORE it makes the release commit". So
-      # the dist sitting in the workspace right now was built from exactly the
-      # tree that became the tagged commit. It is the best-provenance artifact
-      # this workflow will ever hold.
-      #
-      # It used to be discarded when this job ended, and the publish job built
-      # the package a second time from a separate checkout -- two builds of one
-      # version, from two trees, with nothing reconciling them. PyPI received the
-      # second, and the attestations signed the second, so the in-toto statement
-      # described a tree assembled by a job that had no part in deciding what was
-      # released. Uploading it here is what makes that one build.
-      #
-      # Only on the path that actually cut a version. On every other path this
-      # job does not run at all, and the `build` job below produces the dist.
-      - name: Upload the release build
-        if: steps.release.outputs.released == 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: dist
-          path: dist/
-          if-no-files-found: error
-          retention-days: 1
-
-  # Build for the two paths that have no release job to take a dist from.
-  #
-  # This job exists so that the publish job never has to build. It is the same
-  # split PyPA documents: the package is assembled where a compromise buys
-  # nothing, and the job holding the Trusted Publishing identity does nothing but
-  # move a file it did not make.
-  #
-  # It runs ONLY when the release job did not already produce an artifact, so
-  # across all three triggers the package is built exactly once:
-  #
-  #   schedule / dispatch -> release job built it, this job is skipped
-  #   release event       -> release job skipped, this job builds the tag
-  #   publish_only        -> release job skipped, this job builds main's tip
+  # Build where a compromise buys nothing. This is the split PyPA documents:
+  # the job holding the Trusted Publishing identity does nothing but move a
+  # file it did not make.
   #
   # No `permissions:` block, so every scope is the workflow default and none of
   # it is id-token. That is the point: `pip install build` and hatchling's
   # isolated build env both resolve unpinned dependency trees at run time, and
-  # neither of them can be reached from a job that holds an OIDC credential.
+  # neither can be reached from a job that holds an OIDC credential.
   build:
     name: Build distribution
     runs-on: ubuntu-latest
-    needs: [release]
-    if: |
-      always() && needs.release.outputs.released != 'true' && (
-        github.event_name == 'release' ||
-        (github.event_name == 'workflow_dispatch' && inputs.publish_only == true)
-      )
-
+    needs: [gate]
     steps:
-      # A release event names an immutable tag; publish_only means main's tip by
-      # that input's documented intent. Neither needs the commit assertion the
-      # publish job used to carry -- that step existed because the publish job
-      # resolved a ref it then built, and this job resolves a ref that is either
-      # already immutable or deliberately floating.
+      # github.ref is the tag, which is what the gate checked.
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || 'main' }}
-          fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -404,185 +165,79 @@ jobs:
   publish:
     name: Publish to PyPI
     runs-on: ubuntu-latest
-    needs: [release, build]
-    # Run if: the release job cut a version, OR a release was published, OR this
-    # is a publish-only dispatch. always() is what lets this run at all when the
-    # `release` job is skipped -- a skipped dependency otherwise skips this too.
-    #
-    # The first clause carries no event check. `released` is set only by a run
-    # of the release job that actually created a tag, so it already implies the
-    # trigger was one that cuts versions; naming the event as well is how the
-    # push-trigger removal could have silently disabled publishing.
-    #
-    # `needs.build` is guarded rather than ignored. `always()` would otherwise
-    # run this job after a FAILED build, where the only thing left to do is fail
-    # a second time on a missing artifact and bury the real error under it. A
-    # skipped build is fine and expected -- that is the schedule path, where the
-    # release job supplied the artifact -- so the test is on failure and
-    # cancellation specifically, not on `success()`.
-    if: |
-      always() && needs.build.result != 'failure' && needs.build.result != 'cancelled' && (
-        needs.release.outputs.released == 'true' ||
-        github.event_name == 'release' ||
-        (github.event_name == 'workflow_dispatch' && inputs.publish_only == true)
-      )
-    # The only scope this job gets, and now the only privileged thing in it.
-    # Declaring `permissions` at all makes every unlisted scope `none`; the
-    # artifact download needs no scope, because a same-run artifact is fetched
-    # with the runtime token rather than with GITHUB_TOKEN.
+    needs: [gate, build]
+    # The only scope this job gets, and the only privileged thing in it.
     permissions:
       id-token: write  # Required for Trusted Publishing
 
     steps:
       # Take the dist that was already built. This job does not build, does not
-      # check out, and does not install anything -- it holds the Trusted
-      # Publishing identity, and every line removed from it is one less thing
-      # that identity is exposed to.
-      #
-      # It used to check out a ref and build the package itself. That checkout
-      # needed an assertion that it had resolved to the released commit, because
-      # the tree it resolved was the tree that got published. There is no such
-      # assertion here because there is no such resolution: the artifact was
-      # built by a job that already knew what it was building, and the identity
-      # of what arrives is checked below rather than assumed from a ref.
-      #
-      # `dist` is uploaded under that one name by whichever of the two producers
-      # ran, so this step is the same on all three triggers.
+      # check out, and does not install anything.
       - name: Download the built distribution
         uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
 
-      # Assert that the right artifact ARRIVED.
-      #
-      # This used to check that the right tree had been checked out and built.
-      # Now that the build happens elsewhere, it checks the thing that can
-      # actually go wrong here: that the dist handed to this job is the one the
-      # release job cut. A build job that resolved the wrong ref, an artifact
-      # name collision, or a partially uploaded dist all land here.
-      #
-      # It has to run BEFORE the upload rather than after it. PyPI refuses a
-      # second upload of a filename it already holds, and `skip-existing: true`
+      # Assert that the right artifact ARRIVED, before the upload. PyPI refuses
+      # a second upload of a filename it already holds, and `skip-existing`
       # below turns that refusal into a green step -- so a wrong tree published
       # under a right version number cannot be corrected by re-running this
       # workflow. The version has to be burned and a new one cut.
       #
-      # Asserted only where an expectation exists INDEPENDENTLY of the artifact
-      # being published. On the release and schedule/dispatch paths that is the
-      # tag. On a publish_only dispatch there is none: the only statement of
-      # intent is pyproject.toml's own version, which is the build's input, so
-      # comparing against it would compare the build to itself.
-      - name: Verify the artifact carries the released version
+      # hatchling names the sdist thyra-<version>.tar.gz (PEP 625) and the
+      # wheel thyra-<version>-<tags>.whl (PEP 427), both from project.version.
+      # The wheel tag is globbed rather than pinned to py3-none-any, so this
+      # check is not what breaks if the package ever stops being pure Python.
+      - name: Verify the artifact carries the tagged version
         env:
-          EXPECTED: ${{ github.event_name == 'release' && github.event.release.tag_name || needs.release.outputs.version }}
+          EXPECTED: ${{ needs.gate.outputs.version }}
+        shell: bash
         run: |
-          # tag_name carries the leading v; the release job's `version` output
-          # does not. Strip it so both paths compare bare versions.
-          EXPECTED="${EXPECTED#v}"
-          if [ -z "$EXPECTED" ]; then
-            echo "publish_only dispatch: no expected version independent of the build. Skipping."
-            exit 0
-          fi
-
           echo "Expecting version $EXPECTED. Downloaded:"
           ls -1 dist/
-
-          # hatchling names the sdist thyra-<version>.tar.gz (PEP 625) and the
-          # wheel thyra-<version>-<tags>.whl (PEP 427), both from
-          # project.version -- which is the field `version_toml` rewrites. So
-          # these filenames are what the built tree actually claims to be.
-          # The wheel tag is globbed rather than pinned to py3-none-any: the
-          # package is pure Python today, and this check should not be what
-          # breaks if that ever stops being true.
           MISSING=0
           [ -f "dist/thyra-$EXPECTED.tar.gz" ] || MISSING=1
           compgen -G "dist/thyra-$EXPECTED-*.whl" >/dev/null || MISSING=1
-
           if [ "$MISSING" = "1" ]; then
             echo "REFUSING TO PUBLISH: the artifact does not carry version $EXPECTED."
-            echo "The dist that reached this job was built from a tree whose"
-            echo "project.version is not the released one. Publishing it would put a"
-            echo "different tree on PyPI under the released version number, and"
-            echo "skip-existing would report that as success."
             exit 1
           fi
-          echo "Artifact carries the released version $EXPECTED."
-        shell: bash
+          echo "Artifact carries the tagged version $EXPECTED."
 
       # SHA-pinned, which is a deliberate deviation from PyPA's own README.
-      #
-      # `@release/v1` is the ref PyPA documents, and it moves on purpose so that
-      # publishing keeps working when PyPI changes its API. That is a real
-      # argument for the branch, and it is the reason this was not pinned before.
-      # What tips it the other way is that this action is now the ONLY third-party
-      # code in the job holding the Trusted Publishing identity: the pip install
-      # and the hatchling build env, which resolved unpinned trees at run time,
-      # have moved to the unprivileged `build` job. Pinning one input out of three
-      # would have changed nothing about the blast radius; pinning the last one
-      # closes it.
-      #
-      # The cost is that this pin does not bump itself -- there is no
-      # .github/dependabot.yml in this repository. Move it deliberately, and
-      # re-read PyPA's changelog when you do, because the moving ref exists to
-      # carry API changes.
+      # `@release/v1` moves on purpose so publishing keeps working when PyPI
+      # changes its API. What tips it the other way is that this action is the
+      # ONLY third-party code in the job holding the Trusted Publishing
+      # identity. The pin does not bump itself (there is no dependabot config):
+      # move it deliberately, and re-read PyPA's changelog when you do.
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           skip-existing: true
         # No token needed - uses Trusted Publishing!
 
-  # Rebuild the docs site after a release, because nothing else will.
-  #
-  # `semantic-release version` pushes the version commit that rewrites
-  # CHANGELOG.md, and docs/changelog.md is a snippets include of that file --
-  # which is exactly why CHANGELOG.md is one of docs.yml's trigger paths. But
-  # that push is made with GITHUB_TOKEN, and a GITHUB_TOKEN push deliberately
-  # does not create a workflow run (GitHub's recursion guard). The version
-  # commit is the ONLY thing that ever touches CHANGELOG.md, so that trigger
-  # path could never fire on its own.
-  #
-  # Measured on 2026-08-03: neither 780df41 (3.0.2) nor 43016f1 (3.0.3)
-  # produced a docs run, and gh-pages sat at `Deployed 020accf` with the 3.0.3
-  # entry missing from the published changelog. The symptom is intermittent --
-  # any later unrelated push to docs/**, mkdocs.yml or thyra/** rebuilds the
-  # page and the staleness disappears before anyone looks.
-  #
-  # workflow_dispatch is the documented exception to the recursion guard: it
-  # and repository_dispatch always create a run, even from GITHUB_TOKEN. That
-  # needs `actions: write`, which is scoped to this job alone rather than
-  # widened on the release job -- without it the dispatch fails with HTTP 403.
+  # Rebuild the docs site after a release. A release pull request merged by a
+  # person changes CHANGELOG.md on main, which starts docs.yml by itself; one
+  # merged by the Monday cron is a GITHUB_TOKEN push and starts nothing. So
+  # dispatch it always (workflow_dispatch is exempt from that rule). A second
+  # docs run queues behind the first in docs.yml's `pages-deploy` group, so the
+  # duplicate on the manual path is harmless.
   #
   # This deliberately does not depend on `publish`. A PyPI failure has no
-  # bearing on whether the changelog page is correct, and coupling them would
-  # mean one broken upload also leaves the docs stale.
+  # bearing on whether the changelog page is correct.
   deploy-docs:
     name: Trigger Docs Deploy
     runs-on: ubuntu-latest
-    needs: [release]
-    # No always(): if `release` is skipped or cut nothing, this should be
-    # skipped too. Only a real version bump needs the changelog page rebuilt.
-    if: needs.release.outputs.released == 'true'
+    needs: [gate]
     permissions:
       actions: write
 
     steps:
       # No checkout: `gh workflow run` needs the repo name, not its contents.
-      #
-      # --ref main rather than the triggering sha, matching what the release
-      # job now releases. The version commit is on main's tip by the time this
-      # runs, so the docs build picks up the rewritten CHANGELOG.md.
-      #
-      # If a docs run is already in flight this one queues behind it, because
-      # docs.yml's `pages-deploy` concurrency group is deliberately not keyed
-      # on the event -- a dispatch and a push contend for the same gh-pages
-      # force-push and must serialise.
       - name: Dispatch docs.yml
         run: |
           gh workflow run docs.yml --ref main -R "$GITHUB_REPOSITORY"
-          echo "Dispatched docs.yml for v${{ needs.release.outputs.version }}."
-          echo "Confirm with the gh-pages commit message -- gh-deploy writes"
-          echo "\"Deployed <sha> with MkDocs version: ...\" -- not the rendered"
-          echo "site, which serves a stale CDN copy for a minute or two."
+          echo "Dispatched docs.yml for v${{ needs.gate.outputs.version }}."
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

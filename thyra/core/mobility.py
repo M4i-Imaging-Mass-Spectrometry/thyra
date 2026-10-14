@@ -10,8 +10,9 @@ way -- with the PSI-MS terms mzPeak also uses.
 
 It also holds :func:`ccs_from_one_over_k0`, the one derived quantity of
 the axis. A collision cross section needs a charge state, which no
-converter can know, so it is computed on request and never written as a
-``var`` column.
+converter can know. The mobility table's ``var["ccs"]`` is computed with
+the charge assumed to be 1, and :func:`ccs_assumptions` is the block that
+says so beside it (design decision D47).
 """
 
 import math
@@ -26,6 +27,9 @@ from ..errors import ConversionRefused
 #: The two mobility quantities an instrument records, as PSI-MS terms.
 INVERSE_REDUCED_MOBILITY_ACCESSION = "MS:1002815"
 DRIFT_TIME_ACCESSION = "MS:1002476"
+
+#: volt-second per square centimeter, the unit 1/K0 is stated in.
+INVERSE_REDUCED_MOBILITY_UNIT_ACCESSION = "MS:1002814"
 
 #: The unit a drift time is reported in (UO millisecond).
 MILLISECOND_UNIT_ACCESSION = "UO:0000028"
@@ -66,7 +70,7 @@ MOBILITY_ARRAY_TERMS: Dict[str, Tuple[str, Optional[str]]] = {
 
 #: Units that identify the quantity when the array term does not.
 _UNIT_TO_KIND: Dict[str, str] = {
-    "MS:1002814": INVERSE_REDUCED_MOBILITY_ACCESSION,  # volt-second per square centimeter
+    INVERSE_REDUCED_MOBILITY_UNIT_ACCESSION: INVERSE_REDUCED_MOBILITY_ACCESSION,
     "UO:0000028": DRIFT_TIME_ACCESSION,  # millisecond
     "UO:0000010": DRIFT_TIME_ACCESSION,  # second
 }
@@ -256,12 +260,17 @@ def ccs_from_one_over_k0(
     Goes through the vendor library when ``sdk`` (an
     :class:`~thyra.readers.bruker.timstof.sdk.sdk_functions.SDKFunctions`
     opened on a TDF file) is given and exports the conversion, and
-    through :func:`mason_schamp_ccs` otherwise; the two agree to better
-    than 1e-6 relative and a test pins them to each other.
+    through :func:`mason_schamp_ccs` otherwise. The two agree to 1e-6
+    relative from m/z 100 up and to 2.2e-6 at m/z 50 (measured 2026-10-13;
+    the gap grows as the ion gets lighter), and a test pins them to each
+    other.
 
     The charge is an input on purpose. MALDI imaging is mostly singly
-    charged, but that is an assumption an annotation step has to make
-    and record; the converter never writes a ``ccs`` column.
+    charged, but that is an assumption whoever calls this has to make and
+    record. The converter makes it for the mobility table's ``var["ccs"]``
+    and records it with :func:`ccs_assumptions`; it calls
+    :func:`mason_schamp_ccs` directly, so a store's values do not depend on
+    which vendor library the machine has.
     """
     _checked_charge(charge)
     if sdk is not None and getattr(sdk, "file_type", None) == "tdf":
@@ -276,6 +285,56 @@ def ccs_from_one_over_k0(
                 dtype=np.float64,
             )
     return mason_schamp_ccs(one_over_k0, mz, charge)
+
+
+#: The charge state the mobility table's ``var["ccs"]`` is computed for.
+#: MALDI ions are almost always singly charged. For an ion of charge
+#: ``z`` the charge enters twice, as a factor and through the ion's mass
+#: in the reduced mass, so recompute with :func:`mason_schamp_ccs` rather
+#: than rescale the stored value.
+CCS_ASSUMED_CHARGE = 1
+
+#: PSI-MS "collisional cross sectional area" and UO "square angstrom".
+CCS_ACCESSION = "MS:1002954"
+CCS_UNIT_ACCESSION = "UO:0000324"
+
+
+def ccs_applies(axis: Optional[MobilityAxis]) -> bool:
+    """Whether a mobility axis is one a cross section can be computed from.
+
+    Only 1/K0 stated in V s/cm^2: the Mason-Schamp form here takes that
+    quantity in that unit. A drift time needs the drift cell's length,
+    field and pressure, which no source Thyra reads states, and an axis
+    whose kind or unit is not stated is not guessed at.
+    """
+    return (
+        axis is not None
+        and axis.kind_accession == INVERSE_REDUCED_MOBILITY_ACCESSION
+        and axis.unit_accession == INVERSE_REDUCED_MOBILITY_UNIT_ACCESSION
+    )
+
+
+def ccs_assumptions() -> Dict[str, Any]:
+    """What a stored ``var["ccs"]`` rests on, as a plain ``uns`` block.
+
+    Plain-name keys and scalar values only, CV accessions as values: a
+    zarr key is a directory name and a colon is not a legal Windows path
+    character. The gas and temperature are the conversion's convention,
+    the one Bruker's own library uses, not conditions read from the
+    instrument.
+    """
+    return {
+        "quantity_accession": CCS_ACCESSION,
+        "quantity_name": "collisional cross sectional area",
+        "unit_accession": CCS_UNIT_ACCESSION,
+        "unit_name": "square angstrom",
+        "method": "Mason-Schamp",
+        "charge_assumed": CCS_ASSUMED_CHARGE,
+        "drift_gas": "nitrogen",
+        "drift_gas_mass_da": CCS_DRIFT_GAS_MASS_DA,
+        "temperature_k": CCS_TEMPERATURE_K,
+        "conditions_source": "convention",
+    }
 
 
 def _checked_charge(charge: Any) -> int:

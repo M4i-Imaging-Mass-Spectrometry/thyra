@@ -6,7 +6,7 @@ See :mod:`thyra.metadata.schema.models` for the schema itself,
 for the CLI.
 
 **What this schema covers, and what it deliberately does not** (issue
-#278). ``uns`` holds fourteen keys and only one of them, ``msi_metadata``,
+#278). ``uns`` holds sixteen keys and only one of them, ``msi_metadata``,
 is built here. That is not two standards of rigour applied to one kind of
 thing; it is three kinds of thing:
 
@@ -21,13 +21,13 @@ thing; it is three kinds of thing:
   schema refuses unknown keys -- it is where the refused material goes.
 * **Computed data** -- ``average_spectrum``, ``mobility_heatmap``,
   ``feature_axis``, ``mobility_grid``, ``mobility_axis``,
-  ``mobility_marginal``, ``msms_schedule``, ``demultiplexed_current``,
-  ``average_spectrum_per_region``. Arrays and tables that live in ``uns``
+  ``mobility_marginal``, ``ccs``, ``msms_schedule``,
+  ``demultiplexed_current``, ``average_spectrum_per_region``. Arrays and tables that live in ``uns``
   because anndata puts non-matrix data there. They are outputs, not
   descriptions, and a metadata schema has nothing to say about them.
 
 So the boundary is "can a fixed vocabulary describe this", not "was anyone
-rigorous here". Every one of the fourteen is documented in
+rigorous here". Every one of the sixteen is documented in
 ``docs/output-format.md`` with its storage contract, which is what a
 consumer reads to know what it may rely on.
 """

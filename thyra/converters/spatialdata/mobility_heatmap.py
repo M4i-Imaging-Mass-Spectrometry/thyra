@@ -496,7 +496,7 @@ def _mobility_range(reader: BaseMSIReader) -> Optional[Tuple[float, float, int]]
     scans, and binning over the declared range would pile those scans
     into an edge channel. :func:`default_channel_plan` turns them into
     channels -- the grid table's own rule, so the two stay index-aligned,
-    including on a source whose axis is a short list of bins (D49). The
+    including on a source whose axis is a short list of bins (D50). The
     declared range, over the anchor's channels, is the fallback for an
     axis that has no values.
     """

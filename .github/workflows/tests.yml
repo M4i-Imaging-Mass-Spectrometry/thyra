@@ -7,11 +7,12 @@ on:
   # v3.0.0 shipped from a commit no test job had ever seen.
   #
   # This trigger is load-bearing for releases and must not be narrowed further.
-  # release.yml gates on a completed run of THIS workflow for the exact commit
-  # it is about to release, and it fails closed: drop this trigger and every
-  # release blocks for 30 minutes and then errors, rather than shipping
-  # ungated. Releases no longer run on push, so this is the only thing that
-  # gives main's tip a test run to be gated on.
+  # release.yml gates the PyPI publish on a completed run of THIS workflow for
+  # the exact tagged commit, and it fails closed. When a person merges the
+  # release pull request, this push run is the run it waits for: drop this
+  # trigger and every such release blocks for 90 minutes and then errors,
+  # rather than shipping ungated. (A release merged by the Monday cron gets a
+  # dispatched run instead; see release-please.yml.)
   push:
     branches: [ main ]
   # Deliberately unfiltered. `branches:` on a pull_request trigger matches the
@@ -84,7 +85,7 @@ jobs:
   #
   # Living in tests.yml couples lint to the release. release.yml gates the
   # PyPI publish on a completed successful run of the workflow named `Tests`
-  # for the exact release SHA and fails closed (see its GATE_WORKFLOW block),
+  # for the exact tagged SHA and fails closed (see its GATE_WORKFLOW block),
   # and that comment says the gate is on tests specifically so an ADVISORY
   # workflow cannot veto a release. Lint is not advisory: a red lint on main
   # should stop a publish, so the coupling is accepted deliberately rather

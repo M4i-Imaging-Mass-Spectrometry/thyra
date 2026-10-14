@@ -34,7 +34,7 @@ import spatialdata as sd
 sdata = sd.read_zarr("output.zarr")
 block = sdata.tables["msi_dataset_z0"].uns["msi_metadata"]
 
-print(block["schema_version"])                       # "0.12.0"
+print(block["schema_version"])                       # "0.13.0"
 print(block["ms_analysis"]["pixel_size_um"])         # {"x": 20.0, "y": 20.0}
 print(block["ms_analysis"]["ionisation_source"])     # "MALDI"
 print(block["ms_analysis"]["ionisation_source_term"])
@@ -479,6 +479,7 @@ consumer can rely on one spelling:
 | `mz_index` | the converter, on sibling tables only | Column of the feature's m/z on the summed MSI table's axis |
 | `mobility_index` | the converter, on mobility-resolved tables only | The feature's position on the table's mobility axis: the rank of its mobility among the distinct values a shared-axis source lists, or the channel it fell in on a common grid (`ion_mobility.grid`) |
 | `precursor_mobility` | the converter, on demultiplexed MS/MS tables only | The 1/K0 the precursor was isolated at (the middle of its mobility window). What tells two precursors sharing an m/z apart -- an isomer pair -- so they are never merged |
+| `ccs` | the converter, on mobility-resolved tables whose axis is 1/K0 | The feature's collision cross section in square angstroms, computed by Mason-Schamp from its `mz` and `mobility` for an assumed charge of 1, in nitrogen at 305 K. `uns["ccs"]` records those assumptions. A drift-time table has no such column. Any table that carries it must hold numeric, finite, positive values |
 | `precursor_index` | the converter, on demultiplexed MS/MS tables only | The precursor's position in **this store's** precursor axis, and the identity of its column block. Means nothing outside the store: align two stores on `(precursor_mz, precursor_mobility)` |
 | `formula` | annotation tools | Molecular formula of the annotation |
 | `adduct` | annotation tools | Adduct, e.g. `+H`, `-H`, `+Na` |
@@ -489,7 +490,7 @@ Readers may add extra per-channel columns (a non-m/z native axis such as
 flight time stays alongside `mz`), and annotation tools may add columns
 beyond these -- but the reserved names above must never be reused with a
 different meaning. `thyra validate` checks the `mz` contract on every
-table of a store.
+table of a store, and the `ccs` contract on every table that has one.
 
 ## obs column conventions
 
@@ -540,13 +541,14 @@ the processing steps' `action_term` added), 0.9.0 (the `alignment` section
 added), 0.10.0 (the `obs` column `acquisition_order` reserved; the document
 is unchanged), 0.11.0 (`provenance.mass_axis` added), 0.12.0
 (`sample.sample_id`, `sample.sample_name` and
-`ms_analysis.spectrum_representation` added).
+`ms_analysis.spectrum_representation` added), 0.13.0 (the `var` column
+`ccs` reserved; the document is unchanged).
 
 The JSON Schema rendering is published at a fixed, versioned address,
 which is also its `$id`:
 
 ```
-https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.12.0/msi_metadata.schema.json
+https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.13.0/msi_metadata.schema.json
 ```
 
 Every version from 0.6.0 on has its own folder under that path, and a
@@ -556,7 +558,7 @@ program that writes the document without Thyra validates against that
 address; see [Writing the Metadata Document](writing-the-metadata-document.md).
 
 The same file is committed at
-`thyra/metadata/schema/msi_metadata_schema_v0_12.json` and ships in the
+`thyra/metadata/schema/msi_metadata_schema_v0_13.json` and ships in the
 wheel, so a Python consumer can validate documents offline without
 importing Thyra:
 
@@ -566,7 +568,7 @@ import json
 
 schema = json.loads(
     resources.files("thyra.metadata.schema")
-    .joinpath("msi_metadata_schema_v0_12.json")
+    .joinpath("msi_metadata_schema_v0_13.json")
     .read_text()
 )
 ```

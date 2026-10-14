@@ -185,10 +185,9 @@ which reads the test sources rather than running them.
      fix: resolve memory leak in large dataset processing
      docs: update installation instructions
      ```
-     The allowed types are `allowed_tags` under
-     `[tool.semantic_release.commit_parser_options]` in `pyproject.toml`. A
-     title the release tool cannot parse would ship with no version bump and
-     no changelog line.
+     The allowed types are the `type`s under `changelog-sections` in
+     `release-please-config.json`. A title the release tool cannot parse
+     would ship with no version bump and no changelog line.
    - Your commit messages become the body of the squash commit, and the
      release tool reads them too. A paragraph starting with a type counts as
      one more change, and a `BREAKING CHANGE:` line makes a major version.
@@ -355,51 +354,58 @@ Thyra follows [Semantic Versioning](https://semver.org/) (SemVer):
 
 ### Release Process
 
-1. **Automated Versioning** - We use `python-semantic-release` for automated version bumping
-2. **Commit Message Format** - Use conventional commits to trigger appropriate version bumps:
+1. **Automated Versioning** - [release-please](https://github.com/googleapis/release-please)
+   picks the next version from the conventional commits merged since the last tag:
    ```
    feat: add new converter format (triggers MINOR)
    fix: resolve memory leak (triggers PATCH)
    feat!: redesign API structure (triggers MAJOR)
    ```
 
-3. **Breaking Changes** - Always include `!` in commit type or `BREAKING CHANGE:` in footer
-4. **Changelog** - Automatically generated from commit messages into
-   `CHANGELOG.md`. Never edit it by hand; the [Changelog](changelog.md) page
-   includes that file verbatim.
+2. **Breaking Changes** - Always include `!` in commit type or `BREAKING CHANGE:` in footer
+3. **Changelog** - Generated from commit titles into `CHANGELOG.md` by the
+   release pull request. Never edit it by hand; the [Changelog](changelog.md)
+   page includes that file verbatim. Only `feat`, `fix` and `perf` commits get
+   a line.
 
 ### Releases are batched, not per-merge
 
-**Merging a pull request does not publish a release.** Releases are cut on a
-schedule or on demand, and each one covers every commit merged since the
-previous tag.
+**Merging a pull request does not publish a release.** A release is its own
+pull request.
 
-`semantic-release version` reads all commits since the last tag and applies the
-highest bump among them, so a batch of eight `fix:` merges becomes one patch
-version whose changelog section lists all eight. Releasing per merge would have
-turned the same eight into eight versions and eight PyPI uploads.
+After every merge to `main`, release-please updates one open pull request
+titled `chore(main): release X.Y.Z`. It bumps the version in `pyproject.toml`,
+`thyra/__init__.py` and `uv.lock`, and adds the changelog section. Its body
+shows that section. Eight `fix:` merges become one patch version listing all
+eight.
 
-`.github/workflows/release.yml` therefore has no `push` trigger. It runs:
+**Merging that pull request is the release.** release-please then tags the
+merge commit and creates the GitHub Release. `.github/workflows/release.yml`
+builds the tag and publishes it to PyPI, once **Tests** has passed on that
+commit. The release pull request runs the same checks as any other.
 
-- **on a cron**, Mondays at 06:00 UTC, releasing whatever has accumulated;
-- **on demand**, whenever you want a release sooner:
+It is merged:
+
+- **by hand**, whenever you want a release;
+- **on a cron**, Mondays at 06:00 UTC, if **Tests** passed on it. If the
+  checks are still running it waits for the next Monday, or run:
 
   ```bash
-  gh workflow run release.yml
+  gh workflow run release-please.yml -f merge_release_pr=true
   ```
 
-- **publish-only**, to re-upload the current version to PyPI without cutting a
-  new one, via the `publish_only` input on the Run workflow button.
+With only `chore:`, `ci:`, `docs:`, `refactor:`, `style:`, `test:` or `build:`
+commits since the last tag, there is no release pull request. Only `feat:`
+(minor) and `fix:`/`perf:` (patch) open one.
 
-A run with nothing releasable since the last tag - only `chore:`, `ci:`,
-`docs:`, `refactor:`, `style:`, `test:` or `build:` commits - reports
-`No release` and exits green. Only `feat:` (minor) and `fix:`/`perf:` (patch)
-move the version.
+To publish a tag to PyPI again, for example after an outage:
 
-Nothing is lost by waiting: unreleased commits sit on `main` and the next run
-picks them up. What you should *not* do is merge a fix and then expect
-`pip install thyra` to have it minutes later - check the tags, or trigger a
-release yourself.
+```bash
+gh workflow run release.yml --ref v4.5.0
+```
+
+Do not expect `pip install thyra` to have a fix minutes after it merges.
+Check the tags, or merge the release pull request.
 
 ### Grouping issues into release batches
 

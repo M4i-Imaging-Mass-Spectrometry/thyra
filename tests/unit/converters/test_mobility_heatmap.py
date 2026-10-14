@@ -518,7 +518,7 @@ class _DriftBinReader(MobilityStubReader):
 
 
 class TestNativeChannels:
-    """D49: a short list of declared bins is its own channel set."""
+    """D50: a short list of declared bins is its own channel set."""
 
     def test_each_bin_is_one_channel(self):
         block = build_mobility_heatmap(_DriftBinReader(), MASS_AXIS)

@@ -382,7 +382,7 @@ Windows), numpy arrays rather than lists:
 | `acq_range` | `float64[2]`, `[lower, upper]`: the acquired range as declared, else the span of `values` |
 | `calibration` | `{model_type, coefficients}`: the vendor `TimsCalibration` row, provenance only |
 | `source` | `"bruker_tdf"`, `"imzml"` or `"waters_raw"` |
-| `bin_width` | `float`, only where the source defines its own equal-width bins (Waters drift bins): the width of one, in the axis unit. Its presence is what gives the heatmap one channel per bin (D49) |
+| `bin_width` | `float`, only where the source defines its own equal-width bins (Waters drift bins): the width of one, in the axis unit. Its presence is what gives the heatmap one channel per bin (D50) |
 | `resolved_table` | element key of the mobility-resolved sibling table, when one was written |
 
 **`uns["mobility_heatmap"]`** is the table's mean mass-mobility frame: the
@@ -398,7 +398,7 @@ plane's heatmap.
 | key | value |
 |---|---|
 | `mz_edges` | `float64[m + 1]`: bin edges on the common m/z axis, which is coarsened by an integer factor to about 4,000 bins (`m` is the axis length itself when it is shorter) |
-| `mobility_edges` | `float64[k + 1]`, **`k = 256`**: equal-width bins in the axis unit, ascending, spanning the axis `values`. A source whose axis is fewer than 256 equal-width bins of its own (Waters drift bins, `uns["mobility_axis"]["bin_width"]` set) gets one channel per bin instead, edges half a bin outside the first and last value (D49) |
+| `mobility_edges` | `float64[k + 1]`, **`k = 256`**: equal-width bins in the axis unit, ascending, spanning the axis `values`. A source whose axis is fewer than 256 equal-width bins of its own (Waters drift bins, `uns["mobility_axis"]["bin_width"]` set) gets one channel per bin instead, edges half a bin outside the first and last value (D50) |
 | `counts` | `float32[m, k]`: mean intensity per bin over pixel positions, the rows `uns["average_spectrum"]` divides by |
 | `current_ratio` | `float`: the heatmap's ion current over `uns["average_spectrum"]`'s -- 1.0 under `scan_sum`; above 1 under `vendor_centroid` (about 1.01 to 1.23), whose picked peaks keep only part of the raw current the heatmap holds |
 
@@ -444,7 +444,8 @@ table**, `{table}_mobility`, unless `--no-mobility-table` is given:
 | `var["mz"]` | strictly increasing, unique | **non-decreasing with duplicates** |
 | `var["mobility"]` | absent | the feature's 1/K0 (or drift time) |
 | sort | by `mz` | lexicographic `(mz, mobility)` |
-| also | | `mz_index` (column on the MSI axis), `mobility_index` (rank of the mobility value, or the grid channel), `uns["feature_axis"]`, `uns["mobility_axis"]` |
+| `var["ccs"]` | absent | the feature's collision cross section in square angstroms, for an assumed charge of 1; on a 1/K0 axis only (see [below](#collision-cross-section)) |
+| also | | `mz_index` (column on the MSI axis), `mobility_index` (rank of the mobility value, or the grid channel), `uns["feature_axis"]`, `uns["mobility_axis"]`, `uns["ccs"]` with `var["ccs"]` |
 
 Two isomers at one m/z that separate in mobility are one column in the MSI
 table and two in the mobility table. The `(mz, mobility)` sort means an m/z
@@ -457,6 +458,49 @@ assumes a unique, strictly increasing `var["mz"]` must not be pointed at it.
 `thyra validate` applies the pair contract (non-decreasing `mz`, unique
 sorted pairs) to tables carrying `mobility` and the strict contract to all
 others.
+
+#### Collision cross section
+
+When the mobility axis is 1/K0 in V s/cm2 (`uns["mobility_axis"]["type_accession"]`
+is `MS:1002815`, its `unit_accession` `MS:1002814`), the mobility table also
+carries `var["ccs"]`: each feature's collision cross section (CCS), in square
+angstroms, worked out from its own `mz` and `mobility` by the Mason-Schamp
+equation. Every TIMS route qualifies: a Bruker TDF with `--mobility-grid`, and a
+continuous imzML whose mobility array states 1/K0 in that unit. A drift-time
+axis gets no column: turning a drift time into a CCS needs the drift cell's
+length, field and pressure, which no source Thyra reads states. Neither does an
+axis whose quantity or unit the source leaves unstated.
+
+The value rests on three assumptions, and `uns["ccs"]` on the same table
+records them:
+
+| key | value |
+|---|---|
+| `quantity_accession`, `quantity_name` | `MS:1002954`, collisional cross sectional area |
+| `unit_accession`, `unit_name` | `UO:0000324`, square angstrom |
+| `method` | `"Mason-Schamp"` |
+| `charge_assumed` | `1`. MALDI ions are almost always singly charged; no source states a feature's charge |
+| `drift_gas`, `drift_gas_mass_da` | `"nitrogen"`, `28.0134` |
+| `temperature_k` | `305.0` |
+| `conditions_source` | `"convention"`: the gas and temperature are the ones Bruker's own conversion uses, not conditions read from the run |
+
+For an ion of charge `z` the true value is between `sqrt(z)` and `z` times
+the stored one, because the charge also changes the ion's mass in the reduced
+mass. Recompute it rather than rescale it:
+
+```python
+from thyra.core.mobility import mason_schamp_ccs
+
+mob = sdata.tables["msi_dataset_z0_mobility"]
+ccs_2plus = mason_schamp_ccs(mob.var["mobility"], mob.var["mz"], 2)
+```
+
+The same formula fills the column on every route and every platform, so a
+store does not depend on which vendor library the machine has. Bruker's own
+library gives the same values to 1e-6 relative from m/z 100 up, and to 2.2e-6
+at m/z 50. On a grid table, `mz` is the mass bin and `mobility` the channel
+centre, so the value is that cell's, not one peak's. Two features that share
+an m/z keep the order of their mobility: the larger 1/K0 has the larger CCS.
 
 #### The same table from a common mobility grid
 
@@ -476,7 +520,7 @@ to tell them apart to read either. What says which one filled it is
 |---|---|
 | `law` | how the channel edges are spaced; `"linear"` (equal width in the axis unit) is the only law today |
 | `lower`, `upper` | the range the channels span, in the axis unit |
-| `n_channels` | how many channels: by default the heatmap's own, **256**, or one per bin on a source with fewer equal-width bins (D49) |
+| `n_channels` | how many channels: by default the heatmap's own, **256**, or one per bin on a source with fewer equal-width bins (D50) |
 | `channel_width` | `(upper - lower) / n_channels`, recorded so a reader can see it without arithmetic |
 | `edges` | `float64[n_channels + 1]`, the channel edges themselves |
 
@@ -539,7 +583,7 @@ A grid is refused, at `INFO` or `WARNING` and never as an exception, when:
 | `--mobility-grid` was not given | binning is opt in: it costs a pass over the source and a much larger table |
 | the mobility axis carries no per-scan values | a reader opened without its vendor library cannot supply them, and the declared range is not a substitute |
 | the grid spans more pairs than the counting pass can hold (a raw, unresampled axis of millions of bins) | the count array is `4 bytes x bins x channels`, capped at 1 GB; resample to fewer mass bins |
-| the `var` frame of the occupied `(m/z bin, channel)` pairs is projected to take more than half of the machine's free memory (330 bytes per pair, measured), or the pairs pass an absolute cap of 100,000,000 | the count, the projection and the free memory are printed; resample to fewer mass bins or ask for fewer channels. A projection past a quarter of free memory is attempted with a `WARNING`. See [Design Decisions](design-decisions.md#d4-the-grids-feature-ceiling-is-a-memory-guard-not-a-format-limit) |
+| the `var` frame of the occupied `(m/z bin, channel)` pairs is projected to take more than half of the machine's free memory (338 bytes per pair: 330 measured, plus the `ccs` column), or the pairs pass an absolute cap of 100,000,000 | the count, the projection and the free memory are printed; resample to fewer mass bins or ask for fewer channels. A projection past a quarter of free memory is attempted with a `WARNING`. See [Design Decisions](design-decisions.md#d4-the-grids-feature-ceiling-is-a-memory-guard-not-a-format-limit) |
 
 **How it is built, and why its size does not matter.** The table is built
 the way the summed table is built, in two passes over the raw scans. The first pass counts, per `(m/z bin, channel)` cell of the
@@ -1168,7 +1212,7 @@ terms, and a schema a validator can hold it to.
 ```python
 block = msi_table.uns["msi_metadata"]
 
-print(block["schema_version"])                    # "0.12.0"
+print(block["schema_version"])                    # "0.13.0"
 print(block["ms_analysis"]["pixel_size_um"])      # {"x": 20.0, "y": 20.0}
 print(block["ms_analysis"].get("spectrum_representation"))  # "profile" / "centroid"
 print(block.get("sample", {}).get("sample_id"))   # only when you named the sample

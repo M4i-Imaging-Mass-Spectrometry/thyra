@@ -11,13 +11,17 @@ import numpy as np
 import pytest
 
 from thyra.core.mobility import (
+    CCS_ASSUMED_CHARGE,
     CCS_DRIFT_GAS_MASS_DA,
     CCS_TEMPERATURE_K,
     MASON_SCHAMP_PREFACTOR,
     MobilityAxis,
+    ccs_applies,
+    ccs_assumptions,
     ccs_from_one_over_k0,
     mason_schamp_ccs,
 )
+from thyra.metadata.ontology.cache import ONTOLOGY
 
 # The constant the vendor's documentation and the open reimplementations
 # carry, in A^2 sqrt(Da K) cm^2 V^-1 s^-1.
@@ -171,3 +175,56 @@ class TestAxisUnsContract:
         block = axis.to_uns()
         np.testing.assert_array_equal(block["acq_range"], [0.95, 1.35])
         assert "calibration" not in block and "source" not in block
+
+
+def _axis(kind, unit):
+    return MobilityAxis(
+        kind_accession=kind, kind_name=None, unit_accession=unit, unit_name=None
+    )
+
+
+class TestWhenTheConverterWritesIt:
+    """The gate and the record behind the mobility table's ``var["ccs"]`` (D47)."""
+
+    def test_a_one_over_k0_axis_in_its_unit(self):
+        assert ccs_applies(_axis("MS:1002815", "MS:1002814"))
+
+    @pytest.mark.parametrize(
+        "kind, unit",
+        [
+            ("MS:1002476", "UO:0000028"),  # drift time in milliseconds
+            ("MS:1002815", None),  # 1/K0 with no unit stated
+            ("MS:1002815", "UO:0000028"),  # 1/K0 in a unit it is never in
+            (None, "MS:1002814"),  # a quantity nobody stated
+        ],
+        ids=["drift-time", "no-unit", "wrong-unit", "no-kind"],
+    )
+    def test_anything_else_is_not_guessed_at(self, kind, unit):
+        assert not ccs_applies(_axis(kind, unit))
+
+    def test_no_axis(self):
+        assert not ccs_applies(None)
+
+    def test_the_record_says_what_the_values_rest_on(self):
+        block = ccs_assumptions()
+        assert block["charge_assumed"] == CCS_ASSUMED_CHARGE == 1
+        assert block["drift_gas_mass_da"] == CCS_DRIFT_GAS_MASS_DA
+        assert block["temperature_k"] == CCS_TEMPERATURE_K
+        assert block["method"] == "Mason-Schamp"
+        assert block["conditions_source"] == "convention"
+
+    def test_the_record_is_a_legal_zarr_group(self):
+        # Keys become directory names: no colon, which Windows refuses.
+        # Values are scalars, so nothing nests deeper than uns/ccs/<key>.
+        block = ccs_assumptions()
+        assert not any(":" in key for key in block)
+        assert all(isinstance(v, (str, int, float)) for v in block.values())
+
+    def test_the_accessions_resolve_in_the_shipped_ontology(self):
+        block = ccs_assumptions()
+        for accession, name in (
+            (block["quantity_accession"], block["quantity_name"]),
+            (block["unit_accession"], block["unit_name"]),
+        ):
+            term = ONTOLOGY.get_term(accession)
+            assert term is not None and term[0] == name

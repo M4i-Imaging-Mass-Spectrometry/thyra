@@ -170,7 +170,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 into. ``None`` (default) takes the mass-mobility heatmap's
                 own channels over the same edges -- 256, or one per bin on
                 a source whose axis is fewer equal-width bins (Waters drift
-                bins, D49) -- which is what lets a box drawn on the heatmap
+                bins, D50) -- which is what lets a box drawn on the heatmap
                 index grid channels directly; a number gives that up.
             mobility_min: Lower edge of the grid, in the axis unit.
                 ``None`` (default) takes the smallest mobility value the

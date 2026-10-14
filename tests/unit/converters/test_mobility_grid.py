@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Generator, Optional, Tuple
 
 import numpy as np
+import pandas as pd
 import pytest
 from numpy.typing import NDArray
 
@@ -26,6 +27,7 @@ from thyra.converters.spatialdata.mobility_table import (
     GRID_VAR_REFUSE_FRACTION,
     MAX_GRID_VAR_ENTRIES,
     VAR_BYTES_PER_FEATURE,
+    add_ccs_column,
     build_mobility_table,
     grid_refusal,
     grid_var_bound,
@@ -35,7 +37,7 @@ from thyra.converters.spatialdata.mobility_table import (
 )
 from thyra.core.base_extractor import MetadataExtractor
 from thyra.core.base_reader import BaseMSIReader
-from thyra.core.mobility import MobilityAxis
+from thyra.core.mobility import MobilityAxis, mason_schamp_ccs
 from thyra.metadata.types import ComprehensiveMetadata, EssentialMetadata
 from thyra.resampling.mobility_grid import (
     MAX_CHANNEL_WIDTH,
@@ -166,7 +168,7 @@ class TestChannelWidthBand:
 
 
 class TestDefaultChannelPlan:
-    """D49: the channels the heatmap and a default grid share."""
+    """D50: the channels the heatmap and a default grid share."""
 
     def test_a_continuum_gets_the_anchor_over_its_values(self):
         from thyra.resampling.mobility_grid import default_channel_plan
@@ -375,6 +377,21 @@ class _NoMobilityReader(GridStubReader):
     @property
     def has_ion_mobility(self) -> bool:
         return False
+
+
+class _DriftTimeReader(GridStubReader):
+    """The same clouds, said to be drift times in milliseconds."""
+
+    def get_mobility_axis(self) -> Optional[MobilityAxis]:
+        return MobilityAxis(
+            kind_accession="MS:1002476",
+            kind_name="ion mobility drift time",
+            unit_accession="UO:0000028",
+            unit_name="millisecond",
+            values=SCAN_K0.copy(),
+            acq_range=(1.1, 1.5),
+            source="stub",
+        )
 
 
 class TestGridRange:
@@ -596,8 +613,15 @@ class TestGridTable:
         )
         var = sdata.tables["stub_z0_mobility"].var
         # Exactly the columns the shared-axis mechanism writes; a consumer
-        # must not be able to tell the two apart from the table.
-        assert list(var.columns) == ["mz", "mobility", "mz_index", "mobility_index"]
+        # must not be able to tell the two apart from the table. The stub's
+        # axis is 1/K0, so ``ccs`` is there too (D47).
+        assert list(var.columns) == [
+            "mz",
+            "mobility",
+            "mz_index",
+            "mobility_index",
+            "ccs",
+        ]
         mz = var["mz"].to_numpy()
         mobility = var["mobility"].to_numpy()
         assert np.all(np.diff(mz) >= 0)
@@ -617,6 +641,45 @@ class TestGridTable:
             "mz2_im64",
             "mz2_im68",
         ]
+
+    def test_ccs_is_each_cell_s_value_for_a_charge_of_one(self, tmp_path):
+        sdata = _read(
+            _convert(GridStubReader(), tmp_path / "s.zarr", mobility_grid=True)
+        )
+        grid = sdata.tables["stub_z0_mobility"]
+        mz = grid.var["mz"].to_numpy()
+        k0 = grid.var["mobility"].to_numpy()
+        # The closed form with the published constant, nitrogen at 305 K:
+        # an independent spelling of what the table must hold.
+        reduced = mz * 28.0134 / (mz + 28.0134)
+        expected = 18509.8632163405 * k0 / np.sqrt(reduced * 305.0)
+        ccs = grid.var["ccs"].to_numpy()
+        assert ccs.dtype == np.float64
+        np.testing.assert_allclose(ccs, expected, rtol=1e-6)
+        block = grid.uns["ccs"]
+        assert int(block["charge_assumed"]) == 1
+        assert str(block["drift_gas"]) == "nitrogen"
+        assert float(block["drift_gas_mass_da"]) == 28.0134
+        assert float(block["temperature_k"]) == 305.0
+        assert str(block["unit_accession"]) == "UO:0000324"
+        assert str(block["quantity_accession"]) == "MS:1002954"
+        assert str(block["conditions_source"]) == "convention"
+        # The summed table has no mobility and so no cross section.
+        summed = sdata.tables["stub_z0"]
+        assert "ccs" not in summed.var.columns and "ccs" not in summed.uns
+
+    def test_a_drift_time_axis_gets_no_ccs(self, tmp_path):
+        sdata = _read(
+            _convert(_DriftTimeReader(), tmp_path / "s.zarr", mobility_grid=True)
+        )
+        grid = sdata.tables["stub_z0_mobility"]
+        assert list(grid.var.columns) == [
+            "mz",
+            "mobility",
+            "mz_index",
+            "mobility_index",
+        ]
+        assert "ccs" not in grid.uns
 
     def test_the_marginal_reproduces_the_summed_table_per_pixel(self, tmp_path):
         sdata = _read(
@@ -713,7 +776,7 @@ class TestGridTable:
             assert [i for i in issues if i.severity == "error"] == []
 
     def test_drift_bins_are_the_default_channels(self, tmp_path):
-        # D49: a source whose axis is nine declared bins gets nine
+        # D50: a source whose axis is nine declared bins gets nine
         # channels, on the heatmap and the grid alike.
         sdata = _read(
             _convert(_DriftBinGridReader(), tmp_path / "s.zarr", mobility_grid=True)
@@ -810,3 +873,26 @@ class TestGridTable:
         )
         assert set(sdata.tables) == {"stub_z0"}
         assert "mobility_grid" not in sdata.tables["stub_z0"].uns
+
+
+class TestAddCcsColumn:
+    def _var(self, n):
+        mz = np.linspace(200.0, 1800.0, n)
+        return pd.DataFrame({"mz": mz, "mobility": np.linspace(0.7, 1.9, n)})
+
+    def test_chunks_give_the_same_values_as_one_pass(self, monkeypatch):
+        from thyra.converters.spatialdata import mobility_table
+
+        var = self._var(11)
+        expected = mason_schamp_ccs(var["mobility"], var["mz"], 1)
+        monkeypatch.setattr(mobility_table, "_CCS_CHUNK", 3)
+        block = add_ccs_column(GridStubReader(), var)
+        assert block is not None
+        np.testing.assert_array_equal(var["ccs"].to_numpy(), expected)
+
+    def test_an_axis_it_does_not_apply_to_leaves_var_alone(self, thyra_logs):
+        var = self._var(4)
+        with thyra_logs("thyra.converters", logging.INFO) as records:
+            assert add_ccs_column(_DriftTimeReader(), var) is None
+        assert list(var.columns) == ["mz", "mobility"]
+        assert "ion mobility drift time in millisecond" in records.text
