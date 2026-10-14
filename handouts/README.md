@@ -26,7 +26,7 @@ gets written, which is the subject of half these handouts.
 | D | [toolchain-hygiene.md](toolchain-hygiene.md) | `chore/toolchain-hygiene` | `../Thyra-toolchain` | **RESOLVED** -- `pre-commit run --all-files` passes clean |
 | E | [upstream-lazy-table-pr.md](upstream-lazy-table-pr.md) | *upstream* | *scverse/spatialdata* | **OPEN upstream** -- scverse/spatialdata#1055 still unmerged (2026-08-03) |
 | F | [interpolation-resampling.md](interpolation-resampling.md) | *not created* | `../Thyra-interp` | **backlog** -- a capability gap, not a defect |
-| G | [resampling-scils-alignment.md](resampling-scils-alignment.md) | `fix/resampling-scils-alignment` | `../Thyra-resampling` | **DONE** -- v2.1.0-v2.2.3; item 5 in part by D48 (cell rebinning where bins skip samples) |
+| G | [resampling-scils-alignment.md](resampling-scils-alignment.md) | `fix/resampling-scils-alignment` | `../Thyra-resampling` | **DONE** -- v2.1.0-v2.2.3; item 5 in part by D50 (cell rebinning where bins skip samples) |
 | H | [loose-ends-after-scils-alignment.md](loose-ends-after-scils-alignment.md) | one per item | `../Thyra-loose` | items 3 and 4 shipped; item 2 is **BLOCKED**; item 1 is not Thyra's |
 | I | [spatialdata-table-sharding.md](spatialdata-table-sharding.md) | *upstream* | *scverse/spatialdata* | **OPEN upstream** -- scverse/spatialdata#1178, design comment posted 2026-09-01, awaiting reply |
 | J | [zarr-4304-rank0-shard-hang.md](zarr-4304-rank0-shard-hang.md) | *upstream* | *zarr-developers/zarr-python* | **OPEN upstream** -- zarr-python#4304 filed 2026-09-01, fix not written |

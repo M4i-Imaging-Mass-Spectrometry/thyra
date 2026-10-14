@@ -1,4 +1,4 @@
-"""tic_preserving onto bins wider than the source sampling (issue #442, D48).
+"""tic_preserving onto bins wider than the source sampling (issue #442, D50).
 
 Interpolating at the bin centres is sampling: once a bin holds a sample that
 neither of the two around its centre is, a peak narrower than the bin that

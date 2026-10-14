@@ -6,7 +6,7 @@ Linear interpolation onto the target axis, followed by rescaling so the
 resampled spectrum carries the same total ion current as the input --
 evaluated only at the axis points the interpolant can be non-zero at. A
 spectrum whose bins are wide enough to skip a sample is rebinned instead
-(design decision D48). See :mod:`thyra.resampling.interpolation` for the
+(design decision D50). See :mod:`thyra.resampling.interpolation` for the
 evaluation and :mod:`thyra.resampling.tic` for what "preserved" means when
 the axis does not span the whole spectrum.
 """
@@ -90,7 +90,7 @@ class TICPreservingStrategy(ResamplingStrategy):
         more samples is filled with its share of each sample instead, and
         the spectrum's other bins are put on the same ion-current footing.
         A spectrum in which no centre skips a sample is resampled exactly
-        as before. See design decision D48.
+        as before. See design decision D50.
 
         Args:
             mzs: Original m/z values from the spectrum.

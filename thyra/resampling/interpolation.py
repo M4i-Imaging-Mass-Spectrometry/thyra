@@ -11,7 +11,7 @@ Interpolating at a bin centre is sampling, not binning. It is right while a
 bin is no wider than the spacing of the source samples, and wrong once a bin
 holds several of them: a peak narrower than the bin that falls between two
 centres is mostly lost, and the rescale hands its ion current to whatever
-the centres did land on (issue #442, design decision D48). So a spectrum
+the centres did land on (issue #442, design decision D50). So a spectrum
 in which some bin holds a sample its centre does not read is rebinned
 wherever a bin holds two or more samples -- :func:`wide_bins`,
 :func:`rebin_wide_bins` -- and any other spectrum is resampled exactly as
@@ -116,7 +116,7 @@ def wide_bins(
     or more samples, not only in the bins that skip one: between one and
     two samples per bin, interpolating a bin and rebinning its neighbour
     puts the two on different footings, and rebinning both was measured
-    the more accurate of the two (design decision D48).
+    the more accurate of the two (design decision D50).
 
     A sample on an inner edge belongs to the bin on its right; one on the
     top edge belongs to the last bin (:meth:`BinLayout.locate`). Samples
@@ -309,7 +309,7 @@ def _merge_wide_bins(
 
     A spectrum with no wide bin never comes here: its bins are all
     heights, the rescale alone puts them on the TIC, and it is resampled
-    exactly as it was before design decision D48.
+    exactly as it was before design decision D50.
 
     Args:
         layout: The axis's bins.
@@ -361,7 +361,7 @@ def tic_preserving_sparse(
     (:func:`rebin_wide_bins`), the other bins are scaled onto the same
     ion-current footing (:func:`_merge_wide_bins`), and the rescale then
     sets the total as before. A spectrum with none takes exactly the path
-    described above. See design decision D48.
+    described above. See design decision D50.
 
     Measured on a Waters SELECT SERIES MRT run (13,398 pixels, ~15,000
     stored samples per strong pixel, 1.05M-bin axis): the dense form cost

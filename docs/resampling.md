@@ -318,7 +318,7 @@ current wherever it falls. The spectrum's other bins are scaled by bin width
 over sample spacing, so both kinds of bin count ions on one scale. On an
 evenly sampled source this starts at about two bins per sample; below that,
 spectra are resampled by interpolation alone, as described above. See
-[D48](design-decisions.md#d48-a-bin-wider-than-the-source-sampling-is-rebinned-not-sampled)
+[D50](design-decisions.md#d50-a-bin-wider-than-the-source-sampling-is-rebinned-not-sampled)
 for the measurements.
 
 The total that is preserved is the share of the spectrum inside the axis range.
