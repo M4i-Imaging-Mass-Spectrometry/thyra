@@ -466,6 +466,29 @@ class SiblingTables:
             return None
         return mobility_table_key(table_key)
 
+    def _grid_channels(
+        self,
+        measured: Optional[Tuple[float, float]],
+        plan: Optional[Tuple[float, float, int]],
+    ) -> Tuple[float, float, int]:
+        """The grid's ``(lower, upper, n_channels)``.
+
+        With nothing overridden, ``plan``: the heatmap's own channels, which
+        on a short list of drift bins are the bins themselves (D53). Any of
+        ``--mobility-min``, ``--mobility-max`` or ``--mobility-bins`` gives
+        that up for equal-width channels over the stated range, 256 unless
+        the count is given.
+        """
+        lower, upper = self._mobility_bounds
+        if lower is None and upper is None and self._mobility_bins is None and plan:
+            return plan
+        span = measured or (0.0, 0.0)
+        return (
+            span[0] if lower is None else float(lower),
+            span[1] if upper is None else float(upper),
+            MOBILITY_CHANNELS if self._mobility_bins is None else self._mobility_bins,
+        )
+
     def _resolve_mobility_grid(self, ctx: SiblingContext) -> Optional[MobilityGrid]:
         """The common mobility grid this conversion bins onto, or ``None``.
 
@@ -503,22 +526,10 @@ class SiblingTables:
                 "--mobility-max to bin over a stated range."
             )
             return None
-        plan = mobility_grid_plan(self.reader)
-        if lower is None and upper is None and self._mobility_bins is None and plan:
-            # Nothing overridden: the heatmap's own channels, which on a
-            # short list of drift bins are the bins themselves (D53).
-            plan_lower, plan_upper, n_channels = plan
-        else:
-            span = measured or (0.0, 0.0)
-            plan_lower = span[0] if lower is None else float(lower)
-            plan_upper = span[1] if upper is None else float(upper)
-            n_channels = (
-                MOBILITY_CHANNELS
-                if self._mobility_bins is None
-                else self._mobility_bins
-            )
         try:
-            grid = build_mobility_grid(plan_lower, plan_upper, n_channels)
+            grid = build_mobility_grid(
+                *self._grid_channels(measured, mobility_grid_plan(self.reader))
+            )
         except ValueError as e:
             logger.warning("No mobility-resolved table: %s", str(e))
             return None
