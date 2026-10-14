@@ -74,7 +74,7 @@ def _reader(schedule=SCHEDULE, spectra=SPECTRA, ramp=None):
     )
 
 
-def _build(reader=None, obs=None, axis=AXIS):
+def _build(reader=None, obs=None, axis=AXIS, kept_range=None):
     return build_msms_table(
         reader if reader is not None else _reader(),
         OBS if obs is None else obs,
@@ -82,6 +82,7 @@ def _build(reader=None, obs=None, axis=AXIS):
         "msi_z0",
         "msi_z0_pixels",
         {"provenance": "unchanged"},
+        kept_range=kept_range,
     )
 
 
@@ -184,6 +185,35 @@ class TestTheValues:
 
         np.testing.assert_array_equal(table.var["mz"].to_numpy(), [300.0])
         np.testing.assert_allclose(_dense(table), [[20.0], [0.0]])
+
+    def test_a_fragment_in_the_edge_margin_goes_to_the_edge_column(self):
+        """A resampled axis keeps what the declared range holds (kept_range).
+
+        The axis centres sit half a bin (50) inside 50-550, and the summed
+        table keeps a peak in that margin in the edge bin. A fragment at 60
+        or 540 must reach the edge columns here too; one at 40 or 560 is
+        beyond the kept range and is dropped.
+        """
+        spectra = [
+            (
+                (0, 0, 0),
+                0,
+                [40.0, 60.0, 300.0, 540.0, 560.0],
+                [1.0, 2.0, 3.0, 4.0, 5.0],
+            )
+        ]
+        table = _build(_reader(spectra=spectra), kept_range=(50.0, 550.0))
+
+        np.testing.assert_array_equal(table.var["mz_index"].to_numpy(), [0, 2, 4])
+        np.testing.assert_allclose(_dense(table), [[2.0, 3.0, 4.0], [0.0, 0.0, 0.0]])
+
+    def test_without_a_kept_range_the_margin_is_dropped_as_before(self):
+        """The axis span is the default: the same peaks, the strict answer."""
+        spectra = [((0, 0, 0), 0, [40.0, 60.0, 300.0, 540.0], [1.0, 2.0, 3.0, 4.0])]
+        table = _build(_reader(spectra=spectra))
+
+        np.testing.assert_array_equal(table.var["mz_index"].to_numpy(), [2])
+        np.testing.assert_allclose(_dense(table), [[3.0], [0.0]])
 
     def test_a_fragment_between_bins_lands_on_the_nearest(self):
         spectra = [((0, 0, 0), 0, [297.0], [5.0])]

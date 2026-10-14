@@ -357,8 +357,8 @@ class TestSolarixReader:
         with SolarixReader(d_dir) as reader:
             assert reader.get_region_map() == {(0, 0): 0, (1, 0): 1}
             assert reader.get_region_info() == [
-                {"region_number": 0, "n_spectra": 1},
-                {"region_number": 1, "n_spectra": 1},
+                {"region_number": 0, "n_spectra": 1, "bounds": (0, 0, 0, 0)},
+                {"region_number": 1, "n_spectra": 1, "bounds": (1, 0, 1, 0)},
             ]
 
     def test_closed_reader_refuses_iteration(self, solarix_d):
@@ -595,7 +595,9 @@ class TestSolarixMetadata:
         assert fmt["acquisition_software"] == "ftmsControl"
         assert fmt["raster_x_range"] == [1239, 1240]
         assert fmt["raster_y_range"] == [166, 167]
-        assert fmt["regions"] == [{"region_number": 0, "n_spectra": 3}]
+        assert fmt["regions"] == [
+            {"region_number": 0, "n_spectra": 3, "bounds": (0, 0, 1, 1)}
+        ]
 
 
 class TestSolarixDecisionTree:

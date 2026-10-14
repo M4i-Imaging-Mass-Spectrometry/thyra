@@ -310,3 +310,81 @@ class TestEndToEndOnAPhysicsAxis:
         )
 
         assert occupied == [0, adata.n_vars - 1]
+
+
+class TestTheSiblingsKeepWhatTheSummedTableKeeps:
+    """The mobility sinks are handed the summed table's own kept range.
+
+    The sibling context carries it, and the heatmap, the grid table and the
+    MS/MS split test their points against it. If it were the axis span
+    they would drop the file's first and last samples on a physics axis
+    (see :class:`TestEndToEndOnAPhysicsAxis`) although the summed table
+    kept them.
+    """
+
+    @staticmethod
+    def _contexts(imzml_path: Path, output_path: Path, resampling_config):
+        """Convert and return the converter with every context it handed out."""
+        reader = ImzMLReader(imzml_path)
+        try:
+            converter = StreamingSpatialDataConverter(
+                reader=reader,
+                output_path=output_path,
+                dataset_id="edge",
+                pixel_size_um=10.0,
+                resampling_config=resampling_config,
+            )
+            contexts = []
+            original = converter._sibling_context
+
+            def recording():
+                context = original()
+                contexts.append(context)
+                return context
+
+            converter._sibling_context = recording  # type: ignore[method-assign]
+            assert converter.convert() is True
+            return converter, contexts
+        finally:
+            reader.close()
+
+    @pytest.mark.parametrize("axis_type", ["linear_tof", "constant"])
+    def test_a_resampled_context_has_the_strategys_kept_range(
+        self, create_minimal_imzml, temp_dir, axis_type
+    ):
+        imzml_path, _, mzs, _ = create_minimal_imzml
+        converter, contexts = self._contexts(
+            imzml_path,
+            temp_dir / "ctx.zarr",
+            {
+                "method": "nearest_neighbor",
+                "axis_type": axis_type,
+                "target_bins": 2_000,
+                "min_mz": float(mzs[10]),
+                "max_mz": float(mzs[30]),
+            },
+        )
+
+        assert contexts
+        assert converter._resampler is not None
+        for context in contexts:
+            assert context.kept_range == converter._resampler.kept_range
+        axis = converter._common_mass_axis
+        if axis_type == "linear_tof":
+            # The premise: the range reaches past the end centres.
+            assert context.kept_range[0] < axis[0]
+            assert context.kept_range[1] > axis[-1]
+        else:
+            assert context.kept_range == (axis[0], axis[-1])
+
+    def test_without_resampling_the_range_is_the_axis_span(
+        self, create_minimal_imzml, temp_dir
+    ):
+        imzml_path, _, _, _ = create_minimal_imzml
+        converter, contexts = self._contexts(imzml_path, temp_dir / "raw.zarr", None)
+
+        axis = converter._common_mass_axis
+        assert converter._resampler is None
+        assert contexts
+        for context in contexts:
+            assert context.kept_range == (axis[0], axis[-1])

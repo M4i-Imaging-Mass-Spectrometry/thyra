@@ -71,7 +71,7 @@ actually populate from each.
 | Pixel size from metadata | when declared | yes | yes (`.mis`) | yes (`_info.txt`) | yes | yes | when declared |
 | Optical image | -- | yes | yes | yes | -- | -- | -- |
 | Optical alignment | -- | yes (`.mis`) | -- | yes (`.mis`) | -- | -- | -- |
-| Multi-region | -- | yes | recorded | -- | -- | mosaic tiles | -- |
+| Multi-region | -- | yes | recorded | recorded | -- | mosaic tiles | recorded |
 | 3D / multi-slice | yes | -- | -- | -- | -- | -- | -- |
 | Native non-m/z axis kept | -- | -- | -- | -- | -- | flight time, with `--no-resample` | -- |
 
@@ -282,8 +282,9 @@ Two things to know up front:
 
 A folder of `*.dat` files with `*_poslog.txt` and `*_info.txt` alongside; all
 three are needed for the folder to be recognised, and only the first `.dat` is
-read. The `.dat` header gives the raster size, and the position log places
-each spectrum on it. No SDK required.
+read. The `.dat` header gives the raster size and its offset table places
+each spectrum on it. The position log names each spectrum's region. No SDK
+required.
 
 The raster step comes from the `Raster:` line in `*_info.txt`. Without it,
 Thyra refuses and asks for `--pixel-size`, the same way the solariX reader

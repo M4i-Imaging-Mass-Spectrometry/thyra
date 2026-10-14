@@ -157,6 +157,7 @@ def _context(siblings: SiblingTables, reader: Any) -> SiblingContext:
     return SiblingContext(
         mass_axis=MASS_AXIS.copy(),
         linearisation=None,
+        kept_range=None,
         dimensions=(4, 4, 1),
         n_spectra=lambda: len(PIXELS),
         build_uns=build_uns,

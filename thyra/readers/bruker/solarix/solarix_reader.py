@@ -660,15 +660,28 @@ class SolarixReader(BrukerBaseMSIReader):
         """Summary of acquisition regions found in the Spectra table.
 
         A plain SQL aggregate rather than the spectra index, so the
-        metadata-only preview path stays cheap.
+        metadata-only preview path stays cheap. ``bounds`` is
+        ``(x_min, y_min, x_max, y_max)``, 0-based, in the frame of
+        :attr:`dimensions`, as the timsTOF reader gives it.
         """
+        x_min, y_min, _ = self.coordinate_offsets
         rows = self._conn.execute(
-            "SELECT COALESCE(RegionNumber, 0) AS region, COUNT(*) "
+            "SELECT COALESCE(RegionNumber, 0) AS region, COUNT(*), "
+            "MIN(XIndexPos), MIN(YIndexPos), MAX(XIndexPos), MAX(YIndexPos) "
             "FROM Spectra GROUP BY region ORDER BY region"
         ).fetchall()
         return [
-            {"region_number": int(region), "n_spectra": int(count)}
-            for region, count in rows
+            {
+                "region_number": int(region),
+                "n_spectra": int(count),
+                "bounds": (
+                    int(lo_x - x_min),
+                    int(lo_y - y_min),
+                    int(hi_x - x_min),
+                    int(hi_y - y_min),
+                ),
+            }
+            for region, count, lo_x, lo_y, hi_x, hi_y in rows
         ]
 
     def close(self) -> None:

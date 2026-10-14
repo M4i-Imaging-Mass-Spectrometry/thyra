@@ -65,6 +65,7 @@ from ...errors import ConversionRefused
 from ...metadata.constants import sample_value_problem
 from ...metadata.schema import MSI_VAR_RESERVED_COLUMNS, mass_axis_sha256
 from ...resampling.axis_planner import AxisPlanner, normalize_resampling_config
+from ...resampling.binning import kept_mz_range
 from ...resampling.plan import MassAxisPlan
 from ...resampling.strategies import ResamplingStrategy, build_strategy
 from ...resampling.types import AxisLinearisation, ResamplingConfig
@@ -478,6 +479,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         return SiblingContext(
             mass_axis=self._common_mass_axis,
             linearisation=self._axis_linearisation,
+            kept_range=(
+                None
+                if self._common_mass_axis is None or self._common_mass_axis.size == 0
+                else kept_mz_range(self._common_mass_axis, self._axis_range)
+            ),
             dimensions=self._dimensions,
             n_spectra=self._get_total_spectra_count,
             build_uns=self.build_uns_metadata,
@@ -894,8 +900,9 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         Written on every dataset for a consistent schema, so a consumer
         does not have to branch on whether the acquisition had regions:
         without a region map every pixel is region 1, which is also what
-        ``uns["regions"]`` reports for that case. Only the Bruker timsTOF
-        reader produces a map today; a position missing from it gets -1.
+        ``uns["regions"]`` reports for that case. The timsTOF, rapifleX
+        and mzPeak readers produce a map for two or more regions, the
+        solariX reader always does; a position missing from it gets -1.
 
         Kept as one method because the three write paths that used to
         build an obs table each had their own copy of this rule, and the

@@ -54,6 +54,7 @@ if TYPE_CHECKING:  # pragma: no cover - for type checkers, not at runtime
     from .mass_axis_plan import plan_mass_axis
     from .metadata.document import read_metadata_document
     from .preview import MsiPreview, preview_msi
+    from .regions import list_regions
     from .resampling.plan import MassAxisPlan
 
 # Suppress remaining dependency warnings
@@ -77,6 +78,7 @@ _LAZY_ATTRS = {
     "MsiPreview": ".preview",
     "SpatialDataConverter": ".converters.spatialdata.converter",
     "convert_msi": ".convert",
+    "list_regions": ".regions",
     "plan_mass_axis": ".mass_axis_plan",
     "preview_msi": ".preview",
     "read_metadata_document": ".metadata.document",
@@ -92,6 +94,7 @@ __all__ = [
     "__version__",
     "convert_msi",
     "preview_msi",
+    "list_regions",
     "plan_mass_axis",
     "read_metadata_document",
     "MassAxisPlan",

@@ -411,6 +411,7 @@ integer index in both directions. Read `k` off `mobility_edges` or the
 shape of `counts`, never assume 256: on a Waters run it is the drift bin
 count, 200 on every run measured, because 256 channels over 200 bins would
 leave 56 of them empty in a fixed comb.
+The heatmap keeps the m/z points the summed table keeps, edge bins included.
 The m/z binning is the converter's own nearest-bin rule, coarsened, so under a
 lossless summed spectrum (`--tdf-spectrum scan_sum`) the heatmap summed over
 mobility, `counts.sum(axis=1)`, equals `uns["average_spectrum"]` coarsened to
@@ -943,7 +944,10 @@ and what else was considered, is in
 ## Regions
 
 Datasets acquired from multi-region slides (e.g., multiple tissue sections on
-one slide) store region information in two places.
+one slide) store region information in two places. The timsTOF, solariX,
+Rapiflex and mzPeak readers record regions; every other format writes region 1
+for each pixel. `thyra.list_regions` gives the same summary from the raw input,
+before converting.
 
 ### Per-Pixel Region Number
 
@@ -957,7 +961,8 @@ print(msi_table.obs["region_number"].value_counts())
 ### Region Summary
 
 Region metadata -- including human-readable names from the instrument's Area
-definitions -- is stored as JSON in `uns`:
+definitions and each region's `bounds` (`x_min, y_min, x_max, y_max`, 0-based,
+in the store's pixel grid) -- is stored as JSON in `uns`:
 
 ```python
 import json

@@ -141,6 +141,11 @@ class SiblingContext:
             than by search (design decision D21). Belongs to the axis,
             not to the strategy that bins with it: an interpolated
             conversion still writes siblings onto the same axis.
+        kept_range: The m/z range a point has to be inside for the summed
+            table to keep it (:func:`~thyra.resampling.binning.kept_mz_range`),
+            or ``None`` before the axis is built. Every mobility sink keeps
+            exactly these points, so a point the summed table keeps in an
+            edge bin is not dropped from the heatmap or the grid table.
         dimensions: The source's ``(n_x, n_y, n_z)`` grid, or ``None``
             before the reader's essential metadata is loaded. Only the
             fused route needs it, to size one row space.
@@ -162,6 +167,7 @@ class SiblingContext:
 
     mass_axis: Optional[NDArray[np.float64]]
     linearisation: Optional[AxisLinearisation]
+    kept_range: Optional[Tuple[float, float]]
     dimensions: Optional[Tuple[int, int, int]]
     n_spectra: Callable[[], int]
     build_uns: Callable[[], Dict[str, Any]]
@@ -381,6 +387,7 @@ class SiblingTables:
                 ctx.mass_axis,
                 n_spectra=ctx.n_spectra(),
                 linearisation=ctx.linearisation,
+                kept_range=ctx.kept_range,
             )
         except Exception as e:
             logger.error("Could not build the mass-mobility heatmap: %s", str(e))
@@ -672,6 +679,7 @@ class SiblingTables:
                     else "Mobility heatmap"
                 ),
                 linearisation=ctx.linearisation,
+                kept_range=ctx.kept_range,
             )
         except Exception as e:
             logger.error("Could not scan the mobility spectra: %s", str(e))
@@ -771,6 +779,7 @@ class SiblingTables:
                 ctx.mass_axis,
                 n_grid,
                 ctx.linearisation,
+                ctx.kept_range,
             )
         if heatmap is None and discovery is None and msms is None:
             return None
@@ -781,6 +790,7 @@ class SiblingTables:
             discovery=discovery,
             msms=msms,
             linearisation=ctx.linearisation,
+            kept_range=ctx.kept_range,
         )
 
     def take_fused_results(self, passes: Any) -> None:
@@ -962,6 +972,7 @@ class SiblingTables:
             scratch=scratch,
             linearisation=ctx.linearisation,
             merge_duplicates=merge_duplicates,
+            kept_range=ctx.kept_range,
         )
 
     def _build_msms_sibling(
@@ -999,6 +1010,7 @@ class SiblingTables:
             accumulator=accumulator,
             linearisation=ctx.linearisation,
             merge_duplicates=merge_duplicates,
+            kept_range=ctx.kept_range,
         )
 
     # -- What the two tables say about each other ------------------------

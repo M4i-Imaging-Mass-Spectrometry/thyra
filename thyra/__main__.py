@@ -553,9 +553,10 @@ FORMAT_NAMES = {
 #: one of these was accepted on an imzML input and produced a store
 #: byte-identical to the plain run, with no log line (issue #260).
 #: ``--tof-law`` on a non-tof axis and ``--msms-table`` on imzML already
-#: set the precedent of saying it out loud; these follow.
+#: set the precedent of saying it out loud; these follow. ``--region`` is
+#: not here: the reader refuses it on every other format (issue #448), and
+#: an "ignored" line before that refusal said the opposite.
 IGNORED_ELSEWHERE: dict[str, Tuple[str, Tuple[str, ...]]] = {
-    "region": ("--region", ("bruker",)),
     "tdf_spectrum": ("--tdf-spectrum", ("bruker",)),
     "waters_spectrum": ("--waters-spectrum", ("waters",)),
     "use_recalibrated": ("--use-recalibrated/--no-recalibrated", ("bruker",)),
@@ -824,9 +825,9 @@ class GroupedCommand(click.Command):
     type=str,
     default=None,
     help=(
-        "Convert specific region (default: all regions). Accepts a "
-        ".mis Area Name (e.g. '03') or an integer DB RegionNumber. The "
-        "DB-to-name mapping is logged at startup for multi-region datasets."
+        "Convert one region of a timsTOF .d (default: all regions). "
+        "Accepts a .mis Area Name (e.g. '03') or an integer DB "
+        "RegionNumber. Refused for every other format."
     ),
 )
 @click.option(

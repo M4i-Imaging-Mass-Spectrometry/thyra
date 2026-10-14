@@ -61,6 +61,9 @@ class SiblingPasses:
             bin index is computed rather than searched for. The sinks
             were the last callers still searching after design decision
             D21 (issue #348); the index is the same either way.
+        kept_range: The m/z range a point must lie in to be kept, the
+            summed table's own (see :func:`map_points_to_axis`). ``None``
+            is the axis span.
     """
 
     def __init__(
@@ -70,10 +73,12 @@ class SiblingPasses:
         discovery: Optional[GridDiscovery] = None,
         msms: Optional[MsmsAccumulator] = None,
         linearisation: Optional[AxisLinearisation] = None,
+        kept_range: Optional[Tuple[float, float]] = None,
     ) -> None:
         """Hold the sinks; nothing is read until the converter's passes feed them."""
         self.axis = np.asarray(axis, dtype=np.float64)
         self.linearisation = linearisation
+        self.kept_range = kept_range
         self.heatmap = heatmap
         self.heatmap_wanted = heatmap is not None
         self.discovery = discovery
@@ -122,14 +127,20 @@ class SiblingPasses:
                 return None
             unique_mz, inverse, mobility, intensities = points
             return map_indexed_points_to_axis(
-                self.axis, unique_mz, inverse, mobility, intensities, self.linearisation
+                self.axis,
+                unique_mz,
+                inverse,
+                mobility,
+                intensities,
+                self.linearisation,
+                self.kept_range,
             )
         flat = frame.mobility_points()
         if flat is None:
             return None
         mzs, mobility, intensities = flat
         return map_points_to_axis(
-            self.axis, mzs, mobility, intensities, self.linearisation
+            self.axis, mzs, mobility, intensities, self.linearisation, self.kept_range
         )
 
     # -- pass 1 ----------------------------------------------------------

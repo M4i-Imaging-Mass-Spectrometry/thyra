@@ -143,19 +143,33 @@ def usable_intensities(intensities: NDArray[np.float64]) -> Optional[NDArray[np.
     return None if bool(usable.all()) else usable
 
 
+def _kept_bounds(
+    axis: NDArray[np.float64], kept_range: Optional[Tuple[float, float]]
+) -> Tuple[float, float]:
+    """``kept_range``, or the axis span when there is none."""
+    if kept_range is None:
+        return float(axis[0]), float(axis[-1])
+    return float(kept_range[0]), float(kept_range[1])
+
+
 def map_points_to_axis(
     axis: NDArray[np.float64],
     mzs: NDArray[np.float64],
     mobility: NDArray[np.float64],
     intensities: NDArray[np.float64],
     linearisation: Optional[AxisLinearisation] = None,
+    kept_range: Optional[Tuple[float, float]] = None,
 ) -> Tuple[NDArray[np.int64], NDArray[np.float64], NDArray[np.float64], int]:
     """One pixel's points onto the common mass axis, the summed table's way.
 
-    "In range" is the strict axis span, and a point outside it is dropped
-    rather than folded onto an edge bin -- the summed table drops it, so
-    a marginal over mobility that kept it would exceed the column it
-    mirrors. A point whose intensity is not a measurement goes for the
+    "In range" is the summed table's own kept range
+    (:func:`~thyra.resampling.binning.kept_mz_range`): on a resampled
+    axis that is the declared range, the outer bin edges, up to half a
+    bin past the first and last centre. A point inside it goes to the
+    edge bin, as the summed table puts it there; a point outside it is
+    dropped rather than folded onto an edge bin -- the summed table drops
+    it, so a marginal over mobility that kept it would exceed the column
+    it mirrors. A point whose intensity is not a measurement goes for the
     same reason, by the same rule (:func:`usable_intensities`). Points in
     range go to their nearest axis entry through the converter's own rule
     (ties to the right). This is the one place the mapping is written: the
@@ -172,11 +186,15 @@ def map_points_to_axis(
             ``None`` searches, which is the answer for a raw union axis.
             It changes the cost of this call and nothing else: the two
             routes return the same index for every value.
+        kept_range: ``(lower, upper)`` a point must lie in to be kept, as
+            :func:`~thyra.resampling.binning.kept_mz_range` gives it for
+            this axis. ``None`` is the axis span, which is the kept range
+            when no resampled axis was built (``--no-resample``).
 
     Returns:
         ``(bins, mobility, intensities, n_dropped)`` -- the axis index of
         every kept point, the two other arrays masked to match, and how
-        many points were dropped for lying outside the axis.
+        many points were dropped for lying outside the kept range.
     """
     mzs = np.asarray(mzs, dtype=np.float64)
     mobility = np.asarray(mobility, dtype=np.float64)
@@ -193,7 +211,8 @@ def map_points_to_axis(
         intensities = intensities[usable]
         if mzs.size == 0:
             return np.zeros(0, dtype=np.int64), mobility, intensities, 0
-    in_range = (mzs >= axis[0]) & (mzs <= axis[-1])
+    lower, upper = _kept_bounds(axis, kept_range)
+    in_range = (mzs >= lower) & (mzs <= upper)
     n_dropped = 0
     if not in_range.all():
         n_dropped = int(mzs.size - in_range.sum())
@@ -217,6 +236,7 @@ def map_indexed_points_to_axis(
     mobility: NDArray[np.float64],
     intensities: NDArray[np.float64],
     linearisation: Optional[AxisLinearisation] = None,
+    kept_range: Optional[Tuple[float, float]] = None,
 ) -> Tuple[NDArray[np.int64], NDArray[np.float64], NDArray[np.float64], int]:
     """:func:`map_points_to_axis` for points whose m/z is ``unique_mz[inverse]``.
 
@@ -240,6 +260,7 @@ def map_indexed_points_to_axis(
         mobility: Each point's mobility value.
         intensities: Each point's intensity.
         linearisation: As :func:`map_points_to_axis`.
+        kept_range: As :func:`map_points_to_axis`.
 
     Returns:
         What :func:`map_points_to_axis` returns for ``unique_mz[inverse]``.
@@ -263,11 +284,14 @@ def map_indexed_points_to_axis(
     # The mask first, then the mapping of what it kept. The out-of-range
     # entries' bins were always discarded -- ``inverse`` is filtered by
     # ``kept`` before it indexes ``bins`` -- but mapping them was still a
-    # closed form evaluated outside the axis, where a law is free to
+    # closed form evaluated outside the kept range, where a law is free to
     # return a NaN or an infinity (``sqrt`` of a negative, a reciprocal
-    # of zero) and the cast to an index is then undefined. Masking first
+    # of zero) and the cast to an index is then undefined. Inside it, up
+    # to half a bin past an end centre, the summed table evaluates the
+    # same closed form. Masking first
     # is the same answer for every entry anyone reads, and maps fewer.
-    in_range = (unique_mz >= axis[0]) & (unique_mz <= axis[-1])
+    lower, upper = _kept_bounds(axis, kept_range)
+    in_range = (unique_mz >= lower) & (unique_mz <= upper)
     if in_range.all():
         bins = nn_map_to_bins(axis, unique_mz, linearisation).astype(np.int64)
         return bins[inverse], mobility, intensities, 0
@@ -343,8 +367,11 @@ class MobilityHeatmap:
         m/z goes to its nearest common-axis entry (the converter's own
         rule, ties to the right) and then to the coarse bin; points
         outside the axis span are dropped, as the summed spectrum drops
-        them. Mobility goes to its channel by position in the range;
-        values at the upper edge belong to the last channel, and the
+        them on an axis it did not resample onto. The converter maps
+        through :func:`scan_mobility` with the summed table's kept range
+        instead and hands the result to :meth:`add_mapped`. Mobility goes
+        to its channel by position in the range; values at the upper edge
+        belong to the last channel, and the
         rare point beyond either edge (an axis that overhangs its declared
         range) is clipped into the edge channel rather than lost, so the
         marginal keeps every count. ``coords`` is the spectrum's position,
@@ -581,7 +608,7 @@ def finish_mobility_heatmap(
     name = "Mass-mobility heatmap" + ("" if label is None else f" ({label})")
     if heatmap.n_out_of_range:
         logger.info(
-            "%s dropped %d of %d points outside the mass axis",
+            "%s dropped %d of %d points outside the kept mass range",
             name,
             heatmap.n_out_of_range,
             heatmap.n_points + heatmap.n_out_of_range,
@@ -605,6 +632,7 @@ def scan_mobility(
     n_spectra: Optional[int] = None,
     description: str = "Mobility scan",
     linearisation: Optional[AxisLinearisation] = None,
+    kept_range: Optional[Tuple[float, float]] = None,
 ) -> None:
     """One raw pass over :meth:`BaseMSIReader.iter_mobility_spectra`.
 
@@ -615,15 +643,18 @@ def scan_mobility(
     frame, about a millisecond); the mapping costs more than the read,
     which is why the sinks share a pass rather than each taking one.
 
-    ``linearisation`` is the axis's own, passed straight to the mapping;
-    see :func:`map_points_to_axis`.
+    ``linearisation`` is the axis's own and ``kept_range`` the summed
+    table's, both passed straight to the mapping; see
+    :func:`map_points_to_axis`.
     """
     from tqdm import tqdm
 
     axis = np.asarray(mass_axis, dtype=np.float64)
     with tqdm(total=n_spectra, desc=description, unit="spectrum") as pbar:
         for coords, mzs, mobility, intensities in reader.iter_mobility_spectra():
-            mapped = map_points_to_axis(axis, mzs, mobility, intensities, linearisation)
+            mapped = map_points_to_axis(
+                axis, mzs, mobility, intensities, linearisation, kept_range
+            )
             for sink in sinks:
                 sink.add_mapped(coords, *mapped)
             pbar.update(1)
@@ -634,6 +665,7 @@ def build_mobility_heatmap(
     mass_axis: NDArray[np.float64],
     n_spectra: Optional[int] = None,
     linearisation: Optional[AxisLinearisation] = None,
+    kept_range: Optional[Tuple[float, float]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Accumulate the heatmap over every pixel of ``reader``.
 
@@ -651,5 +683,6 @@ def build_mobility_heatmap(
         n_spectra=n_spectra,
         description="Mobility heatmap",
         linearisation=linearisation,
+        kept_range=kept_range,
     )
     return finish_mobility_heatmap(heatmap)
