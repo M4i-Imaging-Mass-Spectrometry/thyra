@@ -116,6 +116,8 @@ walks through both, and the output format describes the
 [mobility](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/output-format/#ion-mobility)
 and [MS/MS](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/output-format/#demultiplexed-msms-table)
 tables in full.
+[For tool developers](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/for-tool-developers/)
+lists the rules a tool can rely on, and what may change.
 
 Not covered yet: Waters ion mobility (drift time) functions are skipped.
 CCS is computed from 1/K0 only, never from a drift time.

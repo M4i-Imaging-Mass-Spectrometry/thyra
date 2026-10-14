@@ -696,13 +696,17 @@ corresponding column of the summed table are the same m/z bin. One
 precursor's fragments are therefore a contiguous column block whose row
 sums are its ion image, and **the blocks add back up**: summing all
 fragment columns of every precursor reproduces the summed table's TIC per
-pixel, because each recorded point falls in exactly one isolation window.
+pixel, when every scan that carries current lies in an isolation window.
 Exactly, under the default `--tdf-spectrum scan_sum`: the split is built
 from the raw scans, and only a summed spectrum built from the same scans
-can add back up to it. An explicit `vendor_centroid` keeps only the current
-inside the peaks it picks (79 to 99 percent on the imaging acquisitions measured),
-so the two tables of one store would genuinely not agree; that is said at
-`WARNING` and recorded in `uns["demultiplexed_current"]`.
+can add back up to it. Two things break the identity, and both are said at
+`WARNING` and recorded in `uns["demultiplexed_current"]`. An explicit
+`vendor_centroid` keeps only the current inside the peaks it picks (79 to
+99 percent on the imaging acquisitions measured), so the split holds more
+than the summed table. A schedule whose windows leave out scans that carry
+current puts that current in no block, so the split holds less. Every
+acquired PASEF schedule measured so far covers all of it (see
+[Design Decisions](design-decisions.md#d2-the-msms-table-is-written-by-default-when-the-schedule-qualifies)).
 
 ```python
 msms = sdata.tables["msi_dataset_z0_msms"]
@@ -790,7 +794,10 @@ split needs today.
 **`uns["demultiplexed_current"]`** records how much of the summed table's
 ion current the split holds: `current_ratio` over the whole image, and
 `current_ratio_pixel_min` / `_max` across pixels. Under the default
-`--tdf-spectrum scan_sum` it is exactly `1.0`.
+`--tdf-spectrum scan_sum` it is exactly `1.0` when the windows cover every
+scan that carries current, and **below** 1 when they do not: the synthetic
+type-9 test fixture, whose three windows span scans 60 to 180 of a
+240-scan ramp, gives 0.92.
 Under an explicit `--tdf-spectrum vendor_centroid` it is **above** 1 -- the
 vendor peak picker drops the index bins it assigns to no peak while the
 split reads raw scans,
