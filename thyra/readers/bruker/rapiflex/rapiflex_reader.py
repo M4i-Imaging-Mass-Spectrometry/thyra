@@ -64,8 +64,9 @@ class RapiflexMetadataExtractor(MetadataExtractor):
         # header carries it and it used to be discarded for a hard-coded
         # (0, 0, 0), so no Rapiflex store could be placed against its
         # optical image the way a solariX or timsTOF one can. The converter
-        # turns these into stage_offset_um by multiplying by the pixel
-        # size, so this is the only thing the reader owes it (issue #237).
+        # multiplies these by the pixel size into stage_offset_um and the
+        # "acquisition" coordinate system's translation (D48), so this is
+        # the only thing the reader owes it (issue #237).
         coord_offsets = (
             int(header.get("first_raster_x", 0)),
             int(header.get("first_raster_y", 0)),

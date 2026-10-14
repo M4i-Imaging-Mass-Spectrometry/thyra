@@ -68,6 +68,12 @@ class EssentialMetadata:
         source_path: Absolute path to the source data.
         coordinate_offsets: Raw coordinate offsets ``(x, y, z)`` used to
             normalise coordinates to 0-based indexing.
+        stage_origin_um: Where grid index ``(0, 0)`` sits on the stage, as
+            ``(x_um, y_um)``, for a source that re-zeroes on a measured
+            stage position rather than on raster indices (Waters, whose
+            origin is fitted, not an integer index). ``None`` for every
+            other source. A store's ``"acquisition"`` coordinate system
+            translates by it (D48).
         spectrum_type: Spectrum type string (e.g. ``"centroid spectrum"``),
             used to guide resampling decisions.
         z_spacing_um: Distance between consecutive slices in micrometres,
@@ -99,6 +105,7 @@ class EssentialMetadata:
     n_spectra_counted: bool = True
     mass_range_known: bool = True
     spectrum_type_guessed: bool = False
+    stage_origin_um: Optional[Tuple[float, float]] = None
 
     @property
     def has_pixel_size(self) -> bool:
