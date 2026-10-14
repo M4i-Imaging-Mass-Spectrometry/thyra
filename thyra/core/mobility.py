@@ -31,6 +31,9 @@ DRIFT_TIME_ACCESSION = "MS:1002476"
 #: volt-second per square centimeter, the unit 1/K0 is stated in.
 INVERSE_REDUCED_MOBILITY_UNIT_ACCESSION = "MS:1002814"
 
+#: The unit a drift time is reported in (UO millisecond).
+MILLISECOND_UNIT_ACCESSION = "UO:0000028"
+
 MOBILITY_KIND_NAMES: Dict[str, str] = {
     INVERSE_REDUCED_MOBILITY_ACCESSION: "inverse reduced ion mobility",
     DRIFT_TIME_ACCESSION: "ion mobility drift time",
@@ -132,6 +135,10 @@ class MobilityAxis:
     acq_range: Optional[Tuple[float, float]] = None
     calibration: Optional[Dict[str, Any]] = None
     source: Optional[str] = None
+    #: Set when ``values`` are the centres of equal-width bins the source
+    #: itself defines (Waters drift bins): the width of one. ``None`` for a
+    #: continuum sampled at those values (TIMS 1/K0, an imzML array).
+    bin_width: Optional[float] = None
 
     @property
     def is_shared(self) -> bool:
@@ -176,6 +183,8 @@ class MobilityAxis:
             block["calibration"] = dict(self.calibration)
         if self.source is not None:
             block["source"] = self.source
+        if self.bin_width is not None:
+            block["bin_width"] = float(self.bin_width)
         return block
 
     def to_extractor_report(self) -> Dict[str, Any]:

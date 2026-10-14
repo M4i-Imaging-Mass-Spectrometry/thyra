@@ -1,6 +1,7 @@
 """Tests for the Waters .raw MSI reader."""
 
 import ctypes
+import logging
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -10,6 +11,17 @@ from thyra.errors import ConversionRefused
 from thyra.readers.waters.imaging_grid import ImagingGrid, _grid_from_scan_map
 from thyra.readers.waters.masslynx_lib import FunctionType, ScanInfoData, ScanInfoStruct
 from thyra.readers.waters.waters_reader import WatersReader
+
+
+def _fake_library():
+    """A MassLynxLib stand-in for a run with no drift bins.
+
+    A bare MagicMock answers every question with a truthy MagicMock, which
+    would make every function look like it carries drift bins.
+    """
+    mock_ml = MagicMock()
+    mock_ml.is_ion_mobility_function.return_value = False
+    return mock_ml
 
 
 def _make_scan_info(x_mm=0.1, y_mm=0.2, ms_level=1, has_pos=True, is_profile=0):
@@ -97,7 +109,7 @@ class TestWatersReaderInit:
         self, mock_build_grid, mock_ml_cls, mock_waters_data
     ):
         """Test that _ensure_initialized loads DLL and opens file."""
-        mock_ml = MagicMock()
+        mock_ml = _fake_library()
         mock_ml_cls.get_instance.return_value = mock_ml
         mock_ml.is_imaging_file.return_value = True
         mock_ml.get_number_of_functions.return_value = 1
@@ -114,7 +126,7 @@ class TestWatersReaderInit:
     @patch("thyra.readers.waters.waters_reader.MassLynxLib")
     def test_rejects_non_imaging_file(self, mock_ml_cls, mock_waters_data):
         """Test error when DLL says file is not imaging."""
-        mock_ml = MagicMock()
+        mock_ml = _fake_library()
         mock_ml_cls.get_instance.return_value = mock_ml
         mock_ml.is_imaging_file.return_value = False
 
@@ -128,7 +140,7 @@ class TestWatersReaderInit:
     @patch("thyra.readers.waters.waters_reader.MassLynxLib")
     def test_rejects_no_ms_functions(self, mock_ml_cls, mock_waters_data):
         """Test error when no MS functions are found."""
-        mock_ml = MagicMock()
+        mock_ml = _fake_library()
         mock_ml_cls.get_instance.return_value = mock_ml
         mock_ml.is_imaging_file.return_value = True
         mock_ml.get_number_of_functions.return_value = 1
@@ -142,7 +154,7 @@ class TestWatersReaderInit:
     @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
     def test_second_init_is_noop(self, mock_build_grid, mock_ml_cls, mock_waters_data):
         """Test that calling _ensure_initialized twice doesn't re-open."""
-        mock_ml = MagicMock()
+        mock_ml = _fake_library()
         mock_ml_cls.get_instance.return_value = mock_ml
         mock_ml.is_imaging_file.return_value = True
         mock_ml.get_number_of_functions.return_value = 1
@@ -166,7 +178,7 @@ class TestWatersReaderClose:
         self, mock_build_grid, mock_ml_cls, mock_waters_data
     ):
         """Test that close() calls close_file on the native library."""
-        mock_ml = MagicMock()
+        mock_ml = _fake_library()
         mock_ml_cls.get_instance.return_value = mock_ml
         mock_ml.is_imaging_file.return_value = True
         mock_ml.get_number_of_functions.return_value = 1
@@ -190,7 +202,7 @@ class TestWatersReaderClose:
     @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
     def test_double_close_is_safe(self, mock_build_grid, mock_ml_cls, mock_waters_data):
         """Test that closing twice doesn't call close_file twice."""
-        mock_ml = MagicMock()
+        mock_ml = _fake_library()
         mock_ml_cls.get_instance.return_value = mock_ml
         mock_ml.is_imaging_file.return_value = True
         mock_ml.get_number_of_functions.return_value = 1
@@ -210,7 +222,7 @@ class TestWatersReaderClose:
         self, mock_build_grid, mock_ml_cls, mock_waters_data
     ):
         """Test that re-initializing after close raises RuntimeError."""
-        mock_ml = MagicMock()
+        mock_ml = _fake_library()
         mock_ml_cls.get_instance.return_value = mock_ml
         mock_ml.is_imaging_file.return_value = True
         mock_ml.get_number_of_functions.return_value = 1
@@ -234,7 +246,7 @@ class TestWatersReaderIterSpectra:
         self, mock_build_grid, mock_ml_cls, mock_waters_data
     ):
         """Test that iter_spectra yields (coords, mzs, intensities) tuples."""
-        mock_ml = MagicMock()
+        mock_ml = _fake_library()
         mock_ml_cls.get_instance.return_value = mock_ml
         mock_ml.is_imaging_file.return_value = True
         mock_ml.get_number_of_functions.return_value = 1
@@ -267,7 +279,7 @@ class TestWatersReaderIterSpectra:
         self, mock_build_grid, mock_ml_cls, mock_waters_data
     ):
         """Test that scans without laser position are skipped."""
-        mock_ml = MagicMock()
+        mock_ml = _fake_library()
         mock_ml_cls.get_instance.return_value = mock_ml
         mock_ml.is_imaging_file.return_value = True
         mock_ml.get_number_of_functions.return_value = 1
@@ -310,7 +322,7 @@ class TestWatersReaderIterSpectra:
         self, mock_build_grid, mock_ml_cls, mock_waters_data
     ):
         """Test that spectra with no data points are skipped."""
-        mock_ml = MagicMock()
+        mock_ml = _fake_library()
         mock_ml_cls.get_instance.return_value = mock_ml
         mock_ml.is_imaging_file.return_value = True
         mock_ml.get_number_of_functions.return_value = 1
@@ -338,7 +350,7 @@ class TestWatersReaderIterSpectra:
         self, mock_build_grid, mock_ml_cls, mock_waters_data
     ):
         """Test that read errors for individual spectra are logged and skipped."""
-        mock_ml = MagicMock()
+        mock_ml = _fake_library()
         mock_ml_cls.get_instance.return_value = mock_ml
         mock_ml.is_imaging_file.return_value = True
         mock_ml.get_number_of_functions.return_value = 1
@@ -373,7 +385,7 @@ class TestWatersReaderMassAxis:
     @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
     def test_get_common_mass_axis(self, mock_build_grid, mock_ml_cls, mock_waters_data):
         """Test building common mass axis from multiple spectra."""
-        mock_ml = MagicMock()
+        mock_ml = _fake_library()
         mock_ml_cls.get_instance.return_value = mock_ml
         mock_ml.is_imaging_file.return_value = True
         mock_ml.get_number_of_functions.return_value = 1
@@ -405,7 +417,7 @@ class TestWatersReaderMassAxis:
     @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
     def test_mass_axis_is_cached(self, mock_build_grid, mock_ml_cls, mock_waters_data):
         """Test that the mass axis is cached after first call."""
-        mock_ml = MagicMock()
+        mock_ml = _fake_library()
         mock_ml_cls.get_instance.return_value = mock_ml
         mock_ml.is_imaging_file.return_value = True
         mock_ml.get_number_of_functions.return_value = 1
@@ -447,7 +459,7 @@ class TestWatersReaderProperties:
     @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
     def test_repr_after_init(self, mock_build_grid, mock_ml_cls, mock_waters_data):
         """Test repr includes grid info after initialization."""
-        mock_ml = MagicMock()
+        mock_ml = _fake_library()
         mock_ml_cls.get_instance.return_value = mock_ml
         mock_ml.is_imaging_file.return_value = True
         mock_ml.get_number_of_functions.return_value = 1
@@ -552,7 +564,7 @@ def _open_reader(
     # directory MassLynx could not have produced.
     _declare_function_files(mock_waters_data, n_funcs)
 
-    mock_ml = MagicMock()
+    mock_ml = _fake_library()
     mock_ml_cls.get_instance.return_value = mock_ml
     mock_ml.is_imaging_file.return_value = True
     mock_ml.get_number_of_functions.return_value = n_funcs
@@ -1011,3 +1023,408 @@ class TestScanInfoStructLayout:
     def test_layout_is_explicit(self):
         # Without it, Python 3.14 warns at import on Linux and macOS.
         assert ScanInfoStruct._layout_ == "ms"
+
+
+# ----------------------------------------------------------------------
+# Ion mobility (drift time)
+# ----------------------------------------------------------------------
+
+#: What a Synapt G2-Si or XS run declares in _extern.inf, and what an older
+#: Synapt G1 run does not.
+ADC_EXTERN = "Instrument Configuration:\nAcquisition Algorithm\t\t\t\tADC Mode\n"
+
+#: Drift times of a three-bin run, ms, as getMobility reports them.
+DRIFT_MS = np.array([0.0, 0.05425, 0.1085])
+
+
+def _drift_grid(levels, n_bins=3, chunked=False):
+    """A grid whose scans each report ``n_bins`` drift bins."""
+    grid = _chunked_grid(levels) if chunked else _two_function_grid(levels)
+    for key, info in list(grid.scan_map.items()):
+        grid.scan_map[key] = ScanInfoData(
+            **{**info.__dict__, "drift_scan_count": n_bins}
+        )
+    return grid
+
+
+def _drift_bin(_handle, func, scan, drift_bin):
+    """Two points per bin, intensities that say which bin and scan they are."""
+    mzs = np.array([100.0, 200.0])
+    return mzs, np.array([1.0, 2.0]) * (drift_bin + 1) + 10.0 * scan + 100.0 * func
+
+
+def _open_drift_reader(
+    mock_ml_cls,
+    mock_build_grid,
+    raw_dir,
+    grid,
+    types,
+    drift_functions,
+    extern=ADC_EXTERN,
+    cdt=True,
+    use_centroid=True,
+    intensity_threshold=None,
+):
+    """A reader over a fake run whose ``drift_functions`` carry drift bins."""
+    n_funcs = len(types)
+    _declare_function_files(raw_dir, n_funcs)
+    if extern is not None:
+        (raw_dir / "_extern.inf").write_text(extern, encoding="latin-1")
+    if cdt:
+        for f in drift_functions:
+            (raw_dir / f"_func{f + 1:03d}.cdt").write_bytes(b"\x00" * 16)
+
+    mock_ml = _fake_library()
+    mock_ml_cls.get_instance.return_value = mock_ml
+    mock_ml.is_imaging_file.return_value = True
+    mock_ml.get_number_of_functions.return_value = n_funcs
+    mock_ml.classify_function.side_effect = lambda _h, f: types[f]
+    mock_ml.is_ion_mobility_function.side_effect = lambda _h, f: f in drift_functions
+    mock_ml.get_number_of_scans_in_function.return_value = 3
+    mock_ml.read_spectrum.return_value = (
+        np.array([100.0, 200.0]),
+        np.array([1.0, 2.0]),
+    )
+    mock_ml.get_number_of_drift_bins.return_value = DRIFT_MS.size
+    mock_ml.get_drift_times.side_effect = lambda _h, n: DRIFT_MS[:n].copy()
+    mock_ml.read_drift_bin.side_effect = _drift_bin
+    mock_build_grid.return_value = grid
+    reader = WatersReader(
+        raw_dir, use_centroid=use_centroid, intensity_threshold=intensity_threshold
+    )
+    return reader, mock_ml
+
+
+class TestWatersReaderDriftTime:
+    """A Waters image acquired with ion mobility on: read, and read safely."""
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_a_mobility_image_is_no_longer_refused(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        reader, _ = _open_drift_reader(
+            mock_ml_cls,
+            mock_build_grid,
+            mock_waters_data,
+            _drift_grid({0: 1}),
+            {0: FunctionType.IMS_MS},
+            {0},
+        )
+
+        spectra = list(reader.iter_spectra())
+
+        assert {c for c, _, _ in spectra} == {(0, 0, 0), (1, 0, 0), (2, 0, 0)}
+        assert reader.has_ion_mobility is True
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_a_run_without_adc_mode_is_refused_before_any_read(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        reader, mock_ml = _open_drift_reader(
+            mock_ml_cls,
+            mock_build_grid,
+            mock_waters_data,
+            _drift_grid({0: 1}),
+            {0: FunctionType.IMS_MS},
+            {0},
+            extern="Instrument Configuration:\nPusher Interval (us)\t90\n",
+        )
+
+        with pytest.raises(ConversionRefused, match="ADC Mode"):
+            list(reader.iter_spectra())
+
+        # The library crashes on these files, so nothing may have read one.
+        mock_ml.read_spectrum.assert_not_called()
+        mock_ml.read_drift_bin.assert_not_called()
+        mock_ml.get_drift_times.assert_not_called()
+        mock_ml.close_file.assert_called_once()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_a_missing_drift_file_is_refused(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        reader, mock_ml = _open_drift_reader(
+            mock_ml_cls,
+            mock_build_grid,
+            mock_waters_data,
+            _drift_grid({0: 1}),
+            {0: FunctionType.IMS_MS},
+            {0},
+            cdt=False,
+        )
+
+        with pytest.raises(ConversionRefused, match="_FUNC001.CDT"):
+            list(reader.iter_spectra())
+        mock_ml.read_spectrum.assert_not_called()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_an_old_run_without_mobility_still_converts(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        # The guard is about drift bins: a G1 run without them is untouched.
+        reader, _ = _open_drift_reader(
+            mock_ml_cls,
+            mock_build_grid,
+            mock_waters_data,
+            _drift_grid({0: 1}, n_bins=0),
+            {0: FunctionType.MS},
+            set(),
+            extern=None,
+        )
+
+        assert len(list(reader.iter_spectra())) == 3
+        assert reader.has_ion_mobility is False
+        assert reader.get_mobility_axis() is None
+        assert reader.mobility_report() is None
+        block = reader._create_metadata_extractor()._extract_waters_specific()
+        assert "ion_mobility" not in block
+        with pytest.raises(NotImplementedError):
+            list(reader.iter_mobility_spectra())
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_the_axis_is_drift_time_in_ms(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        reader, mock_ml = _open_drift_reader(
+            mock_ml_cls,
+            mock_build_grid,
+            mock_waters_data,
+            _drift_grid({0: 1}),
+            {0: FunctionType.IMS_MS},
+            {0},
+        )
+
+        axis = reader.get_mobility_axis()
+
+        assert axis.kind_accession == "MS:1002476"
+        assert axis.unit_accession == "UO:0000028"
+        assert axis.unit_name == "millisecond"
+        assert axis.source == "waters_raw"
+        np.testing.assert_array_equal(axis.values, DRIFT_MS)
+        # The bins are declared as bins, so the heatmap gets one channel
+        # per bin (D53).
+        assert axis.bin_width == pytest.approx(0.05425)
+        assert axis.to_uns()["bin_width"] == pytest.approx(0.05425)
+        assert reader.has_shared_mobility_axis is False
+        # Never asked past the count the library gave.
+        mock_ml.get_drift_times.assert_called_once()
+        assert mock_ml.get_drift_times.call_args.args[1] == DRIFT_MS.size
+
+        report = reader.mobility_report()
+        assert report["separation_accession"] == "MS:1002476"
+        assert report["num_scans"] == DRIFT_MS.size
+        block = reader._create_metadata_extractor()._extract_waters_specific()
+        assert block["ion_mobility"]["unit_accession"] == "UO:0000028"
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_each_scan_is_its_bins_concatenated(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        reader, mock_ml = _open_drift_reader(
+            mock_ml_cls,
+            mock_build_grid,
+            mock_waters_data,
+            _drift_grid({0: 1}),
+            {0: FunctionType.IMS_MS},
+            {0},
+        )
+
+        clouds = list(reader.iter_mobility_spectra())
+        summed = list(reader.iter_spectra())
+
+        assert [c for c, *_ in clouds] == [c for c, _, _ in summed]
+        _, mzs, mobility, intensities = clouds[1]
+        np.testing.assert_array_equal(mzs, np.tile([100.0, 200.0], 3))
+        np.testing.assert_array_equal(mobility, np.repeat(DRIFT_MS, 2))
+        np.testing.assert_array_equal(
+            intensities, np.array([1.0, 2.0, 2.0, 4.0, 3.0, 6.0]) + 10.0
+        )
+        bins = {call.args[3] for call in mock_ml.read_drift_bin.call_args_list}
+        assert bins == {0, 1, 2}
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_a_scan_never_reads_past_the_function_bin_count(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        reader, mock_ml = _open_drift_reader(
+            mock_ml_cls,
+            mock_build_grid,
+            mock_waters_data,
+            _drift_grid({0: 1}, n_bins=7),
+            {0: FunctionType.IMS_MS},
+            {0},
+        )
+
+        list(reader.iter_mobility_spectra())
+
+        bins = {call.args[3] for call in mock_ml.read_drift_bin.call_args_list}
+        assert max(bins) == DRIFT_MS.size - 1
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_the_threshold_keeps_a_peak_across_its_bins(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        # Scan 0: m/z 100 sums to 1 + 2 + 3 = 6 over its bins, m/z 200 to
+        # 2 + 4 + 6 = 12. A threshold of 7 drops every point of m/z 100 and
+        # keeps every point of m/z 200, though no single one reaches 7 (D34).
+        reader, _ = _open_drift_reader(
+            mock_ml_cls,
+            mock_build_grid,
+            mock_waters_data,
+            _drift_grid({0: 1}),
+            {0: FunctionType.IMS_MS},
+            {0},
+            intensity_threshold=7.0,
+        )
+
+        _, mzs, _, intensities = next(iter(reader.iter_mobility_spectra()))
+
+        np.testing.assert_array_equal(mzs, [200.0, 200.0, 200.0])
+        np.testing.assert_array_equal(intensities, [2.0, 4.0, 6.0])
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_a_lockmass_named_tail_with_drift_bins_keeps_the_mobility(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        # A mobility raster split across functions: MassLynx names the tail
+        # the lockmass function, and it still carries drift bins.
+        reader, _ = _open_drift_reader(
+            mock_ml_cls,
+            mock_build_grid,
+            mock_waters_data,
+            _drift_grid({0: 1, 1: 0}, chunked=True),
+            {0: FunctionType.IMS_MS, 1: FunctionType.LOCKMASS},
+            {0, 1},
+            use_centroid=False,
+        )
+
+        clouds = list(reader.iter_mobility_spectra())
+
+        assert reader._ms_functions == [0, 1]
+        assert reader.has_ion_mobility is True
+        assert len(clouds) == 6
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_a_function_without_bins_in_the_image_drops_the_mobility(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data, thyra_logs
+    ):
+        with thyra_logs("thyra.readers.waters.waters_reader", logging.WARNING) as logs:
+            reader, _ = _open_drift_reader(
+                mock_ml_cls,
+                mock_build_grid,
+                mock_waters_data,
+                _drift_grid({0: 1, 1: 1}, chunked=True),
+                {0: FunctionType.IMS_MS, 1: FunctionType.MS},
+                {0},
+            )
+            assert len(list(reader.iter_spectra())) == 6
+            assert reader.has_ion_mobility is False
+
+        assert any("carry drift bins and 1 do not" in m for m in logs.messages)
+        with pytest.raises(NotImplementedError):
+            list(reader.iter_mobility_spectra())
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_the_lossless_option_follows_the_representation(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        centroid, _ = _open_drift_reader(
+            mock_ml_cls,
+            mock_build_grid,
+            mock_waters_data,
+            _drift_grid({0: 1}),
+            {0: FunctionType.IMS_MS},
+            {0},
+        )
+        profile = WatersReader(mock_waters_data, use_centroid=False)
+
+        assert centroid.lossless_spectrum_option == "--waters-spectrum profile"
+        assert profile.lossless_spectrum_option is None
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_a_parallel_mobility_function_stays_out_as_before(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        # Plain MS and mobility functions on the same pixels: before drift
+        # time was read the plain one alone was stored, and it still is.
+        reader, mock_ml = _open_drift_reader(
+            mock_ml_cls,
+            mock_build_grid,
+            mock_waters_data,
+            _drift_grid({0: 1, 1: 1}),
+            {0: FunctionType.MS, 1: FunctionType.IMS_MS},
+            {1},
+        )
+
+        assert len(list(reader.iter_spectra())) == 3
+        assert reader._ms_functions == [0]
+        assert "drift bins" in reader._excluded_functions[1]["reason"]
+        assert {c.args[1] for c in mock_ml.read_spectrum.call_args_list} == {0}
+        assert reader.has_ion_mobility is False
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_without_adc_mode_the_plain_functions_still_convert(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        # A run the library cannot read drift bins from keeps converting
+        # what it converted before: the mobility functions stay out, and
+        # nothing is ever read from them.
+        reader, mock_ml = _open_drift_reader(
+            mock_ml_cls,
+            mock_build_grid,
+            mock_waters_data,
+            _drift_grid({0: 1, 1: 1}),
+            {0: FunctionType.MS, 1: FunctionType.IMS_MS},
+            {1},
+            extern=None,
+        )
+
+        assert len(list(reader.iter_spectra())) == 3
+        assert reader._ms_functions == [0]
+        assert "ADC Mode" in reader._excluded_functions[1]["reason"]
+        assert {c.args[1] for c in mock_ml.read_spectrum.call_args_list} == {0}
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_without_adc_mode_a_lockmass_named_drift_tail_is_not_rescued(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        reader, mock_ml = _open_drift_reader(
+            mock_ml_cls,
+            mock_build_grid,
+            mock_waters_data,
+            _drift_grid({0: 1, 1: 0}, chunked=True),
+            {0: FunctionType.MS, 1: FunctionType.LOCKMASS},
+            {1},
+            extern=None,
+            use_centroid=False,
+        )
+
+        list(reader.iter_spectra())
+
+        assert reader._ms_functions == [0]
+        assert {c.args[1] for c in mock_ml.read_spectrum.call_args_list} == {0}
+        reader.close()

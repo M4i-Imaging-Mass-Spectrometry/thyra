@@ -270,6 +270,7 @@ class TestReaderDefault:
     ):
         """The decision is only real once ``set_centroid`` sees it."""
         mock_ml = MagicMock()
+        mock_ml.is_ion_mobility_function.return_value = False
         mock_ml_cls.get_instance.return_value = mock_ml
         mock_ml.open_file.return_value = "handle"
         mock_ml.is_imaging_file.return_value = True
@@ -284,3 +285,31 @@ class TestReaderDefault:
         extractor = reader._create_metadata_extractor()
         assert extractor._use_centroid is False
         assert extractor._instrument is reader.instrument
+
+
+class TestMobilityReadable:
+    """Whether the library can read the run's drift bins, from _extern.inf.
+
+    The two shapes are copied from real runs: a Synapt G2-Si / XS declares
+    the acquisition algorithm under the instrument configuration; an older
+    Synapt G1 run carries a ``Pusher Interval`` field and no such line.
+    """
+
+    def test_adc_mode_is_readable(self, tmp_path):
+        extern = SYNAPT_EXTERN + "Acquisition Algorithm\t\t\t\tADC Mode\n"
+        decision = identify_waters_instrument(_raw_dir(tmp_path, extern, None))
+
+        assert decision.acquisition_algorithm == "ADC Mode"
+        assert decision.mobility_readable is True
+
+    def test_an_old_run_without_the_field_is_not(self, tmp_path):
+        extern = "Instrument Configuration:\nPusher Interval (\xb5S)\t90\n"
+        decision = identify_waters_instrument(_raw_dir(tmp_path, extern, None))
+
+        assert decision.acquisition_algorithm is None
+        assert decision.mobility_readable is False
+
+    def test_no_side_file_is_not(self, tmp_path):
+        decision = identify_waters_instrument(_raw_dir(tmp_path, None, None))
+
+        assert decision.mobility_readable is False

@@ -64,7 +64,7 @@ from ...core.mobility import (
 )
 from ...errors import ConversionRefused
 from ...resampling.binning import nn_map_to_bins
-from ...resampling.mobility_grid import MobilityGrid
+from ...resampling.mobility_grid import MobilityGrid, default_channel_plan
 from ...resampling.types import AxisLinearisation
 from .csc_assembly import (
     CscAssembly,
@@ -1106,6 +1106,22 @@ def assemble_sibling_table(
         region=region_key,
         region_key="region",
         instance_key="instance_key",
+    )
+
+
+def mobility_grid_plan(reader: BaseMSIReader) -> Optional[Tuple[float, float, int]]:
+    """The default grid's ``(lower, upper, n_channels)``, or ``None``.
+
+    The mass-mobility heatmap's own channels, from the same
+    :func:`default_channel_plan`, so a heatmap box indexes the default grid
+    whether the axis is a TIMS ramp (256 channels over the values) or a
+    short list of drift bins (one channel per bin, D53). ``None`` when the
+    source has no values to read.
+    """
+    axis = reader.get_mobility_axis()
+    return default_channel_plan(
+        reader.get_mobility_value_range(),
+        None if axis is None else axis.bin_width,
     )
 
 

@@ -158,7 +158,9 @@ A timsTOF `.d` also fills `ion_mobility`: `present: true` for a TDF acquisition
 (TIMS engaged), with the acquired 1/K0 range and the ramp length in scans,
 and `present: false` for TSF. An imzML states it as well: `present: true`
 with the array's terms when the file declares a mobility array, `present:
-false` otherwise. Other formats leave the field unset, which means "not
+false` otherwise. A Waters run with drift bins states `present: true` with
+drift time (`MS:1002476`, ms), its range and the bin count. Other formats,
+and Waters runs without drift bins, leave the field unset, which means "not
 reported", not "no mobility". The MSI table is always summed over
 the ramp; how it was summed is the `tdf_spectrum` parameter of the
 `conversion` processing step (see [Supported Formats](supported-formats.md#bruker-timstof)).

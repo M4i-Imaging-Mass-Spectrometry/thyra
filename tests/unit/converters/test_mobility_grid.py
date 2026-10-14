@@ -154,6 +154,67 @@ class TestChannelWidthBand:
             report_channel_width(grid)
         assert "above" in records.text
 
+    def test_a_drift_time_grid_is_not_held_to_the_tims_band(self, thyra_logs):
+        # The band is 1/K0. A Waters drift bin is 0.05 to 0.2 ms wide, which
+        # read as 1/K0 would warn on every Waters grid.
+        from thyra.resampling.mobility_grid import report_channel_width
+
+        grid = build_mobility_grid(1.0, 11.0, n_channels=4)
+        with thyra_logs("thyra.resampling", logging.INFO) as records:
+            report_channel_width(grid, kind_accession="MS:1002476")
+            assert records == []
+            report_channel_width(grid, kind_accession="MS:1002815")
+        assert "above" in records.text
+
+
+class TestDefaultChannelPlan:
+    """D53: the channels the heatmap and a default grid share."""
+
+    def test_a_continuum_gets_the_anchor_over_its_values(self):
+        from thyra.resampling.mobility_grid import default_channel_plan
+
+        assert default_channel_plan((1.1, 1.5)) == (
+            pytest.approx(1.1),
+            pytest.approx(1.5),
+            MOBILITY_CHANNELS,
+        )
+
+    def test_two_hundred_drift_bins_are_two_hundred_channels(self):
+        from thyra.resampling.mobility_grid import default_channel_plan
+
+        # Float32 drift times one pusher period apart, as a Synapt XS reports.
+        values = (np.arange(200) * np.float32(0.06625149)).astype(np.float32)
+        width = float(values[-1] - values[0]) / 199
+        span = (float(values[0]), float(values[-1]))
+        lower, upper, n = default_channel_plan(span, width)
+
+        assert n == 200
+        assert lower == pytest.approx(-width / 2)
+        assert upper == pytest.approx(float(values[-1]) + width / 2)
+        # Every bin lands in its own channel: no comb.
+        channels = linear_channel(values.astype(np.float64), lower, upper, n)
+        np.testing.assert_array_equal(channels, np.arange(200))
+
+    def test_the_anchor_spread_over_200_bins_leaves_a_comb(self):
+        # Why the rule exists: 256 channels over 200 values leave 56 empty.
+        values = np.arange(200) * 0.06625
+        channels = linear_channel(values, values[0], values[-1], MOBILITY_CHANNELS)
+        assert MOBILITY_CHANNELS - np.unique(channels).size == 56
+
+    def test_as_many_bins_as_the_anchor_keeps_the_anchor(self):
+        from thyra.resampling.mobility_grid import default_channel_plan
+
+        values = np.arange(400) * 0.01
+        span = (float(values[0]), float(values[-1]))
+        assert default_channel_plan(span, 0.01)[2] == MOBILITY_CHANNELS
+
+    def test_no_values_no_plan(self):
+        from thyra.resampling.mobility_grid import default_channel_plan
+
+        assert default_channel_plan(None) is None
+        assert default_channel_plan((1.0, 1.0)) is None
+        assert default_channel_plan((np.nan, 1.0)) is None
+
 
 class TestLinearChannel:
     def test_is_the_shared_expression(self):
@@ -286,6 +347,33 @@ class GridStubReader(BaseMSIReader):
 
     def close(self) -> None:
         pass
+
+
+#: Nine Waters-style drift bins, 0.2 ms apart from 0 ms: scan s of the
+#: 1/K0 stub is drift bin s.
+DRIFT_BINS_MS = np.arange(9) * 0.2
+
+
+class _DriftBinGridReader(GridStubReader):
+    """The stub's clouds on a drift-time axis the source declares as bins."""
+
+    def get_mobility_axis(self) -> Optional[MobilityAxis]:
+        return MobilityAxis(
+            kind_accession="MS:1002476",
+            kind_name="ion mobility drift time",
+            unit_accession="UO:0000028",
+            unit_name="millisecond",
+            values=DRIFT_BINS_MS.copy(),
+            source="stub",
+            bin_width=0.2,
+        )
+
+    def iter_mobility_spectra(self) -> Generator:
+        # Each 1/K0 value goes to the drift bin of its nearest scan.
+        step = float(SCAN_K0[0] - SCAN_K0[1])
+        for coords, mzs, k0, it in super().iter_mobility_spectra():
+            scan = np.rint((SCAN_K0[0] - k0) / step).astype(int)
+            yield coords, mzs, DRIFT_BINS_MS[scan], it
 
 
 class _NoMobilityReader(GridStubReader):
@@ -689,6 +777,44 @@ class TestGridTable:
         assert results, "no tables were checked"
         for issues in results.values():
             assert [i for i in issues if i.severity == "error"] == []
+
+    def test_drift_bins_are_the_default_channels(self, tmp_path):
+        # D53: a source whose axis is nine declared bins gets nine
+        # channels, on the heatmap and the grid alike.
+        sdata = _read(
+            _convert(_DriftBinGridReader(), tmp_path / "s.zarr", mobility_grid=True)
+        )
+        summed = sdata.tables["stub_z0"]
+        grid = sdata.tables["stub_z0_mobility"]
+        block = grid.uns["mobility_grid"]
+
+        assert str(block["law"]) == "linear"
+        assert int(block["n_channels"]) == 9
+        np.testing.assert_allclose(
+            np.asarray(block["edges"]), np.arange(10) * 0.2 - 0.1
+        )
+        np.testing.assert_array_equal(
+            np.asarray(block["edges"]),
+            np.asarray(summed.uns["mobility_heatmap"]["mobility_edges"]),
+        )
+        # Each channel centre is its bin's drift time.
+        centres = np.unique(grid.var["mobility"].to_numpy())
+        assert np.all(np.min(np.abs(centres[:, None] - DRIFT_BINS_MS), axis=1) < 1e-12)
+        assert float(summed.uns["mobility_axis"]["bin_width"]) == pytest.approx(0.2)
+
+    def test_an_explicit_count_is_kept_on_drift_bins(self, tmp_path):
+        # 256 given on the command line is a choice, not the default.
+        sdata = _read(
+            _convert(
+                _DriftBinGridReader(),
+                tmp_path / "s.zarr",
+                mobility_grid=True,
+                mobility_bins=MOBILITY_CHANNELS,
+            )
+        )
+        block = sdata.tables["stub_z0_mobility"].uns["mobility_grid"]
+        assert int(block["n_channels"]) == MOBILITY_CHANNELS
+        assert float(block["lower"]) == pytest.approx(0.0)
 
     def test_the_channel_count_and_range_can_be_overridden(self, tmp_path):
         sdata = _read(

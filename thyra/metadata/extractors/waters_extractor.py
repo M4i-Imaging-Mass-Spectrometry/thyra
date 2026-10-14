@@ -43,6 +43,7 @@ class WatersMetadataExtractor(MetadataExtractor):
         instrument: Optional["WatersInstrument"] = None,
         use_centroid: bool = True,
         excluded_functions: Optional[Dict[int, Dict[str, Any]]] = None,
+        mobility_report: Optional[Dict[str, Any]] = None,
     ):
         """Initialize Waters metadata extractor.
 
@@ -65,6 +66,11 @@ class WatersMetadataExtractor(MetadataExtractor):
             excluded_functions: MS functions the reader left out because
                 the file also holds MS1 ones (MSe, data-dependent runs):
                 function index -> ``{"ms_level", "precursor_mz", "n_scans"}``.
+            mobility_report: The drift-time axis as the reader describes
+                it (``MobilityAxis.to_extractor_report`` plus ``num_scans``),
+                reported as ``format_specific["ion_mobility"]``. ``None``
+                for a run without readable drift bins, which reports
+                nothing: "not reported" is not "no mobility".
         """
         super().__init__(ml)
         self._ml = ml
@@ -76,6 +82,9 @@ class WatersMetadataExtractor(MetadataExtractor):
         self._instrument = instrument
         self._use_centroid = use_centroid
         self._excluded_functions = dict(excluded_functions or {})
+        self._mobility_report = (
+            dict(mobility_report) if mobility_report is not None else None
+        )
 
     def _extract_essential_impl(self) -> EssentialMetadata:
         """Extract essential metadata.
@@ -396,6 +405,8 @@ class WatersMetadataExtractor(MetadataExtractor):
                 }
             )
         specific.update(self._function_layout())
+        if self._mobility_report is not None:
+            specific["ion_mobility"] = dict(self._mobility_report)
         return specific
 
     def _function_layout(self) -> Dict[str, Any]:

@@ -110,10 +110,12 @@ class TestGridSizingWithoutAGrid:
         assert not warnings.records
 
     def test_it_is_not_said_twice_on_a_format_that_ignores_them(self, warnings):
-        """On Waters the option is already reported as ignored outright."""
-        _warn_ignored_flags(_Ctx("mobility_bins"), "waters", mobility_grid=False)
+        """On PHI the option is already reported as ignored outright."""
+        _warn_ignored_flags(_Ctx("mobility_bins"), "phi", mobility_grid=False)
         assert len(warnings.records) == 1
-        assert "is ignored on Waters .raw input" in warnings.records[0].getMessage()
+        assert (
+            "is ignored on PHI SmartSoft-TOF input" in warnings.records[0].getMessage()
+        )
 
 
 class TestTheGridOnImzML:

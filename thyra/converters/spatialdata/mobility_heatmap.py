@@ -54,6 +54,7 @@ from ...resampling.binning import nn_map_to_bins
 from ...resampling.mobility_grid import (
     MOBILITY_CHANNELS,
     build_mobility_grid,
+    default_channel_plan,
     linear_channel,
 )
 from ...resampling.types import AxisLinearisation
@@ -463,11 +464,15 @@ class PlaneHeatmaps:
     """
 
     def __init__(
-        self, mass_axis: NDArray[np.float64], mobility_range: Tuple[float, float]
+        self,
+        mass_axis: NDArray[np.float64],
+        mobility_range: Tuple[float, float],
+        channels: int = HEATMAP_MOBILITY_CHANNELS,
     ) -> None:
         """Remember how to size a plane's heatmap; planes appear as they are seen."""
         self._axis = mass_axis
         self._mobility_range = mobility_range
+        self._channels = int(channels)
         self.planes: Dict[int, MobilityHeatmap] = {}
         self._current: Optional[MobilityHeatmap] = None
 
@@ -483,7 +488,9 @@ class PlaneHeatmaps:
         z = 0 if coords is None else int(coords[2])
         heatmap = self.planes.get(z)
         if heatmap is None:
-            heatmap = MobilityHeatmap(self._axis, self._mobility_range)
+            heatmap = MobilityHeatmap(
+                self._axis, self._mobility_range, channels=self._channels
+            )
             self.planes[z] = heatmap
         if heatmap is not self._current:
             # Each accumulator buffers up to _FLUSH_POINTS points of its
@@ -508,8 +515,8 @@ class PlaneHeatmaps:
         return blocks
 
 
-def _mobility_range(reader: BaseMSIReader) -> Optional[Tuple[float, float]]:
-    """The range to bin mobility over, from the values the source holds.
+def _mobility_range(reader: BaseMSIReader) -> Optional[Tuple[float, float, int]]:
+    """The ``(lower, upper, channels)`` to bin mobility over.
 
     The values decide when there are any
     (:meth:`~thyra.core.base_reader.BaseMSIReader.get_mobility_value_range`:
@@ -518,17 +525,23 @@ def _mobility_range(reader: BaseMSIReader) -> Optional[Tuple[float, float]]:
     declared acquisition range by a few scans, and binning over the
     declared range would pile those scans into an edge channel. The
     declared range is the fallback for a source with no values to read.
+    :func:`default_channel_plan` turns the span into channels -- the
+    default grid's own rule, so the two stay index-aligned, including on
+    a source whose axis is a short list of bins (D53).
     """
-    span = reader.get_mobility_value_range()
-    if span is not None:
-        return span
     axis = reader.get_mobility_axis()
+    plan = default_channel_plan(
+        reader.get_mobility_value_range(),
+        None if axis is None else axis.bin_width,
+    )
+    if plan is not None:
+        return plan
     if axis is None:
         return None
     if axis.acq_range is not None:
         lower, upper = float(axis.acq_range[0]), float(axis.acq_range[1])
         if upper > lower:
-            return lower, upper
+            return lower, upper, HEATMAP_MOBILITY_CHANNELS
     return None
 
 
@@ -540,26 +553,30 @@ def prepare_mobility_heatmap(
     ``None`` when the reader has no mobility dimension or its values give
     no range to bin over, or when the common mass axis is empty.
     """
-    mobility_range = _checked_range(reader, mass_axis)
-    if mobility_range is None:
+    plan = _checked_range(reader, mass_axis)
+    if plan is None:
         return None
-    return MobilityHeatmap(np.asarray(mass_axis, dtype=np.float64), mobility_range)
+    return MobilityHeatmap(
+        np.asarray(mass_axis, dtype=np.float64), plan[:2], channels=plan[2]
+    )
 
 
 def prepare_plane_heatmaps(
     reader: BaseMSIReader, mass_axis: NDArray[np.float64]
 ) -> Optional[PlaneHeatmaps]:
     """:func:`prepare_mobility_heatmap`, one heatmap per z plane."""
-    mobility_range = _checked_range(reader, mass_axis)
-    if mobility_range is None:
+    plan = _checked_range(reader, mass_axis)
+    if plan is None:
         return None
-    return PlaneHeatmaps(np.asarray(mass_axis, dtype=np.float64), mobility_range)
+    return PlaneHeatmaps(
+        np.asarray(mass_axis, dtype=np.float64), plan[:2], channels=plan[2]
+    )
 
 
 def _checked_range(
     reader: BaseMSIReader, mass_axis: NDArray[np.float64]
-) -> Optional[Tuple[float, float]]:
-    """The mobility range to bin over, or ``None`` with the reason logged."""
+) -> Optional[Tuple[float, float, int]]:
+    """The mobility range and channels to bin over, or ``None`` with the reason logged."""
     if not reader.has_ion_mobility:
         return None
     mobility_range = _mobility_range(reader)

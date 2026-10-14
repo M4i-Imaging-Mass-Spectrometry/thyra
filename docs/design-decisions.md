@@ -4183,6 +4183,8 @@ plan do not change. Nothing released changes: plans are new since 4.4.0.
   the same values its conversion uses, so a plan cuts nothing the conversion
   keeps.
 
+---
+
 ## D52. The mobility and MS/MS tables keep the m/z range the summed table keeps
 
 **Status:** Implemented (2026-10-14).
@@ -4227,3 +4229,124 @@ where a point falls in that margin.
   lying just outside the edges that row states.
 - Under `tic_preserving` the grid's marginal still differs cell by cell
   from the summed table, as D46 says; only the points each keeps now agree.
+
+---
+
+## D53. Waters drift time is read as a mobility axis, and a short list of bins is its own channel set
+
+**Status:** Implemented (2026-10-14).
+
+**Decision.** Two parts.
+
+1. A Waters function acquired with ion mobility on is converted. Its spectrum
+   is the one MassLynx reports summed over the drift bins, and the bins
+   become the reader's mobility dimension, as a TIMS frame's scans are:
+   `uns["mobility_axis"]` (drift time, `MS:1002476`, in ms, `UO:0000028`;
+   `values` the drift time of each bin; `source` `"waters_raw"`;
+   `bin_width` the step), `uns["mobility_heatmap"]`, the `{table}_mobility`
+   sibling with `--mobility-grid`, and `msi_metadata.ms_analysis.ion_mobility`.
+   Each bin is read raw (`getRawMobilityScanDataPoints`), whatever
+   representation the summed table was read in.
+2. When a mobility axis declares itself a list of equal-width bins
+   (`MobilityAxis.bin_width`) with fewer bins than the 256-channel anchor,
+   the heatmap and the default grid use one channel per bin, edges half a
+   bin outside the first and last value. Every other axis keeps 256
+   channels over its values. `--mobility-bins` now defaults to "not given",
+   so `--mobility-bins 256` is a choice that keeps 256.
+
+**Why part 1.** Before it, the reader kept MS functions only, and a mobility
+function is classified `IMS_MS`. So every Waters image recorded with
+mobility on was refused with "No MS functions found": not the drift
+dimension dropped, the whole image. Measured on an in-house Synapt G2-Si
+tissue image. The bundled `MLReader` already exports the calls, which mzmine
+binds the same way: `getNumberOfMobilityScans`, `getMobility`,
+`getRawMobilityScanDataPoints`.
+
+Measured on the public MassIVE MSV000092638 Synapt XS image (8,475 scans,
+MS1) and on in-house Synapt G2-Si runs:
+
+- 200 bins on every run, equal steps from exactly 0 ms (0.045 to 0.216 ms
+  per bin across runs; 0.06625 ms on the XS image). The step matches the
+  run's "ADC Pusher Frequency" in `_extern.inf`.
+- `driftScanCount` on every scan equals the function's bin count.
+- Summed over the bins, the raw points reproduce the profile spectrum's ion
+  current exactly (ratio 1.0 on every sampled scan). The per-bin centroided
+  call is about ten times slower and does not sum to the centroided
+  spectrum (up to 15.6 % off), so it is not bound.
+
+**The guard.** Over 91 Synapt runs with mobility on, read one per child
+process: the 56 that declare `Acquisition Algorithm: ADC Mode` read cleanly;
+the 35 that do not, all older Synapt G1 runs, crashed the library with an
+access violation (32) or returned bins that do not sum to the spectrum (3).
+Even the summed-spectrum read crashed on most of them. An access violation
+ends the Python process with no message, so on such a run the reader leaves
+the mobility functions out, decided from the side file before it reads any
+spectrum, and refuses the run when nothing else is left. That is no regression: before drift time was
+read, mobility functions were never converted, so those runs store what they
+stored before, and a run with nothing else was refused then too, as "No MS
+functions found". `getMobility` past the last
+bin raises a C++ exception inside the library, so it is never asked past
+`getNumberOfMobilityScans`.
+
+**Why part 2.** 256 channels over 200 values leave 56 channels holding no
+value at all, in a fixed comb (`1111011101111...`): a striped heatmap and 56
+empty mobility columns per m/z bin in a grid table. The anchor exists so a
+heatmap box indexes grid channels. One channel per bin keeps that, because
+the heatmap and the grid take their channels from the same function
+(`default_channel_plan`), and it puts each bin in exactly one channel. The
+channels are still equal-width, so the grid's `law` stays `"linear"`. No
+schema change.
+
+**Why a declaration, not a test on the values.** "Equal steps, fewer than
+256" also describes stubs in the TIMS tests and a synthetic TDF fixture.
+A real TIMS ramp has 400 to 1,000 scans on a non-linear 1/K0 law. Only the
+reader knows whether its values are bins it defines or samples of a
+continuum, so only the Waters reader sets `bin_width`.
+
+**What changes in a store.**
+
+- Waters runs with mobility on, which were refused, now convert. They gain
+  `uns["mobility_axis"]`, `uns["mobility_heatmap"]` (200 mobility channels)
+  and `ion_mobility` in the versioned block.
+- `uns["mobility_axis"]` gains the key `bin_width` where a reader sets one
+  (Waters only).
+- Waters runs without mobility, and every Bruker and imzML store, are
+  unchanged: their axes declare no bins, so the plan is the 256 anchor it
+  always was.
+- The heatmap is on by default, so a Waters mobility run costs one extra
+  read of every bin: 200 library calls per scan, about 40 ms per scan on the
+  XS image. `--no-mobility-heatmap` skips it. A grid table costs two more
+  passes; Waters has no single-read frame record as TDF has (D5).
+
+**Objections that did not win.**
+
+- "Centroid each bin to match the centroided table." It is ten times
+  slower, it crashed on G1 runs, and centroids of bins still do not sum to
+  the centroid of the sum. The store records the gap instead
+  (`current_ratio`, with a warning naming `--waters-spectrum profile`), as
+  it does for TDF `vendor_centroid` (D1).
+- "Keep 256 everywhere; consumers may assume it." The docs said `k = 256`.
+  A consumer that hard-codes 256 instead of reading `mobility_edges` breaks
+  on Waters stores. That is the consumer's fix (the format comes first),
+  and the docs now say to read `k`.
+- "Probe each file in a child process instead of reading `_extern.inf`."
+  It would catch crashes the field does not predict, at a process start per
+  conversion. The field separated all 91 runs; a probe can be added if a
+  counter-example appears.
+
+**Known limits.**
+
+- `getMobility` takes no function. The reader refuses mobility when two
+  mobility functions report different bin counts. A run whose functions
+  share a count but not a pusher period would be described by one axis;
+  none has been seen.
+- Functions with and without drift bins on the same pixels (a parallel
+  acquisition): the ones without are converted, as before drift time was
+  read, and the mobility functions are listed under `excluded_functions`.
+  Functions with and without drift bins on different pixels (chunks of
+  one raster) are all converted, and no mobility is recorded, since the
+  bins would not cover the image. No measured run has either layout.
+- Drift time is not converted to CCS. That needs the run's calibration
+  (`getDriftTime_CCS` in `MassLynxRaw`), which is not bound.
+- No public DESI or cyclic IMS image with its `.raw` folder was found, so
+  neither is tested.

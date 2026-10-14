@@ -379,11 +379,12 @@ Windows), numpy arrays rather than lists:
 | `present` | `True` |
 | `type_name`, `type_accession` | the quantity: `inverse reduced ion mobility` / `MS:1002815` (TIMS), or drift time / `MS:1002476` |
 | `unit_name`, `unit_accession` | e.g. `volt-second per square centimeter` / `MS:1002814` for 1/K0 |
-| `n_scans` | length of `values` (the TIMS ramp length on a Bruker source) |
-| `values` | `float64[n_scans]`: the native axis when it is shared across pixels -- the 1/K0 of every TIMS scan (from the vendor calibration, decreasing with scan number) or of every feature of a continuous imzML export; absent when mobility is per pixel |
+| `n_scans` | length of `values` (the TIMS ramp length on a Bruker source, the drift bin count on a Waters one) |
+| `values` | `float64[n_scans]`: the native axis when it is shared across pixels -- the 1/K0 of every TIMS scan (from the vendor calibration, decreasing with scan number) or of every feature of a continuous imzML export, or the drift time in ms of every Waters drift bin (ascending, from 0); absent when mobility is per pixel |
 | `acq_range` | `float64[2]`, `[lower, upper]`: the acquired range as declared, else the span of `values` |
 | `calibration` | `{model_type, coefficients}`: the vendor `TimsCalibration` row, provenance only |
-| `source` | `"bruker_tdf"` or `"imzml"` |
+| `source` | `"bruker_tdf"`, `"imzml"` or `"waters_raw"` |
+| `bin_width` | `float`, only where the source defines its own equal-width bins (Waters drift bins): the width of one, in the axis unit. Its presence is what gives the heatmap one channel per bin (D53) |
 | `resolved_table` | element key of the mobility-resolved sibling table, when one was written |
 
 **`uns["mobility_heatmap"]`** is the table's mean mass-mobility frame: the
@@ -399,14 +400,17 @@ plane's heatmap.
 | key | value |
 |---|---|
 | `mz_edges` | `float64[m + 1]`: bin edges on the common m/z axis, which is coarsened by an integer factor to about 4,000 bins (`m` is the axis length itself when it is shorter) |
-| `mobility_edges` | `float64[k + 1]`, **`k = 256`**: equal-width bins in the axis unit, ascending, spanning the smallest to the largest mobility value the source holds (the axis `values` when shared; every pixel's own values on a processed imzML, read once for this) |
+| `mobility_edges` | `float64[k + 1]`, **`k = 256`**: equal-width bins in the axis unit, ascending, spanning the smallest to the largest mobility value the source holds (the axis `values` when shared; every pixel's own values on a processed imzML, read once for this). A source whose axis is fewer than 256 equal-width bins of its own (Waters drift bins, `uns["mobility_axis"]["bin_width"]` set) gets one channel per bin instead, edges half a bin outside the first and last value (D53) |
 | `counts` | `float32[m, k]`: mean intensity per bin over pixel positions, the rows `uns["average_spectrum"]` divides by |
 | `current_ratio` | `float`: the heatmap's ion current over `uns["average_spectrum"]`'s -- 1.0 under `scan_sum`; above 1 under `vendor_centroid` (about 1.01 to 1.23), whose picked peaks keep only part of the raw current the heatmap holds |
 
-`k = 256` is fixed on purpose: the mobility grid table below defaults to the
-same 256 channels over the same edges -- literally the same constant and the
-same generator -- so a box drawn on the heatmap maps onto grid channels by
-integer index in both directions.
+`k` is not tuned: the mobility grid table below defaults to the same
+channels over the same edges -- literally the same rule and the same
+generator -- so a box drawn on the heatmap maps onto grid channels by
+integer index in both directions. Read `k` off `mobility_edges` or the
+shape of `counts`, never assume 256: on a Waters run it is the drift bin
+count, 200 on every run measured, because 256 channels over 200 bins would
+leave 56 of them empty in a fixed comb.
 The heatmap keeps the m/z points the summed table keeps, edge bins included.
 The m/z binning is the converter's own nearest-bin rule, coarsened, so under a
 lossless summed spectrum (`--tdf-spectrum scan_sum`) the heatmap summed over
@@ -420,7 +424,7 @@ it.
 
 ```python
 heat = msi_table.uns["mobility_heatmap"]
-counts = np.asarray(heat["counts"])              # (m, 256)
+counts = np.asarray(heat["counts"])              # (m, k)
 mz_centres = np.asarray(heat["mz_edges"])
 mz_centres = (mz_centres[:-1] + mz_centres[1:]) / 2
 k0_centres = np.asarray(heat["mobility_edges"])
@@ -520,7 +524,7 @@ to tell them apart to read either. What says which one filled it is
 |---|---|
 | `law` | how the channel edges are spaced; `"linear"` (equal width in the axis unit) is the only law today |
 | `lower`, `upper` | the range the channels span, in the axis unit |
-| `n_channels` | how many channels, **256 by default** |
+| `n_channels` | how many channels: by default the heatmap's own, **256**, or one per bin on a source with fewer equal-width bins (D53) |
 | `channel_width` | `(upper - lower) / n_channels`, recorded so a reader can see it without arithmetic |
 | `edges` | `float64[n_channels + 1]`, the channel edges themselves |
 
@@ -537,10 +541,11 @@ Three things are worth knowing before asking for one:
   pixel, once, before the heatmap's pass
   ([D46](design-decisions.md#d46-a-processed-imzml-with-mobility-gets-the-heatmap-and-the-grid-when-asked)). `--mobility-min` / `--mobility-max` override
   them, at the cost of the alignment below.
-- **256 channels is an alignment anchor, not a tuning knob.** It is the
-  heatmap's own channel count over the heatmap's own edges, so a box drawn on
-  the heatmap selects grid channels by integer index with no resampling and
-  no edge off-by-one. `--mobility-bins` changes it and gives that up. The
+- **The default channels are an alignment anchor, not a tuning knob.** They
+  are the heatmap's own channels over the heatmap's own edges (256, or one
+  per Waters drift bin), so a box drawn on the heatmap selects grid channels
+  by integer index with no resampling and no edge off-by-one.
+  `--mobility-bins` changes them and gives that up, even when it says 256. The
   width the anchor realizes on a typical 0.29 1/K0 span is 0.0011, finer than
   the 0.002 to 0.02 band TIMS resolving power supports; that is said at
   `INFO` and the count is not moved for it, because the alignment is worth

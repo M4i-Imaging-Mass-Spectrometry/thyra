@@ -1,8 +1,8 @@
 # Ion mobility and MS/MS
 
-Some instruments measure more than m/z. A Bruker timsTOF can also separate
-ions by their ion mobility, and it can break selected ions into fragments
-(MS/MS). Thyra keeps both, next to the usual spectra.
+Some instruments measure more than m/z. A Bruker timsTOF or a Waters Synapt
+can also separate ions by their ion mobility. A timsTOF can break selected
+ions into fragments (MS/MS). Thyra keeps both, next to the usual spectra.
 
 ## Which data has them
 
@@ -12,6 +12,7 @@ ions by their ion mobility, and it can break selected ions into fragments
 | Bruker timsTOF PASEF or iprm-PASEF imaging run | ion mobility and MS/MS |
 | imzML in continuous mode with a mobility array, as TIMSImaging writes | ion mobility |
 | imzML in processed mode with a mobility array, as TIMSCONVERT writes | ion mobility |
+| Waters Synapt `.raw` folder, with ion mobility on | ion mobility (drift time) |
 
 You do not need to switch anything on. Thyra finds the mobility and the
 MS/MS data by itself.
@@ -22,7 +23,7 @@ MS/MS data by itself.
 |---|---|---|
 | **The spectra**, `msi_dataset_z0` | every pixel's spectrum, added up over mobility | always |
 | **Mass-mobility heatmap**, inside the spectra table | the whole image in one picture: m/z against mobility | when the data has mobility |
-| **Mobility table**, `msi_dataset_z0_mobility` | one column for each pair of m/z and mobility | continuous imzML: always. timsTOF and processed imzML: add `--mobility-grid` |
+| **Mobility table**, `msi_dataset_z0_mobility` | one column for each pair of m/z and mobility | continuous imzML: always. timsTOF, processed imzML and Waters: add `--mobility-grid` |
 | **MS/MS table**, `msi_dataset_z0_msms` | the fragments, grouped by the ion they came from | when every pixel fragments the same list of ions |
 
 The spectra table looks the same as for any other data. Tools that know
@@ -61,7 +62,8 @@ files with a mobility array get the table without asking.
 
 ??? advanced "Advanced: how this table is built"
     Every pixel measures mobility at slightly different values. So Thyra puts
-    them on 256 shared mobility channels, the same channels as the heatmap.
+    them on shared mobility channels, the same channels as the heatmap: 256
+    on a timsTOF, one per drift bin on a Waters run.
     A box drawn on the heatmap then picks the same channels in the table.
     `--mobility-bins`, `--mobility-min` and `--mobility-max` change the
     channels. See
@@ -129,8 +131,8 @@ precursor 0, one value per pixel.
 
 ## Not covered yet
 
-- Waters ion mobility (drift time) is not read. Thyra skips those functions
-  and converts the others.
+- Older Waters Synapt G1 runs with ion mobility on are refused. The Waters
+  library cannot read them safely.
 - CCS is computed from 1/K0 only, never from a drift time.
 - diaPASEF and data-dependent PASEF runs give the spectra table only. Their
   list of precursors changes from pixel to pixel.

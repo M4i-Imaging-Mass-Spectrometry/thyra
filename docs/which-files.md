@@ -98,9 +98,11 @@ will need `--pixel-size`.
 - Point Thyra at the `.raw` folder, and copy the folder whole: if any
   `_FUNC` file is missing, Thyra stops.
 - The pixel size comes from the recorded laser positions.
-- Ion mobility functions are skipped. When a run records low and high
-  collision energy over the same pixels (MSe), Thyra keeps the low-energy
-  data.
+- Synapt runs with ion mobility on keep their drift times. Older Synapt G1
+  runs with ion mobility on are refused: the Waters library cannot read them
+  safely.
+- When a run records low and high collision energy over the same pixels
+  (MSe), Thyra keeps the low-energy data.
 
 ??? advanced "Advanced: profile and centroid data from Waters"
     Waters runs can be read as profile spectra or as centroids. For SELECT
