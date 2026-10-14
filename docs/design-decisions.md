@@ -3786,9 +3786,9 @@ long as `mz`.
 
 ## D49. A release is a pull request, and `main` requires passing checks
 
-**Status:** Accepted (2026-10-14). Supersedes D18. The release workflows land
-first; the ruleset and auto-merge follow once a release pull request has
-been seen running its checks.
+**Status:** Implemented (2026-10-14), #474. Supersedes D18. The first release
+pull request, #478, opened on the merge and ran its checks; the required-checks
+ruleset and auto-merge were turned on after it.
 
 **Decision.** release-please replaces python-semantic-release. After every
 merge it keeps one release pull request open, `chore(main): release X.Y.Z`,
