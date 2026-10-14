@@ -98,9 +98,9 @@ flight-time axis, so do not assume `mz` is the only one.
 - A sibling table has the same rows as its MSI table, in the same order,
   with the same `obs`.
 - `mz_index` is the column of the MSI table that a sibling feature belongs
-  to. Use it to relate the two mass axes. On a mobility table read from
-  imzML, a feature outside the MSI table's mass range is given the first or
-  last column.
+  to. Use it to relate the two mass axes. On a mobility table read from a
+  continuous imzML, a feature outside the MSI table's mass range is given
+  the first or last column.
 - The MSI table names its siblings in its metadata block:
   `uns["msi_metadata"]["ms_analysis"]["ion_mobility"]["resolved_table"]` and
   `uns["msi_metadata"]["ms_analysis"]["fragmentation"]["resolved_table"]`.
@@ -199,8 +199,8 @@ To see what made a store:
 - **The mass axis.** The default axis follows the acquisition's mass range,
   so two stores usually differ. Compare the fingerprint, or `var["mz"]`
   itself, before reading across stores.
-- **The sibling feature axes.** In a timsTOF mobility grid table and in an
-  MS/MS table, only features that carry signal become columns. Two
+- **The sibling feature axes.** In a mobility grid table (`--mobility-grid`)
+  and in an MS/MS table, only features that carry signal become columns. Two
   conversions with the same settings can give different `var`.
 - **Other `uns` blocks**, such as `mobility_axis`, `mobility_heatmap` and
   `msms_schedule`. They are described in [Output format](output-format.md)
