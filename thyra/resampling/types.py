@@ -185,7 +185,8 @@ class ResamplingConfig:
             default -- means no check, which is how ``np.interp`` behaves:
             straight lines are drawn across regions where nothing was
             measured.  Only affects ``tic_preserving``; ``nearest_neighbor``
-            never invents a bin.  See :mod:`thyra.resampling.gaps`.
+            never invents a bin, and a bin ``tic_preserving`` rebins is
+            never discarded.  See :mod:`thyra.resampling.gaps`.
         tof_a: ``A`` of the two-term TOF width law ``FWHM(m) = sqrt(A m +
             B m^2)`` (mDa^2/Da), for ``AxisType.TOF``.  ``None`` takes the
             pair the detected instrument declares, if any.  Give both or

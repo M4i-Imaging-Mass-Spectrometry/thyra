@@ -88,7 +88,7 @@ def test_both_sources_get_the_planned_axis(tmp_path, sources, as_dict):
         assert recorded["sha256"] == plan.sha256
         assert int(recorded["n_bins"]) == plan.n_bins
     # The intersection, each imzML header bound moved out by one unit of its
-    # last stated decimal: pyimzml writes "300.0" and "600.0" (D49).
+    # last stated decimal: pyimzml writes "300.0" and "600.0" (D51).
     assert (plan.min_mz, plan.max_mz) == pytest.approx((299.9, 600.1), rel=1e-12)
 
 

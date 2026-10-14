@@ -99,8 +99,9 @@ body.
 - **Those changes also need a release-notes line.** The generated notes list commit
   titles only. Write one or two plain sentences for users in the pull request
   description, under "Release notes".
-- **Merging publishes nothing.** Releases are batched and cut on a schedule. See
-  "Releases are batched" in the [full guide](docs/contributing.md#releases-are-batched-not-per-merge).
+- **Merging publishes nothing.** Releases are batched in a release pull request,
+  merged by hand or on Mondays. See "Releases are batched" in the
+  [full guide](docs/contributing.md#releases-are-batched-not-per-merge).
 
 ## Code of conduct
 

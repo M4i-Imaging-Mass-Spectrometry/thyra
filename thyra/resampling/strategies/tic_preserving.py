@@ -4,10 +4,11 @@
 
 Linear interpolation onto the target axis, followed by rescaling so the
 resampled spectrum carries the same total ion current as the input --
-evaluated only at the axis points the interpolant can be non-zero at. See
-:mod:`thyra.resampling.interpolation` for the evaluation and
-:mod:`thyra.resampling.tic` for what "preserved" means when the axis does
-not span the whole spectrum.
+evaluated only at the axis points the interpolant can be non-zero at. A
+spectrum whose bins are wide enough to skip a sample is rebinned instead
+(design decision D50). See :mod:`thyra.resampling.interpolation` for the
+evaluation and :mod:`thyra.resampling.tic` for what "preserved" means when
+the axis does not span the whole spectrum.
 """
 
 from typing import Optional, Tuple
@@ -15,6 +16,7 @@ from typing import Optional, Tuple
 import numpy as np
 from numpy.typing import NDArray
 
+from ..binning import BinLayout
 from ..interpolation import tic_preserving_sparse
 from .base import ResamplingStrategy
 
@@ -40,6 +42,10 @@ class TICPreservingStrategy(ResamplingStrategy):
         """Bind the operator to one axis, its range and the gap tolerance."""
         super().__init__(axis, axis_range)
         self.gap_tolerance_da = gap_tolerance_da
+        # A property of the axis, so laid once rather than per spectrum.
+        self.layout: Optional[BinLayout] = (
+            BinLayout(self.axis, self.kept_range) if self.axis.size >= 2 else None
+        )
 
     def resample(
         self, mzs: NDArray[np.float64], intensities: NDArray[np.float64]
@@ -74,6 +80,18 @@ class TICPreservingStrategy(ResamplingStrategy):
         bounded by reading the file. ``to_dense`` reproduces the dense
         evaluation bin for bin.
 
+        Interpolating at a bin centre is sampling. Once a bin is wider than
+        the source spacing, a peak narrower than the bin that falls between
+        two centres is mostly lost, and the rescale gives its ion current
+        to whatever the centres landed on: on 0.73 Da bins over 0.01 Da
+        sampling, two narrow peaks kept 2% of their area while the TIC
+        still balanced (issue #442). So when some bin holds a sample that
+        neither of the two around its centre is, every bin holding two or
+        more samples is filled with its share of each sample instead, and
+        the spectrum's other bins are put on the same ion-current footing.
+        A spectrum in which no centre skips a sample is resampled exactly
+        as before. See design decision D50.
+
         Args:
             mzs: Original m/z values from the spectrum.
             intensities: Corresponding intensity values.
@@ -87,4 +105,5 @@ class TICPreservingStrategy(ResamplingStrategy):
             intensities,
             self.gap_tolerance_da,
             self.axis_range,
+            self.layout,
         )

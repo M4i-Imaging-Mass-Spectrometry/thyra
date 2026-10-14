@@ -122,7 +122,7 @@ warns you once.
       every axis type.
     - `tic_preserving` spreads the signal between bins and keeps the total
       ion current. It is exact only on an axis spaced like your instrument's
-      own sampling.
+      own sampling. Bins wider than that sampling still keep narrow peaks.
 
     `--mass-axis-type` chooses how the bin width changes across the mass
     range. If you change it and leave the method on automatic, Thyra

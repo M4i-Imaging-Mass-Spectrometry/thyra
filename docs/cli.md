@@ -256,8 +256,10 @@ default), so there is no separate flag for that quantity.
     - **`nearest_neighbor`** -- Each target bin takes the nearest original m/z
       value. Correct for **centroid** data, where peaks are discrete masses.
     - **`tic_preserving`** -- Linear interpolation, rescaled so the total ion
-      current is unchanged. Correct for **profile** data on a target axis
-      whose bin widths scale the same way the source points are spaced.
+      current is unchanged. Bins wide enough to skip source samples are
+      rebinned instead, so a coarse axis keeps narrow peaks. Correct for
+      **profile** data on a target axis whose bin widths scale the same way
+      the source points are spaced.
     - **`auto`** -- Picks `tic_preserving` only where the source grid's law
       is known and the target axis follows it: Bruker rapifleX and other
       Bruker MALDI-TOF data, but not timsTOF (uniform in m/z, onto

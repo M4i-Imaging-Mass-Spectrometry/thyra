@@ -21,8 +21,8 @@ The public names below resolve on first attribute access (:pep:`562`), so
 still cost what they always did -- paid by the caller who asks for them.
 
 ``__version__`` stays an ordinary module attribute rather than joining
-them. It is what ``python-semantic-release`` rewrites at release
-(``version_variables`` in ``pyproject.toml``), and
+them. It is what release-please rewrites in the release pull request
+(the ``python`` release type in ``release-please-config.json``), and
 ``thyra.metadata.schema.builder`` reads it through ``from thyra import
 __version__`` while building a document -- which is only affordable
 because reaching this module is now free.
