@@ -3992,3 +3992,45 @@ and the Thyra version in the processing step say which operator ran.
 - The gap cut uses a fixed factor of two. A source whose spacing changes by
   more than that between neighbouring samples without a gap would have its
   cells trimmed.
+
+## D51. A mass axis plan moves an imzML header range out by the precision its text states
+
+**Status:** Implemented (2026-10-14).
+
+**Decision.** When `plan_mass_axis` takes a range from an imzML source, it
+moves each header bound out by one unit of the last digit its text states:
+`100.123457` by 1e-6, `1000` by 1, `1.2E3` by 100. When two texts give the
+same extreme, the coarser step is used. A low bound that would reach 0 or
+below is halved instead. This supersedes D43's range rule for imzML sources
+only; the intersection, the forced bounds and every other format are as D43
+describes. A bound the caller forces is used exactly as given. The plan's
+`origins` for a derived bound say that an imzML range is its header text
+moved out.
+
+**Why.** An imzML header states the lowest and highest observed m/z
+(MS:1000528 and MS:1000527) as rounded text. The rounded low bound can sit
+above the source's first sample, and the rounded high bound below its last.
+A conversion keeps the m/z inside its declared bounds, inclusive, so a plan
+built from the header as it stands dropped those samples in every spectrum
+and reported nothing. Measured: on `imzml_continuous_profile_a` a one-source
+plan lost one sample per spectrum (620 of 3.4e7 counts); with the step, the
+planned and unplanned stores both hold 34,446,401.7. A synthetic file lost
+15%. The step is read from the text, not the parsed number: `1000` and
+`1000.000000` parse to the same float, but only the first can hide a sample
+at 1000.4. A fixed relative margin (1 ppm was tried first) covers six-decimal
+headers and misses coarser ones. The same file converted without a plan reads
+the exact extremes of the decoded data and loses nothing.
+
+**What changes in a store.** A planned conversion of imzML sources lays an
+axis up to one stated digit wider at a header-derived end and keeps its edge
+samples; the extra bins are zero in every store. Stores converted without a
+plan do not change. Nothing released changes: plans are new since 4.4.0.
+
+**Known limits.**
+
+- The step bounds rounding and truncation of the stated text. A header whose
+  value is wrong by more than that still cuts samples; the plan cannot tell
+  without decoding spectra.
+- Only imzML sources are moved. Every other format's plan range comes from
+  the same values its conversion uses, so a plan cuts nothing the conversion
+  keeps.

@@ -698,9 +698,19 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             ConversionRefused: When the projection exceeds the fraction of
                 free memory a conversion may take.
         """
-        from .csc_assembly import mass_axis_refusal
+        from ...resampling.memory_guard import mass_axis_refusal
 
-        refusal = mass_axis_refusal(int(n_bins))
+        config = self._resampling_config
+        if config is not None and config.mass_axis_sha256 is not None:
+            refusal = mass_axis_refusal(
+                int(n_bins),
+                levers=(
+                    "plan a coarser axis (a wider width_at_mz or fewer "
+                    "bins_per_fwhm) or a narrower range"
+                ),
+            )
+        else:
+            refusal = mass_axis_refusal(int(n_bins))
         if refusal is not None:
             raise ConversionRefused(refusal)
 

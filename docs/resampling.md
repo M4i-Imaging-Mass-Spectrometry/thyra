@@ -728,6 +728,7 @@ plan fixes the axis, so the other axis options cannot be combined with it.
 The plan takes the range all sources share and, on most axes, the widest bin
 width any source declares. Each source keeps its own resampling method. A
 conversion refuses to run when the axis it builds is not the planned one.
+An imzML range is moved out by the last digit its header states, because the header rounds it.
 Pass `axis_type`, `min_mz`, `max_mz` or `width_at_mz` to set a value yourself.
 
 ---

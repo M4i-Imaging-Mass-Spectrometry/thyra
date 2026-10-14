@@ -87,7 +87,65 @@ def test_both_sources_get_the_planned_axis(tmp_path, sources, as_dict):
         recorded = _recorded(store)
         assert recorded["sha256"] == plan.sha256
         assert int(recorded["n_bins"]) == plan.n_bins
-    assert (plan.min_mz, plan.max_mz) == (300.0, 600.0)
+    # The intersection, each imzML header bound moved out by one unit of its
+    # last stated decimal: pyimzml writes "300.0" and "600.0" (D51).
+    assert (plan.min_mz, plan.max_mz) == pytest.approx((299.9, 600.1), rel=1e-12)
+
+
+def _stored_total(store: Path) -> float:
+    import zarr
+
+    root = zarr.open_group(str(prepare_zarr_read_path(store)), mode="r")
+    (table,) = list(root["tables"])
+    return float(np.asarray(root["tables"][table]["X"]["data"]).sum(dtype=np.float64))
+
+
+def test_a_one_source_plan_keeps_the_edge_samples_a_rounded_header_would_cut(
+    tmp_path,
+):
+    """Issue #473: the header states the observed m/z to six decimals.
+
+    The rounded low bound sat above the first sample and the rounded high bound
+    below the last, so the planned conversion dropped both in every spectrum
+    and stored less than the same file converted without a plan.
+    """
+    import re
+
+    source = tmp_path / "src.imzML"
+    mz = np.linspace(100.12345678, 999.87654321, 2000)
+    with ImzMLWriter(
+        str(source), mode="continuous", mz_dtype=np.float64, intensity_dtype=np.float32
+    ) as writer:
+        for y in range(1, 4):
+            for x in range(1, 4):
+                writer.addSpectrum(mz, np.full(mz.size, 5.0, np.float32), (x, y, 1))
+    text = source.read_text(encoding="utf-8")
+    text = re.sub(
+        r'(accession="MS:100052[78]"[^>]*?value=")([^"]*)"',
+        lambda m: f'{m.group(1)}{float(m.group(2)):.6f}"',
+        text,
+    )
+    source.write_text(text, encoding="utf-8")
+
+    plan = plan_mass_axis([source])
+    assert plan.min_mz < mz[0] and plan.max_mz > mz[-1]
+    totals = {}
+    for label, config in (("plain", None), ("planned", plan)):
+        out = tmp_path / f"{label}.zarr"
+        assert (
+            convert_msi(
+                str(source),
+                str(out),
+                dataset_id="ds",
+                pixel_size_um=10.0,
+                resampling_config=config,
+            )
+            is True
+        )
+        totals[label] = _stored_total(out)
+
+    assert totals["plain"] == 9 * 2000 * 5
+    assert totals["planned"] == totals["plain"]
 
 
 def test_the_plan_leaves_the_resampling_step_as_without_it(tmp_path, sources):

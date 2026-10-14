@@ -760,11 +760,20 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         usable = peaks_in - self._unusable_intensities
         if self._resampler is not None and self._resampler.out_of_range_peaks >= usable:
             lo_mz, hi_mz = self._resampler.kept_range
+            config = self._resampling_config
+            if config is not None and config.mass_axis_sha256 is not None:
+                fix = (
+                    "plan again with this source among the sources, or widen "
+                    "the plan's range, to keep them"
+                )
+            else:
+                fix = (
+                    "widen the resampling range (--resample-min-mz / "
+                    "--resample-max-mz) to keep them"
+                )
             return (
                 "every peak fell outside the target mass range "
-                f"[{lo_mz:.4f}, {hi_mz:.4f}] m/z -- widen the "
-                "resampling range (--resample-min-mz / --resample-max-mz) to "
-                "keep them"
+                f"[{lo_mz:.4f}, {hi_mz:.4f}] m/z -- {fix}"
             )
         return "every intensity in the source is zero"
 
