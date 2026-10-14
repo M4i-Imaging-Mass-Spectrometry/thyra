@@ -224,18 +224,25 @@ def _bin_indices(
     axis: NDArray[np.float64],
     mzs: NDArray[np.float64],
     linearisation: Optional[AxisLinearisation] = None,
+    kept_range: Optional[Tuple[float, float]] = None,
 ) -> Tuple[NDArray[np.int64], NDArray[np.bool_]]:
     """Nearest mass-axis column of each fragment m/z, and which were kept.
 
-    The same rule the summed table's resampling follows: "in range" is the
-    strict axis span, and a peak outside it is dropped rather than folded
-    onto an edge bin.
+    The same rule the summed table's resampling follows: "in range" is
+    ``kept_range``, the summed table's own
+    (:func:`~thyra.resampling.binning.kept_mz_range`; ``None`` is the axis
+    span). A peak inside it goes to its nearest bin, the edge bin when it
+    lies past an end centre; a peak outside it is dropped rather than
+    folded onto an edge bin.
 
     ``linearisation`` is ``axis``'s own, when it has one, so the column is
     computed rather than searched for (design decision D21, issue #348).
     The column is the same either way.
     """
-    in_range = (mzs >= axis[0]) & (mzs <= axis[-1])
+    lower, upper = (
+        (float(axis[0]), float(axis[-1])) if kept_range is None else kept_range
+    )
+    in_range = (mzs >= lower) & (mzs <= upper)
     kept = mzs if in_range.all() else mzs[in_range]
     if kept.size == 0:
         return np.array([], dtype=np.int64), in_range
@@ -256,10 +263,12 @@ class _Demultiplexer:
         axis: NDArray[np.float64],
         window_rank: NDArray[np.int64],
         linearisation: Optional[AxisLinearisation] = None,
+        kept_range: Optional[Tuple[float, float]] = None,
     ) -> None:
         self.axis = axis
         self.window_rank = window_rank
         self.linearisation = linearisation
+        self.kept_range = kept_range
         self.n_dropped = 0
 
     def entries(
@@ -268,7 +277,9 @@ class _Demultiplexer:
         mzs: NDArray[np.float64],
         intensities: NDArray[np.float64],
     ) -> Tuple[NDArray[np.int64], NDArray[np.float64]]:
-        columns, in_range = _bin_indices(self.axis, mzs, self.linearisation)
+        columns, in_range = _bin_indices(
+            self.axis, mzs, self.linearisation, self.kept_range
+        )
         if columns.size == 0:
             self.n_dropped += int(mzs.size)
             return columns, np.zeros(0, dtype=np.float64)
@@ -331,10 +342,11 @@ class MsmsAccumulator:
         window_rank: NDArray[np.int64],
         n_rows: int,
         linearisation: Optional[AxisLinearisation] = None,
+        kept_range: Optional[Tuple[float, float]] = None,
     ) -> None:
         """Allocate the count over ``windows x axis``; refuses a span too wide."""
         n_windows = int(window_rank.size)
-        self.demux = _Demultiplexer(axis, window_rank, linearisation)
+        self.demux = _Demultiplexer(axis, window_rank, linearisation, kept_range)
         self.assembly = CscAssembly(n_windows * int(axis.size), n_rows)
         self.n_skipped = 0
         self.n_rows_seen = 0
@@ -369,8 +381,8 @@ class MsmsAccumulator:
             )
         if self.demux.n_dropped:
             logger.warning(
-                "%d fragment peaks fell outside the mass axis and were dropped "
-                "from the demultiplexed table",
+                "%d fragment peaks fell outside the kept mass range and were "
+                "dropped from the demultiplexed table",
                 self.demux.n_dropped,
             )
         if self.n_rows_seen == 0:
@@ -414,11 +426,12 @@ def _demultiplex(
     scratch: Path,
     linearisation: Optional[AxisLinearisation] = None,
     merge_duplicates: bool = False,
+    kept_range: Optional[Tuple[float, float]] = None,
 ) -> Optional[Tuple[sparse.csc_matrix, NDArray[np.int64], CscAssembly]]:
     """Two passes over the precursor spectra; ``(matrix, keys, assembly)`` or ``None``."""
     from tqdm import tqdm
 
-    accumulator = MsmsAccumulator(axis, window_rank, n_obs, linearisation)
+    accumulator = MsmsAccumulator(axis, window_rank, n_obs, linearisation, kept_range)
     accumulator.assembly.merge_duplicates = merge_duplicates
     with tqdm(desc="MS/MS table: counting", unit="spectrum") as pbar:
         for coords, window_index, mzs, intensities in reader.iter_precursor_spectra():
@@ -439,6 +452,7 @@ def new_msms_accumulator(
     common_mass_axis: NDArray[np.float64],
     n_rows: int,
     linearisation: Optional[AxisLinearisation] = None,
+    kept_range: Optional[Tuple[float, float]] = None,
 ) -> Optional[MsmsAccumulator]:
     """An accumulator for ``reader``'s schedule, or ``None`` when it must not be split.
 
@@ -453,7 +467,7 @@ def new_msms_accumulator(
     if axis.size == 0:
         return None
     _mz, _mobility, window_rank = _precursor_axis(schedule, _window_mobility(reader))
-    return MsmsAccumulator(axis, window_rank, n_rows, linearisation)
+    return MsmsAccumulator(axis, window_rank, n_rows, linearisation, kept_range)
 
 
 def build_msms_table(
@@ -469,6 +483,7 @@ def build_msms_table(
     accumulator: Optional[MsmsAccumulator] = None,
     linearisation: Optional[AxisLinearisation] = None,
     merge_duplicates: bool = False,
+    kept_range: Optional[Tuple[float, float]] = None,
 ) -> Optional[Any]:
     """Build the demultiplexed MS/MS table for one MSI table, or ``None``.
 
@@ -498,6 +513,10 @@ def build_msms_table(
             one spectrum, so one ``(row, precursor, fragment)`` entry may
             arrive twice; they are summed into one, as the summed table
             sums the position's spectra into its row (issue #241).
+        kept_range: The m/z range a fragment peak must lie in to be kept,
+            the summed table's own (see :func:`_bin_indices`). ``None`` is
+            the axis span. Ignored when ``accumulator`` is given, as
+            ``linearisation`` is.
 
     Returns:
         A ``TableModel``-parsed AnnData, or ``None`` when the acquisition
@@ -541,6 +560,7 @@ def build_msms_table(
                 workdir,
                 linearisation,
                 merge_duplicates=merge_duplicates,
+                kept_range=kept_range,
             )
         finally:
             if built is None and owns_scratch:

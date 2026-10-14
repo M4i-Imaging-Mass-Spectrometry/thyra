@@ -333,6 +333,99 @@ class TestIndexedMapping:
         assert a.n_out_of_range == b.n_out_of_range == 1
 
 
+class TestKeptRange:
+    """The summed table's kept range, not the axis span, decides what is dropped.
+
+    On a resampled axis the first and last centre sit up to half a bin
+    inside the declared range, and the summed table keeps a point in that
+    margin in the edge bin. The mapping has to keep it too, or a marginal
+    over mobility falls short of the column it mirrors.
+    """
+
+    AXIS = np.array([100.0, 110.0, 120.0, 130.0])
+    #: Half a bin (5) past each end centre.
+    KEPT = (95.0, 135.0)
+    #: Below the margin, in it, mid-axis, in it, above it.
+    MZS = np.array([94.9, 96.0, 120.0, 134.0, 135.1])
+    MOBILITY = np.array([1.5, 1.4, 1.3, 1.2, 1.1])
+    INTENSITIES = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+
+    def _flat(self, kept_range):
+        return map_points_to_axis(
+            self.AXIS, self.MZS, self.MOBILITY, self.INTENSITIES, None, kept_range
+        )
+
+    def _indexed(self, kept_range):
+        unique, inverse = np.unique(self.MZS, return_inverse=True)
+        return map_indexed_points_to_axis(
+            self.AXIS,
+            unique,
+            np.asarray(inverse).ravel(),
+            self.MOBILITY,
+            self.INTENSITIES,
+            None,
+            kept_range,
+        )
+
+    def test_a_point_in_the_margin_goes_to_the_edge_bin(self):
+        bins, mobility, intensities, n_dropped = self._flat(self.KEPT)
+        np.testing.assert_array_equal(bins, [0, 2, 3])
+        np.testing.assert_array_equal(mobility, [1.4, 1.3, 1.2])
+        np.testing.assert_array_equal(intensities, [2.0, 3.0, 4.0])
+        assert n_dropped == 2
+
+    def test_a_point_beyond_the_kept_bound_is_dropped_and_counted(self):
+        _bins, _mobility, intensities, n_dropped = self._flat(self.KEPT)
+        assert 1.0 not in intensities and 5.0 not in intensities
+        assert n_dropped == 2
+
+    def test_the_default_is_the_strict_axis_span(self):
+        # The old behaviour, and the answer the margin points would get
+        # without the kept range: all four off-axis points are dropped.
+        bins, _mobility, intensities, n_dropped = self._flat(None)
+        np.testing.assert_array_equal(bins, [2])
+        np.testing.assert_array_equal(intensities, [3.0])
+        assert n_dropped == 4
+        assert self._flat(None)[3] == self._flat((100.0, 130.0))[3]
+
+    def test_the_indexed_mapping_agrees_with_the_flat_one(self):
+        for kept_range in (self.KEPT, None):
+            flat, indexed = self._flat(kept_range), self._indexed(kept_range)
+            for got, want in zip(indexed[:3], flat[:3]):
+                np.testing.assert_array_equal(got, want)
+            assert indexed[3] == flat[3]
+            assert indexed[0].dtype == np.int64
+
+    def test_the_indexed_margin_goes_to_the_edge_bin(self):
+        bins, _mobility, _intensities, n_dropped = self._indexed(self.KEPT)
+        np.testing.assert_array_equal(bins, [0, 2, 3])
+        assert n_dropped == 2
+
+    def test_the_margin_is_mapped_through_the_closed_form_too(self):
+        """A linearisation maps the margin point to the edge bin as the search does."""
+        from thyra.resampling.types import AxisLinearisation
+
+        # The law is exactly the axis: m/z is 100 + 10 * index.
+        linearisation = AxisLinearisation(forward=lambda mz: mz, u0=100.0, du=10.0)
+        with_law = map_points_to_axis(
+            self.AXIS,
+            self.MZS,
+            self.MOBILITY,
+            self.INTENSITIES,
+            linearisation,
+            self.KEPT,
+        )
+        np.testing.assert_array_equal(with_law[0], self._flat(self.KEPT)[0])
+
+    def test_the_heatmap_keeps_what_the_mapping_keeps(self):
+        heat = MobilityHeatmap(self.AXIS, (1.1, 1.5))
+        heat.add_mapped(None, *self._flat(self.KEPT))
+        assert heat.n_out_of_range == 2
+        assert heat.n_points == 3
+        counts = heat.finalize()["counts"]
+        assert counts[0].sum() == 2.0 and counts[3].sum() == 4.0
+
+
 # ----------------------------------------------------------------------
 # A stub reader: four pixels, a shared four-entry mass axis, three
 # "scans" of 1/K0, and a known point cloud per pixel. iter_spectra yields
@@ -690,6 +783,49 @@ class TestPerPlaneHeatmap:
         np.testing.assert_allclose(blocks[1], 3.0 * blocks[0], rtol=1e-6)
         # One raw pass serves every plane.
         assert reader.mobility_passes == 1
+
+    def test_a_resampled_plane_keeps_the_points_in_the_edge_margin(self, tmp_path):
+        """The stub's m/z 100 and 130 are the declared bounds of a laid axis.
+
+        A linear-TOF axis puts its first and last centre inside 100-130, so
+        those points sit in the half-bin margin the summed table keeps.
+        Each plane's heatmap and grid table keep them as well, and so
+        their marginals still reproduce that plane's summed table.
+        """
+        resampling = {
+            "method": "nearest_neighbor",
+            "axis_type": "linear_tof",
+            "target_bins": 30,
+            "min_mz": 100.0,
+            "max_mz": 130.0,
+        }
+        out = _convert(
+            TwoPlaneMobilityReader(),
+            tmp_path / "stub.zarr",
+            resampling_config=resampling,
+            mobility_grid=True,
+        )
+        tables = _read(out).tables
+
+        for z, scale in enumerate(PLANE_SCALE):
+            summed = tables[f"stub_z{z}"]
+            axis = summed.var["mz"].to_numpy()
+            # The premise: both bounds are past the end centres.
+            assert axis[0] > 100.0 and axis[-1] < 130.0
+            every_point = sum(_cloud(p)[2].sum() for p in range(4)) * scale
+            assert float(summed.X.sum()) == pytest.approx(every_point)
+
+            heatmap = summed.uns["mobility_heatmap"]
+            counts = np.asarray(heatmap["counts"])
+            assert counts.sum() * len(PIXELS) == pytest.approx(every_point, rel=1e-5)
+            assert float(heatmap["current_ratio"]) == pytest.approx(1.0, abs=1e-6)
+
+            grid = tables[f"stub_z{z}_mobility"]
+            assert float(grid.X.sum()) == pytest.approx(every_point)
+            marginal = grid.uns["mobility_marginal"]
+            assert float(marginal["current_ratio"]) == pytest.approx(1.0)
+            assert float(marginal["current_ratio_pixel_min"]) == pytest.approx(1.0)
+            assert float(marginal["current_ratio_pixel_max"]) == pytest.approx(1.0)
 
     def test_a_volume_keeps_one_heatmap_over_every_plane(self, tmp_path):
         out = _convert(TwoPlaneMobilityReader(), tmp_path / "stub.zarr", handle_3d=True)

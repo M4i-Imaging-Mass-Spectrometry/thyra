@@ -168,9 +168,10 @@ def nearest_axis_index(
 
     The summed table's own rule -- nearest axis entry, ties to the right --
     so ``mz_index`` names the column that table put the same m/z in. A
-    value outside the axis span has no such column (the summed table
-    dropped it); it takes the nearest edge, which is the only honest
-    integer there is.
+    value past an end centre takes the edge column: within the kept range
+    that is where the summed table put it, and beyond it (the summed
+    table dropped it) the nearest edge is the only honest integer there
+    is.
 
     ``linearisation`` is ``axis``'s own, when it has one, so the column is
     computed rather than searched for (issue #348). The clip above it is
@@ -797,7 +798,7 @@ def _decide_discovery(discovery: GridDiscovery) -> bool:
         )
     if discovery.n_dropped:
         logger.warning(
-            "%d mobility points fell outside the mass axis and were "
+            "%d mobility points fell outside the kept mass range and were "
             "dropped from the mobility-resolved table",
             discovery.n_dropped,
         )
@@ -822,6 +823,7 @@ def _build_from_grid(
     scratch: Path,
     linearisation: Optional[AxisLinearisation] = None,
     merge_duplicates: bool = False,
+    kept_range: Optional[Tuple[float, float]] = None,
 ) -> Optional[Tuple[sparse.csc_matrix, pd.DataFrame, CscAssembly]]:
     """Bin every pixel's point cloud onto the grid; ``(matrix, var, assembly)`` or ``None``.
 
@@ -830,6 +832,7 @@ def _build_from_grid(
     the source and scatters each pixel straight into the CSC arrays --
     unless the converter's fused passes have scattered already
     (``discovery.scattered``), in which case the matrix is taken as it is.
+    Both passes keep the points the summed table keeps (``kept_range``).
     """
     axis = np.asarray(common_mass_axis, dtype=np.float64)
     if discovery is None:
@@ -840,6 +843,7 @@ def _build_from_grid(
             discovery,
             description="Mobility grid: counting",
             linearisation=linearisation,
+            kept_range=kept_range,
         )
         discovery.finish()
     elif discovery.n_features is None:
@@ -856,6 +860,7 @@ def _build_from_grid(
             GridScatter(discovery),
             description="Mobility grid: scattering",
             linearisation=linearisation,
+            kept_range=kept_range,
         )
     assembly.merge_duplicates |= merge_duplicates
     matrix = assembly.matrix()
@@ -892,6 +897,7 @@ def build_mobility_table(
     scratch: Optional[Path] = None,
     linearisation: Optional[AxisLinearisation] = None,
     merge_duplicates: bool = False,
+    kept_range: Optional[Tuple[float, float]] = None,
 ) -> Optional[Any]:
     """Build the mobility-resolved table for one MSI table, or ``None``.
 
@@ -933,6 +939,11 @@ def build_mobility_table(
             one row; this table must too, or it stores the repeated
             ``(row, column)`` entries side by side (issue #241). The
             converter knows from its own count pass and says so.
+        kept_range: The m/z range a point must lie in to be kept on the
+            grid route: the summed table's own, so a point it keeps in an
+            edge bin is kept here too (see :func:`map_points_to_axis`).
+            ``None`` is the axis span. Ignored, as ``linearisation`` is,
+            on the parts of the grid route ``discovery`` already ran.
 
     Returns:
         A ``TableModel``-parsed AnnData, or ``None`` when no table can be
@@ -979,6 +990,7 @@ def build_mobility_table(
                 workdir,
                 linearisation,
                 merge_duplicates=merge_duplicates,
+                kept_range=kept_range,
             )
             grid_uns = grid.to_uns()
     finally:

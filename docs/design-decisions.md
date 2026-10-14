@@ -3724,7 +3724,8 @@ channel.
   axis a point exactly at the data's m/z edge can also lie just outside the
   first or last bin centre; the heatmap and the grid drop it while the
   summed table folds it into the edge bin (#347). `current_ratio` records
-  both.
+  both. D52 lifts the second part: the heatmap and the grid now keep the
+  points the summed table keeps.
 - A multi-plane imzML converted as 2D reads the whole file once per plane
   for the grid's discovery pass.
 - With `--no-resample` the raw union axis times 256 channels can pass the
@@ -4181,3 +4182,48 @@ plan do not change. Nothing released changes: plans are new since 4.4.0.
 - Only imzML sources are moved. Every other format's plan range comes from
   the same values its conversion uses, so a plan cuts nothing the conversion
   keeps.
+
+## D52. The mobility and MS/MS tables keep the m/z range the summed table keeps
+
+**Status:** Implemented (2026-10-14).
+
+**Decision.** The mass-mobility heatmap, the mobility grid table and the
+demultiplexed MS/MS table keep a point when its m/z is inside the range the
+summed table keeps (D13): the declared range on a resampled axis, which
+reaches up to half a bin past the first and last bin centre. A point there
+goes to the edge bin, as it does in the summed table. A point beyond the
+range is still dropped. This extends D13 to every table built from the raw
+points, and lifts the known limit D46 records for its grid and heatmap.
+
+**Why.** These tables map their points onto the common mass axis with the
+summed table's nearest-bin rule, but they tested membership against the
+strict span `[axis[0], axis[-1]]`, the rule D13 retired for the summed
+table. On a resampled axis whose end centres sit inside the data, the
+lowest and highest m/z samples of a file were dropped from them while the
+summed table kept them. Measured on the `mobility_processed.imzML` fixture
+with the command line's default resampling and `--mobility-grid`: the grid
+table held 810 of the summed table's 1000 counts (`current_ratio` 0.81,
+0.6 in the worst pixel), and the heatmap the same 0.81. Both are now 1.0,
+with every pixel at 1.0. The same file under `--no-resample` was already
+1.0.
+
+**What changes in a store.** On a resampled axis that is not `constant`,
+points in the half-bin margin at either end now appear in the edge bins of
+the heatmap `counts`, the grid table's `X` and `var`, and the MS/MS
+table's `X` and `var`. `mobility_heatmap.current_ratio`,
+`mobility_marginal.current_ratio` (with its pixel minimum and maximum) and
+the MS/MS table's `demultiplexed_current` ratios move towards 1. Under `--no-resample` and
+on a `constant` axis the kept range is the axis span, so nothing changes.
+A continuous imzML's shared-axis mobility table drops nothing by m/z and
+does not change. Released stores: the per-pixel imzML grid is new since
+4.4.0 (D46); Bruker TDF heatmaps, grid tables and MS/MS tables change only
+where a point falls in that margin.
+
+**Known limits.**
+
+- The heatmap's stored `mz_edges` are unchanged. On an axis whose bins
+  widen with m/z the declared upper bound sits a fraction of a bin above
+  the last stored edge, so a point there is counted in the last row while
+  lying just outside the edges that row states.
+- Under `tic_preserving` the grid's marginal still differs cell by cell
+  from the summed table, as D46 says; only the points each keeps now agree.

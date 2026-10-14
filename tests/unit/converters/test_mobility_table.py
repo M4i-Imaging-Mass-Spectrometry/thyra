@@ -355,6 +355,41 @@ class TestProcessedExportOnAGrid:
         assert float(block["current_ratio_pixel_min"]) == pytest.approx(1.0)
         assert float(block["current_ratio_pixel_max"]) == pytest.approx(1.0)
 
+    def test_the_marginal_holds_under_the_cli_resampling(self, tmp_path, streaming):
+        """The CLI resamples by default; the file's edge samples stay in.
+
+        The laid axis puts its first and last bin centres inside the
+        file's m/z range, so pixel 0's m/z 100.0 points and pixel 3's
+        m/z 403.0 point sit within half a bin past the outer centres.
+        The summed table keeps them, so the grid and the heatmap must.
+        """
+        cli_default = {
+            "method": "auto",
+            "axis_type": "auto",
+            "reference_mz": 1000.0,
+        }
+        _, sdata = _convert(
+            PROCESSED,
+            tmp_path,
+            streaming=streaming,
+            mobility_grid=True,
+            resampling_config=cli_default,
+        )
+        summed = sdata.tables["mob_z0"]
+        # The premise: the laid axis's end centres sit inside the data.
+        axis = summed.var["mz"].to_numpy()
+        assert axis[0] > 100.0 and axis[-1] < 403.0
+        assert float(summed.X.sum()) == pytest.approx(1000.0)
+        block = sdata.tables["mob_z0_mobility"].uns["mobility_marginal"]
+        assert float(block["current_ratio"]) == pytest.approx(1.0)
+        assert float(block["current_ratio_pixel_min"]) == pytest.approx(1.0)
+        assert float(block["current_ratio_pixel_max"]) == pytest.approx(1.0)
+        grid = sdata.tables["mob_z0_mobility"]
+        for i, (x, y) in enumerate([(0, 0), (1, 0), (0, 1), (1, 1)]):
+            assert _row(grid, x, y).sum() == pytest.approx(100.0 * (i + 1))
+        heatmap = summed.uns["mobility_heatmap"]
+        assert float(heatmap["current_ratio"]) == pytest.approx(1.0)
+
     def test_a_stated_range_overrides_the_values(self, tmp_path, streaming):
         _, sdata = _convert(
             PROCESSED,

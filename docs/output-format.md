@@ -407,6 +407,7 @@ plane's heatmap.
 same 256 channels over the same edges -- literally the same constant and the
 same generator -- so a box drawn on the heatmap maps onto grid channels by
 integer index in both directions.
+The heatmap keeps the m/z points the summed table keeps, edge bins included.
 The m/z binning is the converter's own nearest-bin rule, coarsened, so under a
 lossless summed spectrum (`--tdf-spectrum scan_sum`) the heatmap summed over
 mobility, `counts.sum(axis=1)`, equals `uns["average_spectrum"]` coarsened to
