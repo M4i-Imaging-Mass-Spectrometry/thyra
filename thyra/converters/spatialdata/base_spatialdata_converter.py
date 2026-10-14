@@ -559,7 +559,12 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             # Store essential metadata for use throughout conversion
             self._coordinate_bounds = essential.coordinate_bounds
             self._n_spectra = essential.n_spectra
-            self._source_coordinate_offsets = essential.coordinate_offsets
+            # Read with getattr, as the root attrs always read the offsets:
+            # a reader's metadata need only quack like EssentialMetadata,
+            # and one without these fields reports no origin.
+            self._source_coordinate_offsets = getattr(
+                essential, "coordinate_offsets", None
+            )
             self._source_stage_origin_um = getattr(essential, "stage_origin_um", None)
 
             # Override pixel size only if using default and metadata is available
