@@ -66,6 +66,7 @@ from typing import (
 import numpy as np
 from numpy.typing import NDArray
 
+from ..errors import ConversionRefused
 from ..metadata.types import ComprehensiveMetadata, EssentialMetadata
 
 if TYPE_CHECKING:
@@ -168,7 +169,21 @@ class BaseMSIReader(ABC):
                 to ``None``, no cap, everywhere except imzML, which sets its
                 own documented default. A reader that does not build a raw
                 axis simply never consults it.
+                ``region`` is refused here: only the timsTOF reader can
+                select a region, and it takes the option as a named
+                parameter, so it never arrives in these kwargs.
+
+        Raises:
+            ConversionRefused: When ``region`` is given. Dropping it
+                would convert every region of an input that has several.
         """
+        if kwargs.get("region") is not None:
+            raise ConversionRefused(
+                f"Selecting a region (region={kwargs['region']!r}) is only "
+                f"supported for Bruker timsTOF data. Convert the whole "
+                f"dataset; obs['region_number'] tells its regions apart, and "
+                f"thyra.list_regions() lists them."
+            )
         self.data_path = Path(data_path)
         self._intensity_threshold = intensity_threshold
         self._metadata_extractor: Optional["MetadataExtractor"] = None

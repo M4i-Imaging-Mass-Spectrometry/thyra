@@ -3520,6 +3520,58 @@ exist. The new check refuses a conversion; it writes nothing.
   peaks (#442). D50 fixes the second part.
 - There is no plan for "the axis of an existing store" yet.
 
+## D44. Only a reader that can select a region accepts the region option
+
+**Status:** Implemented (2026-10-13).
+
+**Decision.** `region` selects one region, and only the timsTOF reader can do
+that. Every other reader refuses it, through the API as well as the CLI. The
+refusal lives in `BaseMSIReader`, so a new reader refuses it until it learns
+to honour it. `thyra.list_regions(path)` lists the regions of any input from
+its header: each region's number, `.mis` Area name, spectrum count and box.
+Two readers record more than before:
+
+- Rapiflex builds a region map from the position log. A spot named
+  `R{n}X{x}Y{y}` is region `n`, at its raster cell minus the `.dat` header
+  origin. The name is the n-th `.mis` Area, the pairing D31 already uses. As
+  on timsTOF, one region gives no map.
+- solariX adds each region's `bounds` to its region summary, in the store's
+  pixel grid, as timsTOF and mzPeak give them.
+
+**Why.** solariX, Rapiflex, imzML, PHI and Waters dropped `region` in silence
+through the API, and converted every region of an input the caller asked to
+cut. On mzPeak the CLI logged it as ignored and the reader then refused it.
+One rule gives one message. A caller who wants one store per region needs the
+region list first, and had to open the vendor database to get it.
+`list_regions` always returns at least one entry, so a loop over it works on
+any input; `MsiPreview.regions` stays `None` for one region, which answers a
+different question.
+
+**What changes in a store.**
+
+- A multi-region Rapiflex store: `obs["region_number"]` holds the
+  position-log region instead of 1 everywhere, `uns["regions"]` has one entry
+  per region with `n_spectra`, `bounds` and `name`, and
+  `uns["average_spectrum_per_region"]` appears. A single-region Rapiflex store
+  is unchanged.
+- A solariX store: each entry of `uns["regions"]` and of
+  `format_specific.regions` gains `bounds`.
+- A call that passed `region` to another format now fails instead of writing a
+  store of the whole input.
+
+**Known limits.**
+
+- The Rapiflex keying was checked on one real single-region acquisition, where
+  every position-log spot landed on its offset-table cell. No multi-region
+  Rapiflex acquisition was available. When a spectrum has no position-log spot,
+  or a cell is in two regions, the reader warns and writes no map.
+- solariX regions have no names. The positional Area pairing is not verified
+  on solariX.
+- `n_spectra` counts spectra, not pixels: a position measured twice (D40)
+  counts twice.
+- Region selection for solariX, Rapiflex and mzPeak, which know their regions,
+  is not part of this decision.
+
 ## D45. The metadata block names the sample and the spectrum representation
 
 **Status:** Implemented (2026-10-13).

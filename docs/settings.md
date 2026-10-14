@@ -46,7 +46,8 @@ did find.
     one region, Thyra also crops the slide photo to that region, plus a 10%
     margin.
 
-    For other formats, `--region` is ignored with a warning.
+    Other formats refuse `--region`. From Python, `thyra.list_regions` lists
+    the regions of any input without converting it.
 
 ## Leave out the optical image
 

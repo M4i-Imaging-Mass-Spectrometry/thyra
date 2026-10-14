@@ -610,12 +610,13 @@ def convert_msi(
             ``"auto"`` are accepted at all: a no-op argument still has to
             say when it was misspelled, and ``0`` -- which reads as
             ``False`` but is not it -- used to convert in silence.
-        region: For multi-region datasets (e.g. Bruker timsTOF),
-            select a specific region. Accepts an int (DB
-            RegionNumber) or a str (matched against .mis Area
-            Name, falling back to integer parse). None (default)
-            converts all regions. Passed to the reader as
-            reader_options["region"].
+        region: Select one region of a multi-region Bruker timsTOF
+            ``.d``. Accepts an int (DB RegionNumber) or a str (matched
+            against .mis Area Name, falling back to integer parse).
+            None (default) converts all regions. Every other format
+            refuses it: no other reader can select a region.
+            :func:`thyra.list_regions` lists the regions of any input.
+            Passed to the reader as reader_options["region"].
         sample_id: Your identifier for the sample, written to
             ``msi_metadata.sample.sample_id``. Never read from the
             source, because a vendor sample name can identify a person.
