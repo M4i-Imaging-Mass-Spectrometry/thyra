@@ -242,7 +242,7 @@ class SiblingTables:
                 feature axis needs no grid and ignores this).
             mobility_bins: Channels that grid divides the mobility range
                 into, or ``None`` for the heatmap's own channels: 256, or
-                one per bin on a source with fewer equal-width bins (D52).
+                one per bin on a source with fewer equal-width bins (D53).
             mobility_min: Lower edge of the grid, or ``None`` for the
                 smallest value the source holds.
             mobility_max: Upper edge, or ``None`` for the largest.
@@ -506,7 +506,7 @@ class SiblingTables:
         plan = mobility_grid_plan(self.reader)
         if lower is None and upper is None and self._mobility_bins is None and plan:
             # Nothing overridden: the heatmap's own channels, which on a
-            # short list of drift bins are the bins themselves (D52).
+            # short list of drift bins are the bins themselves (D53).
             plan_lower, plan_upper, n_channels = plan
         else:
             span = measured or (0.0, 0.0)

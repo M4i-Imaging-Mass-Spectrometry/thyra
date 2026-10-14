@@ -500,7 +500,7 @@ def _mobility_range(reader: BaseMSIReader) -> Optional[Tuple[float, float, int]]
     declared range is the fallback for a source with no values to read.
     :func:`default_channel_plan` turns the span into channels -- the
     default grid's own rule, so the two stay index-aligned, including on
-    a source whose axis is a short list of bins (D52).
+    a source whose axis is a short list of bins (D53).
     """
     axis = reader.get_mobility_axis()
     plan = default_channel_plan(

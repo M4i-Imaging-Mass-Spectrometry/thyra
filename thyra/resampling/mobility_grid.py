@@ -231,7 +231,7 @@ def default_channel_plan(
     anchor, the channels are its bins instead: edges half a bin outside the
     first and last value, one channel per bin, so a value lands in the
     channel of its own bin. Spread over the anchor, 200 bins would leave 56
-    channels empty in a regular comb (design decision D52).
+    channels empty in a regular comb (design decision D53).
 
     ``None`` when there is no span to bin over.
     """

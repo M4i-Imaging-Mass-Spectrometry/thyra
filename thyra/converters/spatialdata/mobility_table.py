@@ -1103,7 +1103,7 @@ def mobility_grid_plan(reader: BaseMSIReader) -> Optional[Tuple[float, float, in
     The mass-mobility heatmap's own channels, from the same
     :func:`default_channel_plan`, so a heatmap box indexes the default grid
     whether the axis is a TIMS ramp (256 channels over the values) or a
-    short list of drift bins (one channel per bin, D52). ``None`` when the
+    short list of drift bins (one channel per bin, D53). ``None`` when the
     source has no values to read.
     """
     axis = reader.get_mobility_axis()

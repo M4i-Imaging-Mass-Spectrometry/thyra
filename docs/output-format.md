@@ -384,7 +384,7 @@ Windows), numpy arrays rather than lists:
 | `acq_range` | `float64[2]`, `[lower, upper]`: the acquired range as declared, else the span of `values` |
 | `calibration` | `{model_type, coefficients}`: the vendor `TimsCalibration` row, provenance only |
 | `source` | `"bruker_tdf"`, `"imzml"` or `"waters_raw"` |
-| `bin_width` | `float`, only where the source defines its own equal-width bins (Waters drift bins): the width of one, in the axis unit. Its presence is what gives the heatmap one channel per bin (D52) |
+| `bin_width` | `float`, only where the source defines its own equal-width bins (Waters drift bins): the width of one, in the axis unit. Its presence is what gives the heatmap one channel per bin (D53) |
 | `resolved_table` | element key of the mobility-resolved sibling table, when one was written |
 
 **`uns["mobility_heatmap"]`** is the table's mean mass-mobility frame: the
@@ -400,7 +400,7 @@ plane's heatmap.
 | key | value |
 |---|---|
 | `mz_edges` | `float64[m + 1]`: bin edges on the common m/z axis, which is coarsened by an integer factor to about 4,000 bins (`m` is the axis length itself when it is shorter) |
-| `mobility_edges` | `float64[k + 1]`, **`k = 256`**: equal-width bins in the axis unit, ascending, spanning the smallest to the largest mobility value the source holds (the axis `values` when shared; every pixel's own values on a processed imzML, read once for this). A source whose axis is fewer than 256 equal-width bins of its own (Waters drift bins, `uns["mobility_axis"]["bin_width"]` set) gets one channel per bin instead, edges half a bin outside the first and last value (D52) |
+| `mobility_edges` | `float64[k + 1]`, **`k = 256`**: equal-width bins in the axis unit, ascending, spanning the smallest to the largest mobility value the source holds (the axis `values` when shared; every pixel's own values on a processed imzML, read once for this). A source whose axis is fewer than 256 equal-width bins of its own (Waters drift bins, `uns["mobility_axis"]["bin_width"]` set) gets one channel per bin instead, edges half a bin outside the first and last value (D53) |
 | `counts` | `float32[m, k]`: mean intensity per bin over pixel positions, the rows `uns["average_spectrum"]` divides by |
 | `current_ratio` | `float`: the heatmap's ion current over `uns["average_spectrum"]`'s -- 1.0 under `scan_sum`; above 1 under `vendor_centroid` (about 1.01 to 1.23), whose picked peaks keep only part of the raw current the heatmap holds |
 
@@ -523,7 +523,7 @@ to tell them apart to read either. What says which one filled it is
 |---|---|
 | `law` | how the channel edges are spaced; `"linear"` (equal width in the axis unit) is the only law today |
 | `lower`, `upper` | the range the channels span, in the axis unit |
-| `n_channels` | how many channels: by default the heatmap's own, **256**, or one per bin on a source with fewer equal-width bins (D52) |
+| `n_channels` | how many channels: by default the heatmap's own, **256**, or one per bin on a source with fewer equal-width bins (D53) |
 | `channel_width` | `(upper - lower) / n_channels`, recorded so a reader can see it without arithmetic |
 | `edges` | `float64[n_channels + 1]`, the channel edges themselves |
 

@@ -1209,7 +1209,7 @@ class TestWatersReaderDriftTime:
         assert axis.source == "waters_raw"
         np.testing.assert_array_equal(axis.values, DRIFT_MS)
         # The bins are declared as bins, so the heatmap gets one channel
-        # per bin (D52).
+        # per bin (D53).
         assert axis.bin_width == pytest.approx(0.05425)
         assert axis.to_uns()["bin_width"] == pytest.approx(0.05425)
         assert reader.has_shared_mobility_axis is False

@@ -168,7 +168,7 @@ class TestChannelWidthBand:
 
 
 class TestDefaultChannelPlan:
-    """D52: the channels the heatmap and a default grid share."""
+    """D53: the channels the heatmap and a default grid share."""
 
     def test_a_continuum_gets_the_anchor_over_its_values(self):
         from thyra.resampling.mobility_grid import default_channel_plan
@@ -779,7 +779,7 @@ class TestGridTable:
             assert [i for i in issues if i.severity == "error"] == []
 
     def test_drift_bins_are_the_default_channels(self, tmp_path):
-        # D52: a source whose axis is nine declared bins gets nine
+        # D53: a source whose axis is nine declared bins gets nine
         # channels, on the heatmap and the grid alike.
         sdata = _read(
             _convert(_DriftBinGridReader(), tmp_path / "s.zarr", mobility_grid=True)

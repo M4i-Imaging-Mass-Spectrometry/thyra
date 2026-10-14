@@ -4132,7 +4132,7 @@ plan do not change. Nothing released changes: plans are new since 4.4.0.
 
 ---
 
-## D52. Waters drift time is read as a mobility axis, and a short list of bins is its own channel set
+## D53. Waters drift time is read as a mobility axis, and a short list of bins is its own channel set
 
 **Status:** Implemented (2026-10-14).
 
