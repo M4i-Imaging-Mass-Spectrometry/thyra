@@ -1004,7 +1004,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             validated[name] = values
         return validated
 
-    def _create_pixel_shapes(self, adata: AnnData) -> "ShapesModel":
+    def _create_pixel_shapes(self, adata: AnnData) -> gpd.GeoDataFrame:
         """Create geometric shapes for pixels with proper transformations.
 
         When optical alignment is available (FlexImaging with Area definitions),
@@ -1063,7 +1063,8 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             adata: AnnData object containing coordinates
 
         Returns:
-            SpatialData shapes model
+            The validated shapes element (a GeoDataFrame from
+            ``ShapesModel.parse``)
         """
         geometries = []
 
@@ -1087,29 +1088,26 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         # while this took the alignment branch, `transform_point` returned
         # None for every position, and the shapes element came out with
         # zero polygons.
-        use_msi_alignment = (
-            self.optical.msi_in_pixel_space and self.optical.alignment is not None
-        )
-
-        if use_msi_alignment:
+        alignment = self.optical.alignment
+        if self.optical.msi_in_pixel_space and alignment is not None:
             # Use optical alignment - transform raster coords to image pixels
             # Only create shapes for positions that have actual spectra (in pos_to_region)
-            raster_x: NDArray[np.int_] = adata.obs["x"].values
-            raster_y: NDArray[np.int_] = adata.obs["y"].values
+            raster_x: NDArray[np.int_] = adata.obs["x"].to_numpy()
+            raster_y: NDArray[np.int_] = adata.obs["y"].to_numpy()
 
             # Default half-pixel size (fallback if region lookup fails)
             default_half_pixel = (10.0, 10.0)
-            if self.optical.alignment.region_mappings:
+            if alignment.region_mappings:
                 # Use first region as default
-                rm = self.optical.alignment.region_mappings[0]
+                rm = alignment.region_mappings[0]
                 default_half_pixel = rm.get_half_pixel_size()
 
             # Under the teaching-point lattice (D31) a pixel's polygon is the
             # exact cell the TIC image draws, through the same matrix, so the
             # two cannot disagree; it is a parallelogram when the photo is
             # rotated against the stage.
-            cell_corners = getattr(self.optical.alignment, "cell_corners", None)
-            lattice = getattr(self.optical.alignment, "lattice", None)
+            cell_corners = getattr(alignment, "cell_corners", None)
+            lattice = getattr(alignment, "lattice", None)
 
             valid_indices = []
             for i in range(len(adata)):
@@ -1121,12 +1119,12 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                         valid_indices.append(i)
                     continue
 
-                img_coords = self.optical.alignment.transform_point(rx, ry)
+                img_coords = alignment.transform_point(rx, ry)
 
                 if img_coords is not None:
                     ix, iy = img_coords
                     # Get region-specific half-pixel size (may be non-square)
-                    half_pixel = self.optical.alignment.get_half_pixel_size(rx, ry)
+                    half_pixel = alignment.get_half_pixel_size(rx, ry)
                     if half_pixel is None:
                         half_pixel = default_half_pixel
 
@@ -1156,8 +1154,8 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             # Standard physical coordinates (micrometers)
             from shapely import box as shapely_box_vectorized
 
-            x_coords: NDArray[np.float64] = adata.obs["spatial_x"].values
-            y_coords: NDArray[np.float64] = adata.obs["spatial_y"].values
+            x_coords: NDArray[np.float64] = adata.obs["spatial_x"].to_numpy()
+            y_coords: NDArray[np.float64] = adata.obs["spatial_y"].to_numpy()
             half_x_um = self.pixel_size_um / 2
             half_y_um = self.pixel_size_y_um / 2
 

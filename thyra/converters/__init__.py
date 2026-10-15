@@ -15,7 +15,7 @@ before the subpackage import rather than after.
 """
 
 try:
-    import dask
+    import dask.config
 
     # Configure Dask to use new query planning (silences legacy DataFrame
     # warning)
