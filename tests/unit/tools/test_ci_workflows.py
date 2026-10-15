@@ -171,12 +171,37 @@ def test_the_six_tools_and_the_path_guards_are_all_hooks() -> None:
         "isort",
         "flake8",
         "mypy",
+        "pyright",
         "bandit",
         "pydocstyle",
         "no-lab-share-paths",
         "no-user-home-paths",
     }
     assert expected <= declared_ids, f"missing hooks: {sorted(expected - declared_ids)}"
+
+
+def test_the_pyright_hook_checks_what_the_config_includes() -> None:
+    """pyright must run without file names, on what [tool.pyright] includes.
+
+    Given file names, pyright checks exactly those and ignores `include`, so
+    `--all-files` would hand it tests and scripts the gate does not cover.
+    Setting args in the hook would let it drift from a bare `pyright` run.
+    """
+    (hook,) = [hook for hook in _hooks_with_ids() if hook["id"] == "pyright"]
+    assert hook.get("pass_filenames") is False
+    assert not hook.get("args")
+
+
+def test_pyright_analyses_as_windows_whatever_the_host() -> None:
+    """The pyright platform pin, the twin of mypy's `platform = "win32"`.
+
+    Without it the verdict depends on the runner: on Linux and macOS pyright
+    reports `winreg` and `ctypes.windll` members that exist only on Windows.
+    """
+    pyproject = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text("utf-8"))
+    settings = pyproject["tool"]["pyright"]
+    assert settings["pythonPlatform"] == "Windows"
+    assert settings["include"] == ["thyra"]
 
 
 def test_the_black_hook_runs_the_black_the_lockfile_resolves() -> None:

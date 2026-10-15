@@ -1578,6 +1578,8 @@ actually blocks a release, the answer is to split `lint.yml` out with the same
 `on:` block. It is **not** to weaken `release.yml`'s gate: that gate is the only
 thing standing between a red commit and PyPI, and it fails closed on purpose.
 
+**Later.** D54 adds pyright to the same job, next to mypy.
+
 ---
 
 ## D20. The PHI target axis follows measured peak width, fitted at its narrow edge
@@ -4350,3 +4352,84 @@ continuum, so only the Waters reader sets `bin_width`.
   (`getDriftTime_CCS` in `MassLynxRaw`), which is not bound.
 - No public DESI or cyclic IMS image with its `.raw` folder was found, so
   neither is tested.
+
+---
+
+## D54. pyright checks types in the lint lane, next to mypy
+
+**Status:** Implemented (2026-10-15), issue #434.
+
+**Decision.** The `lint` job runs pyright 1.1.414 in standard mode as a
+pre-commit hook, beside mypy. Its settings are `[tool.pyright]` in
+`pyproject.toml`: `thyra/` minus the generated ontology tables, Python 3.12,
+platform Windows, and the project's `.venv` for third-party types. A pyright
+error fails `lint`, so by D19 it can veto a release. To give pyright those
+types, the job now installs the project's runtime dependencies (not the
+project itself) as well as the `dev` group.
+
+**Why add it.** As configured here, mypy sees less than it appears to. The
+hook runs it with `--ignore-missing-imports` and `--no-strict-optional`, and
+`[tool.mypy]` makes pyimzml, spatialdata, anndata, zarr, dask and pandas
+`Any`. On `08f0ea4`, with the mypy hook green, pyright in standard mode
+reported 276 errors. A triage found no reachable bug among them, but some
+were real defects:
+
+- `@register_reader` returned an unannotated class, so every reader class
+  read as the base class and its own attributes went unchecked (#483).
+- Untyped abstract copies in the Bruker base reader hid twelve override
+  mismatches (#484).
+- zarr nodes were used as groups unchecked; a malformed store crashed with
+  an unrelated `AttributeError` or `IndexError` (#485).
+- A closed or metadata-only timsTOF reader failed on `None` with an
+  `AttributeError` that named neither cause (#489).
+
+#483 to #490 took the count from 279 to 0 on `cb060e8`. The gate keeps it
+there.
+
+**Why mypy stays.** The two overlap but do not nest. mypy's settings here
+report what pyright's standard mode does not: unused `# type: ignore`
+comments (`warn_unused_ignores`), unreachable code (`warn_unreachable`),
+returning `Any` from a typed function (`warn_return_any`) and comparisons
+that can never be equal (`strict_equality`). Dropping either checker drops
+checks the other does not make. Running both costs about ten seconds of
+pyright per lint run.
+
+**What would retire mypy.** pyright's own switches for those checks
+(`reportUnnecessaryTypeIgnoreComment` and its reachability and `Any`
+reporting, or strict mode) turned on and at 0 errors, then mypy's hook
+removed in a new D-entry. Not before: the lint job would quietly lose
+checks.
+
+**The platform pin.** `pythonPlatform = "Windows"`, for the reason
+`[tool.mypy] platform = "win32"` exists. Measured on the same tree, `Linux`
+and `Darwin` each report four errors, all of them `winreg` attributes and
+`ctypes.windll`, which exist only on Windows, behind guards that are correct
+on every platform. Without the pin the verdict depends on the runner.
+
+**How the hook is wired.** Two settings are load-bearing, and a test guards
+both:
+
+- `pass_filenames: false`. Given file names, pyright checks exactly those
+  and ignores `include`, so `--all-files` would hand it tests and scripts.
+- No args. Settings live in `pyproject.toml`, so the hook and a bare
+  `pyright` run agree, as flake8's do with `.flake8`.
+
+**Alternatives.**
+
+- "Replace mypy now." It drops the four checks above.
+- "Run pyright as its own CI step, not a hook." That is a second command to
+  keep in step with what a contributor runs locally. D19 chose one command,
+  `pre-commit run --all-files`, for exactly that reason.
+- "Basic mode." Fewer checks for no gain: standard is pyright's default,
+  and it is the mode the 279 errors were counted and fixed in.
+
+**Costs, accepted.**
+
+- The lint job installs spatialdata, dask, zarr and the rest of the runtime
+  tree. It is a larger install than `--only-group dev` was.
+- A local run needs `uv sync` first. Without `.venv`, every third-party
+  import is unresolved and the hook fails on that alone.
+- The hook env downloads the pyright package from npm when it is built.
+  Like D19's GitHub dependency, an outage there can turn `lint` red.
+- The `rev` is not in `uv.lock`, so nothing moves it; bump it by hand,
+  re-measure, and fix what a newer pyright reports in the same PR.

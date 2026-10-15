@@ -89,9 +89,10 @@ One command reproduces the CI lint job exactly, because CI runs this command:
 uv run pre-commit run --all-files
 ```
 
-It applies black, isort, flake8, mypy, bandit and pydocstyle with the settings
-in `.flake8` and `pyproject.toml`, plus the file-hygiene and lab-share-path
-hooks. **`--all-files` skips untracked files**, so `git add -A` first or a new
+It applies black, isort, flake8, mypy, pyright, bandit and pydocstyle with the
+settings in `.flake8` and `pyproject.toml`, plus the file-hygiene and
+lab-share-path hooks. pyright reads third-party types from the `.venv` that
+`uv sync` builds, so sync first. **`--all-files` skips untracked files**, so `git add -A` first or a new
 file you have just written is not checked.
 
 The individual tools are still there if you want to run one on its own:

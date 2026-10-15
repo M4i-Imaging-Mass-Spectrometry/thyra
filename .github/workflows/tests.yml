@@ -62,7 +62,7 @@ jobs:
         name: codecov-umbrella
         fail_ci_if_error: false
 
-  # Six lint, type and security tools are configured across .flake8,
+  # Six lint, type and security tools were configured across .flake8,
   # .pre-commit-config.yaml and pyproject.toml, and until this job existed not
   # one of them ran anywhere but a local hook a contributor may never install.
   # A fork PR, a `git commit --no-verify`, or any editor that writes files
@@ -114,21 +114,20 @@ jobs:
         # See the test job: pin the lean pre-v9 pruning behaviour.
         prune-cache: true
     - name: Install dependencies
-      # --only-group, not the `--no-default-groups --group <name>` spelling the
-      # jobs above use, because `dev` IS uv's default group here (there is no
-      # [tool.uv] section), so `--no-default-groups --group dev` is the long
-      # form of a plain `uv sync` and would install the project and its whole
-      # runtime tree -- spatialdata, dask, zarr and everything under them --
-      # for a job whose one need is pre-commit. --only-group drops the project
-      # and that tree while still reading the pre-commit version out of
-      # uv.lock, which keeps the lockfile the single source of it.
+      # The `dev` group (uv's default group here: there is no [tool.uv]
+      # section) for pre-commit, plus the project's runtime dependencies --
+      # spatialdata, dask, zarr and everything under them -- for pyright (D54).
+      # pyright reads third-party types from this .venv ([tool.pyright] venv in
+      # pyproject.toml); without them every third-party import is unresolved
+      # and the hook fails on that alone. --no-install-project leaves Thyra
+      # itself out: pyright analyses it from the source tree, and nothing here
+      # imports it.
       #
-      # What it does NOT do is make the install small. `dev` is installed
-      # whole, Jupyter, ipykernel, matplotlib and ptitprince included, because
-      # pre-commit is declared in that group and there is no leaner group to
-      # ask for. Splitting a `lint` group out is the change that would buy
-      # that; revisit on a measured install time, not in advance.
-      run: uv sync --locked --only-group dev
+      # This used to be `--only-group dev`, which skipped that runtime tree
+      # because pre-commit was the job's one need. pyright made it a second
+      # one. The install is larger for it; `dev` was already installed whole,
+      # Jupyter and matplotlib included, because there is no leaner group.
+      run: uv sync --locked --no-install-project
     - name: Cache the pre-commit hook environments
       uses: actions/cache@v4
       with:
@@ -139,8 +138,8 @@ jobs:
         restore-keys: |
           pre-commit-${{ runner.os }}-py${{ env.LINT_PYTHON_VERSION }}-
     - name: Run every hook
-      # --no-sync: the step above deliberately installed only one group, and a
-      # bare `uv run` would re-sync the project back in before running.
+      # --no-sync: the step above deliberately left the project itself out, and
+      # a bare `uv run` would re-sync it back in before running.
       #
       # --show-diff-on-failure is what makes the four in-place rewriters
       # (the three whitespace hooks and fix-byte-order-marker) useful here.
