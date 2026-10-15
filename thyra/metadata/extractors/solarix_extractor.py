@@ -176,7 +176,7 @@ class SolarixMetadataExtractor(MetadataExtractor):
         props = self._reader.properties
         family = props.get("InstrumentFamily")
         try:
-            family_number: Optional[int] = int(family)
+            family_number: Optional[int] = None if family is None else int(family)
         except (TypeError, ValueError):
             family_number = None
 

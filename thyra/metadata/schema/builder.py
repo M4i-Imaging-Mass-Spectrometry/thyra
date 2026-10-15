@@ -603,13 +603,18 @@ _TEACHING_POINT_FIELDS = ("image_x_px", "image_y_px", "stage_x_um", "stage_y_um"
 
 def _teaching_point(entry: Any) -> Optional[TeachingPoint]:
     """One parsed ``TeachPoint``, or ``None`` when it is not two pairs of numbers."""
-    pairs = [_mapping(entry).get(key) for key in ("image", "stage")]
-    if not all(isinstance(pair, (list, tuple)) and len(pair) == 2 for pair in pairs):
+    pairs = [
+        pair
+        for pair in (_mapping(entry).get(key) for key in ("image", "stage"))
+        if isinstance(pair, (list, tuple)) and len(pair) == 2
+    ]
+    if len(pairs) != 2:
         return None
     numbers = [_as_number(value) for pair in pairs for value in pair]
-    if any(number is None for number in numbers):
+    finite = [number for number in numbers if number is not None]
+    if len(finite) != len(numbers):
         return None
-    return TeachingPoint(**dict(zip(_TEACHING_POINT_FIELDS, numbers)))
+    return TeachingPoint(**dict(zip(_TEACHING_POINT_FIELDS, finite)))
 
 
 def _build_alignment(raw_metadata: Dict[str, Any]) -> Optional[Alignment]:
@@ -662,7 +667,8 @@ def _counted_spectra(essential: Any) -> Optional[int]:
     count = getattr(essential, "n_spectra", None)
     if isinstance(count, bool) or not isinstance(count, numbers.Integral):
         return None
-    return int(count) if count >= 1 else None
+    counted = int(count)
+    return counted if counted >= 1 else None
 
 
 def _polarity_from_cv_params(raw_metadata: Dict[str, Any]) -> Optional[str]:
@@ -1122,13 +1128,10 @@ def build_msi_metadata(
 
     # Absent unless the user gave one: the model's own default is an empty
     # sample, which to_uns_dict leaves out.
-    sample_fields = {
-        key: value
-        for key, value in (("sample_id", sample_id), ("sample_name", sample_name))
-        if value is not None
-    }
     sample_section: Dict[str, Any] = (
-        {"sample": SampleInformation(**sample_fields)} if sample_fields else {}
+        {"sample": SampleInformation(sample_id=sample_id, sample_name=sample_name)}
+        if sample_id is not None or sample_name is not None
+        else {}
     )
 
     return MSIMetadata(

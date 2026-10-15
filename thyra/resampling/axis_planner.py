@@ -771,12 +771,13 @@ class AxisPlanner:
     def _extract_spectrum_metadata(self, metadata: Dict[str, Any]) -> None:
         """Extract ImzML-specific spectrum metadata."""
         try:
-            if hasattr(self.reader, "get_spectrum_metadata"):
+            get_spectrum_metadata = getattr(self.reader, "get_spectrum_metadata", None)
+            if get_spectrum_metadata is not None:
                 # Use cached spectrum metadata if available
                 if self._spectrum_metadata is not None:
                     spec_meta = self._spectrum_metadata
                 else:
-                    spec_meta = self.reader.get_spectrum_metadata()
+                    spec_meta = get_spectrum_metadata()
                     self._spectrum_metadata = spec_meta
 
                 if spec_meta:

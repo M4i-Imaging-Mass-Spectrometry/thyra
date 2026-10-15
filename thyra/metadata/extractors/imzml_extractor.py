@@ -637,7 +637,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             logger.debug(f"Failed to read spectrum {idx}: {e}")
             return None
 
-    def _coordinate_bases(self, coords: List) -> Tuple[int, int, int]:
+    def _coordinate_bases(self, coords: NDArray[np.int_]) -> Tuple[int, int, int]:
         """The ``(x, y, z)`` values in this file that map onto index 0.
 
         The same rebasing :meth:`ImzMLReader._coordinate_bases` does, and
@@ -655,7 +655,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         Memoised; the scan is one pass over the coordinate list.
 
         Args:
-            coords: The parser's coordinate list.
+            coords: The parser's coordinates, one ``(x, y, z)`` row each.
 
         Returns:
             ``(x_base, y_base, z_base)``.
@@ -1334,12 +1334,11 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         x_name = None
 
         try:
-            if not hasattr(self.parser, "metadata") or not hasattr(
-                self.parser.metadata, "root"
-            ):
+            metadata = getattr(self.parser, "metadata", None)
+            if metadata is None or not hasattr(metadata, "root"):
                 return None
 
-            root = self.parser.metadata.root
+            root = metadata.root
 
             # Define namespaces for XML parsing
             namespaces = {

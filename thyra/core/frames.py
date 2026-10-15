@@ -87,3 +87,4 @@ class FrameScans(Protocol):
         Empty when the acquisition has no separable precursor schedule
         or the frame holds no isolated points.
         """
+        ...
