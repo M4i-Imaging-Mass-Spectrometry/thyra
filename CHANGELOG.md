@@ -2,6 +2,35 @@
 
 <!-- version list -->
 
+## [4.5.0](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/compare/v4.4.0...v4.5.0) (2026-10-15)
+
+
+### Features
+
+* **converters:** carry the raster origin as an "acquisition" coordinate system (schema 0.14.0) ([#476](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/476)) ([1e98caf](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/1e98caf4ce9b0a91b269d1a4c2dd9d1ade402d01))
+* **imzml:** keep ion mobility from processed imzML ([#471](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/471)) ([d84a250](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/d84a250e2a359a98ffbbbd77874aedd6f2a51c11))
+* **metadata:** name the sample and the spectrum representation in msi_metadata (schema 0.12.0) ([#469](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/469)) ([46064e4](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/46064e4b1717bfdde941d6a4f37810919a98bdb7))
+* **metadata:** store a fingerprint of the mass axis (schema 0.11.0) ([#461](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/461)) ([92e8f75](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/92e8f758affcc842fd5e5eadc0817e8e47985306)), closes [#444](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/444)
+* **mobility:** store each feature's collision cross section (schema 0.13.0) ([#472](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/472)) ([59fb0eb](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/59fb0eb656d69967a1fe100f207f70d3d3071579))
+* **preview:** report the TOF width law the instrument declares ([#457](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/457)) ([eb49f9f](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/eb49f9f247770c64615345efd644eae638b44d96)), closes [#456](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/456)
+* **regions:** list regions and refuse the region option where it cannot apply ([#466](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/466)) ([8cf30ac](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/8cf30ac522835d0363e5cb698826c996150bde33)), closes [#448](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/448)
+* **resampling:** plan one mass axis for several sources ([#462](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/462)) ([08f0ea4](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/08f0ea4be10f704836539ac08a2149606a231b8b)), closes [#449](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/449)
+* **waters:** read Synapt drift time as an ion mobility axis ([#481](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/481)) ([16ab22d](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/16ab22d8f1a264139493da785987688125ea7746))
+
+
+### Bug Fixes
+
+* **converters:** average the mobility heatmap over pixels, not spectra ([#455](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/455)) ([54e4a05](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/54e4a052bc4498a10f9b341dab0047a2514787c1))
+* **converters:** give each plane's table the mobility heatmap of its own plane ([#460](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/460)) ([82fea7c](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/82fea7c179111377dc7d773af467a8701d5a1501))
+* **converters:** sum a repeated position in the sibling tables on every route ([#459](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/459)) ([4bdf429](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/4bdf4298df62ff8a51804f298ab4bf68d8ba929f))
+* **metadata:** read JSON inputs saved as UTF-16 or with a byte-order mark ([#454](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/454)) ([c911018](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/c911018411367a9f796917769d203fe22306ea1e)), closes [#453](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/453)
+* **mobility:** keep the summed table's edge samples in the heatmap, grid and MS/MS tables ([#480](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/480)) ([d38279a](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/d38279ad36a6d424f44d237c304a26c595e8d071))
+* **readers:** read mzPeak position z from a scan's parameters list ([#452](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/452)) ([bdcd102](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/bdcd1026c886e1f7fb407f553e873e3d08eb1a0e)), closes [#451](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/451)
+* **readers:** read the isolation windows of type-9 (DIA) frames ([#443](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/443)) ([85792a0](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/85792a070e4a51444adc1dcf75b063682358929d))
+* **resampling:** keep a planned imzML's edge samples and check plan files ([#477](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/477)) ([a76a7ab](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a76a7ab7f8751b5cb834806d3f15040363cc9ab8)), closes [#473](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/473)
+* **resampling:** rebin tic_preserving spectra whose bins skip source samples ([#470](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/470)) ([0fed251](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/0fed251c89471e1842e5eba0260fd7a9c19803f1)), closes [#442](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/442)
+* **resampling:** refuse a bin count with a width, and half a TOF law ([#458](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/458)) ([ba9324e](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/ba9324e83038264508f349947eef1c9ede0a7e1a)), closes [#445](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/445)
+
 ## v4.4.0 (2026-10-12)
 
 ### Bug Fixes
