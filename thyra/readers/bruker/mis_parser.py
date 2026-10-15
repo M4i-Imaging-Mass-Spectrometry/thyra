@@ -194,6 +194,10 @@ def parse_mis_file(path: Path) -> Dict[str, Any]:
     try:
         tree = ET.parse(path)  # nosec B314
         root = tree.getroot()
+        if root is None:
+            # A completed parse always has a root; read like a parse error.
+            logger.warning(f"Failed to parse .mis file: {path} has no root element")
+            return metadata
 
         _extract_basic_elements(root, metadata)
         _extract_teaching_points(root, metadata)
