@@ -170,11 +170,11 @@ class TestEveryReaderUsesIt:
 
     Every reader module is discovered, not listed. A hardcoded list can
     only confirm the builders that were converted, which is how #308's
-    equivalent audit missed two loops of the shape it was fixing. Three
+    equivalent audit missed two loops of the shape it was fixing. Two
     modules here define ``get_common_mass_axis`` without building a union
-    -- Rapiflex and PHI derive theirs analytically, and the Bruker base
-    delegates -- and the audit covers them too, so a future rewrite of one
-    into a collect-then-unique is caught.
+    -- Rapiflex and PHI derive theirs analytically -- and the audit covers
+    them too, so a future rewrite of one into a collect-then-unique is
+    caught.
     """
 
     READERS = sorted(
