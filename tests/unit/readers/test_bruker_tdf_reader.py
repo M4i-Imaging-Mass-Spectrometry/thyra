@@ -354,6 +354,7 @@ class TestMobilityIteration:
 
     def test_metadata_only_mode_needs_the_library(self):
         reader, _, _ = _make_reader("tdf")
+        reader._metadata_only = True
         reader.sdk = None
         reader.handle = None
         with pytest.raises(SDKError, match="metadata-only"):

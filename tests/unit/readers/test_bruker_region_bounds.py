@@ -25,8 +25,8 @@ class _BoundsHarness:
     """A stand-in exposing only what the two methods under test touch.
 
     ``get_region_info`` reads ``_region_info`` and ``_mis_metadata`` and
-    calls ``_region_bounds``; ``_region_bounds`` reads ``conn`` and
-    ``_get_coordinate_offsets``.  Nothing else on the real reader is
+    calls ``_region_bounds``; ``_region_bounds`` reads ``conn`` (through
+    ``_database``) and ``_get_coordinate_offsets``.  Nothing else on the real reader is
     reachable from here, which is why the heavy SDK initialisation can
     be skipped.
     """
@@ -39,6 +39,7 @@ class _BoundsHarness:
     # Bound off the real class so a change in behaviour reaches the test.
     _region_bounds = BrukerReader._region_bounds
     get_region_info = BrukerReader.get_region_info
+    _database = BrukerReader._database
 
     def _get_coordinate_offsets(self) -> Optional[Tuple[int, int, int]]:
         return self._offsets
