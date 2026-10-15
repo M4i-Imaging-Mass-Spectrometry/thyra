@@ -4383,8 +4383,8 @@ were real defects:
 - A closed or metadata-only timsTOF reader failed on `None` with an
   `AttributeError` that named neither cause (#489).
 
-#483 to #490 took the count from 279 to 0 on `cb060e8`. The gate keeps it
-there.
+By the release of 4.5.0 (`7845456`) the count was 279. #483 to #490 took it
+to 0 on `cb060e8`. The gate keeps it there.
 
 **Why mypy stays.** The two overlap but do not nest. mypy's settings here
 report what pyright's standard mode does not: unused `# type: ignore`
@@ -4411,6 +4411,7 @@ both:
 
 - `pass_filenames: false`. Given file names, pyright checks exactly those
   and ignores `include`, so `--all-files` would hand it tests and scripts.
+  `types_or` adds `toml`, so an edit to `pyproject.toml` alone runs it too.
 - No args. Settings live in `pyproject.toml`, so the hook and a bare
   `pyright` run agree, as flake8's do with `.flake8`.
 
@@ -4427,8 +4428,9 @@ both:
 
 - The lint job installs spatialdata, dask, zarr and the rest of the runtime
   tree. It is a larger install than `--only-group dev` was.
-- A local run needs `uv sync` first. Without `.venv`, every third-party
-  import is unresolved and the hook fails on that alone.
+- A local run needs `uv sync` first. Without `.venv` the hook fails on
+  every third-party import. A bare `pyright` instead uses whatever `python`
+  is on PATH, so its verdict then depends on the machine.
 - The hook env downloads the pyright package from npm when it is built.
   Like D19's GitHub dependency, an outage there can turn `lint` red.
 - The `rev` is not in `uv.lock`, so nothing moves it; bump it by hand,

@@ -433,8 +433,9 @@ pythonVersion = "3.12"
 # Windows, behind guards that are correct on every platform.
 pythonPlatform = "Windows"
 # The project's own environment, which `uv sync` creates. pyright resolves
-# numpy, zarr, spatialdata and the rest from it; without it every third-party
-# import is unresolved and the run fails on that alone.
+# numpy, zarr, spatialdata and the rest from it. Without it the pre-commit hook
+# fails on every third-party import; a bare `pyright` falls back to whatever
+# `python` is on PATH, so its verdict then depends on the machine.
 venvPath = "."
 venv = ".venv"
 

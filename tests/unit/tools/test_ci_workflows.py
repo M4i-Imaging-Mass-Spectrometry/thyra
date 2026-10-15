@@ -190,6 +190,10 @@ def test_the_pyright_hook_checks_what_the_config_includes() -> None:
     (hook,) = [hook for hook in _hooks_with_ids() if hook["id"] == "pyright"]
     assert hook.get("pass_filenames") is False
     assert not hook.get("args")
+    # The upstream hook narrows to python and pyi before `files` is read, so
+    # without toml an edit to [tool.pyright] alone would never run it.
+    assert "toml" in hook.get("types_or", [])
+    assert re.match(hook["files"], "pyproject.toml")
 
 
 def test_pyright_analyses_as_windows_whatever_the_host() -> None:

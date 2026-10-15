@@ -200,7 +200,9 @@ repos:
   # exactly those files and ignores `include`, so `--all-files` would hand it
   # every .py in the repository, tests and scripts included, none of which the
   # gate covers. Without names it checks what [tool.pyright] includes, the same
-  # set however the hook was triggered. `files` only decides WHETHER it runs.
+  # set however the hook was triggered. `files` only decides WHETHER it runs,
+  # and `types_or` must name toml for the pyproject.toml half of it to fire:
+  # the upstream hook narrows to python and pyi before `files` is consulted.
   #
   # The hook env holds pyright alone. Third-party types come from the project's
   # own .venv ([tool.pyright] venv), which is why the CI lint job installs the
@@ -210,6 +212,7 @@ repos:
     hooks:
       - id: pyright
         pass_filenames: false
+        types_or: [python, pyi, toml]
         files: ^(thyra/.*\.pyi?|pyproject\.toml)$
 
   # Security scanning
