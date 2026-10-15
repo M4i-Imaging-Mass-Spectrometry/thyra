@@ -191,6 +191,30 @@ repos:
           - types-PyYAML==6.0.12.20260815
         exclude: ^(tests/|docs/)
 
+  # Type checking, second opinion (D54)
+  #
+  # pyright runs next to mypy, not instead of it. Its settings live in
+  # [tool.pyright] in pyproject.toml; do not add setting args here.
+  #
+  # pass_filenames: false is load-bearing. Given file names, pyright checks
+  # exactly those files and ignores `include`, so `--all-files` would hand it
+  # every .py in the repository, tests and scripts included, none of which the
+  # gate covers. Without names it checks what [tool.pyright] includes, the same
+  # set however the hook was triggered. `files` only decides WHETHER it runs,
+  # and `types_or` must name toml for the pyproject.toml half of it to fire:
+  # the upstream hook narrows to python and pyi before `files` is consulted.
+  #
+  # The hook env holds pyright alone. Third-party types come from the project's
+  # own .venv ([tool.pyright] venv), which is why the CI lint job installs the
+  # project's dependencies and why a local run needs `uv sync` first.
+  - repo: https://github.com/RobertCraigie/pyright-python
+    rev: v1.1.414
+    hooks:
+      - id: pyright
+        pass_filenames: false
+        types_or: [python, pyi, toml]
+        files: ^(thyra/.*\.pyi?|pyproject\.toml)$
+
   # Security scanning
   #
   # `bandit[toml]` is the one additional dependency here that is deliberately

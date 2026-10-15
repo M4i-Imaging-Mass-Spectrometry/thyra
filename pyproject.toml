@@ -418,6 +418,27 @@ module = [
 ]
 ignore_missing_imports = true
 
+# pyright, the second type checker in the lint lane (D54). It reads these
+# settings both from the pre-commit hook and from a bare `pyright` run, so the
+# two cannot drift apart: do not add setting args to the hook.
+[tool.pyright]
+include = ["thyra"]
+# Generated ontology tables: data, not code.
+exclude = ["thyra/metadata/ontology/_*.py"]
+typeCheckingMode = "standard"
+pythonVersion = "3.12"
+# Analyse as Windows, whatever the host is, for the reason [tool.mypy] gives.
+# Measured on the same tree: "Linux" and "Darwin" each report four errors,
+# all of them `winreg` attributes and `ctypes.windll` that exist only on
+# Windows, behind guards that are correct on every platform.
+pythonPlatform = "Windows"
+# The project's own environment, which `uv sync` creates. pyright resolves
+# numpy, zarr, spatialdata and the rest from it. Without it the pre-commit hook
+# fails on every third-party import; a bare `pyright` falls back to whatever
+# `python` is on PATH, so its verdict then depends on the machine.
+venvPath = "."
+venv = ".venv"
+
 
 [tool.black]
 # Black otherwise infers every version in `requires-python` and, whenever the
