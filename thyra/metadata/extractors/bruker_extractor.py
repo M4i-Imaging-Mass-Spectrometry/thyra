@@ -44,8 +44,9 @@ def _instrument_calibration(stated: Dict[str, Any]) -> Dict[str, Any]:
         value = stated.get(key)
         if isinstance(value, str) and value.strip():
             info[name] = value.strip()
+    stated_sd = stated.get("MzStandardDeviationPPM")
     try:
-        sd = float(stated.get("MzStandardDeviationPPM"))
+        sd = math.nan if stated_sd is None else float(stated_sd)
     except (TypeError, ValueError):
         sd = math.nan
     if math.isfinite(sd):
@@ -239,13 +240,15 @@ class BrukerMetadataExtractor(MetadataExtractor):
         min_mass = bounds_data.get("MzAcqRangeLower")
         max_mass = bounds_data.get("MzAcqRangeUpper")
 
-        missing_keys = []
-        if min_mass is None:
-            missing_keys.append("MzAcqRangeLower")
-        if max_mass is None:
-            missing_keys.append("MzAcqRangeUpper")
-
-        if missing_keys:
+        if min_mass is None or max_mass is None:
+            missing_keys = [
+                key
+                for key, value in (
+                    ("MzAcqRangeLower", min_mass),
+                    ("MzAcqRangeUpper", max_mass),
+                )
+                if value is None
+            ]
             error_msg = (
                 f"Missing critical mass range bounds in GlobalMetadata: "
                 f"{', '.join(missing_keys)}. Cannot establish mass range."

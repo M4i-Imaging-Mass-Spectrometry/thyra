@@ -71,7 +71,8 @@ def _data_type(node):
 if __name__ == "__main__":
     import sys
 
-    import obonet
+    # A dev-only script: obonet is not a Thyra dependency.
+    import obonet  # pyright: ignore[reportMissingImports]
 
     now = datetime.now(timezone.utc).isoformat()
     here = Path(__file__).resolve().parent

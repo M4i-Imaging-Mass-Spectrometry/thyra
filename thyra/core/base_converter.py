@@ -374,11 +374,12 @@ class BaseMSIConverter(ABC):
         Args:
             essential: Metadata for the dataset being converted.
         """
+        detected = getattr(essential, "z_spacing_um", None)
         if self._z_spacing_um_arg is not None:
             self.z_spacing_um = self._z_spacing_um_arg
             self.z_spacing_source = ZSpacingSource.USER_PROVIDED
-        elif getattr(essential, "z_spacing_um", None) is not None:
-            self.z_spacing_um = float(essential.z_spacing_um)
+        elif detected is not None:
+            self.z_spacing_um = float(detected)
             self.z_spacing_source = ZSpacingSource.AUTO_DETECTED
         else:
             self.z_spacing_um = float(self.pixel_size_um)
@@ -509,18 +510,21 @@ class BaseMSIConverter(ABC):
         if self._n_spectra is not None:
             return self._n_spectra
 
-        # Fallback: try reader-specific methods
-        if hasattr(self.reader, "n_spectra"):
-            return int(self.reader.n_spectra)
+        # Fallback: try reader-specific methods. None of these is on the
+        # BaseMSIReader contract, so each is looked up by name.
+        n_spectra = getattr(self.reader, "n_spectra", None)
+        if n_spectra is not None:
+            return int(n_spectra)
 
         # For ImzML readers, count coordinates
-        if hasattr(self.reader, "parser") and self.reader.parser is not None:
-            if hasattr(self.reader.parser, "coordinates"):
-                return len(self.reader.parser.coordinates)
+        parser = getattr(self.reader, "parser", None)
+        if parser is not None and hasattr(parser, "coordinates"):
+            return len(parser.coordinates)
 
         # For Bruker readers, try frame count methods
-        if hasattr(self.reader, "_get_frame_count"):
-            return int(self.reader._get_frame_count())
+        get_frame_count = getattr(self.reader, "_get_frame_count", None)
+        if get_frame_count is not None:
+            return int(get_frame_count())
 
         # Final fallback: calculate from dimensions
         if self._dimensions is not None:

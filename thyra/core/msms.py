@@ -273,8 +273,12 @@ def windows_overlap(windows: Sequence[IsolationWindow]) -> bool:
     which is a fact about the acquisition worth knowing before anyone
     tries to demultiplex it.
     """
+    # The two None checks are ``is_mobility_resolved``, spelled out so the
+    # pairs are typed as ints.
     ranges = sorted(
-        (w.scan_begin, w.scan_end) for w in windows if w.is_mobility_resolved
+        (w.scan_begin, w.scan_end)
+        for w in windows
+        if w.scan_begin is not None and w.scan_end is not None
     )
     if len(ranges) < len(windows):
         return True
