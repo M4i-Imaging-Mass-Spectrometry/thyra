@@ -37,7 +37,7 @@ from .models import (
     OntologyTerm,
     holder_of,
 )
-from .store_io import read_msi_metadata_blocks
+from .store_io import read_msi_metadata_blocks, subgroup
 
 logger = logging.getLogger(__name__)
 
@@ -307,7 +307,8 @@ def check_store_var_conventions(
     # Same routing as read_msi_metadata_blocks: past the Windows path limit
     # zarr returns fill values instead of failing.
     root = zarr.open_group(str(prepare_zarr_read_path(Path(store_path))), mode="r")
-    if "tables" not in root:
+    tables = subgroup(root, "tables")
+    if tables is None:
         raise ValueError(
             f"{store_path} does not look like a SpatialData store: "
             "it has no 'tables' group"
@@ -315,12 +316,11 @@ def check_store_var_conventions(
 
     blocks = read_msi_metadata_blocks(store_path)
     results: Dict[str, List[ValidationIssue]] = {}
-    for name in sorted(root["tables"].keys()):
+    for name in sorted(tables.keys()):
         issues: List[ValidationIssue] = []
         results[name] = issues
-        try:
-            var_group = root["tables"][name]["var"]
-        except KeyError:
+        var_group = subgroup(tables, f"{name}/var")
+        if var_group is None:
             issues.append(ValidationIssue("error", "var", "table has no var group"))
             continue
         if "mz" not in var_group:

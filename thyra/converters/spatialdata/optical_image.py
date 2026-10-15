@@ -305,6 +305,34 @@ def _write_regions(array: zarr.Array) -> Iterator[Tuple[slice, slice, slice]]:
         yield c, y, x
 
 
+def _multiscale_dataset_paths(attrs: Mapping[str, Any]) -> Optional[List[str]]:
+    """The ``path`` of each level in an OME-Zarr image's ``multiscales[0]``.
+
+    Returns None when the metadata is missing or not shaped as OME-Zarr
+    writes it: a dict, a non-empty list, a dict, a list of dicts that
+    each name a string path.
+    """
+    ome = attrs.get("ome")
+    if not isinstance(ome, dict):
+        return None
+    multiscales = ome.get("multiscales")
+    if not isinstance(multiscales, list) or not multiscales:
+        return None
+    first = multiscales[0]
+    if not isinstance(first, dict):
+        return None
+    datasets = first.get("datasets")
+    if not isinstance(datasets, list):
+        return None
+    paths: List[str] = []
+    for dataset in datasets:
+        path = dataset.get("path") if isinstance(dataset, dict) else None
+        if not isinstance(path, str):
+            return None
+        paths.append(path)
+    return paths
+
+
 @dataclass(frozen=True)
 class OpticalTiffSource:
     """What the first page of an optical TIFF looks like, without decoding it.
@@ -803,19 +831,17 @@ class StreamedOpticalImage:
         """Remove the declared element from ``store_path``, if it is there."""
         root = zarr.open_group(str(store_path), mode="r+", use_consolidated=False)
         images = root["images"]
-        if self.name in images:
+        if isinstance(images, zarr.Group) and self.name in images:
             del images[self.name]
 
     def _open_level_arrays(self, store_path: Union[str, Path]) -> List[zarr.Array]:
         root = zarr.open_group(str(store_path), mode="r+", use_consolidated=False)
         element = root[f"images/{self.name}"]
-        try:
-            datasets = element.attrs["ome"]["multiscales"][0]["datasets"]
-        except (KeyError, IndexError, TypeError) as exc:
+        paths = _multiscale_dataset_paths(element.attrs)
+        if not isinstance(element, zarr.Group) or paths is None:
             raise RuntimeError(
                 f"images/{self.name} in {store_path} carries no multiscales metadata"
-            ) from exc
-        paths = [dataset["path"] for dataset in datasets]
+            )
         expected = self.level_shapes
         if len(paths) != len(expected):
             raise RuntimeError(
