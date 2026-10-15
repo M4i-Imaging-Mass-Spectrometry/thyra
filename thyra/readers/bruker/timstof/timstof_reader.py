@@ -360,8 +360,9 @@ class TdfFrameScans:
         self.coords = coords
         self.frame_id = int(frame_id)
         self._reader = reader
-        self.indices, self.intensities, self.scans = reader.sdk.read_tdf_scans(
-            reader.handle,
+        sdk, handle = reader._library()
+        self.indices, self.intensities, self.scans = sdk.read_tdf_scans(
+            handle,
             frame_id,
             0,
             reader._frame_num_scans(frame_id),
@@ -386,8 +387,9 @@ class TdfFrameScans:
     def unique_mz(self) -> NDArray[np.float64]:
         """m/z of each unique digitizer index, ascending; converted once."""
         if self._unique_mz is None:
-            self._unique_mz = self._reader.sdk.index_to_mz(
-                self._reader.handle,
+            sdk, handle = self._reader._library()
+            self._unique_mz = sdk.index_to_mz(
+                handle,
                 self.frame_id,
                 self.unique_indices.astype(np.float64),
             )
@@ -1100,6 +1102,41 @@ class BrukerReader(BrukerBaseMSIReader):
             return SpectrumType.CENTROID
         return SpectrumType.PROFILE
 
+    def _library(self, purpose: str = "Reading spectra") -> Tuple[SDKFunctions, int]:
+        """The Bruker library and the open file handle, for a spectral read.
+
+        Args:
+            purpose: What the caller is doing, to begin the error message.
+
+        Raises:
+            SDKError: When the reader holds no library: it was opened with
+                ``metadata_only=True``, or it has been closed.
+        """
+        sdk: Optional[SDKFunctions] = getattr(self, "sdk", None)
+        handle: Optional[int] = getattr(self, "handle", None)
+        if sdk is None or not handle:
+            if getattr(self, "_closed", False):
+                reason = "the reader has been closed"
+            elif getattr(self, "_metadata_only", False):
+                reason = "the reader was opened in metadata-only mode"
+            else:
+                reason = "the reader holds no open file handle"
+            raise SDKError(f"{purpose} needs the Bruker library; {reason}")
+        return sdk, handle
+
+    def _database(self) -> sqlite3.Connection:
+        """The open ``analysis.tdf``/``.tsf`` connection.
+
+        Raises:
+            DataError: When the reader has been closed.
+        """
+        conn: Optional[sqlite3.Connection] = getattr(self, "conn", None)
+        if conn is None:
+            raise DataError(
+                "The analysis database is not open; the reader has been closed"
+            )
+        return conn
+
     def _create_metadata_extractor(self) -> MetadataExtractor:
         """Create Bruker metadata extractor."""
         if not hasattr(self, "conn") or self.conn is None:
@@ -1126,7 +1163,7 @@ class BrukerReader(BrukerBaseMSIReader):
             count descending. Empty list if no region info available.
         """
         try:
-            cursor = self.conn.cursor()
+            cursor = self._database().cursor()
             cursor.execute(
                 "SELECT RegionNumber, COUNT(*) as n_frames "
                 "FROM MaldiFrameInfo "
@@ -1260,7 +1297,7 @@ class BrukerReader(BrukerBaseMSIReader):
                 )
 
             # Get frame IDs for selected region
-            cursor = self.conn.cursor()
+            cursor = self._database().cursor()
             cursor.execute(
                 "SELECT Frame FROM MaldiFrameInfo WHERE RegionNumber = ?",
                 (resolved,),
@@ -1331,7 +1368,7 @@ class BrukerReader(BrukerBaseMSIReader):
         region_map: Dict[tuple, int] = {}
 
         try:
-            cursor = self.conn.cursor()
+            cursor = self._database().cursor()
             if self._selected_region is not None:
                 cursor.execute(
                     "SELECT XIndexPos, YIndexPos, RegionNumber "
@@ -1380,7 +1417,7 @@ class BrukerReader(BrukerBaseMSIReader):
         offsets = self._get_coordinate_offsets()
         x_off, y_off = (offsets[0], offsets[1]) if offsets else (0, 0)
         try:
-            cursor = self.conn.cursor()
+            cursor = self._database().cursor()
             cursor.execute(
                 "SELECT RegionNumber, MIN(XIndexPos), MIN(YIndexPos), "
                 "MAX(XIndexPos), MAX(YIndexPos) "
@@ -1619,7 +1656,8 @@ class BrukerReader(BrukerBaseMSIReader):
         self._mixed_ms_levels_checked = True
         # ``? IS NULL`` keeps every region when none was selected.
         try:
-            rows = self.conn.execute(
+            conn = self._database()
+            rows = conn.execute(
                 "SELECT COUNT(*), GROUP_CONCAT(DISTINCT kinds) FROM ("
                 "SELECT GROUP_CONCAT(DISTINCT f.MsMsType) AS kinds "
                 "FROM MaldiFrameInfo m JOIN Frames f ON f.Id = m.Frame "
@@ -1679,8 +1717,9 @@ class BrukerReader(BrukerBaseMSIReader):
     def _build_mobility_axis(self) -> MobilityAxis:
         n_scans, frame_id = self._mobility_ramp()
         values: Optional[NDArray[np.float64]] = None
-        if getattr(self, "sdk", None) is not None and self.handle:
-            values = self.sdk.scannum_to_oneoverk0(
+        sdk = getattr(self, "sdk", None)
+        if sdk is not None and self.handle:
+            values = sdk.scannum_to_oneoverk0(
                 self.handle, frame_id, np.arange(n_scans, dtype=np.float64)
             )
         else:
@@ -1701,7 +1740,8 @@ class BrukerReader(BrukerBaseMSIReader):
 
     def _mobility_ramp(self) -> Tuple[int, int]:
         """``(longest NumScans in the file, a frame id to calibrate against)``."""
-        row = self.conn.execute("SELECT MAX(NumScans), MIN(Id) FROM Frames").fetchone()
+        conn = self._database()
+        row = conn.execute("SELECT MAX(NumScans), MIN(Id) FROM Frames").fetchone()
         if row is None or row[0] is None:
             raise DataError("The Frames table carries no NumScans; not a TIMS file")
         return int(row[0]), int(row[1])
@@ -1709,7 +1749,8 @@ class BrukerReader(BrukerBaseMSIReader):
     def _one_over_k0_acq_range(self) -> Optional[Tuple[float, float]]:
         """The acquired 1/K0 range from ``GlobalMetadata``, when declared."""
         try:
-            rows = self.conn.execute(
+            conn = self._database()
+            rows = conn.execute(
                 "SELECT Key, Value FROM GlobalMetadata WHERE Key IN "
                 "('OneOverK0AcqRangeLower', 'OneOverK0AcqRangeUpper')"
             ).fetchall()
@@ -1731,7 +1772,8 @@ class BrukerReader(BrukerBaseMSIReader):
         a NULL becomes NaN so positions are preserved.
         """
         try:
-            cursor = self.conn.execute("SELECT * FROM TimsCalibration ORDER BY Id")
+            conn = self._database()
+            cursor = conn.execute("SELECT * FROM TimsCalibration ORDER BY Id")
             row = cursor.fetchone()
         except sqlite3.OperationalError as e:
             logger.debug(f"No TimsCalibration table: {e}")
@@ -1820,7 +1862,8 @@ class BrukerReader(BrukerBaseMSIReader):
 
     def _build_fragmentation(self) -> Optional[FragmentationSchedule]:
         try:
-            rows = self.conn.execute(
+            conn = self._database()
+            rows = conn.execute(
                 "SELECT MsMsType, COUNT(*) FROM Frames GROUP BY MsMsType"
             ).fetchall()
         except sqlite3.OperationalError as e:
@@ -1919,7 +1962,8 @@ class BrukerReader(BrukerBaseMSIReader):
             ),
         ):
             try:
-                rows = self.conn.execute(query).fetchall()
+                conn = self._database()
+                rows = conn.execute(query).fetchall()
             except sqlite3.OperationalError:
                 continue
             rows = [row for row in rows if row[0] is not None]
@@ -1971,11 +2015,7 @@ class BrukerReader(BrukerBaseMSIReader):
                 "Only a TDF (TIMS engaged) acquisition carries an ion mobility "
                 "dimension; this is a TSF file"
             )
-        if getattr(self, "sdk", None) is None or not self.handle:
-            raise SDKError(
-                "Reading mobility spectra needs the Bruker library; the reader "
-                "was opened in metadata-only mode"
-            )
+        self._library("Reading mobility spectra")
         values, n_axis = self._mobility_values()
 
         tally = DropTally(logger, "frames whose mobility scans could not be read")
@@ -2087,7 +2127,12 @@ class BrukerReader(BrukerBaseMSIReader):
         )
         scan_map = np.full(n_scans, -1, dtype=np.int64)
         for index, window in enumerate(windows):
-            scan_map[int(window.scan_begin) : int(window.scan_end)] = index
+            begin, end = window.scan_begin, window.scan_end
+            if begin is None or end is None:
+                raise ValueError(
+                    f"Isolation window {index} carries no mobility scan range"
+                )
+            scan_map[int(begin) : int(end)] = index
         return scan_map
 
     def iter_precursor_spectra(self) -> Generator[
@@ -2147,11 +2192,7 @@ class BrukerReader(BrukerBaseMSIReader):
                 "The isolation windows are not the same in every frame, or "
                 "they overlap, so a frame cannot be split by scan number alone"
             )
-        if getattr(self, "sdk", None) is None or not self.handle:
-            raise SDKError(
-                "Splitting a frame by precursor needs the Bruker library; "
-                "the reader was opened in metadata-only mode"
-            )
+        self._library("Splitting a frame by precursor")
 
         scan_map = self._precursor_scan_map(schedule.windows)
         n_windows = len(schedule.windows)
@@ -2290,7 +2331,7 @@ class BrukerReader(BrukerBaseMSIReader):
             Sorted list of frame IDs, or None if MaldiFrameInfo is unavailable.
         """
         try:
-            cursor = self.conn.cursor()
+            cursor = self._database().cursor()
             cursor.execute("SELECT Frame FROM MaldiFrameInfo ORDER BY Frame")
             rows = cursor.fetchall()
             if rows:
@@ -2335,7 +2376,7 @@ class BrukerReader(BrukerBaseMSIReader):
             found
         """
         try:
-            cursor = self.conn.cursor()
+            cursor = self._database().cursor()
 
             # Check if this is MALDI data
             try:
@@ -2446,8 +2487,9 @@ class BrukerReader(BrukerBaseMSIReader):
         """
         buffer_size_hint = self._num_peaks_cache.get(frame_id)
         num_scans = self._frame_num_scans(frame_id) if self.file_type == "tdf" else None
-        mzs, intensities = self.sdk.read_spectrum(
-            self.handle,
+        sdk, handle = self._library()
+        mzs, intensities = sdk.read_spectrum(
+            handle,
             frame_id,
             buffer_size_hint=buffer_size_hint,
             num_scans=num_scans,
@@ -2459,7 +2501,8 @@ class BrukerReader(BrukerBaseMSIReader):
         cached = self._num_scans_cache.get(frame_id)
         if cached is not None:
             return cached
-        row = self.conn.execute(
+        conn = self._database()
+        row = conn.execute(
             "SELECT NumScans FROM Frames WHERE Id = ?", (frame_id,)
         ).fetchone()
         if row is None or row[0] is None:
@@ -2553,8 +2596,10 @@ class BrukerReader(BrukerBaseMSIReader):
 
         try:
             # Close SDK handle
-            if hasattr(self, "handle") and self.handle:
-                self.sdk.close_file(self.handle)
+            sdk = getattr(self, "sdk", None)
+            handle = getattr(self, "handle", None)
+            if handle and sdk is not None:
+                sdk.close_file(handle)
                 self.handle = None
 
             # Close database connection
@@ -2696,7 +2741,7 @@ class BrukerReader(BrukerBaseMSIReader):
         spot_region_re = re.compile(r"^R(\d+)")
 
         try:
-            cursor = self.conn.cursor()
+            cursor = self._database().cursor()
             use_spotname = False
             try:
                 cursor.execute(
@@ -2762,7 +2807,7 @@ class BrukerReader(BrukerBaseMSIReader):
             return {}
 
         try:
-            cursor = self.conn.cursor()
+            cursor = self._database().cursor()
 
             if self._selected_region is not None:
                 # Per-region: use actual min from the selected region's frames
