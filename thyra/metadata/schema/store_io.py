@@ -9,12 +9,34 @@ exporting metadata from a 100+ GB store costs nothing.
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Tuple, Union
 
 from ...utils.windows_paths import prepare_zarr_read_path
 from .models import MSI_METADATA_UNS_KEY, PACKED_OBJECT_LISTS, holder_of
 
+if TYPE_CHECKING:
+    import zarr
+
 logger = logging.getLogger(__name__)
+
+
+def subgroup(group: "zarr.Group", path: str) -> Optional["zarr.Group"]:
+    """Return the group at ``path`` below ``group``, or None.
+
+    ``group[path]`` may be an array as well as a group. A store that holds
+    an array where a group belongs is read as if the group were absent.
+
+    Args:
+        group: The group to look in.
+        path: A member name, or a ``/``-separated path of names.
+
+    Returns:
+        The group, or None when nothing is there or what is there is an array.
+    """
+    import zarr
+
+    node = group.get(path)
+    return node if isinstance(node, zarr.Group) else None
 
 
 def read_msi_metadata_blocks(store_path: Union[str, Path]) -> Dict[str, Dict[str, Any]]:
@@ -39,24 +61,29 @@ def read_msi_metadata_blocks(store_path: Union[str, Path]) -> Dict[str, Dict[str
     # failing: zarr hands out fill values for the keys it cannot open, so
     # every ontology term would come back as {"accession": "", "name": ""}.
     root = zarr.open_group(str(prepare_zarr_read_path(Path(store_path))), mode="r")
-    if "tables" not in root:
+    tables = subgroup(root, "tables")
+    if tables is None:
         raise ValueError(
             f"{store_path} does not look like a SpatialData store: "
             "it has no 'tables' group"
         )
 
-    tables = root["tables"]
     blocks: Dict[str, Dict[str, Any]] = {}
     for name in sorted(tables.keys()):
-        try:
-            uns = tables[name]["uns"]
-        except KeyError:
+        uns = subgroup(tables, f"{name}/uns")
+        if uns is None:
             logger.debug("Table %s has no uns group", name)
             continue
         if MSI_METADATA_UNS_KEY not in uns:
             logger.debug("Table %s has no %s block", name, MSI_METADATA_UNS_KEY)
             continue
-        block = dict(ad.io.read_elem(uns[MSI_METADATA_UNS_KEY]))
+        stored = ad.io.read_elem(uns[MSI_METADATA_UNS_KEY])
+        if not isinstance(stored, Mapping):
+            raise TypeError(
+                f"Table {name}: {MSI_METADATA_UNS_KEY} is a "
+                f"{type(stored).__name__}, not a mapping"
+            )
+        block: Dict[str, Any] = dict(stored)
         # `processing` is stored as JSON (a list of objects cannot
         # round-trip through AnnData/zarr); hand callers the parsed form.
         if isinstance(block.get("processing"), str):
