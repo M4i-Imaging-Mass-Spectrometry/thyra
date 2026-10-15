@@ -420,10 +420,12 @@ class OpticalTiffSource:
             source = zarr.open_array(store=page.aszarr(), mode="r")
             for start in range(y_start, y_stop, rows):
                 stop = min(start + rows, y_stop)
+                # zarr types reads as array-or-scalar; a slice of a
+                # numpy-buffered array is an ndarray, so asarray copies nothing.
                 if self.page_axes == "SYX":
-                    decoded = source[:, start:stop, x_start:x_stop]
+                    decoded = np.asarray(source[:, start:stop, x_start:x_stop])
                 else:
-                    decoded = source[start:stop, x_start:x_stop]
+                    decoded = np.asarray(source[start:stop, x_start:x_stop])
                 yield start, self._to_cyx(decoded)
 
     def _to_cyx(self, decoded: np.ndarray) -> np.ndarray:
@@ -912,15 +914,19 @@ class StreamedOpticalImage:
                 y1 = min(y0 + out_rows_per_read, unit.shape[1])
                 for x0 in range(0, unit.shape[2], out_cols_per_read):
                     x1 = min(x0 + out_cols_per_read, unit.shape[2])
-                    piece = source[
-                        c_sel,
-                        excess_y
-                        + (y_sel.start + y0) * factor : excess_y
-                        + (y_sel.start + y1) * factor,
-                        excess_x
-                        + (x_sel.start + x0) * factor : excess_x
-                        + (x_sel.start + x1) * factor,
-                    ]
+                    # asarray only narrows zarr's array-or-scalar read type:
+                    # the slice is already an ndarray, so nothing is copied.
+                    piece = np.asarray(
+                        source[
+                            c_sel,
+                            excess_y
+                            + (y_sel.start + y0) * factor : excess_y
+                            + (y_sel.start + y1) * factor,
+                            excess_x
+                            + (x_sel.start + x0) * factor : excess_x
+                            + (x_sel.start + x1) * factor,
+                        ]
+                    )
                     for r0 in range(0, y1 - y0, REDUCE_STRIP_ROWS):
                         r1 = min(r0 + REDUCE_STRIP_ROWS, y1 - y0)
                         unit[:, y0 + r0 : y0 + r1, x0:x1] = block_mean(
@@ -1219,7 +1225,9 @@ class OpticalImages:
         """
         # A source that states its own registration (an mzPeak archive with
         # a teach_points affine) hands it over whole.
-        stated = getattr(self.reader, "get_image_alignment", None)
+        stated: Optional[Callable[[], Optional[AreaAlignmentResult]]] = getattr(
+            self.reader, "get_image_alignment", None
+        )
         alignment = stated() if callable(stated) else None
         if alignment is not None:
             self._alignment = alignment
@@ -1441,7 +1449,9 @@ class OpticalImages:
         """
         if self.primary_filename:
             return
-        resolve = getattr(self.reader, "get_primary_optical_image_path", None)
+        resolve: Optional[Callable[[], Optional[Path]]] = getattr(
+            self.reader, "get_primary_optical_image_path", None
+        )
         primary = resolve() if callable(resolve) else None
         if primary is not None:
             self.primary_filename = Path(primary).stem.lower()
@@ -1797,11 +1807,12 @@ class OpticalImages:
         :meth:`_adopt_reader_primary_optical` gives: a reader here need not
         inherit from ``BaseMSIReader``.
         """
-        resolve = getattr(self.reader, "get_optical_image_label", None)
+        resolve: Optional[Callable[[Path], Optional[OpticalImageLabel]]] = getattr(
+            self.reader, "get_optical_image_label", None
+        )
         if not callable(resolve):
             return None
-        label: Optional[OpticalImageLabel] = resolve(image_path)
-        return label
+        return resolve(image_path)
 
     def _element_name(
         self, image_path: Path, label: Optional[OpticalImageLabel] = None
