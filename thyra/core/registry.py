@@ -47,13 +47,18 @@ import re
 import zipfile
 from pathlib import Path
 from threading import RLock
-from typing import Dict, Mapping, NoReturn, Type
+from typing import Callable, Dict, Mapping, NoReturn, Type, TypeVar
 
 from ..errors import ConversionRefused
 from .base_converter import BaseMSIConverter
 from .base_reader import BaseMSIReader
 
 logger = logging.getLogger(__name__)
+
+# The decorators hand back the class they were given, so a type checker
+# should see that class and not the base: ``PhiReader`` stays ``PhiReader``.
+_ReaderT = TypeVar("_ReaderT", bound=BaseMSIReader)
+_ConverterT = TypeVar("_ConverterT", bound=BaseMSIConverter)
 
 #: Which module declares ``@register_reader(format)`` for each format.
 #:
@@ -570,20 +575,22 @@ def get_converter_class(format_name: str) -> Type[BaseMSIConverter]:
     return _registry.get_converter_class(format_name)
 
 
-def register_reader(format_name: str):
+def register_reader(format_name: str) -> Callable[[Type[_ReaderT]], Type[_ReaderT]]:
     """Decorator for reader registration."""
 
-    def decorator(cls: Type[BaseMSIReader]):
+    def decorator(cls: Type[_ReaderT]) -> Type[_ReaderT]:
         _registry.register_reader(format_name, cls)
         return cls
 
     return decorator
 
 
-def register_converter(format_name: str):
+def register_converter(
+    format_name: str,
+) -> Callable[[Type[_ConverterT]], Type[_ConverterT]]:
     """Decorator for converter registration."""
 
-    def decorator(cls: Type[BaseMSIConverter]):
+    def decorator(cls: Type[_ConverterT]) -> Type[_ConverterT]:
         _registry.register_converter(format_name, cls)
         return cls
 
