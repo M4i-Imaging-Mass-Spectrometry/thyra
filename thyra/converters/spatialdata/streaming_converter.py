@@ -65,6 +65,21 @@ logger = logging.getLogger(__name__)
 _NOT_ACQUIRED = np.iinfo(np.int64).max
 
 
+def _obs_frame(adata: AnnData) -> pd.DataFrame:
+    """``adata.obs`` as the DataFrame this converter built the table from.
+
+    anndata types ``obs`` as a DataFrame or a lazily read ``Dataset2D``;
+    a table built here in memory always holds the DataFrame.
+
+    Raises:
+        TypeError: When ``obs`` is anything else.
+    """
+    obs = adata.obs
+    if not isinstance(obs, pd.DataFrame):
+        raise TypeError(f"Expected obs as a DataFrame, got {type(obs).__name__}")
+    return obs
+
+
 def _cell_centred_scale(pitches: List[float], axes: Tuple[str, ...]) -> Any:
     """Raster cells to micrometres, each cell centred on its own position.
 
@@ -213,6 +228,16 @@ class _TableUnit:
                 self.key,
                 n_repeats,
             )
+
+    def row_of(self, grid: int) -> int:
+        """Pass 2: the table row of grid position ``grid`` (-1 when dropped).
+
+        Raises:
+            RuntimeError: Before :meth:`finish_counting` decided the rows.
+        """
+        if self.row_of_grid is None:
+            raise RuntimeError(f"{self.key}: the row layout is not decided yet")
+        return int(self.row_of_grid[grid])
 
     def check_against_pass_one(
         self,
@@ -480,11 +505,9 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         are the layouts the per-slice and volume converters wrote before
         they were folded in here, kept so a store reads back the same.
         """
-        if self._dimensions is None:
-            raise ValueError("Dimensions are not initialized")
+        n_x, n_y, n_z = self._grid_dimensions()
         if self._common_mass_axis is None:
             raise ValueError("Common mass axis is not initialized")
-        n_x, n_y, n_z = self._dimensions
         n_cols = len(self._common_mass_axis)
         records_order = bool(self.reader.has_acquisition_order)
         if self.handle_3d:
@@ -569,6 +592,16 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
         return state
 
+    def _grid_dimensions(self) -> Tuple[int, int, int]:
+        """The declared ``(n_x, n_y, n_z)``, which initialization sets.
+
+        Raises:
+            ValueError: When the dimensions were never read.
+        """
+        if self._dimensions is None:
+            raise ValueError("Dimensions are not initialized")
+        return self._dimensions
+
     def _locate(
         self, units: List[_TableUnit], x: int, y: int, z: int
     ) -> Tuple[Optional[_TableUnit], int]:
@@ -579,7 +612,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         and wraps silently onto an unrelated pixel; a ``z`` past the
         planes would pick a table that does not exist.
         """
-        n_x, n_y, n_z = self._dimensions
+        n_x, n_y, n_z = self._grid_dimensions()
         if not (0 <= x < n_x and 0 <= y < n_y and 0 <= z < n_z):
             return None, -1
         if self.handle_3d:
@@ -746,7 +779,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         if pixel_count == 0:
             return "the reader yielded no spectra at all"
         if off_grid == pixel_count:
-            n_x, n_y, n_z = self._dimensions
+            n_x, n_y, n_z = self._grid_dimensions()
             return (
                 f"all {pixel_count} spectra sat outside the declared "
                 f"{n_x}x{n_y}x{n_z} grid"
@@ -794,10 +827,10 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         the source never asked.
         """
         region_total = state.region_total_intensity
-        if region_total is None:
+        rows = state.region_row_count
+        if region_total is None or rows is None:
             return
 
-        rows: Dict[int, int] = state.region_row_count
         for unit in state.units:
             x_idx, y_idx = self._kept_in_plane_xy(unit)
             numbers, counts = np.unique(
@@ -825,6 +858,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         units: List[_TableUnit] = state.units
         passes = state.passes
         region_total = state.region_total_intensity
+        region_map = self._region_map
 
         pixel_count = 0
         n_out_of_bounds = 0
@@ -848,7 +882,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 nnz = int(mz_indices.size)
                 unit, grid = self._locate(units, x, y, z)
 
-                if frame is not None:
+                if frame is not None and passes is not None:
                     # The row the sinks count under is the grid position,
                     # which is the table row's own order: rows are numbered
                     # in grid order once the empty positions are dropped.
@@ -877,8 +911,8 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                         # written nowhere, so it belongs in no mean
                         # (#243). Indices are unique within a spectrum,
                         # so the fancy-indexed add is exact.
-                        if region_total is not None:
-                            region = self._region_map.get((x, y), -1)
+                        if region_total is not None and region_map is not None:
+                            region = region_map.get((x, y), -1)
                             if region in region_total:
                                 region_total[region][mz_indices] += values
                     else:
@@ -893,10 +927,10 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         logger.info(
             "  Pre-scan complete: %s entries across %s columns",
             f"{total_nnz:,}",
-            f"{len(self._common_mass_axis):,}",
+            f"{len(state.var_df):,}",
         )
         if n_out_of_bounds:
-            n_x, n_y, n_z = self._dimensions
+            n_x, n_y, n_z = self._grid_dimensions()
             logger.warning(
                 "%d spectra sat outside the declared %dx%dx%d grid and were "
                 "skipped: their coordinates fall beyond the raster the source "
@@ -969,11 +1003,11 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 row = -1
                 if mz_indices.size > 0 and unit is not None:
                     unit.check_against_pass_one(grid, coords, values)
-                    row = int(unit.row_of_grid[grid])
+                    row = unit.row_of(grid)
 
-                if frame is not None:
+                if frame is not None and passes is not None:
                     passes.scatter(frame, row if row >= 0 else None)
-                if row >= 0:
+                if row >= 0 and unit is not None:
                     unit.assembly.scatter(row, mz_indices, values)
 
                 pbar.update(1)
@@ -1051,7 +1085,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # re-decides nothing it already decided).
         sibling_ctx = self._sibling_context()
         self.siblings.plan(sibling_ctx, unit.key)
-        self.siblings.prepare_scans(sibling_ctx, adata.obs, z_value=unit.plane)
+        self.siblings.prepare_scans(sibling_ctx, _obs_frame(adata), z_value=unit.plane)
 
         # Add MSI metadata to .uns
         self._add_metadata_to_uns(adata)
@@ -1073,7 +1107,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             state.tables,
             unit.key,
             unit.region_key,
-            adata.obs,
+            _obs_frame(adata),
             z_value=unit.plane,
             # A position measured twice is one summed row here; the
             # siblings read the same spectra and must sum them as well,
@@ -1160,7 +1194,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         centre lands on ``obs["spatial_x"] = i * pixel_size_um``, where
         the pixel's polygon is centred (D32).
         """
-        n_z = self._dimensions[2]
+        n_z = self._grid_dimensions()[2]
         if unit.plane is None and n_z > 1:
             # A volume, on the axes Image3DModel declares. z gets its own
             # spacing (see BaseMSIConverter._resolve_z_spacing). Scale
@@ -1185,9 +1219,12 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # the caller opts out (e.g. Ousia's wizard), MSI lands in pure
         # micrometer coordinates so downstream registration is the
         # canonical alignment step.
-        if self.optical.msi_in_pixel_space:
+        # msi_in_pixel_space already requires the matrix; naming it here
+        # lets the type checker see that too.
+        tic_to_image = self.optical.tic_to_image
+        if self.optical.msi_in_pixel_space and tic_to_image is not None:
             transform = Affine(
-                self.optical.tic_to_image,
+                tic_to_image,
                 input_axes=("x", "y"),
                 output_axes=("x", "y"),
             )

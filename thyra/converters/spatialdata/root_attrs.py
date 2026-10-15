@@ -330,9 +330,12 @@ class RootAttrsBuilder:
         # D48). It is written only when "global" is in micrometers so it
         # cannot be misread in the optical-pixel variant, and it is the
         # translation of the "acquisition" system below.
-        if ctx.optical.msi_in_pixel_space:
+        # msi_in_pixel_space already requires the matrix; naming it here
+        # lets the type checker see that too.
+        tic_to_image = ctx.optical.tic_to_image
+        if ctx.optical.msi_in_pixel_space and tic_to_image is not None:
             global_cs["raster_to_global_affine"] = [
-                [float(v) for v in row] for row in ctx.optical.tic_to_image
+                [float(v) for v in row] for row in tic_to_image
             ]
         else:
             global_cs["raster_to_global_affine"] = [

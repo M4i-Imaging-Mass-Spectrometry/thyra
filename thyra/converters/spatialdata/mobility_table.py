@@ -864,6 +864,8 @@ def _build_from_grid(
         )
     assembly.merge_duplicates |= merge_duplicates
     matrix = assembly.matrix()
+    # matrix() refuses to run before finish_counting() named the keys.
+    assert assembly.unique_keys is not None
     var = _grid_feature_var(assembly.unique_keys, axis, grid)
     logger.info(
         "Mobility grid: %d points over %d pixels onto %d occupied "

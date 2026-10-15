@@ -652,7 +652,7 @@ class SiblingTables:
             # Sizing it reads the reader's mobility range, which on a
             # processed imzML is a pass over the mobility arrays: a file
             # that fails there loses its heatmap, not its conversion.
-            heatmap = self._pending_heatmap(ctx, per_plane=per_plane)
+            heatmap = self._pending_heatmap(ctx.mass_axis, per_plane=per_plane)
         except Exception as e:
             logger.error("Could not size the mass-mobility heatmap: %s", str(e))
             heatmap = None
@@ -663,7 +663,7 @@ class SiblingTables:
             # without this every later plane would ask again and log it
             # again through the route that builds on first demand.
             self._mobility_heatmap_built = True
-        discovery = self._pending_grid_discovery(ctx, obs, z_value)
+        discovery = self._pending_grid_discovery(ctx.mass_axis, obs, z_value)
         sinks = [sink for sink in (heatmap, discovery) if sink is not None]
         if not sinks:
             return
@@ -694,7 +694,9 @@ class SiblingTables:
             discovery.finish()
             self._grid_discovery = discovery
 
-    def _pending_heatmap(self, ctx: SiblingContext, per_plane: bool = False) -> Any:
+    def _pending_heatmap(
+        self, mass_axis: NDArray[np.float64], per_plane: bool = False
+    ) -> Any:
         """An empty heatmap accumulator, when one is wanted and not yet built.
 
         ``per_plane`` asks for one heatmap per z plane, fed by the same
@@ -705,8 +707,8 @@ class SiblingTables:
         from .mobility_heatmap import prepare_mobility_heatmap, prepare_plane_heatmaps
 
         if per_plane:
-            return prepare_plane_heatmaps(self.reader, ctx.mass_axis)
-        return prepare_mobility_heatmap(self.reader, ctx.mass_axis)
+            return prepare_plane_heatmaps(self.reader, mass_axis)
+        return prepare_mobility_heatmap(self.reader, mass_axis)
 
     @staticmethod
     def _finished_blocks(heatmap: Any) -> Dict[Optional[int], Dict[str, Any]]:
@@ -714,12 +716,15 @@ class SiblingTables:
         from .mobility_heatmap import PlaneHeatmaps, finish_mobility_heatmap
 
         if isinstance(heatmap, PlaneHeatmaps):
-            return dict(heatmap.finish())
+            return {z: block for z, block in heatmap.finish().items()}
         block = finish_mobility_heatmap(heatmap)
         return {} if block is None else {None: block}
 
     def _pending_grid_discovery(
-        self, ctx: SiblingContext, obs: pd.DataFrame, z_value: Optional[int]
+        self,
+        mass_axis: NDArray[np.float64],
+        obs: pd.DataFrame,
+        z_value: Optional[int],
     ) -> Any:
         """The grid's discovery accumulator, when a grid table is planned."""
         if self._mobility_table_key is None or self._mobility_grid is None:
@@ -728,7 +733,7 @@ class SiblingTables:
 
         try:
             return GridDiscovery(
-                ctx.mass_axis,
+                mass_axis,
                 self._mobility_grid,
                 row_lookup(obs, z_value, None),
                 int(len(obs)),
@@ -758,7 +763,7 @@ class SiblingTables:
 
         n_x, n_y, n_z = ctx.dimensions
         n_grid = int(n_x * n_y * n_z)
-        heatmap = self._pending_heatmap(ctx)
+        heatmap = self._pending_heatmap(ctx.mass_axis)
         discovery = None
         if self._mobility_table_key is not None and self._mobility_grid is not None:
             try:
@@ -881,6 +886,7 @@ class SiblingTables:
         if self._mobility_table_key is not None:
             table = self._build_mobility_sibling(
                 ctx,
+                ctx.mass_axis,
                 obs,
                 table_key,
                 region_key,
@@ -898,6 +904,7 @@ class SiblingTables:
         if self._msms_table_key is not None:
             table = self._build_msms_sibling(
                 ctx,
+                ctx.mass_axis,
                 obs,
                 table_key,
                 region_key,
@@ -924,6 +931,7 @@ class SiblingTables:
     def _build_mobility_sibling(
         self,
         ctx: SiblingContext,
+        mass_axis: NDArray[np.float64],
         obs: pd.DataFrame,
         table_key: str,
         region_key: str,
@@ -962,7 +970,7 @@ class SiblingTables:
         return build_mobility_table(
             self.reader,
             obs,
-            ctx.mass_axis,
+            mass_axis,
             table_key,
             region_key,
             uns,
@@ -978,6 +986,7 @@ class SiblingTables:
     def _build_msms_sibling(
         self,
         ctx: SiblingContext,
+        mass_axis: NDArray[np.float64],
         obs: pd.DataFrame,
         table_key: str,
         region_key: str,
@@ -1001,7 +1010,7 @@ class SiblingTables:
         return build_msms_table(
             self.reader,
             obs,
-            ctx.mass_axis,
+            mass_axis,
             table_key,
             region_key,
             uns,
