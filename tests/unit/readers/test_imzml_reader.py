@@ -207,6 +207,21 @@ class TestImzMLReader:
         # Close should work without errors
         reader.close()
 
+    def test_metadata_after_close_says_the_parser_is_gone(self, create_minimal_imzml):
+        """Metadata asked of a closed reader names the cause.
+
+        It used to fail inside the extractor with an ``AttributeError`` on
+        ``None``.
+        """
+        imzml_path, _, _, _ = create_minimal_imzml
+
+        reader = ImzMLReader(imzml_path)
+        assert reader.n_spectra > 0
+        reader.close()
+
+        with pytest.raises(RuntimeError, match="Parser is not initialized"):
+            reader.get_essential_metadata()
+
     def test_intensity_threshold_filtering(self, create_minimal_imzml):
         """Test that intensity_threshold filters low values during iteration."""
         imzml_path, _, _, intensities = create_minimal_imzml

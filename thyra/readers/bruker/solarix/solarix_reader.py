@@ -527,8 +527,8 @@ class SolarixReader(BrukerBaseMSIReader):
             return np.array([], dtype=dtype)
         itemsize = np.dtype(dtype).itemsize
         expected = num_peaks * itemsize
-        actual = len(blob) if blob is not None else 0
-        if actual != expected:
+        if blob is None or len(blob) != expected:
+            actual = len(blob) if blob is not None else 0
             raise ConversionRefused(
                 f"Corrupt {column} blob in Spectra row Id={spectrum_id} of "
                 f"{self._peaks_path}: NumPeaks={num_peaks} implies "

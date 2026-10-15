@@ -314,13 +314,14 @@ def _integer_parameter(
     ):
         return None
     matched = pa.array(np.zeros(len(flat), dtype=bool))
+    # Built by pyarrow.compute at import time, so absent from its source.
+    or_ = pc.or_  # pyright: ignore[reportAttributeAccessIssue]
+    equal = pc.equal  # pyright: ignore[reportAttributeAccessIssue]
     for key, wanted in (("name", name), ("accession", accession)):
         if wanted is not None and key in fields:
-            matched = pc.or_(
-                matched, pc.fill_null(pc.equal(flat.field(key), wanted), False)
-            )
+            matched = or_(matched, pc.fill_null(equal(flat.field(key), wanted), False))
     rows = np.asarray(
-        pc.list_parent_indices(column).filter(matched).to_numpy(), dtype=np.int64
+        column.value_parent_indices().filter(matched).to_numpy(), dtype=np.int64
     )
     integers = value.field("integer").filter(matched)
     stated = np.asarray(integers.is_valid().to_numpy(zero_copy_only=False), dtype=bool)
@@ -811,15 +812,13 @@ class MzPeakArchive:
 
     def _distinct(self, column: str) -> List[str]:
         """Distinct values of one string child of the ``chunk`` struct."""
-        import pyarrow.compute as pc  # noqa: WPS433 - deliberate lazy import
-
         table = self.signal().read(columns=[column])
         values = table.column("chunk").combine_chunks()
         if hasattr(values, "num_chunks"):
             values = values.chunk(0)
         for name in column.split(".")[1:]:
             values = values.field(name)
-        return sorted(str(value or "") for value in pc.unique(values).to_pylist())
+        return sorted(str(value or "") for value in values.unique().to_pylist())
 
     def chunk_encodings(self) -> List[str]:
         """Chunk encodings the member that is read uses, as CV accessions.

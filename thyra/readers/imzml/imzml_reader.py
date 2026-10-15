@@ -1,4 +1,5 @@
 # thyra/readers/imzml/imzml_reader.py
+import io
 import logging
 from pathlib import Path
 from typing import Any, Dict, Generator, List, NamedTuple, Optional, Tuple, Union, cast
@@ -16,6 +17,7 @@ from xml.etree import ElementTree  # nosec B405
 import numpy as np
 from numpy.typing import NDArray
 from pyimzml.ImzMLParser import ImzMLParser
+from pyimzml.metadata import Metadata
 from tqdm import tqdm
 
 from ...core.base_extractor import MetadataExtractor
@@ -125,6 +127,74 @@ def _binary_array_specs(
         ("m/z", parser.mzGroupId, parser.mzPrecision),
         ("intensity", parser.intGroupId, parser.intensityPrecision),
     )
+
+
+def _parsed_metadata(parser: ImzMLParser) -> Metadata:
+    """Return the document metadata pyimzml parsed.
+
+    pyimzml sets ``metadata`` to ``None`` until its parse has run, and
+    ``_initialize_parser`` refuses a parser whose parse left it unset.
+
+    Args:
+        parser: An initialized ImzML parser.
+
+    Returns:
+        The parsed metadata.
+
+    Raises:
+        ConversionRefused: If the parser holds no metadata.
+    """
+    metadata = parser.metadata
+    if metadata is None:
+        raise ConversionRefused("Failed to parse metadata from imzML file.")
+    return metadata
+
+
+def _itemsize(parser: ImzMLParser, label: str, precision: Optional[str]) -> int:
+    """Return the bytes per value pyimzml reads for one binary array.
+
+    ``_validate_binary_group`` refuses an array with no resolved precision
+    before any of these reads.
+
+    Args:
+        parser: An initialized ImzML parser.
+        label: ``"m/z"`` or ``"intensity"``, for the message.
+        precision: The precision character pyimzml resolved for the array.
+
+    Returns:
+        The width pyimzml reads each value at.
+
+    Raises:
+        ConversionRefused: If pyimzml resolved no precision for the array.
+    """
+    if precision is None:
+        raise ConversionRefused(
+            f"imzML declares no precision for the {label} array, so pyimzml "
+            f"cannot know how to decode it."
+        )
+    itemsize: int = parser.sizeDict[precision]
+    return itemsize
+
+
+def _ibd_handle(parser: ImzMLParser) -> io.BufferedIOBase:
+    """Return the open ``.ibd`` file pyimzml reads from.
+
+    The reader always hands pyimzml its own ``open(ibd_path, "rb")`` handle,
+    so this is that same object.
+
+    Args:
+        parser: An initialized ImzML parser.
+
+    Returns:
+        The binary file handle.
+
+    Raises:
+        RuntimeError: If the parser holds no open binary file.
+    """
+    handle = parser.m
+    if not isinstance(handle, io.BufferedIOBase):
+        raise RuntimeError("The imzML parser holds no open .ibd file")
+    return handle
 
 
 def _cv_param_int(elem: Any, accession: str) -> Optional[int]:
@@ -737,7 +807,7 @@ class ImzMLReader(BaseMSIReader):
                 and (arrays.mz_lengths == arrays.mz_lengths[0]).all()
             )
 
-        n_scan_settings = len(parser.metadata.scan_settings)
+        n_scan_settings = len(_parsed_metadata(parser).scan_settings)
         if n_scan_settings != 1:
             logger.warning(
                 f"imzML declares {n_scan_settings} <scanSettings> blocks. "
@@ -768,7 +838,7 @@ class ImzMLReader(BaseMSIReader):
                 disagrees with the precision pyimzml resolved, or names a type
                 whose width is platform-dependent.
         """
-        groups = parser.metadata.referenceable_param_groups
+        groups = _parsed_metadata(parser).referenceable_param_groups
         group = groups.get(group_id)
         if group is None or precision is None:
             raise ConversionRefused(
@@ -862,7 +932,7 @@ class ImzMLReader(BaseMSIReader):
             array_length, encoded_length = declared
             if array_length is None or encoded_length is None:
                 continue
-            itemsize = parser.sizeDict[precision]
+            itemsize = _itemsize(parser, label, precision)
             expected = array_length * itemsize
             if encoded_length != expected:
                 raise ConversionRefused(
@@ -937,13 +1007,13 @@ class ImzMLReader(BaseMSIReader):
                 "m/z",
                 arrays.mz_offsets,
                 arrays.mz_lengths,
-                parser.sizeDict[parser.mzPrecision],
+                _itemsize(parser, "m/z", parser.mzPrecision),
             ),
             (
                 "intensity",
                 arrays.int_offsets,
                 arrays.int_lengths,
-                parser.sizeDict[parser.intensityPrecision],
+                _itemsize(parser, "intensity", parser.intensityPrecision),
             ),
         ]
         if self._mobility is not None:
@@ -1028,7 +1098,10 @@ class ImzMLReader(BaseMSIReader):
 
         declared = None
         try:
-            param_by_name = parser.metadata.file_description.param_by_name
+            metadata = parser.metadata
+            if metadata is None:
+                return
+            param_by_name = metadata.file_description.param_by_name
             value = param_by_name.get(ImzMLAccessions.UUID_NAME)
             if isinstance(value, str):
                 # Vendors differ on the registry-format braces (IONTOF writes
@@ -1124,6 +1197,8 @@ class ImzMLReader(BaseMSIReader):
 
         if not self.imzml_path:
             raise ValueError("ImzML path not available")
+        if self.parser is None:
+            raise RuntimeError("Parser is not initialized")
 
         return ImzMLMetadataExtractor(
             self.parser, self.imzml_path, spectrum_type=self.spectrum_type
@@ -1410,12 +1485,13 @@ class ImzMLReader(BaseMSIReader):
                 mzs = self._continuous_mzs = _as_float64(mzs)
                 return mzs, _as_float64(intensities)
 
-        m = parser.m
+        precision = parser.intensityPrecision
+        m = _ibd_handle(parser)
         m.seek(parser.intensityOffsets[idx])
         data = m.read(
-            parser.intensityLengths[idx] * parser.sizeDict[parser.intensityPrecision]
+            parser.intensityLengths[idx] * _itemsize(parser, "intensity", precision)
         )
-        return mzs, _as_float64(np.frombuffer(data, dtype=parser.intensityPrecision))
+        return mzs, _as_float64(np.frombuffer(data, dtype=precision))
 
     def _process_single_spectrum(
         self, parser: ImzMLParser, idx: int, pbar, tally: DropTally
@@ -1642,7 +1718,7 @@ class ImzMLReader(BaseMSIReader):
         offsets, lengths, _ = self._ensure_mobility_offsets()
         spec = cast(MobilityArraySpec, self._mobility)
         parser = cast(ImzMLParser, self.parser)
-        m = parser.m
+        m = _ibd_handle(parser)
         m.seek(int(offsets[idx]))
         data = m.read(int(lengths[idx]) * spec.dtype.itemsize)
         values = np.frombuffer(data, dtype=spec.dtype)
@@ -1946,8 +2022,9 @@ class ImzMLReader(BaseMSIReader):
             self.ibd_file = None
 
         if hasattr(self, "parser") and self.parser is not None:
-            if hasattr(self.parser, "m") and self.parser.m is not None:
-                self.parser.m.close()
+            handle = getattr(self.parser, "m", None)
+            if isinstance(handle, io.IOBase):
+                handle.close()
             self.parser = None
 
     @property

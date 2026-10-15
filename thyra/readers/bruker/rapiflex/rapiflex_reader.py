@@ -464,9 +464,11 @@ class RapiflexReader(BrukerBaseMSIReader):
     def n_datapoints(self) -> int:
         """Get number of data points per spectrum."""
         # Prefer header value, fall back to info metadata
-        return self._header.get(
-            "n_datapoints", self._info_metadata.get("DataPoints", 0)
-        )
+        n_datapoints = self._header.get("n_datapoints")
+        if n_datapoints is None:
+            fallback: int = self._info_metadata.get("DataPoints", 0)
+            return fallback
+        return n_datapoints
 
     @property
     def mass_range(self) -> Tuple[float, float]:

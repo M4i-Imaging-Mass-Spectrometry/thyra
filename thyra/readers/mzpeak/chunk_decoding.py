@@ -237,8 +237,10 @@ def _list_parts(array: Any) -> Tuple[NDArray[Any], NDArray[np.int64]]:
     """
     import pyarrow.compute as pc  # noqa: WPS433 - deliberate lazy import
 
+    # Built by pyarrow.compute at import time, so absent from its source.
+    raw = pc.list_value_length(array)  # pyright: ignore[reportAttributeAccessIssue]
     lengths = np.asarray(
-        pc.list_value_length(array).fill_null(0).to_numpy(zero_copy_only=False),
+        raw.fill_null(0).to_numpy(zero_copy_only=False),
         dtype=np.int64,
     )
     values = array.flatten().to_numpy(zero_copy_only=False)
