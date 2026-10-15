@@ -7,7 +7,6 @@ folder structure analysis.
 """
 
 import logging
-from abc import abstractmethod
 from pathlib import Path
 from typing import List, Optional
 
@@ -25,7 +24,8 @@ class BrukerBaseMSIReader(BaseMSIReader):
     - Optical image discovery
     - Teaching points file location
 
-    Subclasses must implement the abstract methods for reading spectral data.
+    Subclasses must implement the abstract methods for reading spectral data,
+    which :class:`BaseMSIReader` declares with their types.
 
     Attributes:
         folder_info: BrukerFolderInfo with analyzed folder structure
@@ -88,35 +88,3 @@ class BrukerBaseMSIReader(BaseMSIReader):
             Path to teaching points file, or None if not found
         """
         return self.folder_info.teaching_points_file
-
-    @abstractmethod
-    def _create_metadata_extractor(self):
-        """Create format-specific metadata extractor.
-
-        Must be implemented by subclasses.
-        """
-        pass
-
-    @abstractmethod
-    def get_common_mass_axis(self):
-        """Return the common mass axis for all spectra.
-
-        Must be implemented by subclasses.
-        """
-        pass
-
-    @abstractmethod
-    def iter_spectra(self):
-        """Iterate through spectra.
-
-        Must be implemented by subclasses.
-        """
-        pass
-
-    @abstractmethod
-    def close(self):
-        """Close all open file handles.
-
-        Must be implemented by subclasses.
-        """
-        pass
