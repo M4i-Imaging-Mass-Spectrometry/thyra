@@ -521,15 +521,21 @@ class _LatticeSearch:
             guesses.append((float(gx), float(gy)))
         return np.array(guesses)
 
-    def candidates(self, signs: Tuple[int, int]) -> np.ndarray:
+    def candidates(
+        self,
+        signs: Tuple[int, int],
+        planned: Optional[Tuple[int, int, int, int]] = None,
+    ) -> np.ndarray:
         """Every node that keeps each region's spots inside its Area's box.
 
         A node outside that range leaves a spot outside the Area. When no
         node is in range (a ``.mis`` that may not belong to the run), or too
-        many are to try, the nodes near D31's guess. Where no node keeps
-        every spot inside, the edge-spot first pass in :meth:`_score` may
-        miss the node with the fewest spots outside; the fit then warns
-        that the ``.mis`` may not belong to the run either way.
+        many are to try, the nodes near one seed: the node that centres the
+        planned grid on the Areas when there is one, else D31's guess. Where
+        no node keeps every spot inside, the edge-spot first pass in
+        :meth:`_score` may miss the node with the fewest spots outside; the
+        fit then warns that the ``.mis`` may not belong to the run either
+        way.
         """
         lo_x = lo_y = -(10**12)
         hi_x = hi_y = 10**12
@@ -549,10 +555,15 @@ class _LatticeSearch:
                 np.arange(lo_x, hi_x + 1), np.arange(lo_y, hi_y + 1)
             )
             return np.c_[grid_x.ravel(), grid_y.ravel()].astype(np.int64)
+        seeds = (
+            np.array([self.grid_centre(signs, planned)])
+            if planned is not None
+            else self.guesses(signs)
+        )
         span = range(-_NODE_SEARCH_RADIUS, _NODE_SEARCH_RADIUS + 1)
         near = {
             (int(round(gx)) + dx, int(round(gy)) + dy)
-            for gx, gy in self.guesses(signs)
+            for gx, gy in seeds
             for dx in span
             for dy in span
         }
@@ -583,13 +594,10 @@ class _LatticeSearch:
             and abs((height - 1) - float(np.ptp(gy))) <= _PLANNED_GRID_SLACK_STEPS
         )
 
-    def grid_distance(
-        self,
-        nodes: np.ndarray,
-        signs: Tuple[int, int],
-        planned: Tuple[int, int, int, int],
-    ) -> np.ndarray:
-        """Raster steps between the planned grid's centre and the Areas'.
+    def grid_centre(
+        self, signs: Tuple[int, int], planned: Tuple[int, int, int, int]
+    ) -> Tuple[float, float]:
+        """The reference node, unrounded, that centres the grid on the Areas.
 
         The grid a source plans covers its Areas, so on the right node the
         two centres agree within half a step, and a whole-step shift moves
@@ -598,8 +606,19 @@ class _LatticeSearch:
         """
         gx, gy = self._areas_offsets(signs)
         first_x, first_y, width, height = planned
-        centre_x = first_x + (width - 1) / 2.0 - 0.5 * (gx.min() + gx.max())
-        centre_y = first_y + (height - 1) / 2.0 - 0.5 * (gy.min() + gy.max())
+        return (
+            first_x + (width - 1) / 2.0 - 0.5 * float(gx.min() + gx.max()),
+            first_y + (height - 1) / 2.0 - 0.5 * float(gy.min() + gy.max()),
+        )
+
+    def grid_distance(
+        self,
+        nodes: np.ndarray,
+        signs: Tuple[int, int],
+        planned: Tuple[int, int, int, int],
+    ) -> np.ndarray:
+        """Raster steps between each node and :meth:`grid_centre`."""
+        centre_x, centre_y = self.grid_centre(signs, planned)
         return np.hypot(nodes[:, 0] - centre_x, nodes[:, 1] - centre_y)
 
     def _score(
@@ -611,7 +630,7 @@ class _LatticeSearch:
         that did best. The two passes agree whenever a node keeps every
         spot inside, which is the case that matters.
         """
-        nodes = self.candidates(signs)
+        nodes = self.candidates(signs, planned)
         edge = self.outside_counts(nodes, signs, edge_only=True)
         nodes = nodes[edge == edge.min()]
         outside = self.outside_counts(nodes, signs)
@@ -633,25 +652,52 @@ class _LatticeSearch:
         axis directions and the node that centres the grid on the Areas
         (D59); without one, D31's fewest unmeasured nodes and then the usual
         axis directions. ``tied`` counts the nodes that rule cannot tell
-        apart; of those, the one nearest D31's guess is kept.
+        apart; of those, the one nearest D31's guess is kept. Scored as
+        arrays: a run that stopped after a few spots in a large Area can
+        leave a quarter of a million nodes per pair of axis directions.
         """
-        scored = []
-        for preference, signs in enumerate(_LATTICE_AXIS_SIGNS):
-            fewest, nodes, distance, unmeasured = self._score(signs, planned)
-            guesses = self.guesses(signs)
-            for node, dist, n_unm in zip(nodes, distance, unmeasured):
-                near = float(np.min(np.hypot(*(guesses - node).T)))
-                rule = (
-                    (preference, float(dist), int(n_unm))
-                    if planned is not None
-                    else (int(n_unm), preference, 0.0)
+        parts: List[Tuple[np.ndarray, ...]] = []
+        for rank, axes in enumerate(_LATTICE_AXIS_SIGNS):
+            fewest, nodes, distance, unmeasured = self._score(axes, planned)
+            guesses = self.guesses(axes)
+            near = np.hypot(
+                nodes[:, np.newaxis, 0] - guesses[np.newaxis, :, 0],
+                nodes[:, np.newaxis, 1] - guesses[np.newaxis, :, 1],
+            ).min(axis=1)
+            count = len(nodes)
+            parts.append(
+                (
+                    np.full(count, fewest),
+                    np.full(count, rank),
+                    distance,
+                    unmeasured,
+                    near,
+                    nodes[:, 0],
+                    nodes[:, 1],
                 )
-                key = (fewest, rule, near, int(node[0]), int(node[1]))
-                scored.append((key, signs, int(n_unm)))
-        key, signs, n_unmeasured = min(scored, key=lambda s: s[0])
-        fewest, rule = key[0], key[1]
-        tied = sum(1 for s in scored if s[0][:2] == (fewest, rule))
-        return fewest, n_unmeasured, (key[3], key[4]), signs, tied
+            )
+        outside, preference, distance, unmeasured, near, node_x, node_y = (
+            np.concatenate(values) for values in zip(*parts)
+        )
+        rule = (
+            [preference, distance, unmeasured]
+            if planned is not None
+            else [unmeasured, preference]
+        )
+        # np.lexsort sorts by its last key first.
+        order = np.lexsort((node_y, node_x, near, *reversed(rule), outside))
+        pick = int(order[0])
+        same = outside == outside[pick]
+        for column in rule:
+            same &= column == column[pick]
+        signs = _LATTICE_AXIS_SIGNS[int(preference[pick])]
+        return (
+            int(outside[pick]),
+            int(unmeasured[pick]),
+            (int(node_x[pick]), int(node_y[pick])),
+            signs,
+            int(same.sum()),
+        )
 
 
 def fit_raster_lattice(

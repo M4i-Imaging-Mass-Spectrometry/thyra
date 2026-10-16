@@ -21,6 +21,7 @@ import numpy as np
 import pytest
 from shapely.geometry import Point, Polygon
 
+from thyra.alignment import teaching_points
 from thyra.alignment.teaching_points import TeachingPointAlignment, fit_raster_lattice
 from thyra.readers.bruker.mis_parser import parse_mis_file
 
@@ -383,6 +384,35 @@ def test_without_a_planned_grid_a_tie_is_reported(thyra_logs) -> None:
     assert fit is not None
     assert (fit.chosen_by, fit.nodes_tied) == ("Areas", 4)
     assert any("4 lattice nodes" in r.getMessage() for r in records)
+
+
+def test_past_the_node_cap_the_planned_grid_seeds_the_search(monkeypatch) -> None:
+    """Too many nodes to try: look near the grid's node, not the old guess.
+
+    A rectangle 15 rows tall, of which the first 2 were measured. The old
+    guess sits 6.5 rows from the right node, past the 3-node window.
+    """
+    monkeypatch.setattr(teaching_points, "_MAX_CANDIDATE_NODES", 1)
+    stage = _Stage()
+    ref_px = np.array([100.0, 100.0])
+
+    def corner(x: float, y: float) -> List[float]:
+        return list(stage.node_image(np.array([x]), np.array([y]), ref_px)[0])
+
+    lo, hi = corner(12 - 0.33, 8 - 0.33), corner(18 + 0.33, 22 + 0.33)
+    area = {"name": "tall", "type": 0, "points": [lo, hi], "raster": [STEP, STEP]}
+    positions = [
+        {"region": 0, "raster_x": x, "raster_y": y}
+        for x in range(12, 19)
+        for y in range(8, 10)
+    ]
+    fit, _, _, _ = _fit(
+        stage, areas=[area], positions=positions, planned_grid=(12, 8, 7, 15)
+    )
+
+    assert fit is not None
+    assert fit.reference_node == REFERENCE_NODE
+    assert fit.chosen_by == "planned grid"
 
 
 def test_a_planned_grid_that_misses_a_spot_is_not_used() -> None:

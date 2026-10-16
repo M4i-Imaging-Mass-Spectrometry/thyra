@@ -4494,6 +4494,11 @@ The three timsTOF runs also show what the `ImagingArea` bounds are: they
 span every planned row while the frames cover only the first ones, and
 51 x 48 nodes is exactly the 2,448 spots FlexImaging planned.
 
+The planned-grid rule assumes that on the right node the grid's centre
+lies within half a step of the centre of the Areas' box. A whole-step
+shift then moves it more than half a step away. On `rapiflex_dat_profile_a`
+the two centres were 0.4 step apart.
+
 On six complete runs the affine is unchanged to the last digit:
 `tims_msms_pos_brain1` and two runs beside it, `timstof_tdf_centroid_a`,
 `timstof_tsf_centroid_a` and one more complete TSF run. The two public
@@ -4508,7 +4513,8 @@ scaled.
 
 On `timstof_tsf_centroid_a` the old tolerance flagged 28 of 1,599 spots as
 outside the Area, the furthest 0.38 pixel out. Now none are, and the
-affine is unchanged.
+affine is unchanged. So a complete run that used to warn about spots
+outside its Area, from corner rounding alone, no longer does.
 
 **What changes in a store.**
 
@@ -4539,15 +4545,22 @@ that anchor is a step off.
 - The planned grid is taken to cover every Area in the `.mis`; a grid of
   another size is not used. Every partly acquired run measured had one
   Area.
+- The size check allows 1.5 steps. A grid planned with a margin column on
+  both sides of the Area fails it, and the fit falls back to D31's rule and
+  its tie warning: safe, but the grid goes unused.
 - Where the Areas' centre sits exactly half a step from both of two nodes,
   the planned grid ties too, and the fit warns.
 - A square overview photo has the same ratio on both axes at any turn, and
   is still scaled.
 - The search tries at most 250,000 nodes per pair of axis directions. Past
   that, or when no node keeps the spots inside the Areas' box, it tries the
-  3 nodes either side of the old guess, as before. When no node keeps every
-  spot inside, a first pass over the edge spots may miss the node with the
-  fewest spots outside; the fit warns either way.
+  3 nodes either side of a seed: the node that centres the planned grid on
+  the Areas when there is one. Without one the seed is the old guess, as
+  before, which on a run that stopped early in a large Area can miss the
+  right node; the fit then warns that spots fall outside, or that the
+  placement is not determined. When no node keeps every spot inside, a
+  first pass over the edge spots may miss the node with the fewest spots
+  outside; the fit warns either way.
 - Below 1.9 photo pixels per step, whole-pixel corners can still trip the
   warning about spots outside the Area.
 - A planned grid cannot tell a mirrored stage from the usual one. With one,
