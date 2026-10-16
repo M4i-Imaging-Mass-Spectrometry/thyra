@@ -2715,7 +2715,9 @@ where its `.d` records 0, and that 1 would again be a value nobody stated.
 
 ## D31. FlexImaging spots are placed on their lattice, not on the drawn Area
 
-**Status:** Implemented (2026-10-05), issue #428.
+**Status:** Implemented (2026-10-05), issue #428. Amended by
+[D59](#d59-a-fleximaging-run-that-stopped-early-is-placed-by-its-planned-grid)
+for a run that does not fill its Area.
 
 **Decision.** A Bruker MALDI run is placed on its FlexImaging photo by one
 affine. The teaching points map the photo to the stage. The spots sit on a
@@ -4435,3 +4437,118 @@ both:
   Like D19's GitHub dependency, an outage there can turn `lint` red.
 - The `rev` is not in `uv.lock`, so nothing moves it; bump it by hand,
   re-measure, and fix what a newer pyright reports in the same PR.
+
+---
+
+## D59. A FlexImaging run that stopped early is placed by its planned grid
+
+**Status:** Implemented (2026-10-16), issue #497. Amends
+[D31](#d31-fleximaging-spots-are-placed-on-their-lattice-not-on-the-drawn-area).
+
+**Decision.** D31 asks which raster node sits on the `.mis` reference
+point: the one that puts every measured spot inside its Area, then the one
+that leaves the fewest Area nodes unmeasured. Two things change.
+
+- The search tries every node that keeps each region's spots inside its
+  Area's box. It used to try the 3 nodes either side of a guess made from
+  the spots' centre and the Area's centre.
+- When the source states the grid it planned, that grid chooses among the
+  nodes that keep every spot inside: the node that centres it on the
+  Areas. timsTOF states it as the `ImagingArea` bounds in GlobalMetadata,
+  rapifleX in the `.dat` header. A grid is used only when it holds every
+  spot and its size matches the Areas' extent within 1.5 steps. With no
+  usable planned grid, D31's rule chooses.
+  When several nodes still fit equally, the fit keeps the one nearest the
+  old guess and warns that the placement is not determined.
+
+Three related fixes from the same issue:
+
+- **The overview photo.** A second optical image is placed by a `Scale`
+  onto the alignment image only when it is a resampled copy of it: the
+  same ratio on both axes, within the rounding of the copy's sides. Any
+  other image keeps one
+  coordinate system of its own, named after the element, with `Identity`,
+  and is not in `"global"`, the per-dataset system or `"acquisition"`. A
+  warning says so.
+- **The Area's edge tolerance** is at least 0.75 photo pixel, besides 0.1
+  raster step. A `.mis` stores Area corners in whole pixels, and rounding
+  moves an edge by up to 0.71 pixel. The pixel floor stops at 0.4 step, so
+  on a raster finer than 1.9 pixels per step a whole-step shift still
+  leaves a spot outside.
+- **A `<ReferencePoint>` or Area `<Raster>` that is not a finite number**
+  (`inf`, `nan`) is unreadable: the lattice uses the first teaching point,
+  or the Area's own step is dropped.
+
+**Why.** D31 assumed the spots fill their Area. A run that stops early
+fills its first rows, and every whole-step shift along the empty part
+leaves the same nodes unmeasured.
+
+| Run | Acquired | Before | After |
+|---|---|---|---|
+| `rapiflex_dat_profile_a` | 6 of 118 planned rows | 112 nodes tie; kept one 59 rows low | planned grid: one node, its centre 0.4 step from the Area's |
+| timsTOF TSF, same slide as `timstof_tsf_centroid_a` | 273 of 2,448 planned spots | kept a node 24 rows off | the node the complete runs on that slide use |
+| timsTOF TSF, same slide | 12,867 of 29,939 planned spots | kept a node 48 rows off | the same node |
+| timsTOF, 30 um, one freehand Area | 71,249 spots, rows 179-373 of 179-657 | the only fitting node lay 14 x 38 nodes from the guess; kept one with 1,550 spots outside | that node, every spot inside, found with or without the planned grid |
+
+The three timsTOF runs also show what the `ImagingArea` bounds are: they
+span every planned row while the frames cover only the first ones, and
+51 x 48 nodes is exactly the 2,448 spots FlexImaging planned.
+
+On six complete runs the affine is unchanged to the last digit:
+`tims_msms_pos_brain1` and two runs beside it, `timstof_tdf_centroid_a`,
+`timstof_tsf_centroid_a` and one more complete TSF run. The two public
+MassIVE runs still land on flexImaging's spot list.
+
+The overview photo of `tims_msms_pos_brain1` is the alignment scan turned
+by about 0.47 degrees. Its two scales were 4.012 and 4.100, and the `Scale`
+left it up to 297 photo pixels off at the corners. On
+`rapiflex_dat_profile_a` the scales were 2.013 and 2.096, a turn of about
+1 degree. The quarter-size `_0001` scan is 4.000 on both axes and is still
+scaled.
+
+On `timstof_tsf_centroid_a` the old tolerance flagged 28 of 1,599 spots as
+outside the Area, the furthest 0.38 pixel out. Now none are, and the
+affine is unchanged.
+
+**What changes in a store.**
+
+- A FlexImaging run that did not fill its Area: the TIC image's transform,
+  the pixel polygons, the crop window and `raster_to_global_affine`. With
+  `apply_optical_alignment=False`, the photo's place in micrometres.
+- A second optical image that is not a resampled copy of the alignment
+  image, such as the FlexImaging overview photo: its transformations. An
+  mzPeak archive's extra images follow the same rule.
+- A non-finite reference point is no longer copied into the raw `.mis`
+  metadata.
+- A complete run whose Area holds its spots one way only: nothing.
+
+**The objection.** Register the overview photo onto the alignment scan
+from its pixels, so it stays placed. It did not win. It means decoding both
+photos before the store is declared, against the bounded memory the
+optical path keeps. A feature fit is random, so two conversions would
+differ. It would need scikit-image as a declared dependency. And the
+overview is a coarser copy of the alignment scan, which is placed.
+
+A second objection: with no planned grid, anchor the run at the Area's
+first node, where FlexImaging starts. It did not win either. On
+`rapiflex_dat_profile_a` the first planned column was never acquired, so
+that anchor is a step off.
+
+**Known limits.**
+
+- The planned grid is taken to cover every Area in the `.mis`; a grid of
+  another size is not used. Every partly acquired run measured had one
+  Area.
+- Where the Areas' centre sits exactly half a step from both of two nodes,
+  the planned grid ties too, and the fit warns.
+- A square overview photo has the same ratio on both axes at any turn, and
+  is still scaled.
+- The search tries at most 250,000 nodes per pair of axis directions. Past
+  that, or when no node keeps the spots inside the Areas' box, it tries the
+  3 nodes either side of the old guess, as before. When no node keeps every
+  spot inside, a first pass over the edge spots may miss the node with the
+  fewest spots outside; the fit warns either way.
+- Below 1.9 photo pixels per step, whole-pixel corners can still trip the
+  warning about spots outside the Area.
+- A planned grid cannot tell a mirrored stage from the usual one. With one,
+  the usual axis directions are preferred before the grid is consulted.

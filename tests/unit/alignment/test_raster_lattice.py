@@ -265,6 +265,231 @@ def test_areas_with_different_steps_fall_back(thyra_logs) -> None:
     assert any("different raster steps" in r.getMessage() for r in records)
 
 
+# --- Edge tolerance and unreadable inputs (#497) ----------------------------
+
+
+def _fine_raster() -> Tuple[_Stage, List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """A 5 um raster at 2 um per pixel, 2.5 px per step, unrotated.
+
+    The Area's corners are the outermost spots rounded to whole pixels, as a
+    ``.mis`` stores them. The spots sit 0.4 px past a whole pixel, so the
+    far edges round 0.4 px short of them: 0.16 step, over the 0.1-step
+    tolerance.
+    """
+    stage = _Stage(rotation_deg=0.0, um_per_px=2.0)
+    step = 5.0
+    ref_px = np.array([100.4, 100.4])
+    ref = stage.to_stage(ref_px[np.newaxis])[0]
+    xs, ys = np.meshgrid(np.arange(20, 61), np.arange(10, 41))
+    um = np.c_[ref[0] + step * (xs.ravel() - 20), ref[1] - step * (ys.ravel() - 10)]
+    px = stage.to_image(um)
+    lo, hi = np.round(px.min(axis=0)), np.round(px.max(axis=0))
+    area = {
+        "name": "fine",
+        "type": 0,
+        "points": [list(lo), list(hi)],
+        "p1": list(lo),
+        "p2": list(hi),
+        "raster": [step, step],
+    }
+    positions = [
+        {"region": 0, "raster_x": int(x), "raster_y": int(y)}
+        for x, y in zip(xs.ravel(), ys.ravel())
+    ]
+    return stage, [area], positions
+
+
+def test_whole_pixel_area_corners_do_not_trip_the_warning(thyra_logs) -> None:
+    """Rounding a corner to a whole pixel is not a whole-step error (F3)."""
+    stage, areas, positions = _fine_raster()
+    with thyra_logs("thyra.alignment", logging.WARNING) as records:
+        fit = fit_raster_lattice(
+            teaching_points=stage.teaching_points(),
+            reference_point=(100.4, 100.4),
+            raster_step=(5.0, 5.0),
+            areas=areas,
+            positions=positions,
+            first_raster_x=20,
+            first_raster_y=10,
+        )
+
+    assert fit is not None
+    assert fit.spots_outside == 0
+    assert fit.reference_node == (20, 10)
+    assert not [r for r in records if "outside" in r.getMessage()]
+
+
+@pytest.mark.parametrize(
+    "reference", [(float("inf"), 100.0), (float("nan"), 100.0), (100.0, -np.inf)]
+)
+def test_a_non_finite_reference_point_falls_back_to_a_teaching_point(
+    reference: Tuple[float, float], thyra_logs
+) -> None:
+    """``inf`` raised OverflowError and ended the conversion (L2)."""
+    stage = _Stage()
+    with thyra_logs("thyra.alignment", logging.WARNING) as records:
+        fit, _, _, _ = _fit(stage, reference_point=reference)
+
+    assert fit is not None
+    assert fit.reference_from == "first teaching point"
+    assert fit.reference_node == REFERENCE_NODE
+    assert any("not a finite pixel" in r.getMessage() for r in records)
+
+
+@pytest.mark.parametrize("step", [(np.inf, STEP), (np.nan, STEP), (STEP, -1.0)])
+def test_a_non_finite_step_places_no_lattice(step: Tuple[float, float]) -> None:
+    stage = _Stage()
+    fit, _, _, _ = _fit(stage, raster_step=step)
+
+    assert fit is None
+
+
+# --- A run that stopped before filling its Area (#497, D59) -----------------
+
+
+def _partial(stage: _Stage) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """The rectangle Area alone, of which only its first two rows were measured.
+
+    The rectangle holds nodes 12-18 x 8-12. Two rows fit in it four ways,
+    shifted down by 0 to 3 rows, and each leaves the same nodes unmeasured.
+    """
+    areas, positions, _ = _acquisition(stage)
+    rows = [p for p in positions if p["region"] == 0 and p["raster_y"] <= 9]
+    return areas[:1], rows
+
+
+def test_a_partly_acquired_area_is_placed_by_the_planned_grid(thyra_logs) -> None:
+    """The source's planned grid covers the Area: its centre fixes the node."""
+    stage = _Stage()
+    areas, positions = _partial(stage)
+    with thyra_logs("thyra.alignment", logging.WARNING) as records:
+        fit, _, _, _ = _fit(
+            stage, areas=areas, positions=positions, planned_grid=(12, 8, 7, 5)
+        )
+
+    assert fit is not None
+    assert fit.reference_node == REFERENCE_NODE
+    assert (fit.chosen_by, fit.nodes_tied, fit.spots_outside) == ("planned grid", 1, 0)
+    assert not records
+
+
+def test_without_a_planned_grid_a_tie_is_reported(thyra_logs) -> None:
+    """D31's rule cannot choose here; the fit says so instead of guessing."""
+    stage = _Stage()
+    areas, positions = _partial(stage)
+    with thyra_logs("thyra.alignment", logging.WARNING) as records:
+        fit, _, _, _ = _fit(stage, areas=areas, positions=positions)
+
+    assert fit is not None
+    assert (fit.chosen_by, fit.nodes_tied) == ("Areas", 4)
+    assert any("4 lattice nodes" in r.getMessage() for r in records)
+
+
+def test_a_planned_grid_that_misses_a_spot_is_not_used() -> None:
+    stage = _Stage()
+    areas, positions = _partial(stage)
+    fit, _, _, _ = _fit(
+        stage, areas=areas, positions=positions, planned_grid=(13, 8, 7, 5)
+    )
+
+    assert fit is not None
+    assert fit.chosen_by == "Areas"
+
+
+def test_a_planned_grid_smaller_than_the_areas_is_not_used() -> None:
+    """The grid covers one Area of two: its centre would misplace the run."""
+    stage = _Stage()
+    areas, positions, _ = _acquisition(stage)
+    rows = [p for p in positions if p["region"] == 0 and p["raster_y"] <= 9]
+    fit, _, _, _ = _fit(stage, areas=areas, positions=rows, planned_grid=(12, 8, 7, 5))
+
+    assert fit is not None
+    assert fit.chosen_by == "Areas"
+
+
+def test_the_pixel_floor_stays_under_half_a_step() -> None:
+    """At 1 px per step, a column 0.6 step past the Area is outside it.
+
+    The 0.75 px floor alone would have let it in, and a whole-step shift
+    with it.
+    """
+    stage = _Stage(rotation_deg=0.0, um_per_px=5.0)
+    ref = stage.to_stage(np.array([[100.0, 100.0]]))[0]
+    xs, ys = np.meshgrid(np.arange(0, 20), np.arange(0, 10))
+    um = np.c_[ref[0] + 5.0 * xs.ravel(), ref[1] - 5.0 * ys.ravel()]
+    px = stage.to_image(um)
+    lo, hi = px.min(axis=0) - 0.3, px.max(axis=0) + 0.3
+    hi[0] -= 0.9  # the last column sits 0.6 px, 0.6 step, outside
+    area = {"name": "fine", "type": 0, "points": [list(lo), list(hi)]}
+    positions = [
+        {"region": 0, "raster_x": int(x), "raster_y": int(y)}
+        for x, y in zip(xs.ravel(), ys.ravel())
+    ]
+    fit = fit_raster_lattice(
+        teaching_points=stage.teaching_points(),
+        reference_point=(100.0, 100.0),
+        raster_step=(5.0, 5.0),
+        areas=[area],
+        positions=positions,
+        first_raster_x=0,
+        first_raster_y=0,
+    )
+
+    assert fit is not None
+    assert fit.spots_outside == 10
+
+
+def test_the_only_fitting_node_is_found_far_from_the_guess() -> None:
+    """An L-shaped Area whose bar alone was measured.
+
+    The measured block fits only in the bar, 8 to 10 nodes from where the
+    L's centroid puts the reference node. The search used to stop 3 nodes
+    out and kept a node with spots outside.
+    """
+    stage = _Stage()
+    ref_px = np.array([100.0, 100.0])
+
+    def corner(x: float, y: float) -> List[float]:
+        return list(stage.node_image(np.array([x]), np.array([y]), ref_px)[0])
+
+    m = 0.33
+    outline = [
+        corner(20 - m, 10 - m),
+        corner(60 + m, 10 - m),
+        corner(60 + m, 14 + m),
+        corner(24 + m, 14 + m),
+        corner(24 + m, 50 + m),
+        corner(20 - m, 50 + m),
+    ]
+    area = {
+        "name": "L",
+        "type": 3,
+        "points": outline,
+        "p1": [min(v[0] for v in outline), min(v[1] for v in outline)],
+        "p2": [max(v[0] for v in outline), max(v[1] for v in outline)],
+        "raster": [STEP, STEP],
+    }
+    positions = [
+        {"region": 0, "raster_x": x, "raster_y": y}
+        for x in range(20, 61)
+        for y in range(10, 15)
+    ]
+    fit = fit_raster_lattice(
+        teaching_points=stage.teaching_points(),
+        reference_point=tuple(ref_px),
+        raster_step=(STEP, STEP),
+        areas=[area],
+        positions=positions,
+        first_raster_x=20,
+        first_raster_y=10,
+    )
+
+    assert fit is not None
+    assert fit.spots_outside == 0
+    assert fit.reference_node == REFERENCE_NODE
+    assert fit.nodes_tied == 1
+
+
 # --- Two public runs: flexImaging's own spot list is the answer -------------
 
 

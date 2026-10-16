@@ -1268,6 +1268,15 @@ class OpticalImages:
 
         raster = mis_metadata.get("raster")
         reference = mis_metadata.get("reference_point")
+        # The raster the source planned over its Areas, where it states
+        # one (timsTOF GlobalMetadata, the rapifleX .dat header): it
+        # places a run that stopped before filling its Area (D59).
+        width, height = header.get("raster_width"), header.get("raster_height")
+        planned = header.get("planned_grid") or (
+            (first_raster_x, first_raster_y, width, height)
+            if width and height
+            else None
+        )
 
         # Compute area-based alignment
         try:
@@ -1280,6 +1289,7 @@ class OpticalImages:
                 teaching_points=mis_metadata.get("teaching_points"),
                 reference_point=tuple(reference) if reference else None,
                 raster_step=tuple(raster) if raster else None,
+                planned_grid=planned,
             )
             logger.info(
                 f"Computed optical alignment with "
@@ -1403,7 +1413,8 @@ class OpticalImages:
         Finds the optical images associated with the MSI data and adds them
         as image layers in the SpatialData output. The primary alignment image
         (from .mis <ImageFile>) is loaded first so its dimensions are known
-        when computing Scale transforms for the other images.
+        when computing Scale transforms for the other images, or telling
+        that a Scale cannot place one (D59).
 
         Args:
             images: The store's images, to add each placeholder to
@@ -1468,18 +1479,26 @@ class OpticalImages:
             return False
         return image_path.stem.lower() == self.primary_filename
 
-    def _scale_transform(self, x_size: int, y_size: int) -> Any:
+    def _scale_transform(self, x_size: int, y_size: int) -> Optional[Any]:
         """Compute a Scale transform for a non-primary optical image.
 
         Maps the image's pixel coordinates to the primary alignment image's
-        coordinate space using the dimension ratio.
+        coordinate space using the dimension ratio. That is right only for
+        a resampled copy of the alignment image, such as FlexImaging's
+        quarter-size ``_0001`` scan: the same ratio on both axes, give or
+        take the rounding of one pixel. FlexImaging's overview photo is the
+        source the alignment image was made from, turned by up to a degree
+        or so; a turn widens the two sides by different ratios, and a Scale
+        cannot express it (#497, D59).
 
         Args:
             x_size: Width of the non-primary image
             y_size: Height of the non-primary image
 
         Returns:
-            Scale transform, or Identity if no primary dimensions available
+            Scale transform, Identity if no primary dimensions available,
+            or ``None`` when the image is not a resampled copy of the
+            primary and so cannot be placed by a Scale.
         """
         if self._primary_dims is None:
             return Identity()
@@ -1487,6 +1506,17 @@ class OpticalImages:
         primary_w, primary_h = self._primary_dims
         scale_x = primary_w / x_size
         scale_y = primary_h / y_size
+        # The same ratio on both axes, to within the rounding of the copy's
+        # sides: half a copy pixel on each moves the cross product by up to
+        # half the sum of the primary's sides.
+        if abs(x_size * primary_h - y_size * primary_w) > max(primary_w, primary_h):
+            logger.warning(
+                f"  Not placed: {x_size}x{y_size} is not a resampled copy of the "
+                f"{primary_w}x{primary_h} alignment image (scales {scale_x:.4f} "
+                f"and {scale_y:.4f} differ). It is kept in its own coordinate "
+                "system, not in 'global'."
+            )
+            return None
 
         logger.info(f"  Scale to primary: ({scale_x:.4f}, {scale_y:.4f})")
         return Scale([scale_x, scale_y], axes=("x", "y"))
@@ -1560,8 +1590,10 @@ class OpticalImages:
         """Load a single optical image and add it to data structures.
 
         The primary image (identified by .mis <ImageFile>) gets an Identity
-        transform. Other images get a Scale transform mapping their pixel
-        coordinates to the primary image's coordinate space.
+        transform. A resampled copy of it gets a Scale transform mapping its
+        pixel coordinates to the primary image's coordinate space. Any other
+        image keeps a coordinate system of its own, named after it, and is
+        not in ``"global"`` (D59).
 
         Args:
             image_path: Path to the optical image (TIFF, JPEG, PNG or BMP)
@@ -1591,7 +1623,7 @@ class OpticalImages:
         #
         # 1. apply_optical_alignment=True (default): "global" is
         #    optical-image pixel space.  Primary image is Identity;
-        #    non-primary images Scale to match primary dims.
+        #    a resampled copy of it Scales to match primary dims.
         #
         # 2. apply_optical_alignment=False (e.g. Ousia wizard):
         #    "global" is MSI micrometer space.  Map the primary
@@ -1603,6 +1635,7 @@ class OpticalImages:
         um_mode = not self._apply_alignment and self._tic_to_image is not None
         is_primary = self._is_primary_optical(image_path)
         crop: Optional[OpticalCrop] = None
+        placed = True
         if is_primary:
             # The FULL dimensions, crop or not: the other images scale into
             # the whole scan's pixel grid, which is the frame everything on
@@ -1639,9 +1672,13 @@ class OpticalImages:
                 )
         elif self._primary_dims is not None:
             # Non-primary: first scale to match primary, then if
-            # we're in um-mode, chain through the same um affine.
+            # we're in um-mode, chain through the same um affine. An image
+            # a Scale cannot place stays out of both frames (D59).
             base = self._scale_transform(x_size, y_size)
-            if um_mode:
+            if base is None:
+                placed = False
+                transform = Identity()
+            elif um_mode:
                 transform = SequenceTransform([base, self._to_um_transform()])
             else:
                 transform = base
@@ -1668,14 +1705,21 @@ class OpticalImages:
         # chunk per request.
         smallest = min(y_size, x_size)
         scale_factors = _calc_optical_scale_factors(smallest)
+        # An unplaced image gets a coordinate system of its own, named after
+        # it: in "global" any transform would claim a placement.
+        transformations = (
+            self._transformations(
+                transform, um_mode and (is_primary or self._primary_dims is not None)
+            )
+            if placed
+            else {image_name: Identity()}
+        )
         streamed = StreamedOpticalImage(
             source=source,
             name=image_name,
             chunks=image_chunks(2),  # (1, 4096, 4096); sharding seam, see _chunking
             scale_factors=scale_factors,
-            transformations=self._transformations(
-                transform, um_mode and (is_primary or self._primary_dims is not None)
-            ),
+            transformations=transformations,
         )
         # Keyed by element name, as the images dict is: a second file that
         # maps to the same name replaces the first, the way the dict
@@ -1861,8 +1905,8 @@ class OpticalImages:
           ``<dataset_id>_optical_highres`` and neither name survives.
         * **Which one the alignment is stated against.** The .mis names it
           in ``<ImageFile>``; the store only ever implied it, through the
-          transform (the alignment image gets ``Identity``, the others a
-          ``Scale`` into its pixel grid) and only when
+          transform (the alignment image gets ``Identity``, a resampled
+          copy a ``Scale`` into its pixel grid) and only when
           ``apply_optical_alignment=True``. A consumer that wanted the
           alignment image had to guess -- Ousia guesses alphabetically.
 
