@@ -25,7 +25,7 @@ def _whole_run(reader: Any) -> Dict[str, Any]:
 
     Numbered 1, which is what ``obs["region_number"]`` holds when a reader
     gives no region map. A reader that states one region lists it itself,
-    with the number ``region=`` accepts (D58).
+    with the number ``region=`` accepts (D57).
     """
     essential = reader.get_essential_metadata()
     width, height = essential.dimensions[0], essential.dimensions[1]

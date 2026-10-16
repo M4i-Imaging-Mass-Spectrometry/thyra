@@ -585,7 +585,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # _finalize_table for what that means for a multi-plane store.
         # Only for two regions or more: one region's mean is the table's
         # own average_spectrum, so a single-region store does not get the
-        # same vector twice (D58).
+        # same vector twice (D57).
         unique_regions = sorted(set((self._region_map or {}).values()))
         if len(unique_regions) >= 2:
             state.region_total_intensity = {
@@ -852,7 +852,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             if rows.get(region, 0) > 0
         }
         # Two regions with rows or more: one region's mean is the table's
-        # own average_spectrum (D58).
+        # own average_spectrum (D57).
         state.avg_spectrum_per_region = means if len(means) >= 2 else None
 
     def _count_pass(self, state: ConversionState) -> None:

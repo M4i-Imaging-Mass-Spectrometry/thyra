@@ -164,7 +164,7 @@ class TestRegionInfoCarriesBounds:
         assert summary[2]["n_spectra"] == 9
 
     def test_a_single_region_set_is_one_entry(self) -> None:
-        """One region is listed with its number, box and name (D58)."""
+        """One region is listed with its number, box and name (D57)."""
         h = _harness(areas=["01"], region_info=[(0, 6)])
         assert h.get_region_info() == [
             {"region_number": 0, "n_spectra": 6, "bounds": (0, 0, 2, 1), "name": "01"}

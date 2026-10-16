@@ -2241,7 +2241,7 @@ plus a mask that any reader of the Zarr without anndata has to know about. The
 price: concatenating a table that has the column with one that has not gives
 pandas' `float64` with NaN, unless the caller asks for `Int64`.
 
-*Corrected 2026-10-16 (D58):* this entry first said `x`, `y` and
+*Corrected 2026-10-16 (D57):* this entry first said `x`, `y` and
 `region_number` are `int64`. In a 2D store all three are `int32`; in a volume
 `x` and `y` are `int64` and `region_number` is `int32`. The reasoning holds:
 each is a plain integer column.
@@ -3529,7 +3529,7 @@ exist. The new check refuses a conversion; it writes nothing.
 
 ## D44. Only a reader that can select a region accepts the region option
 
-**Status:** Implemented (2026-10-13). Superseded in part by D58
+**Status:** Implemented (2026-10-13). Superseded in part by D57
 (2026-10-16): one region now gives a region map, so a single-region store
 keeps the source's region number and name.
 
@@ -4443,7 +4443,7 @@ both:
 - The `rev` is not in `uv.lock`, so nothing moves it; bump it by hand,
   re-measure, and fix what a newer pyright reports in the same PR.
 
-## D58. A store keeps its source's regions, and a region store describes only its own
+## D57. A store keeps its source's regions, and a region store describes only its own
 
 **Status:** Implemented (2026-10-16), issue #496.
 

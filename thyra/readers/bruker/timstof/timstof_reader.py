@@ -1361,7 +1361,7 @@ class BrukerReader(BrukerBaseMSIReader):
             )
 
         # The name list_regions gives the lone region is the Area its spot
-        # names point to (D58), which on a run cut from a slide is not the
+        # names point to (D57), which on a run cut from a slide is not the
         # Area at the DB number; a request for that name is this region.
         lone_name = self._lone_region_name()
         if lone_name and self._requested_region == lone_name:
@@ -1394,7 +1394,7 @@ class BrukerReader(BrukerBaseMSIReader):
         the mapping is consistent with obs indices.
 
         One region is a map too, so the store keeps the number the
-        database states rather than a placeholder (D58).
+        database states rather than a placeholder (D57).
 
         Returns:
             Dict mapping (x, y) tuples to region numbers, or None if
@@ -1499,7 +1499,7 @@ class BrukerReader(BrukerBaseMSIReader):
             frame of :attr:`EssentialMetadata.dimensions`), and name
             (from .mis Area definitions when available), or None if
             region information is not available. One region is one
-            entry (D58).
+            entry (D57).
 
             Order follows ``_detect_regions``: frame count descending,
             NOT region number. Sort before displaying.

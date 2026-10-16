@@ -1969,7 +1969,7 @@ class MzPeakReader(BaseMSIReader):
         mzPeak has no region column. A Bruker archive from mzpeak-convert
         lists its regions under ``bruker_maldi.regions``; see
         :meth:`_regions`. One region is a map too, as from the ``.d``
-        (D58).
+        (D57).
         """
         regions = self._regions()
         return regions[0] if regions is not None else None
@@ -2066,7 +2066,7 @@ class MzPeakReader(BaseMSIReader):
 
         The box and the name of a region come from its listing when it has
         one, as for the ``.d``. A region no listing describes is boxed by
-        its own pixels. One region is a map too (D58).
+        its own pixels. One region is a map too (D57).
         """
         numbers = sorted({int(n) for n in named.tolist()})
         if not numbers:
@@ -2091,7 +2091,7 @@ class MzPeakReader(BaseMSIReader):
                 entry["name"] = name
             info.append(entry)
         # In spectrum order: a position two regions measured takes the
-        # region of its first scan, as on the .d (D58).
+        # region of its first scan, as on the .d (D57).
         region_map = build_region_map(
             (int(x), int(y), int(n))
             for (x, y), n in zip(coordinates.tolist(), named.tolist())
