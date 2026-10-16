@@ -712,7 +712,7 @@ class UnsAssembler:
         preserves the structure and can be parsed with json.loads().
 
         Always written for a consistent schema. A reader that states one
-        region gives its one entry (D58); a format with no regions gets a
+        region gives its one entry (D57); a format with no regions gets a
         single entry with region_number=1.
         """
         region_info = ctx.region_info

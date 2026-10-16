@@ -665,7 +665,7 @@ class UnfusedEmptySummedStubReader(EmptySummedStubReader):
 
 
 class TestAPositionWithoutARow:
-    """The heatmap is a mean over the summed table's rows (issue #495, D57)."""
+    """The heatmap is a mean over the summed table's rows (issue #495, D58)."""
 
     @pytest.mark.parametrize(
         "reader_type", [EmptySummedStubReader, UnfusedEmptySummedStubReader]

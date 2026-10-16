@@ -590,7 +590,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             # - obs["region_number"] exists on every dataset
             # - uns["regions"] always has at least one entry
             # A reader that states its regions gives a map even for one
-            # (D58); a format with no region concept defaults to region 1.
+            # (D57); a format with no region concept defaults to region 1.
             self._region_map = self.reader.get_region_map()
             self._region_info = self.reader.get_region_info()
             if self._region_info:
@@ -903,7 +903,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         without a region map every pixel is region 1, which is also what
         ``uns["regions"]`` reports for that case. The timsTOF, rapifleX,
         mzPeak and solariX readers produce a map whenever the source
-        states its regions, one region included (D58); a position missing
+        states its regions, one region included (D57); a position missing
         from it gets -1.
 
         Kept as one method because the three write paths that used to

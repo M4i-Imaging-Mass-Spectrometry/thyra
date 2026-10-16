@@ -627,7 +627,7 @@ class RapiflexReader(BrukerBaseMSIReader):
             when there is no poslog, or when a spectrum has no poslog spot
             or sits under two regions: a map that does not cover every
             pixel would write region -1 for the gaps. One region is a map
-            too, so the store keeps its number (D58). Spots without a
+            too, so the store keeps its number (D57). Spots without a
             spectrum are not looked at.
 
         Raises:
@@ -671,7 +671,7 @@ class RapiflexReader(BrukerBaseMSIReader):
         """Map 0-based ``(x, y)`` to the poslog region, or ``None``.
 
         One region is a map too, as on timsTOF, so a single-region store
-        keeps the poslog's number rather than the placeholder 1 (D58).
+        keeps the poslog's number rather than the placeholder 1 (D57).
         """
         cells = self._poslog_regions()
         return dict(cells) if cells else None

@@ -152,7 +152,7 @@ def _region_summary(reader: Any) -> Optional[List[Dict[str, Any]]]:
     Three things happen here that callers should not each have to do:
 
     * **A single region is not a region list.** A reader that knows its
-      one region answers a one-entry list (D58), and one without regions
+      one region answers a one-entry list (D57), and one without regions
       answers ``None``, so a caller testing ``regions is not None`` would
       get a different answer per format for the same "is this one
       section?" question.  One entry is folded to ``None`` here, and the

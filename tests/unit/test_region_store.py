@@ -326,7 +326,7 @@ class TestARegionWithNoRowHasNoMean:
         assert sorted(table.uns["average_spectrum_per_region"]) == ["0", "1"]
 
     def test_one_region_with_rows_writes_no_per_region_mean(self, tmp_path):
-        """Its mean would be ``average_spectrum`` again (D58)."""
+        """Its mean would be ``average_spectrum`` again (D57)."""
         run = _run(
             tmp_path,
             "UPDATE MaldiFrameInfo SET RegionNumber = 2 WHERE Frame = 5",

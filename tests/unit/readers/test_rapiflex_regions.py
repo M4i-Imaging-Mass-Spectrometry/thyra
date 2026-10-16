@@ -114,7 +114,7 @@ def test_region_info_has_counts_bounds_and_area_names(tmp_path):
 
 
 def test_one_region_is_a_map_with_its_poslog_number(tmp_path):
-    """A single-region store keeps the poslog's number, not 1 (D58)."""
+    """A single-region store keeps the poslog's number, not 1 (D57)."""
     cells = {(x, y): 2 for x in range(WIDTH) for y in range(HEIGHT)}
     reader = RapiflexReader(_write(tmp_path / "rf", cells))
     try:

@@ -595,7 +595,7 @@ class TestRegions:
         ]
 
     def test_one_region_is_a_map_as_from_the_d(self, tmp_path):
-        """One listed region keeps its number and box, as a ``.d`` does (D58)."""
+        """One listed region keeps its number and box, as a ``.d`` does (D57)."""
         archive = _two_regions(tmp_path, [_region(3, 8, (101, 105), (11, 12))])
 
         with MzPeakReader(archive) as reader:
@@ -1085,7 +1085,7 @@ class TestRegionNamedByEachScan:
         assert region_map[(3, 0)] == 1
 
     def test_one_named_region_is_a_map_as_from_the_d(self, tmp_path):
-        """As for a ``.d`` of one region (D58)."""
+        """As for a ``.d`` of one region (D57)."""
         archive = _named_regions(tmp_path, [3] * 8, [])
 
         with MzPeakReader(archive) as reader:
