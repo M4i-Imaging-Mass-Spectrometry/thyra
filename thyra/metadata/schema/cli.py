@@ -59,7 +59,7 @@ def _load_json(path: Path) -> Dict[str, Any]:
     ``thyra metadata src > meta.json`` as UTF-16, and with its Out-File
     default set to utf8 it writes UTF-8 with a mark. Text in any other
     encoding, an ANSI code page for instance, is refused in one line, and
-    so is JSON nested deeper than the parser can follow.
+    so is JSON nested more than ``_MAX_JSON_DEPTH`` levels deep.
 
     So is a number that is not finite. ``json.loads`` reads ``1e999`` and
     the tokens ``Infinity`` and ``NaN``, none of which JSON has, and the
@@ -80,6 +80,11 @@ def _load_json(path: Path) -> Dict[str, Any]:
         raise click.ClickException(f"Could not read {path}: {exc}") from exc
     if not isinstance(document, dict):
         raise click.ClickException(f"{path} does not contain a JSON object")
+    if _nested_deeper_than(document, _MAX_JSON_DEPTH):
+        raise click.ClickException(
+            f"Could not read {path}: its JSON is nested too deeply (more than "
+            f"{_MAX_JSON_DEPTH} levels). A metadata document is a few levels deep."
+        )
     location = _first_non_finite(document)
     if location is not None:
         raise click.ClickException(
@@ -89,12 +94,37 @@ def _load_json(path: Path) -> Dict[str, Any]:
     return document
 
 
+# Far deeper than any metadata document (about six levels) or overlay. Where
+# the parser stops is no bound to rely on: Python 3.14 measures recursion
+# against the C stack, and on Linux it parses 100,000 levels, which the
+# merge, the validation and the encoder then recurse through (issue #494).
+_MAX_JSON_DEPTH = 100
+
+
+def _nested_deeper_than(document: Any, limit: int) -> bool:
+    """Whether ``document`` nests objects or arrays more than ``limit`` deep.
+
+    Walked with a stack rather than by recursion, and stopped at the first
+    node past the limit, so a pathological input costs little.
+    """
+    stack: List[Tuple[Any, int]] = [(document, 1)]
+    while stack:
+        node, depth = stack.pop()
+        if depth > limit:
+            return True
+        if isinstance(node, dict):
+            stack.extend((value, depth + 1) for value in node.values())
+        elif isinstance(node, list):
+            stack.extend((value, depth + 1) for value in node)
+    return False
+
+
 def _first_non_finite(document: Dict[str, Any]) -> Optional[str]:
     """The dotted location of the first NaN or infinity in ``document``.
 
-    Walked with a stack rather than by recursion: a document nested
-    almost as deeply as the parser allows would otherwise end in the
-    RecursionError :func:`_load_json` refuses for deeper ones.
+    Walked with a stack rather than by recursion. It builds a location for
+    every node, so it runs only on a document within ``_MAX_JSON_DEPTH``
+    or one Thyra built itself.
     """
     stack: List[Tuple[str, Any]] = [("", document)]
     while stack:
@@ -124,8 +154,8 @@ def _render_json(document: Dict[str, Any]) -> str:
     try:
         return json.dumps(document, indent=2, allow_nan=False)
     except RecursionError as exc:
-        # An overlay nested below the parser's limit can still be too deep
-        # for the encoder, which recurses in Python on some versions.
+        # A backstop: inputs are refused past _MAX_JSON_DEPTH when read, and
+        # Thyra's own documents are a few levels deep.
         raise click.ClickException(
             "Nothing was written: the metadata is nested too deeply to write."
         ) from exc

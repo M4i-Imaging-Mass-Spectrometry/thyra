@@ -229,6 +229,26 @@ class TestJsonNestedTooDeeply:
         self._assert_refused(result)
         assert not out.exists()
 
+    def test_a_depth_the_parser_reads_is_refused_too(self, runner, tmp_path):
+        """Python 3.14 on Linux parses 100,000 levels; the bound is Thyra's own."""
+        path = _write_doc(tmp_path)
+        deep = _deep_json(tmp_path / "deep.json", levels=200)
+        result = runner.invoke(validate_command, [str(path), "--merge", str(deep)])
+        self._assert_refused(result)
+        assert "more than 100 levels" in result.output + (result.stderr or "")
+
+    def test_a_document_within_the_bound_is_read(self, runner, tmp_path):
+        """98 array levels inside two object levels: 100 in all."""
+        path = _write_doc(tmp_path)
+        overlay = tmp_path / "deep.json"
+        overlay.write_text(
+            '{"sample": {"a": ' + "[" * 98 + "]" * 98 + "}}", encoding="utf-8"
+        )
+        result = runner.invoke(validate_command, [str(path), "--merge", str(overlay)])
+        message = result.output + (result.stderr or "")
+        assert "nested too deeply" not in message
+        assert "sample.a" in message  # the schema has no such field
+
     def test_export_metaspace_refuses_it_as_an_overlay(self, runner, tmp_path):
         path = _write_doc(tmp_path)
         deep = _deep_json(tmp_path / "deep.json")
@@ -303,19 +323,18 @@ class TestNonFiniteNumbers:
         self._assert_refused(result, "ms_analysis.pixel_size_um.x")
         assert not out.exists()
 
-    def test_the_json_writer_refuses_a_document_too_deep_to_write(self):
-        """An overlay below the parser's limit can exceed the encoder's."""
+    def test_the_json_writer_refuses_a_document_too_deep_to_write(self, monkeypatch):
+        """The encoder's own recursion limit is refused in one line too."""
         import click
 
-        from thyra.metadata.schema.cli import _render_json
+        from thyra.metadata.schema import cli
 
-        deep: dict = {}
-        node = deep
-        for _ in range(100_000):
-            node["a"] = {}
-            node = node["a"]
+        def too_deep(*args, **kwargs):
+            raise RecursionError("maximum recursion depth exceeded")
+
+        monkeypatch.setattr(cli.json, "dumps", too_deep)
         with pytest.raises(click.ClickException, match="nested too deeply"):
-            _render_json(deep)
+            cli._render_json({"x": 1})
 
     def test_the_json_writer_refuses_them_in_one_line(self):
         """The backstop for a value from a store or a raw source."""
