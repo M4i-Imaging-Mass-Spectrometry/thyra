@@ -237,6 +237,73 @@ class TestWatersReaderClose:
             reader._ensure_initialized()
 
 
+class TestWatersReaderWithoutRaster:
+    """A run whose scans all report one stage position (issue #494).
+
+    A conversion refuses it (issue #213). ``thyra metadata`` builds the
+    reader with ``metadata_only=True`` and still writes the document, so
+    the reader opens the run and refuses only a spectrum read.
+    """
+
+    @staticmethod
+    def _spot_library(mock_ml_cls):
+        mock_ml = _fake_library()
+        mock_ml_cls.get_instance.return_value = mock_ml
+        mock_ml.is_imaging_file.return_value = True
+        mock_ml.get_number_of_functions.return_value = 1
+        mock_ml.classify_function.return_value = FunctionType.MS
+        mock_ml.get_number_of_scans_in_function.return_value = 3
+        mock_ml.get_scan_info.return_value = _make_scan_info(0.5, 0.5)
+        return mock_ml
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    def test_a_conversion_is_still_refused(self, mock_ml_cls, mock_waters_data):
+        self._spot_library(mock_ml_cls)
+        reader = WatersReader(mock_waters_data)
+        with pytest.raises(ConversionRefused, match="same stage position"):
+            reader._ensure_initialized()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    def test_a_metadata_reader_opens_it(self, mock_ml_cls, mock_waters_data):
+        self._spot_library(mock_ml_cls)
+        reader = WatersReader(mock_waters_data, metadata_only=True)
+        reader._ensure_initialized()
+
+        grid = reader._imaging_grid
+        assert grid is not None
+        assert grid.dimensions == (1, 1, 1)
+        assert (grid.pixel_size_x, grid.pixel_size_y) == (0.0, 0.0)
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    def test_a_metadata_reader_refuses_its_spectra(self, mock_ml_cls, mock_waters_data):
+        mock_ml = self._spot_library(mock_ml_cls)
+        reader = WatersReader(mock_waters_data, metadata_only=True)
+        # Opened first, so the refusals below come from the spectrum reads
+        # and not from the grid build a conversion is refused at.
+        reader._ensure_initialized()
+
+        with pytest.raises(ConversionRefused, match="same stage position"):
+            next(iter(reader.iter_spectra()))
+        with pytest.raises(ConversionRefused, match="same stage position"):
+            next(iter(reader.iter_spectra_with_acquisition_order()))
+        with pytest.raises(ConversionRefused, match="same stage position"):
+            reader.get_common_mass_axis()
+        drift = MagicMock(values=np.array([1.0, 2.0]))
+        with patch.object(reader, "get_mobility_axis", return_value=drift):
+            with pytest.raises(ConversionRefused, match="same stage position"):
+                next(iter(reader.iter_mobility_spectra()))
+        mock_ml.read_spectrum.assert_not_called()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    def test_it_says_why_there_is_no_raster(self, mock_ml_cls, mock_waters_data):
+        self._spot_library(mock_ml_cls)
+        reader = WatersReader(mock_waters_data, metadata_only=True)
+        assert reader.no_raster_reason is None  # not opened yet
+        reader._ensure_initialized()
+        assert reader.no_raster_reason is not None
+        assert "same stage position" in reader.no_raster_reason
+
+
 class TestWatersReaderIterSpectra:
     """Test spectrum iteration."""
 
