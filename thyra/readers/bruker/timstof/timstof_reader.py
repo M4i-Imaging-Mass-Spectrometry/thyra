@@ -45,6 +45,7 @@ from ....core.msms import (
     IsolationWindow,
     windows_overlap,
 )
+from ....core.region_map import build_region_map
 from ....core.registry import register_reader
 from ....errors import ConversionRefused
 from ....metadata.constants import SpectrumType
@@ -53,7 +54,6 @@ from ....utils.bruker_exceptions import DataError, FileFormatError, SDKError
 from ..base_bruker_reader import BrukerBaseMSIReader
 from ..folder_structure import BrukerFolderStructure, BrukerFormat
 from ..mis_parser import parse_mis_file
-from ..region_map import build_region_map
 from ..vendor_db import open_read_only
 from .sdk.dll_manager import DLLManager
 from .sdk.sdk_functions import (
@@ -729,10 +729,13 @@ class BrukerReader(BrukerBaseMSIReader):
 
         # Region detection and selection (must be after database init)
         self._region_info: List[Tuple[int, int]] = self._detect_regions()
+        # Before the selection: a lone region's Area Name comes from the
+        # spot names these positions carry (_single_region_area), and a
+        # request naming it is answered from there.
+        self._positions: List[Dict[str, Any]] = self._build_positions_from_db()
         self._selected_region: Optional[int]
         self._region_frame_ids: Optional[set]
         self._selected_region, self._region_frame_ids = self._select_region()
-        self._positions: List[Dict[str, Any]] = self._build_positions_from_db()
         self._header: Dict[str, Any] = self._build_header_alignment()
 
         # Cached properties (lazy loaded)
@@ -1391,6 +1394,19 @@ class BrukerReader(BrukerBaseMSIReader):
                 "convert it."
             )
 
+        # The name list_regions gives the lone region is the Area its spot
+        # names point to (D58), which on a run cut from a slide is not the
+        # Area at the DB number; a request for that name is this region.
+        lone_name = self._lone_region_name()
+        if lone_name and self._requested_region == lone_name:
+            logger.info(
+                "Region %r is the only region in this dataset; all %d frames "
+                "are converted.",
+                lone_name,
+                self._region_info[0][1],
+            )
+            return
+
         resolved = self._resolve_requested_region()
         valid_regions = [r for r, _ in self._region_info]
         if resolved not in valid_regions:
@@ -1411,11 +1427,14 @@ class BrukerReader(BrukerBaseMSIReader):
         region number. Uses the same coordinate offsets as iter_spectra() so
         the mapping is consistent with obs indices.
 
+        One region is a map too, so the store keeps the number the
+        database states rather than a placeholder (D58).
+
         Returns:
             Dict mapping (x, y) tuples to region numbers, or None if
-            region information is not available (single-region dataset).
+            region information is not available (no MaldiFrameInfo).
         """
-        if not self._region_info or len(self._region_info) <= 1:
+        if not self._region_info:
             return None
 
         coordinate_offsets = self._get_coordinate_offsets()
@@ -1513,7 +1532,8 @@ class BrukerReader(BrukerBaseMSIReader):
             bounds (``(x_min, y_min, x_max, y_max)``, 0-based, in the
             frame of :attr:`EssentialMetadata.dimensions`), and name
             (from .mis Area definitions when available), or None if
-            region information is not available.
+            region information is not available. One region is one
+            entry (D58).
 
             Order follows ``_detect_regions``: frame count descending,
             NOT region number. Sort before displaying.
@@ -1522,10 +1542,13 @@ class BrukerReader(BrukerBaseMSIReader):
             store holds no other, and the other regions' boxes lie
             outside its raster (issue #496).
         """
-        if not self._region_info or len(self._region_info) <= 1:
+        if not self._region_info:
             return None
 
         areas = self._mis_metadata.get("areas", [])
+        single_area = (
+            self._single_region_area() if len(self._region_info) == 1 else None
+        )
         bounds = self._region_bounds()
         result = []
         for region_num, n_frames in self._region_info:
@@ -1541,10 +1564,39 @@ class BrukerReader(BrukerBaseMSIReader):
             box = bounds.get(region_num)
             if box is not None:
                 info["bounds"] = box
-            if region_num < len(areas) and areas[region_num].get("name"):
-                info["name"] = areas[region_num]["name"]
+            area = region_num if single_area is None else single_area
+            if area < len(areas) and areas[area].get("name"):
+                info["name"] = areas[area]["name"]
             result.append(info)
         return result
+
+    def _single_region_area(self) -> int:
+        """Which ``.mis`` Area a run's one region is, by the alignment's rule.
+
+        A single-region ``.d`` cut from a multi-region slide often states
+        RegionNumber 0 whatever area it was, and names the true one in its
+        spot names (``R03X...``); the alignment already reads it from
+        there (:meth:`_query_maldi_frame_positions`). The name follows
+        that area, while the number stays the database's, the one
+        ``region=`` accepts.
+        """
+        areas = self._mis_metadata.get("areas", []) if self._mis_metadata else []
+        regions = {position["region"] for position in self._positions}
+        if len(regions) == 1:
+            area = int(regions.pop())
+            if area < len(areas):
+                return area
+        return int(self._region_info[0][0])
+
+    def _lone_region_name(self) -> Optional[str]:
+        """The ``.mis`` Area Name of a single-region run, or ``None``."""
+        if not self._region_info or len(self._region_info) != 1:
+            return None
+        areas = self._mis_metadata.get("areas", []) if self._mis_metadata else []
+        area = self._single_region_area()
+        if area < len(areas) and areas[area].get("name"):
+            return str(areas[area]["name"])
+        return None
 
     def get_common_mass_axis(self) -> NDArray[np.float64]:
         """Return the common mass axis composed of all unique m/z values.

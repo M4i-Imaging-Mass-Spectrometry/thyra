@@ -29,7 +29,11 @@ from math import isfinite
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
-from .core.base_converter import BaseMSIConverter, PixelSizeSource
+from .core.base_converter import (
+    BaseMSIConverter,
+    PixelSizeSource,
+    log_interrupt_after_save,
+)
 from .core.base_reader import BaseMSIReader
 from .core.registry import detect_format, get_converter_class, get_reader_class
 from .errors import ConversionRefused
@@ -694,6 +698,9 @@ def convert_msi(
     # so anything that appears there is this run's own output and this
     # run is responsible for clearing it away if it fails.
     succeeded = False
+    # Bound once created, so an interrupt that escapes the converter can
+    # still ask it whether the store was already complete (issue #500).
+    converter: Optional[BaseMSIConverter] = None
 
     # Merge region into reader_options if provided
     if region is not None:
@@ -766,6 +773,17 @@ def convert_msi(
         # the pixel size -- so wherever Ctrl-C lands the caller gets False
         # and the CLI's post-conversion step runs. Without it click printed
         # ``Aborted!`` and no partial store was ever moved aside (#245).
+        #
+        # It also catches the ones that land after the converter has
+        # finished the store -- in its scratch release, in closing the
+        # reader on the way out of the ``with``. That store is complete
+        # and opens, so it stays where it is (#500). ``is True`` because
+        # tests stand a mock in for the converter. ``succeeded`` first, so
+        # a second Ctrl-C during the log line cannot reach the quarantine.
+        if converter is not None and converter.store_complete is True:
+            succeeded = True
+            log_interrupt_after_save(output_path)
+            return True
         logger.error("Conversion interrupted before it started reading.")
         return False
 

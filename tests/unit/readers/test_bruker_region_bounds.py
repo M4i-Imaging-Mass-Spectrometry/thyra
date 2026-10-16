@@ -40,7 +40,9 @@ class _BoundsHarness:
     # Bound off the real class so a change in behaviour reaches the test.
     _region_bounds = BrukerReader._region_bounds
     get_region_info = BrukerReader.get_region_info
+    _single_region_area = BrukerReader._single_region_area
     _database = BrukerReader._database
+    _positions: List[Dict[str, Any]] = []
 
     def _get_coordinate_offsets(self) -> Optional[Tuple[int, int, int]]:
         return self._offsets
@@ -161,14 +163,24 @@ class TestRegionInfoCarriesBounds:
         assert summary[2]["region_number"] == 2
         assert summary[2]["n_spectra"] == 9
 
-    def test_a_single_region_set_is_still_None(self) -> None:
-        """Unchanged: one region is not a region list.
-
-        Pinned here because ``_region_bounds`` runs a query and the
-        cheapest way to break this would be to run it before the guard.
-        """
+    def test_a_single_region_set_is_one_entry(self) -> None:
+        """One region is listed with its number, box and name (D58)."""
         h = _harness(areas=["01"], region_info=[(0, 6)])
-        assert h.get_region_info() is None
+        assert h.get_region_info() == [
+            {"region_number": 0, "n_spectra": 6, "bounds": (0, 0, 2, 1), "name": "01"}
+        ]
+
+    def test_a_lone_region_is_named_by_its_spot_names(self) -> None:
+        """A run cut from a slide states RegionNumber 0 but spots ``R02``.
+
+        The name is the Area the alignment pairs it with; the number stays
+        the database's, which ``region=`` accepts.
+        """
+        h = _harness(areas=["01", "02", "03"], region_info=[(0, 6)])
+        h._positions = [{"region": 2, "raster_x": 10, "raster_y": 5}]
+        (entry,) = h.get_region_info()
+        assert entry["region_number"] == 0
+        assert entry["name"] == "03"
 
     def test_a_selected_region_is_the_only_entry(self) -> None:
         """Under ``region=`` the store holds one region (issue #496)."""

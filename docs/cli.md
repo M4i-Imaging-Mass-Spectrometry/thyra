@@ -59,7 +59,9 @@ incomplete store is never left where a finished one is expected. An
 interrupted conversion is a failed one: `Ctrl-C` exits `1` and takes the
 same path, so the partial store is moved aside and the scratch directories
 the conversion built (`.thyra_summed_*` and its siblings, next to the
-output) are removed rather than left behind. This makes `thyra` safe to
+output) are removed rather than left behind. A `Ctrl-C` after the store is
+saved comes too late to matter: the store is complete, stays in place, and
+`thyra` exits `0`. This makes `thyra` safe to
 chain in a shell script or CI job:
 
 ```bash

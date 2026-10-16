@@ -3529,7 +3529,9 @@ exist. The new check refuses a conversion; it writes nothing.
 
 ## D44. Only a reader that can select a region accepts the region option
 
-**Status:** Implemented (2026-10-13).
+**Status:** Implemented (2026-10-13). Superseded in part by D58
+(2026-10-16): one region now gives a region map, so a single-region store
+keeps the source's region number and name.
 
 **Decision.** `region` selects one region, and only the timsTOF reader can do
 that. Every other reader refuses it, through the API as well as the CLI. The
@@ -4523,12 +4525,25 @@ the same six spectra on z 1 and 2.
   on such a plane in pass 2 is refused as a disagreement between the passes,
   as any other is.
 
-## D58. A region store describes the region it holds
+## D58. A store keeps its source's regions, and a region store describes only its own
 
 **Status:** Implemented (2026-10-16), issue #496.
 
-**Decision.** Under `region=`, everything the timsTOF reader reports is about
-the selected region. Four rules follow.
+**Decision.** A store describes the regions it holds, with the numbers and
+names its source states. Under `region=`, everything the timsTOF reader
+reports is about the selected region. Five rules follow.
+
+- A reader that knows its regions gives a region map and a region summary
+  for one region too: timsTOF (the DB RegionNumber), rapifleX (the poslog's
+  `R{n}`), mzPeak (the region each scan names, or its one listing) and
+  solariX, which already did. A single-region store then keeps the source's
+  number, name and box instead of the placeholder region 1. This supersedes
+  D44's "As on timsTOF, one region gives no map" and its "A single-region
+  Rapiflex store is unchanged". Region 1 stays only for formats with no
+  region concept (imzML, PHI, Waters). On timsTOF the name of a lone region
+  is the `.mis` Area the alignment pairs it with, which on a run cut from a
+  multi-region slide is the one its spot names give, while the number stays
+  the database's, the one `region=` accepts. `region=` accepts that name too.
 
 - `get_region_info`, and with it `uns["regions"]`, lists only the selected
   region. Its count and box are that region's, inside the stored raster.
@@ -4538,17 +4553,28 @@ the selected region. Four rules follow.
   filtered this way. Without `region=` the queries are unchanged.
 - A position measured in two regions is one row, as any repeated position is
   (D40). On timsTOF and solariX that row takes the region of its first frame
-  that holds peaks, the frame whose number is its `acquisition_order` (D26).
-  An empty frame gives no row, so it names no region. The reader warns once,
-  naming the regions and the first shared position.
+  that holds peaks, the frame whose number is its `acquisition_order` (D26),
+  and on mzPeak the region of its first scan. An empty frame gives no row, so
+  it names no region. The reader warns once, naming the regions and the first
+  shared position.
 - `region` takes any integer type except `bool`, so a value read back from
   `obs["region_number"]`, which is a numpy integer, selects its region.
 
-A region with no row has no entry in `uns["average_spectrum_per_region"]`, on
-every reader. D26's note on column types is corrected in place, with a dated
+`uns["average_spectrum_per_region"]` is written when two regions or more hold
+rows: one region's mean is the table's own `average_spectrum`. A region with no
+row has no entry in it, on every reader. D26's note on column types is corrected in place, with a dated
 note: in a 2D store `x`, `y` and `region_number` are `int32`, not `int64`.
 
-**Why.** A `region=` store listed every region of the run, with whole-run
+**Why.** A single-region run was stored as region 1 with no name, whatever
+the source said: a timsTOF run with one region numbered 3, or an mzPeak
+archive naming region 3 "tumour", came out as region 1, while the optical
+crop record of the same store named region 0 and Area "01". The placeholder
+also broke the region loop: `list_regions` answered 1 for a single-region
+`.d` whose region is 0, and `region=1` was then refused. Runs of one slide
+merged on `region_number` could collide, because the placeholder 1 equals
+another run's real region 1.
+
+A `region=` store listed every region of the run, with whole-run
 counts and boxes outside its raster, some negative. A region on one constant
 schedule lost its MS/MS table when another region was survey only, because
 the survey frames of the other region made the file "mixed". A survey region
@@ -4560,6 +4586,15 @@ which is not a mean.
 
 **What changes in a store.**
 
+- A single-region timsTOF store: `obs["region_number"]` changes from 1 to the
+  DB RegionNumber, which was 0 on all five single-region runs measured
+  (2026-10-16), and the `uns["regions"]` entry
+  gains `bounds` and, where the `.mis` has it, `name`. The same holds for a
+  single-region rapifleX store (the poslog's number, usually 0) and a
+  single-region mzPeak archive of a Bruker run.
+- A single-region solariX store, a `region=` timsTOF store, and any store in
+  which only one region holds rows lose `uns["average_spectrum_per_region"]`,
+  which held a copy of `average_spectrum`.
 - A `region=` timsTOF store: `uns["regions"]` holds one entry. The
   `fragmentation` block and whether an `_msms` table is written follow the
   region's own frames.
@@ -4584,6 +4619,15 @@ which is not a mean.
 
 **Known limits.**
 
+- A consumer that picked a single-region store's rows with
+  `region_number == 1` now finds none on timsTOF, rapifleX and mzPeak.
+- On a timsTOF run cut from a multi-region slide (RegionNumber 0, spot names
+  `R02...`), the optical crop record names region 2 while
+  `obs["region_number"]` is 0. The name agrees; the alignment's number is
+  not part of this decision.
+- A rapifleX run whose poslog misses a spectrum's spot, and an older mzPeak
+  archive whose one listed box does not hold every pixel, still get the
+  placeholder 1, with the warning they gave before.
 - In the full store, a shared position's row sums the spectra of both
   regions, so the earlier region's mean is not the one its `region=` store
   gives. The warning says so.

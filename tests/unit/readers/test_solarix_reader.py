@@ -379,7 +379,7 @@ class TestSolarixReader:
         )
 
         with SolarixReader(d_dir) as reader:
-            with thyra_logs("thyra.readers.bruker.region_map", logging.WARNING) as logs:
+            with thyra_logs("thyra.core.region_map", logging.WARNING) as logs:
                 region_map = reader.get_region_map()
 
         assert region_map == {(0, 0): 2, (1, 0): 2}
