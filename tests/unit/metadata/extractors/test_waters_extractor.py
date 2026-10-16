@@ -617,11 +617,23 @@ class TestTheResampledAxisRange:
     def test_the_log_no_longer_claims_nothing_is_dropped(self, thyra_logs):
         import logging
 
-        with thyra_logs("thyra.metadata", logging.WARNING) as records:
+        with thyra_logs("thyra.metadata", logging.DEBUG) as records:
             self._range_for((100.0, 1200.0), (99.9878, 1200.2158))
 
         assert "so nothing is dropped" not in records.text
         assert "widened" in records.text
+
+    def test_the_widening_is_not_a_warning_here(self, thyra_logs):
+        """Typed bounds or a plan may fix the axis later (D56).
+
+        The axis planner warns, once it knows the range set the axis.
+        """
+        import logging
+
+        with thyra_logs("thyra.metadata", logging.WARNING) as records:
+            self._range_for((100.0, 1200.0), (99.9878, 1200.2158))
+
+        assert "widened" not in records.text
 
 
 class TestTheMsMethodName:
