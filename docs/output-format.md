@@ -307,8 +307,9 @@ print(f"Non-zero: {X.nnz:,} ({X.nnz / (X.shape[0] * X.shape[1]) * 100:.2f}%)")
     `--no-resample` the source's m/z values *are* `var["mz"]`, so such a
     source is refused outright: dropping them would desynchronise every
     index paired with them. A resampled axis is laid over the finite m/z
-    only, and a point outside it is dropped like any other out-of-range
-    peak.
+    only, and a point at a non-finite m/z is dropped before either
+    resampling method sees the spectrum, and counted with the intensities
+    above.
 
 ### Ion Images
 
