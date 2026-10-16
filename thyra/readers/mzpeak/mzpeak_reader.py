@@ -293,7 +293,10 @@ def _integer_parameter(
     Returns:
         The values, 0 where there is none, and a mask that is ``True`` where
         the scan states the parameter as a whole number. ``None`` when the
-        column is not a list of such structs.
+        column is not a list of such structs, or when their ``integer`` slot
+        is not of an integer type: a writer that leaves every slot empty
+        gives it the null type, and a float or string slot states no whole
+        number either (D39).
     """
     import pyarrow as pa  # noqa: WPS433 - deliberate lazy import
     import pyarrow.compute as pc  # noqa: WPS433 - deliberate lazy import
@@ -311,6 +314,7 @@ def _integer_parameter(
         value is None
         or not pa.types.is_struct(value.type)
         or value.type.get_field_index("integer") < 0
+        or not pa.types.is_integer(value.type.field("integer").type)
     ):
         return None
     matched = pa.array(np.zeros(len(flat), dtype=bool))
