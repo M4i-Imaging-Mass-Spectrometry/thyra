@@ -236,9 +236,10 @@ diaPASEF writes them) or from `FrameMsMsInfo` (single-precursor frames). What is
 `msi_metadata.ms_analysis.fragmentation`: the MS level, each isolation window's
 target m/z and offsets, the collision energy, and -- for PASEF and DIA frames
 -- the mobility scan range each window occupies. A window whose values are not
-usable (a target that is not a finite m/z above 0, a negative or infinite width
-or energy, a scan range that does not ascend from 0) is left out, with a
-warning.
+usable (a target that is not a finite m/z above 0, a negative or infinite width,
+an infinite energy, a scan range that does not ascend from 0) is left out, with
+a warning. If such a window still occupies a scan range, the precursors are not
+split and no `_msms` table is written.
 
 The MSI table is still the whole frame summed, so on a scheduled PASEF method
 that isolates several precursors at every pixel it holds fragments of all of

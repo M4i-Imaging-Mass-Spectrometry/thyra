@@ -249,8 +249,9 @@ def _usable_window_row(row: Tuple[Any, ...]) -> bool:
     """Whether a schedule row's target, width and collision energy can be stored.
 
     ``row`` starts ``(target, width, energy, ...)`` in every one of the
-    three tables. The target must be a finite m/z above 0; a width or an
-    energy, when the row has one, finite and not negative; a scan range,
+    three tables. The target must be a finite m/z above 0 (a NULL target
+    is none); a width, when the row has one, finite and not negative; an
+    energy finite, of either sign, as the schema allows; a scan range,
     when the row has one, ascending from 0 or above. A damaged row
     stored as read became a ``precursor_mz`` of ``inf`` that ``thyra
     validate`` refuses, a negative precursor, or an ``Infinity`` in the
@@ -260,22 +261,36 @@ def _usable_window_row(row: Tuple[Any, ...]) -> bool:
     try:
         if not (math.isfinite(float(target)) and float(target) > 0):
             return False
-        if not all(
-            value is None or (math.isfinite(float(value)) and float(value) >= 0)
-            for value in (width, energy)
+        if width is not None and not (
+            math.isfinite(float(width)) and float(width) >= 0
         ):
             return False
-        # The PASEF and DIA rows go on with a scan range, ``[begin, end)``.
-        # A negative begin would slice the frame's scans from the end.
+        if energy is not None and not math.isfinite(float(energy)):
+            return False
         if len(row) > 5:
-            begin, end = row[3], row[4]
-            if begin is not None and end is not None:
-                if not (math.isfinite(float(begin)) and math.isfinite(float(end))):
-                    return False
-                return 0 <= int(begin) < int(end)
+            return _scan_range(row) is not None or row[3] is None or row[4] is None
         return True
     except (TypeError, ValueError, OverflowError):
         return False
+
+
+def _scan_range(row: Tuple[Any, ...]) -> Optional[Tuple[int, int]]:
+    """A PASEF or DIA row's ``[begin, end)``, when it is a usable range.
+
+    Those rows go on ``(..., begin, end, count)``; a range ascends from 0,
+    since a negative begin would slice the frame's scans from the end.
+    """
+    if len(row) <= 5 or row[3] is None or row[4] is None:
+        return None
+    try:
+        begin, end = float(row[3]), float(row[4])
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(begin) and math.isfinite(end)):
+        return None
+    if not 0 <= int(begin) < int(end):
+        return None
+    return int(begin), int(end)
 
 
 def _optional_int(value: Any) -> Optional[int]:
@@ -745,6 +760,9 @@ class BrukerReader(BrukerBaseMSIReader):
         self._mobility_axis: Optional[MobilityAxis] = None
         self._fragmentation: Optional[FragmentationSchedule] = None
         self._fragmentation_read: bool = False
+        #: Scan ranges of schedule rows the screen left out (#498); any
+        #: makes the precursor split refuse, as its ions belong to no window.
+        self._screened_scans: List[Tuple[int, int]] = []
         self._mobility_scan_overflow_warned: bool = False
         self._mixed_ms_levels_checked: bool = False
         # (scan -> window map, window count) for the frame records' precursor
@@ -1959,6 +1977,9 @@ class BrukerReader(BrukerBaseMSIReader):
             return None
         if not schedule.constant_across_pixels or windows_overlap(schedule.windows):
             return None
+        if self._screened_scans:
+            # A window the screen left out still occupies its scans (#498).
+            return None
         return schedule
 
     def get_fragmentation(self) -> Optional[FragmentationSchedule]:
@@ -2091,7 +2112,7 @@ class BrukerReader(BrukerBaseMSIReader):
                 "ScanNumBegin, ScanNumEnd, COUNT(DISTINCT Frame) "
                 f"FROM PasefFrameMsMsInfo{where} GROUP BY IsolationMz, "
                 "IsolationWidth, CollisionEnergy, ScanNumBegin, ScanNumEnd "
-                "ORDER BY IsolationMz, ScanNumBegin",
+                "ORDER BY IsolationMz, ScanNumBegin DESC",
                 pasef_window,
             ),
             (
@@ -2101,7 +2122,7 @@ class BrukerReader(BrukerBaseMSIReader):
                 f"ON i.WindowGroup = w.WindowGroup{dia_where} "
                 "GROUP BY w.IsolationMz, w.IsolationWidth, w.CollisionEnergy, "
                 "w.ScanNumBegin, w.ScanNumEnd "
-                "ORDER BY w.IsolationMz, w.ScanNumBegin",
+                "ORDER BY w.IsolationMz, w.ScanNumBegin DESC",
                 pasef_window,
             ),
             (
@@ -2121,23 +2142,41 @@ class BrukerReader(BrukerBaseMSIReader):
                 rows = conn.execute(query, params).fetchall()
             except sqlite3.OperationalError:
                 continue
-            rows = [row for row in rows if row[0] is not None]
             if not rows:
                 continue
+            # The first table with rows is the one the frames use (D37),
+            # whatever its rows hold; a NULL target is screened, and
+            # counted, like any other target that is no m/z.
             usable = [row for row in rows if _usable_window_row(row)]
             if len(usable) < len(rows):
                 logger.warning(
                     "%d of %d isolation windows hold a target that is not a "
-                    "finite m/z above 0, a negative or non-finite width or "
-                    "collision energy, or a scan range that does not ascend "
-                    "from 0; they are left out of the precursor schedule",
+                    "finite m/z above 0, a negative or non-finite width, a "
+                    "non-finite collision energy, or a scan range that does "
+                    "not ascend from 0; they are left out of the precursor "
+                    "schedule",
                     len(rows) - len(usable),
                     len(rows),
                 )
+            self._screened_scans = [
+                scans
+                for scans in (_scan_range(row) for row in rows if row not in usable)
+                if scans is not None
+            ]
+            if self._screened_scans:
+                # Their scans still hold the ions they isolated. Splitting
+                # by the windows that are left would leave those ions in no
+                # precursor: an approximation, which D2 refuses.
+                logger.warning(
+                    "%d of the windows left out still occupy a mobility scan "
+                    "range; the fragments are not split by precursor, so no "
+                    "demultiplexed MS/MS table is written",
+                    len(self._screened_scans),
+                )
             if not usable:
-                # This is the table the frames use (the first with rows),
-                # so the next one is not asked: it is empty, and its
-                # emptiness would read as "no table carries a precursor".
+                # This is the table the frames use, so the next one is not
+                # asked: it is empty, and its emptiness would read as "no
+                # table carries a precursor".
                 return (), True
             rows = usable
             windows = tuple(build(row) for row in rows)

@@ -1030,11 +1030,13 @@ def _build_fragmentation(
 def _build_isolation_window(entry: Any) -> Optional[IsolationWindow]:
     """One isolation window, or ``None`` when it carries no usable values.
 
-    The target must be finite and above 0; an offset or a collision
-    energy, when given, finite and not negative. A window that breaks one
-    of those is left out rather than written: a negative offset made the
-    model raise and took the whole metadata block with it, and an
-    infinite value wrote ``Infinity``, which strict JSON refuses (#498).
+    The target must be finite and above 0; an offset, when given, finite
+    and not negative; a collision energy finite, of either sign, as the
+    model allows. A window that breaks one of those is left out rather
+    than written: a negative offset made the model raise and took the
+    whole metadata block with it, and an infinite value wrote
+    ``Infinity``, which strict JSON refuses (#498). A scan range that is
+    not ``end > begin >= 0`` is dropped from the window, not the window.
     """
     if not isinstance(entry, dict):
         return None
@@ -1053,7 +1055,9 @@ def _build_isolation_window(entry: Any) -> Optional[IsolationWindow]:
     ):
         value = entry.get(key)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
-            if not (math.isfinite(value) and value >= 0):
+            if not math.isfinite(value):
+                return None
+            if field != "collision_energy" and value < 0:
                 return None
             fields[field] = float(value)
     begin, end = entry.get("scan_begin"), entry.get("scan_end")

@@ -58,8 +58,16 @@ _CASES = [
     pytest.param(1, -1.0, id="negative-width"),
     pytest.param(1, _INF, id="infinite-width"),
     pytest.param(2, _INF, id="infinite-energy"),
-    pytest.param(2, -35.0, id="negative-energy"),
+    pytest.param(0, float("nan"), id="nan-target"),
 ]
+
+
+def _schedule(run: Path):
+    reader = BrukerReader(run, metadata_only=True)
+    try:
+        return reader.get_fragmentation(), reader.has_precursor_spectra
+    finally:
+        reader.close()
 
 
 class TestTheReaderScreensEachWindow:
@@ -83,6 +91,54 @@ class TestTheReaderScreensEachWindow:
         assert len(screened) == 1
         assert screened[0].getMessage().startswith("1 of 3")
 
+    @pytest.mark.parametrize("column, value", _CASES)
+    def test_a_window_left_out_with_its_scans_stops_the_split(
+        self, tmp_path, column, value
+    ):
+        """Its scans still hold its ions, which no window would claim (D2)."""
+        _, separable = _schedule(_damaged(tmp_path, column, value))
+
+        assert separable is False
+
+    def test_a_negative_energy_is_kept(self, tmp_path, thyra_logs):
+        """The schema allows either sign, as signed energies are (#498 review)."""
+        run = _damaged(tmp_path, 2, -35.2)
+        with thyra_logs(
+            "thyra.readers.bruker.timstof.timstof_reader", logging.WARNING
+        ) as logs:
+            schedule, separable = _schedule(run)
+
+        assert sorted(w.collision_energy for w in schedule.windows) == [
+            -35.2,
+            34.3,
+            49.6,
+        ]
+        assert separable is True
+        assert not [r for r in logs if "isolation windows hold" in r.getMessage()]
+
+    def test_a_table_of_null_targets_is_still_the_one_used(self, tmp_path):
+        """A NULL target is screened and counted; the next table is not asked."""
+        run = _damaged(tmp_path, 1, 1.0)
+        with sqlite3.connect(run / "analysis.tdf") as db:
+            db.execute("UPDATE PasefFrameMsMsInfo SET IsolationMz = NULL")
+            db.executemany(
+                "INSERT INTO FrameMsMsInfo (Frame, Parent, TriggerMass, "
+                "IsolationWidth, PrecursorCharge, CollisionEnergy) "
+                "VALUES (?, NULL, 500.0, 1.0, NULL, 30.0)",
+                [(f,) for f in range(1, 7)],
+            )
+        schedule, _ = _schedule(run)
+
+        assert schedule is not None and schedule.windows == ()
+
+    def test_isomers_are_listed_by_mobility(self, tmp_path):
+        """By first scan descending, so 1/K0 ascending, as the table ranks them."""
+        run = _damaged(tmp_path, 0, 313.275)
+        schedule, _ = _schedule(run)
+
+        isomers = [w for w in schedule.windows if w.target == 313.275]
+        assert [w.scan_begin for w in isomers] == [150, 80]
+
     def test_a_good_schedule_is_untouched(self, tmp_path, thyra_logs):
         reader = BrukerReader(_damaged(tmp_path, 1, 1.0), metadata_only=True)
         try:
@@ -102,20 +158,18 @@ class TestTheReaderScreensEachWindow:
         ids=["negative", "reversed", "infinite"],
     )
     def test_a_bad_scan_range_is_left_out(self, tmp_path, begin, end):
+        """A window with no usable range occupies no known scans: the split stays."""
         run = _damaged(tmp_path, 3, begin)
         with sqlite3.connect(run / "analysis.tdf") as db:
             db.execute(
                 "UPDATE PasefFrameMsMsInfo SET ScanNumEnd = ? WHERE IsolationMz = ?",
                 (end, 353.320),
             )
-        reader = BrukerReader(run, metadata_only=True)
-        try:
-            schedule = reader.get_fragmentation()
-        finally:
-            reader.close()
+        schedule, separable = _schedule(run)
 
         assert schedule is not None
         assert sorted(w.target for w in schedule.windows) == [313.275, 936.578]
+        assert separable is True
 
     def test_a_table_with_no_usable_row_is_still_the_one_used(
         self, tmp_path, thyra_logs
@@ -180,5 +234,6 @@ class TestTheStoreKeepsItsMetadata:
         if isinstance(windows, str):  # stored as a JSON string
             windows = json.loads(windows)
         assert [w["target"] for w in windows] == [313.275, 936.578]
-        precursors = sorted(set(tables["msi_dataset_z0_msms"].var["precursor_mz"]))
-        assert precursors == [313.275, 936.578]
+        # The left-out window still occupies scans 80-130, so the fragments
+        # are not split by precursor (D2), rather than split with a gap.
+        assert "msi_dataset_z0_msms" not in tables

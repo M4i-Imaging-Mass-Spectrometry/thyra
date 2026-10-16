@@ -117,7 +117,7 @@ class TestSchedule:
         path = _copy(tmp_path, "one_group")
         with sqlite3.connect(path / "analysis.tdf") as db:
             db.execute(
-                "UPDATE DiaFrameMsMsWindows SET CollisionEnergy = -1 "
+                "UPDATE DiaFrameMsMsWindows SET IsolationWidth = -1 "
                 "WHERE IsolationMz = 500.0"
             )
         with thyra_logs(

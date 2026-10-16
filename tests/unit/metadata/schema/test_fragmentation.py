@@ -290,9 +290,8 @@ class TestBuilder:
             {"isolation_window_target": float("nan")},
             {"isolation_window_target": 353.32, "isolation_window_lower_offset": -0.5},
             {"isolation_window_target": 353.32, "collision_energy": float("inf")},
-            {"isolation_window_target": 353.32, "collision_energy": -35.0},
         ],
-        ids=["inf-target", "nan-target", "negative-offset", "inf-energy", "neg-energy"],
+        ids=["inf-target", "nan-target", "negative-offset", "inf-energy"],
     )
     def test_one_bad_window_costs_that_window_only(self, bad, thyra_logs):
         """Issue #498: it used to drop the block, or write ``Infinity``."""
@@ -305,6 +304,21 @@ class TestBuilder:
         assert block is not None
         assert [w.target for w in block.windows] == [313.275]
         assert len(logs) == 1 and "1 of 2" in logs[0].getMessage()
+
+    def test_a_negative_collision_energy_is_kept(self):
+        """The model sets no bound on the energy, so neither does the screen."""
+        block = _build_fragmentation(
+            {
+                "present": True,
+                "ms_level": 2,
+                "windows": [
+                    {"isolation_window_target": 313.275, "collision_energy": -34.3}
+                ],
+            }
+        )
+
+        assert block is not None
+        assert [w.collision_energy for w in block.windows] == [-34.3]
 
     def test_a_document_with_a_bad_window_still_builds(self):
         meta = build_msi_metadata(

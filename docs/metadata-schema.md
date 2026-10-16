@@ -185,7 +185,7 @@ stays TDF-only is the demultiplexed sibling table, which needs the mobility
 scan ranges only PASEF and DIA frames record. `present: false` records a survey
 acquisition; the field is left unset when the database cannot be asked at all,
 which means "not reported", not "MS1". A window with a target that is not a
-finite m/z above 0, or a negative or infinite offset or energy, is left out of
+finite m/z above 0, a negative or infinite offset, or an infinite energy, is left out of
 `windows` with a warning, rather than failing the block (D60). `windows` is
 stored as a JSON string
 (a list of objects does not round-trip through AnnData/zarr) and decoded by
