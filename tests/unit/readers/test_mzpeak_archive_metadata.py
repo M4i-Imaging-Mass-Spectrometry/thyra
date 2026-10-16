@@ -1475,3 +1475,74 @@ class TestOnlyMeasurementsAreSummed:
 
         np.testing.assert_array_equal(out_mz, [np.inf])
         np.testing.assert_array_equal(out_intensity, [7.0])
+
+    @pytest.mark.parametrize(
+        "mzs, counts, expected, logger_name, said",
+        [
+            # Stored inside the bin at m/z 102 before: 2, 3 and 12.
+            (
+                [100.0, 101.0, 102.0, np.inf],
+                [2.0, 3.0, 5.0, 7.0],
+                [2.0, 3.0, 5.0],
+                "thyra.resampling",
+                "1 of 4 in the first spectrum",
+            ),
+            # Made the bin at m/z 100 NaN before, and the 2 was dropped with it.
+            (
+                [100.0, 100.0, 101.0, 102.0],
+                [2.0, np.nan, 3.0, 5.0],
+                [2.0, 3.0, 5.0],
+                "thyra.converters",
+                "1 of 4 in the first spectrum affected (1 non-finite, 0 negative)",
+            ),
+            # Shrank the bin at m/z 100 to 5 before, with no warning.
+            (
+                [100.0, 100.0, 101.0, 102.0],
+                [9.0, -4.0, 3.0, 5.0],
+                [9.0, 3.0, 5.0],
+                "thyra.converters",
+                "1 of 4 in the first spectrum affected (0 non-finite, 1 negative)",
+            ),
+        ],
+        ids=["inf-mz", "nan-count", "negative-count"],
+    )
+    def test_the_store_holds_the_measured_bins(
+        self, tmp_path, thyra_logs, mzs, counts, expected, logger_name, said
+    ):
+        """The point that is not a measurement is dropped by the converter, said once."""
+        import anndata
+
+        from thyra.convert import convert_msi
+
+        archive = build_mzpeak(
+            tmp_path / "frame.mzpeak",
+            [
+                Spectrum(1, 1, mzs, counts),
+                Spectrum(2, 1, [100.0, 101.0, 102.0], [1.0, 1.0, 1.0]),
+            ],
+            file_metadata=TDF_SOURCE,
+            scan_columns={"ion_injection_time": [100.0, 100.0]},
+        )
+        out = tmp_path / "frame.zarr"
+
+        with thyra_logs(logger_name, logging.WARNING) as records:
+            assert convert_msi(
+                str(archive),
+                str(out),
+                dataset_id="ds",
+                resampling_config={
+                    "method": "nearest_neighbor",
+                    "min_mz": 99.5,
+                    "max_mz": 102.5,
+                    "target_bins": 7,
+                },
+            )
+
+        table = anndata.read_zarr(str(out / "tables" / "ds_z0"))
+        first = table.X.toarray()[0]
+        stored = table.var["mz"].to_numpy()[first > 0]
+        np.testing.assert_allclose(stored, [100.0, 101.0, 102.0])
+        np.testing.assert_array_equal(first[first > 0], expected)
+        dropped = [r.getMessage() for r in records if "Dropping" in r.getMessage()]
+        assert len(dropped) == 1
+        assert said in dropped[0]

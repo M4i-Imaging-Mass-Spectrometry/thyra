@@ -4546,7 +4546,9 @@ shrank the bin it joined. D55 fixed the same split test in
 
 Measured on a two-pixel fixture at 100 ms, so counts keep their values. Its
 first pixel holds 2, 3 and 5 at m/z 100, 101 and 102 and one extra point.
-Values stored for that pixel, resampled to 99.5-102.5, no threshold:
+Values stored for that pixel, resampled to 99.5-102.5, no threshold. A
+converter-level test holds each "Now" row, and the warning that says the
+extra point was dropped:
 
 | Extra point | Before | Now |
 |---|---|---|
@@ -4559,9 +4561,11 @@ a non-finite m/z, or a non-finite or negative count, on a frame. Their bins
 hold the measured counts alone. With `--intensity-threshold`, the points
 passed on decide nothing either: the threshold, applied after this step,
 leaves them out of every sum (D55). Without resampling, a non-finite m/z is
-refused as before, since it would become `var["mz"]`. Archives with only
-finite m/z and non-negative counts give the same stores, value for value.
-No schema change.
+refused as before, since it would become `var["mz"]`. Archives whose m/z
+and counts are all finite and non-negative give the same stores, value for
+value. A count between -0.5 and 0 used to round to 0; it is now passed on
+unrounded and dropped with a warning. Real TDF counts are unsigned, so no
+real archive holds one. No schema change.
 
 **Alternatives.**
 
