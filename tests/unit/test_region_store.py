@@ -325,8 +325,8 @@ class TestARegionWithNoRowHasNoMean:
         assert set(table.obs["region_number"]) == {0, 1}
         assert sorted(table.uns["average_spectrum_per_region"]) == ["0", "1"]
 
-    def test_one_region_with_rows_writes_no_per_region_mean(self, tmp_path):
-        """Its mean would be ``average_spectrum`` again (D57)."""
+    def test_two_regions_keep_the_key_when_one_holds_rows(self, tmp_path):
+        """The store's shape follows its regions, not which hold rows (D57)."""
         run = _run(
             tmp_path,
             "UPDATE MaldiFrameInfo SET RegionNumber = 2 WHERE Frame = 5",
@@ -335,7 +335,7 @@ class TestARegionWithNoRowHasNoMean:
         table = next(iter(_convert(run, tmp_path / "out.zarr").values()))
 
         assert set(table.obs["region_number"]) == {0}
-        assert "average_spectrum_per_region" not in table.uns
+        assert sorted(table.uns["average_spectrum_per_region"]) == ["0"]
 
 
 class TestTheIntegerColumnsD26Names:
@@ -375,10 +375,11 @@ class TestASingleRegionKeepsItsNumber:
         assert sorted(table.uns["average_spectrum_per_region"]) == ["0", "3"]
 
     def test_an_mzpeak_region_numbered_3_and_named(self, tmp_path):
-        from tests.fixtures.mzpeak_builder import Spectrum, build_mzpeak
-        from tests.unit.readers.test_mzpeak_archive_metadata import (
-            _region,
-            _region_parameter,
+        from tests.fixtures.mzpeak_builder import (
+            Spectrum,
+            bruker_region,
+            build_mzpeak,
+            region_parameter,
         )
 
         spectra = [
@@ -389,10 +390,10 @@ class TestASingleRegionKeepsItsNumber:
         archive = build_mzpeak(
             tmp_path / "run.mzpeak",
             spectra,
-            scan_columns={"parameters": [_region_parameter(3)] * 6},
+            scan_columns={"parameters": [region_parameter(3)] * 6},
             file_metadata={
                 "bruker_maldi": {
-                    "regions": [_region(3, 6, (1, 3), (1, 2), name="tumour")]
+                    "regions": [bruker_region(3, 6, (1, 3), (1, 2), name="tumour")]
                 }
             },
         )

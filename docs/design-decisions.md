@@ -4461,7 +4461,8 @@ reports is about the selected region. Five rules follow.
   region concept (imzML, PHI, Waters). On timsTOF the name of a lone region
   is the `.mis` Area the alignment pairs it with, which on a run cut from a
   multi-region slide is the one its spot names give, while the number stays
-  the database's, the one `region=` accepts. `region=` accepts that name too.
+  the database's, the one `region=` accepts. `region=` accepts that name too,
+  and refuses another Area's name on such a run.
 
 - `get_region_info`, and with it `uns["regions"]`, lists only the selected
   region. Its count and box are that region's, inside the stored raster.
@@ -4478,10 +4479,11 @@ reports is about the selected region. Five rules follow.
 - `region` takes any integer type except `bool`, so a value read back from
   `obs["region_number"]`, which is a numpy integer, selects its region.
 
-`uns["average_spectrum_per_region"]` is written when two regions or more hold
-rows: one region's mean is the table's own `average_spectrum`. A region with no
-row has no entry in it, on every reader. D26's note on column types is corrected in place, with a dated
-note: in a 2D store `x`, `y` and `region_number` are `int32`, not `int64`.
+`uns["average_spectrum_per_region"]` is written when the region map holds two
+regions or more: one region's mean is the table's own `average_spectrum`. A
+region with no row has no entry in it, on every reader. D26's note on column
+types is corrected in place, with a dated note: in a 2D store `x`, `y` and
+`region_number` are `int32`, not `int64`.
 
 **Why.** A single-region run was stored as region 1 with no name, whatever
 the source said: a timsTOF run with one region numbered 3, or an mzPeak
@@ -4510,9 +4512,10 @@ which is not a mean.
   gains `bounds` and, where the `.mis` has it, `name`. The same holds for a
   single-region rapifleX store (the poslog's number, usually 0) and a
   single-region mzPeak archive of a Bruker run.
-- A single-region solariX store, a `region=` timsTOF store, and any store in
-  which only one region holds rows lose `uns["average_spectrum_per_region"]`,
-  which held a copy of `average_spectrum`.
+- A single-region solariX store and a `region=` timsTOF store lose
+  `uns["average_spectrum_per_region"]`, which held a copy of
+  `average_spectrum`. A multi-region store keeps it, even when only one of
+  its regions holds rows.
 - A `region=` timsTOF store: `uns["regions"]` holds one entry. The
   `fragmentation` block and whether an `_msms` table is written follow the
   region's own frames.
@@ -4545,7 +4548,8 @@ which is not a mean.
   not part of this decision.
 - A rapifleX run whose poslog misses a spectrum's spot, and an older mzPeak
   archive whose one listed box does not hold every pixel, still get the
-  placeholder 1, with the warning they gave before.
+  placeholder 1, with a warning, new for a single-region run: before, one
+  region was not checked at all.
 - In the full store, a shared position's row sums the spectra of both
   regions, so the earlier region's mean is not the one its `region=` store
   gives. The warning says so.

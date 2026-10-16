@@ -232,9 +232,10 @@ Each region's vector is the mean of the rows in that region, on the same
 mean, so it has no entry. `uns["regions"]` still lists it, with its spectra.
 
 !!! note
-    This key is present when two regions or more hold rows. A dataset with
-    one region, or with no regions, has only the global `average_spectrum`,
-    which is that region's mean.
+    This key is present when the dataset has two regions or more, even if
+    only one of them holds rows. A dataset with one region, or with no
+    regions, has only the global `average_spectrum`, which is that region's
+    mean.
 
 !!! note "Regions span the slices"
     A region is an in-plane footprint: `get_region_map()` is keyed on `(x, y)`

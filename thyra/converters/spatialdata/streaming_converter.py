@@ -846,14 +846,14 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 if region in rows:
                     rows[region] += int(count)
 
-        means = {
+        # The accumulators exist only for a map of two regions or more
+        # (D57), so a multi-region store keeps the key even when only one
+        # of its regions holds rows.
+        state.avg_spectrum_per_region = {
             str(region): total / rows[region]
             for region, total in region_total.items()
             if rows.get(region, 0) > 0
         }
-        # Two regions with rows or more: one region's mean is the table's
-        # own average_spectrum (D57).
-        state.avg_spectrum_per_region = means if len(means) >= 2 else None
 
     def _count_pass(self, state: ConversionState) -> None:
         """Pass 1: count entries per column, TIC, occupancy, region totals.

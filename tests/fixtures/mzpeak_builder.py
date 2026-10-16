@@ -902,3 +902,32 @@ def grid_spectra(
             intensities = np.arange(1, n_points + 1, dtype=np.float64) + offset * 10.0
             spectra.append(Spectrum(x + base, y + base, mzs, intensities))
     return spectra
+
+
+def bruker_region(number, frames, x_index, y_index, name=None):
+    """One ``bruker_maldi.regions`` entry, as mzpeak-convert writes it."""
+    return {
+        "frames": frames,
+        "name": name,
+        "raster_step_um": None,
+        "region_number": number,
+        "x_index": list(x_index),
+        "y_index": list(y_index),
+    }
+
+
+def region_parameter(number):
+    """A scan's ``acquisition region`` parameter, as mzpeak-convert 0.17 writes it."""
+    return [
+        {
+            "value": {
+                "integer": number,
+                "float": None,
+                "string": None,
+                "boolean": None,
+            },
+            "accession": None,
+            "name": "acquisition region",
+            "unit": None,
+        }
+    ]

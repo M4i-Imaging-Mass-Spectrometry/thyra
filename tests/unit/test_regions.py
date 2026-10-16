@@ -17,7 +17,7 @@ import pytest
 from click.testing import CliRunner
 
 import thyra
-from tests.unit.readers.test_mzpeak_archive_metadata import _region
+from tests.fixtures.mzpeak_builder import bruker_region as _region
 from tests.unit.readers.test_mzpeak_archive_metadata import (
     _two_regions as _mzpeak_two_regions,
 )
