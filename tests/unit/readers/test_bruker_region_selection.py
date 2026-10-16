@@ -202,6 +202,13 @@ class TestASingleRegionSetStillChecksTheRequest:
             assert h._select_region() == (None, None)
         assert any("only region" in line for line in records)
 
+    def test_another_areas_name_is_refused_on_a_cut_run(self) -> None:
+        """'01' is Area 01 of the slide, not this run, which is Area '03'."""
+        h = _harness(["01", "02", "03"], [(0, 713)], "01")
+        h._positions = [{"region": 2, "raster_x": 0, "raster_y": 0}]
+        with pytest.raises(ConversionRefused, match="names another Area"):
+            h._select_region()
+
     def test_no_request_is_still_silent_and_unfiltered(self) -> None:
         h = _harness(["01"], [(0, 713)], None)
         assert h._select_region() == (None, None)

@@ -16,13 +16,10 @@ import zipfile
 import numpy as np
 import pytest
 
-from tests.fixtures.mzpeak_builder import (
-    INDEX_MEMBER,
-    SCANS_MEMBER,
-    Spectrum,
-    build_mzpeak,
-    grid_spectra,
-)
+from tests.fixtures.mzpeak_builder import INDEX_MEMBER, SCANS_MEMBER, Spectrum
+from tests.fixtures.mzpeak_builder import bruker_region as _region
+from tests.fixtures.mzpeak_builder import build_mzpeak, grid_spectra
+from tests.fixtures.mzpeak_builder import region_parameter as _region_parameter
 from thyra.core.base_reader import OpticalImageLabel
 from thyra.errors import ConversionRefused
 from thyra.readers.mzpeak import MzPeakReader
@@ -524,18 +521,6 @@ class TestPositionZInScanParameters:
         assert self._offsets(archive) == (1, 1, 0)
 
 
-def _region(number, frames, x_index, y_index, name=None):
-    """One ``bruker_maldi.regions`` entry, as mzpeak-convert writes it."""
-    return {
-        "frames": frames,
-        "name": name,
-        "raster_step_um": None,
-        "region_number": number,
-        "x_index": list(x_index),
-        "y_index": list(y_index),
-    }
-
-
 def _two_regions(tmp_path, regions, name="regions.mzpeak"):
     """Two 2x2 blocks side by side, raster indices 101-102 and 104-105.
 
@@ -972,23 +957,6 @@ class TestEmbeddedImages:
 # ----------------------------------------------------------------------
 # Issue #429: what mzpeak-convert 0.17 states for a Bruker run
 # ----------------------------------------------------------------------
-
-
-def _region_parameter(number):
-    """A scan's ``acquisition region`` parameter, as mzpeak-convert 0.17 writes it."""
-    return [
-        {
-            "value": {
-                "integer": number,
-                "float": None,
-                "string": None,
-                "boolean": None,
-            },
-            "accession": None,
-            "name": "acquisition region",
-            "unit": None,
-        }
-    ]
 
 
 def _named_regions(tmp_path, numbers, regions, name="named.mzpeak"):
