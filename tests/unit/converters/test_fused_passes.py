@@ -332,6 +332,24 @@ class _OutOfRangeRepeat(SharedAxisStubReader):
         yield (0, 0, 0), mzs, mobility, intensities
 
 
+class _GridOutOfRangeRepeat(UnfusedStubReader):
+    """:class:`_OutOfRangeRepeat` on the grid route (issue #495, finding B2).
+
+    The summed table resamples the repeat to nothing and so never flags
+    pixel 0 as measured twice; only the grid builder's own repeated-row
+    check (D40) can sum the second cloud into row 0.
+    """
+
+    def iter_spectra(self) -> Generator:
+        yield from super().iter_spectra()
+        yield (0, 0, 0), np.array([900.0]), np.array([5.0])
+
+    def iter_mobility_spectra(self) -> Generator:
+        yield from super().iter_mobility_spectra()
+        mzs, mobility, intensities = _cloud(0)
+        yield (0, 0, 0), mzs, mobility, intensities
+
+
 class IndexedStubReader(FusedStubReader):
     """The same source whose records hand their points over indexed."""
 
@@ -461,6 +479,18 @@ class TestARemeasuredPosition:
     def test_a_repeat_the_summed_table_never_saw_is_summed_too(self, tmp_path):
         tables = _read(_convert(_OutOfRangeRepeat(), tmp_path / "range.zarr")).tables
         once = _read(_convert(SharedAxisStubReader(), tmp_path / "once.zarr")).tables
+
+        table = tables["stub_z0_mobility"]
+        assert table.X.nnz == _distinct_entries(table)
+        expected = _dense(once["stub_z0_mobility"])
+        expected[0] *= 2
+        np.testing.assert_allclose(_dense(table), expected)
+
+    def test_the_grid_sums_a_repeat_the_summed_table_never_saw(self, tmp_path):
+        tables = _read(
+            _convert(_GridOutOfRangeRepeat(), tmp_path / "range.zarr")
+        ).tables
+        once = _read(_convert(UnfusedStubReader(), tmp_path / "once.zarr")).tables
 
         table = tables["stub_z0_mobility"]
         assert table.X.nnz == _distinct_entries(table)
@@ -602,6 +632,63 @@ class TestRepeatedPosition:
             pytest.approx(1.0)
         )
         assert not any("mass-mobility heatmap" in m for m in messages)
+
+
+class _EmptySummedFrame(_Frame):
+    """Pixel 3's record: raw points, but a summed spectrum with nothing in it.
+
+    What a TDF frame under the vendor centroid gives when the picker finds
+    no peak in raw scans that carry current.
+    """
+
+    def spectrum(self):
+        return None if self._p == 3 else super().spectrum()
+
+
+class EmptySummedStubReader(FusedStubReader):
+    """Pixel 3 gets no row in the summed table; its raw cloud is still read."""
+
+    def iter_spectra(self) -> Generator:
+        for p, (x, y) in enumerate(PIXELS):
+            if p != 3:
+                mzs, intensities = _summed(p)
+                yield (x, y, 0), mzs, intensities
+
+    def iter_frame_scans(self) -> Generator:
+        self.frame_passes += 1
+        for p, (x, y) in enumerate(PIXELS):
+            yield _EmptySummedFrame(p, (x, y, 0))
+
+
+class UnfusedEmptySummedStubReader(EmptySummedStubReader):
+    frame_scans = False
+
+
+class TestAPositionWithoutARow:
+    """The heatmap is a mean over the summed table's rows (issue #495, D57)."""
+
+    @pytest.mark.parametrize(
+        "reader_type", [EmptySummedStubReader, UnfusedEmptySummedStubReader]
+    )
+    def test_its_points_and_pixel_stay_out(self, tmp_path, reader_type):
+        table = _read(_convert(reader_type(), tmp_path / "out.zarr")).tables["stub_z0"]
+
+        assert table.n_obs == 3
+        counts = np.asarray(table.uns["mobility_heatmap"]["counts"])
+        rowed = sum(_cloud(p)[2].sum() for p in range(3))
+        assert counts.sum() == pytest.approx(rowed / 3)
+        assert float(table.uns["mobility_heatmap"]["current_ratio"]) == (
+            pytest.approx(1.0)
+        )
+
+    def test_both_routes_write_the_same_heatmap(self, tmp_path):
+        a = _read(_convert(EmptySummedStubReader(), tmp_path / "a.zarr")).tables
+        b = _read(_convert(UnfusedEmptySummedStubReader(), tmp_path / "b.zarr")).tables
+
+        np.testing.assert_array_equal(
+            np.asarray(a["stub_z0"].uns["mobility_heatmap"]["counts"]),
+            np.asarray(b["stub_z0"].uns["mobility_heatmap"]["counts"]),
+        )
 
 
 #: A laid non-constant axis over the range the clouds span (100 to 500).

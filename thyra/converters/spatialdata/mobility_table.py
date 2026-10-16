@@ -227,6 +227,22 @@ def row_lookup(
     return by_xy
 
 
+def loses_signal(
+    coords: Optional[Coords], plane: Optional[int], intensities: Any
+) -> bool:
+    """Whether a spectrum with no row in the table is current the store lacks.
+
+    A spectrum on another plane has its row in that plane's table, and one
+    whose intensities are all zero carries nothing, so neither is a loss;
+    counting them made a multi-plane conversion warn, once per plane, that
+    the other planes' spectra were skipped (issue #495).
+    """
+    if plane is not None and coords is not None and int(coords[2]) != plane:
+        return False
+    values = np.asarray(intensities, dtype=np.float64)
+    return bool(np.any(values[np.isfinite(values)] > 0))
+
+
 def collapse_row(
     keys: NDArray[np.int64], values: NDArray[np.float64]
 ) -> Tuple[NDArray[np.int64], NDArray[np.float64]]:
@@ -373,10 +389,25 @@ def _build_from_shared_axis(
     scratch: Path,
     linearisation: Optional[AxisLinearisation] = None,
     merge_duplicates: bool = False,
+    plane: Optional[int] = None,
 ) -> Optional[Tuple[sparse.csc_matrix, pd.DataFrame, CscAssembly]]:
-    """Scatter the source's own feature pairs; ``(matrix, var, assembly)`` or ``None``."""
+    """Scatter the source's own feature pairs; ``(matrix, var, assembly)`` or ``None``.
+
+    The feature list is the table's ``var``, so its length is known before
+    anything is allocated, and the grid route's memory guard applies to it
+    as it stands (issue #495). ``plane`` is the table's z plane, or
+    ``None`` for a volume; see :func:`loses_signal`.
+    """
     listed = reader.get_shared_mobility_features()
     if listed is None or listed[0].size == 0:
+        return None
+    refusal = var_ceiling_refusal(
+        int(listed[0].size),
+        features="the source lists {n} (m/z, mobility) features",
+        levers="convert without this table (--no-mobility-table)",
+    )
+    if refusal is not None:
+        logger.warning("No mobility-resolved table: %s", refusal)
         return None
     features = _SharedFeatureAxis(*listed)
     # The source's feature list is the table's var, empty features
@@ -393,7 +424,7 @@ def _build_from_shared_axis(
     for coords, mzs, mobility, intensities in reader.iter_mobility_spectra():
         row = row_for(coords)
         if row is None:
-            n_skipped += 1
+            n_skipped += int(loses_signal(coords, plane, intensities))
             continue
         n_pixels += 1
         if seen[row]:
@@ -507,10 +538,23 @@ def grid_var_bound(common_mass_axis: NDArray[np.float64], grid: MobilityGrid) ->
     return int(np.asarray(common_mass_axis).size) * int(grid.n_channels)
 
 
+#: How :func:`var_ceiling_refusal` names a grid table's features, and what
+#: makes the grid smaller.
+GRID_FEATURES = "the grid occupies {n} (m/z bin, mobility channel) pairs"
+GRID_LEVERS = (
+    "resample to fewer mass bins (--resample-bins) or ask for fewer "
+    "mobility channels (--mobility-bins)"
+)
+
+
 def var_ceiling_refusal(
-    n_features: int, available_gb: Optional[float] = None
+    n_features: int,
+    available_gb: Optional[float] = None,
+    *,
+    features: str = GRID_FEATURES,
+    levers: str = GRID_LEVERS,
 ) -> Optional[str]:
-    """Why a grid table this wide must not be built, or ``None``.
+    """Why a mobility table this wide must not be built, or ``None``.
 
     The operative test is memory: the ``var`` frame is the peak of an
     out-of-core build, its cost per feature is measured, and the machine's
@@ -520,22 +564,19 @@ def var_ceiling_refusal(
     first and is far above any real table.
 
     ``available_gb`` overrides the machine's own answer, for tests.
+    ``features`` names the features (``{n}`` is their count) and
+    ``levers`` what the caller can do; both default to the grid's. The
+    shared-axis table passes its own, since no flag shrinks the feature
+    list a source states (issue #495).
     """
-    levers = (
-        "resample to fewer mass bins (--resample-bins) or ask for fewer "
-        "mobility channels (--mobility-bins)"
-    )
+    named = features.format(n=f"{n_features:,}")
     if n_features > MAX_GRID_VAR_ENTRIES:
-        return (
-            f"the grid occupies {n_features:,} (m/z bin, mobility channel) "
-            f"pairs, above the var ceiling of {MAX_GRID_VAR_ENTRIES:,}; {levers}"
-        )
+        return f"{named}, above the var ceiling of {MAX_GRID_VAR_ENTRIES:,}; {levers}"
     gb = projected_var_gb(n_features)
     free = available_memory_gb() if available_gb is None else float(available_gb)
     if gb > free * GRID_VAR_REFUSE_FRACTION:
         return (
-            f"the grid occupies {n_features:,} (m/z bin, mobility channel) "
-            f"pairs, and building their var frame is projected to need "
+            f"{named}, and building their var frame is projected to need "
             f"{gb:.1f} GB ({VAR_BYTES_PER_FEATURE} bytes per feature, measured) "
             f"against {free:.1f} GB free, more than the "
             f"{GRID_VAR_REFUSE_FRACTION:.0%} of free memory a conversion may "
@@ -543,10 +584,10 @@ def var_ceiling_refusal(
         )
     if gb > free * GRID_VAR_WARN_FRACTION:
         logger.warning(
-            "The mobility grid occupies %s pairs; building their var frame "
-            "is projected to need %.1f GB of the %.1f GB free. It will be "
-            "attempted; %s to make it smaller.",
-            f"{n_features:,}",
+            "In the mobility table, %s; building their var frame is projected "
+            "to need %.1f GB of the %.1f GB free. It will be attempted; %s to "
+            "make it smaller.",
+            named,
             gb,
             free,
             levers,
@@ -620,11 +661,17 @@ class GridDiscovery:
         grid: MobilityGrid,
         row_for: RowLookup,
         n_obs: int,
+        plane: Optional[int] = None,
     ) -> None:
-        """Allocate the count over the grid's span; refuses one too wide."""
+        """Allocate the count over the grid's span; refuses one too wide.
+
+        ``plane`` is the table's z plane, or ``None`` for a volume or a
+        single table; see :func:`loses_signal`.
+        """
         self.axis = np.asarray(axis, dtype=np.float64)
         self.grid = grid
         self.row_for = row_for
+        self.plane = plane
         self.assembly = CscAssembly(grid_var_bound(self.axis, grid), n_obs)
         # The rows a pixel has reached: one pixel is one row, so a second
         # visit is a repeated position and its cells are summed.
@@ -655,9 +702,10 @@ class GridDiscovery:
         n_dropped: int,
     ) -> None:
         """Count one pixel already mapped by :func:`map_points_to_axis`."""
-        self.add_mapped_row(
-            self.row_for(coords), bins, mobility, intensities, n_dropped
-        )
+        row = self.row_for(coords)
+        if row is None and not loses_signal(coords, self.plane, intensities):
+            return
+        self.add_mapped_row(row, bins, mobility, intensities, n_dropped)
 
     def add_mapped_row(
         self,
@@ -824,6 +872,7 @@ def _build_from_grid(
     linearisation: Optional[AxisLinearisation] = None,
     merge_duplicates: bool = False,
     kept_range: Optional[Tuple[float, float]] = None,
+    plane: Optional[int] = None,
 ) -> Optional[Tuple[sparse.csc_matrix, pd.DataFrame, CscAssembly]]:
     """Bin every pixel's point cloud onto the grid; ``(matrix, var, assembly)`` or ``None``.
 
@@ -836,7 +885,7 @@ def _build_from_grid(
     """
     axis = np.asarray(common_mass_axis, dtype=np.float64)
     if discovery is None:
-        discovery = GridDiscovery(axis, grid, row_for, n_obs)
+        discovery = GridDiscovery(axis, grid, row_for, n_obs, plane=plane)
         scan_mobility(
             reader,
             axis,
@@ -972,6 +1021,7 @@ def build_mobility_table(
                 workdir,
                 linearisation,
                 merge_duplicates=merge_duplicates,
+                plane=z_value,
             )
         else:
             refusal = grid_refusal(reader, axis, grid)
@@ -993,6 +1043,7 @@ def build_mobility_table(
                 linearisation,
                 merge_duplicates=merge_duplicates,
                 kept_range=kept_range,
+                plane=z_value,
             )
             grid_uns = grid.to_uns()
     finally:

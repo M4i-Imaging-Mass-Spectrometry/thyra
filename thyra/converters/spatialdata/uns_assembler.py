@@ -219,9 +219,10 @@ def record_heatmap_current(
         return
     logger.warning(
         "The mass-mobility heatmap holds %.4fx the stored mean spectrum's "
-        "ion current, though both are built from the same raw points. A "
-        "spectrum the table has no row for (empty, or off the grid) makes "
-        'them differ. uns["mobility_heatmap"]["current_ratio"] records it.',
+        "ion current, though both are built from the same raw points over "
+        "the same rows. A point the two map onto the mass axis differently "
+        'makes them differ. uns["mobility_heatmap"]["current_ratio"] records '
+        "it.",
         ratio,
     )
 

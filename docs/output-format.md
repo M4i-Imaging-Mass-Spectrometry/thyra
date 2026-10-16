@@ -390,8 +390,9 @@ Windows), numpy arrays rather than lists:
 
 **`uns["mobility_heatmap"]`** is the table's mean mass-mobility frame: the
 raw `(m/z, mobility, intensity)` points of every pixel, binned and averaged
-over pixel positions (two spectra on one position count once, as they make
-one row), accumulated from the raw scan read during conversion. It is the
+over the table's rows (two spectra on one position count once, as they make
+one row), accumulated from the raw scan read during conversion. A spectrum
+the table has no row for, such as an all-zero one, is left out. It is the
 discovery surface -- look at it to see whether mobility separates anything
 before asking for a mobility-resolved table -- and what a viewer's mobility
 panel draws. It covers the same pixels as `uns["average_spectrum"]` beside
@@ -440,7 +441,9 @@ and nothing in them enters `obs` or a coordinate system.
 When every pixel shares one set of `(m/z, mobility)` feature pairs -- a
 continuous imzML export with a mobility array, as TIMSImaging writes --
 Thyra also writes a **mobility-resolved sibling
-table**, `{table}_mobility`, unless `--no-mobility-table` is given:
+table**, `{table}_mobility`, unless `--no-mobility-table` is given. Its
+feature list is checked against free memory first, as the grid's is: past
+half of free memory the table is left out, with a `WARNING`.
 
 | | MSI table `{id}_z0` | mobility table `{id}_z0_mobility` |
 |---|---|---|

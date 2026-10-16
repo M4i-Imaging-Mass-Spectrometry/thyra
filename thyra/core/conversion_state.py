@@ -47,8 +47,9 @@ class ConversionState:
     """The working state of one conversion, threaded through its stages.
 
     Attributes:
-        units: The tables being built -- one per z plane, or one for the
-            whole volume. Opaque here; see the streaming converter.
+        units: The tables being built -- one per z plane the pre-scan
+            meets, or one for the whole volume. Opaque here; see the
+            streaming converter.
         var_df: The feature frame every table copies for its ``var``.
         passes: The fused sibling passes when the reader hands its frames
             over as records (design decision D5), else ``None``.

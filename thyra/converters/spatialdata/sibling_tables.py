@@ -612,7 +612,11 @@ class SiblingTables:
     # -- The raw pass ----------------------------------------------------
 
     def prepare_scans(
-        self, ctx: SiblingContext, obs: pd.DataFrame, z_value: Optional[int] = None
+        self,
+        ctx: SiblingContext,
+        obs: pd.DataFrame,
+        z_value: Optional[int] = None,
+        has_row: Optional[Callable[[Tuple[int, int, int]], bool]] = None,
     ) -> None:
         """Run the raw mobility pass once for everything that needs it.
 
@@ -632,6 +636,10 @@ class SiblingTables:
         A no-op when the sinks were already fed from the summed table's
         own passes (a reader that hands its frames over as records; see
         ``fused_passes.py``).
+
+        ``has_row`` says whether a position has a row in the summed table
+        of its plane (or the volume). Given, the heatmap keeps only those
+        spectra, so it is the mean over the summed table's rows (D57).
         """
         self._heatmap_plane = z_value
         if self._sibling_scans_done:
@@ -645,7 +653,7 @@ class SiblingTables:
             return
         if ctx.mass_axis is None:
             return
-        from .mobility_heatmap import scan_mobility
+        from .mobility_heatmap import RowsOnly, scan_mobility
 
         per_plane = z_value is not None
         try:
@@ -664,7 +672,12 @@ class SiblingTables:
             # again through the route that builds on first demand.
             self._mobility_heatmap_built = True
         discovery = self._pending_grid_discovery(ctx.mass_axis, obs, z_value)
-        sinks = [sink for sink in (heatmap, discovery) if sink is not None]
+        heatmap_sink = (
+            RowsOnly(heatmap, has_row)
+            if heatmap is not None and has_row is not None
+            else heatmap
+        )
+        sinks = [sink for sink in (heatmap_sink, discovery) if sink is not None]
         if not sinks:
             return
         try:
@@ -737,6 +750,7 @@ class SiblingTables:
                 self._mobility_grid,
                 row_lookup(obs, z_value, None),
                 int(len(obs)),
+                plane=z_value,
             )
         except MemoryError as e:
             logger.warning("No mobility-resolved table: %s", str(e))

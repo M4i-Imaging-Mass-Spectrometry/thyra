@@ -151,15 +151,16 @@ class SiblingPasses:
         ``row`` is the row the frame's pixel gets in the summed table, or
         ``None`` when it gets none (an empty spectrum, a coordinate off
         the grid): the row-bound sinks skip it, exactly as their own pass
-        skips a pixel that is not in ``obs``. The heatmap is a mean over
-        every position with points and takes the frame either way; a
-        frame on a position already seen adds its points but no pixel,
-        as the summed table sums it into that position's row (D38).
+        skips a pixel that is not in ``obs``. So does the heatmap, which
+        is the mean over the summed table's rows (D57): a frame that adds
+        nothing to a row adds nothing to it either. A frame on a position
+        already seen adds its points but no pixel, as the summed table
+        sums it into that position's row (D38).
         """
         if self.wants_mobility:
             mapped = self._mapped_points(frame)
             if mapped is not None:
-                if self.heatmap is not None:
+                if self.heatmap is not None and row is not None:
                     self.heatmap.add_mapped(frame.coords, *mapped)
                 if self.discovery is not None:
                     self.discovery.add_mapped_row(row, *mapped)

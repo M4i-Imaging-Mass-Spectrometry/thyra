@@ -38,12 +38,14 @@ gathers for the same bins.
 Mobility is a feature coordinate. The heatmap knows where a pixel is
 only to count it once: two spectra the source places on one position are
 one row of the summed table, so they are one pixel here too (D38).
-:class:`PlaneHeatmaps` also reads which plane a pixel is on (D41).
+:class:`PlaneHeatmaps` also reads which plane a pixel is on (D41). A
+spectrum the summed table gives no row is left out, so the heatmap is a
+mean over the same rows as ``average_spectrum`` (D57, :class:`RowsOnly`).
 """
 
 import logging
 from array import array
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -447,6 +449,37 @@ class MobilityHeatmap:
             "mobility_edges": self.mobility_edges.astype(np.float64),
             "counts": counts.reshape(self.n_mz, self.n_mobility).astype(np.float32),
         }
+
+
+class RowsOnly:
+    """A heatmap sink that keeps only the spectra the summed table has a row for.
+
+    The heatmap is the mean over the summed table's rows (D57), as
+    ``uns["average_spectrum"]`` is. A raw pass that reads the source on
+    its own also meets spectra with no row -- an all-zero one, one off the
+    grid -- and counting their positions put pixels in the denominator the
+    mean spectrum does not have (issue #495). ``has_row`` answers for a
+    position; a spectrum without coordinates is a pixel of its own and is
+    kept.
+    """
+
+    def __init__(self, heatmap: Any, has_row: Callable[[Coords], bool]) -> None:
+        """Wrap ``heatmap`` (a :class:`MobilityHeatmap` or :class:`PlaneHeatmaps`)."""
+        self.heatmap = heatmap
+        self._has_row = has_row
+
+    def add_mapped(
+        self,
+        coords: Optional[Coords],
+        bins: NDArray[np.int64],
+        mobility: NDArray[np.float64],
+        intensities: NDArray[np.float64],
+        n_dropped: int,
+    ) -> None:
+        """Forward one mapped spectrum unless its position has no row."""
+        if coords is not None and not self._has_row(coords):
+            return
+        self.heatmap.add_mapped(coords, bins, mobility, intensities, n_dropped)
 
 
 class PlaneHeatmaps:
