@@ -107,6 +107,18 @@ class TestAnInfiniteMzLeavesTheRangeFinite:
         with ImzMLReader(src) as reader:
             assert reader.get_essential_metadata().mass_range == (400.0, 900.0)
 
+    def test_no_finite_mz_at_all_says_so(self, tmp_path):
+        """Not "no spectrum yielded a peak": they hold peaks, none placeable."""
+        path = tmp_path / "none.imzML"
+        with ImzMLWriter(
+            str(path), mode="processed", mz_dtype=np.float64, intensity_dtype=np.float64
+        ) as writer:
+            writer.addSpectrum(np.array([np.inf, np.nan]), np.array([1.0, 2.0]), (1, 1))
+
+        with ImzMLReader(path) as reader:
+            with pytest.raises(ValueError, match="not one of their m/z is a finite"):
+                reader.get_essential_metadata()
+
     def test_the_default_conversion_succeeds(self, tmp_path):
         """It ended in ``OverflowError: cannot convert float infinity``."""
         src = _write(
@@ -121,10 +133,18 @@ class TestAnInfiniteMzLeavesTheRangeFinite:
             resampling_config=CLI_DEFAULT,
         )
 
-    def test_the_raw_axis_still_refuses_it(self, tmp_path, thyra_logs):
-        """``--no-resample``: the axis is the source's m/z, inf included."""
+    @pytest.mark.parametrize("bad_mz", [np.inf, np.nan])
+    @pytest.mark.parametrize("threshold", [None, 50.0])
+    def test_the_raw_axis_still_refuses_it(
+        self, tmp_path, thyra_logs, bad_mz, threshold
+    ):
+        """``--no-resample``: the axis is the source's m/z, inf included.
+
+        With a threshold too: the threshold leaves the point for the
+        converter, so the refusal no longer depends on whether it is set.
+        """
         src = _write(
-            tmp_path / "raw.imzML", [400.0, 500.0, np.inf], [100.0, 10.0, 100.0]
+            tmp_path / "raw.imzML", [400.0, 500.0, bad_mz], [100.0, 10.0, 100.0]
         )
 
         with thyra_logs("thyra", logging.ERROR) as records:
@@ -134,5 +154,44 @@ class TestAnInfiniteMzLeavesTheRangeFinite:
                 dataset_id="ds",
                 pixel_size_um=10,
                 resampling_config=None,
+                reader_options=(
+                    None if threshold is None else {"intensity_threshold": threshold}
+                ),
             )
         assert "non-finite" in records.text
+
+
+class TestBothMethodsDropANonFiniteMz:
+    """tic_preserving interpolated over a non-finite m/z (D55).
+
+    An infinity zeroed the spectrum and a NaN filled it with NaN, where
+    nearest_neighbor dropped the point as out of range.
+    """
+
+    @pytest.mark.parametrize("method", ["nearest_neighbor", "tic_preserving"])
+    @pytest.mark.parametrize("bad_mz", [np.inf, -np.inf, np.nan])
+    def test_the_spectrum_keeps_its_finite_peaks(self, tmp_path, method, bad_mz):
+        src = _write(
+            tmp_path / "method.imzML",
+            [400.0, 450.0, bad_mz, 500.0],
+            [100.0, 100.0, 100.0, 100.0],
+        )
+        out = tmp_path / "method.zarr"
+
+        assert convert_msi(
+            str(src),
+            str(out),
+            dataset_id="ds",
+            pixel_size_um=10,
+            resampling_config={
+                "method": method,
+                "axis_type": "constant",
+                "min_mz": 300.0,
+                "max_mz": 600.0,
+            },
+        )
+
+        table = anndata.read_zarr(str(out / "tables" / "ds_z0"))
+        values = table.X.toarray()
+        assert np.isfinite(values).all()
+        assert values[0].sum() == pytest.approx(300.0)

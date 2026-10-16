@@ -789,7 +789,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         if self._unusable_intensities >= peaks_in:
             return (
                 "every intensity was dropped as not a measurement "
-                "(non-finite, or negative)"
+                "(non-finite, negative, or at a non-finite m/z)"
             )
         usable = peaks_in - self._unusable_intensities
         if self._resampler is not None and self._resampler.out_of_range_peaks >= usable:
