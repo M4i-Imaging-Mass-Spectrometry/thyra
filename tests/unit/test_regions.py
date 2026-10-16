@@ -148,7 +148,7 @@ class TestListRegions:
         ]
 
     def test_timstof_one_region(self, tmp_path):
-        """The DB RegionNumber, 0 here, not the placeholder 1 (D58)."""
+        """The DB RegionNumber, 0 here, not the placeholder 1 (D57)."""
         d_dir = tmp_path / _TDF.name
         shutil.copytree(_TDF, d_dir)
         preview = thyra.preview_msi(d_dir)

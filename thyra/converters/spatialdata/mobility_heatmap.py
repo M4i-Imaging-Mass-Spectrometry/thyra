@@ -40,7 +40,7 @@ only to count it once: two spectra the source places on one position are
 one row of the summed table, so they are one pixel here too (D38).
 :class:`PlaneHeatmaps` also reads which plane a pixel is on (D41). A
 spectrum the summed table gives no row is left out, so the heatmap is a
-mean over the same rows as ``average_spectrum`` (D57, :class:`RowsOnly`).
+mean over the same rows as ``average_spectrum`` (D58, :class:`RowsOnly`).
 """
 
 import logging
@@ -454,7 +454,7 @@ class MobilityHeatmap:
 class RowsOnly:
     """A heatmap sink that keeps only the spectra the summed table has a row for.
 
-    The heatmap is the mean over the summed table's rows (D57), as
+    The heatmap is the mean over the summed table's rows (D58), as
     ``uns["average_spectrum"]`` is. A raw pass that reads the source on
     its own also meets spectra with no row -- an all-zero one, one off the
     grid -- and counting their positions put pixels in the denominator the

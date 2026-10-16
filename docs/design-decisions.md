@@ -2241,7 +2241,7 @@ plus a mask that any reader of the Zarr without anndata has to know about. The
 price: concatenating a table that has the column with one that has not gives
 pandas' `float64` with NaN, unless the caller asks for `Int64`.
 
-*Corrected 2026-10-16 (D58):* this entry first said `x`, `y` and
+*Corrected 2026-10-16 (D57):* this entry first said `x`, `y` and
 `region_number` are `int64`. In a 2D store all three are `int32`; in a volume
 `x` and `y` are `int64` and `region_number` is `int32`. The reasoning holds:
 each is a plain integer column.
@@ -3272,7 +3272,7 @@ per position do not change.
 - A frame with no points never reaches the heatmap. A position whose
   points all fall outside the mass axis, or one off the grid, still counts
   as a pixel while the table gives it no row, as before. Neither has been
-  seen on a real file. (Lifted by D57: a position with no row is no pixel.)
+  seen on a real file. (Lifted by D58: a position with no row is no pixel.)
 - On a store with more than one plane, the heatmap covers every plane
   while each table's mean spectrum covers its own; `current_ratio` there
   compares the two and is not 1. The new `WARNING` says so.
@@ -3529,7 +3529,7 @@ exist. The new check refuses a conversion; it writes nothing.
 
 ## D44. Only a reader that can select a region accepts the region option
 
-**Status:** Implemented (2026-10-13). Superseded in part by D58
+**Status:** Implemented (2026-10-13). Superseded in part by D57
 (2026-10-16): one region now gives a region map, so a single-region store
 keeps the source's region number and name.
 
@@ -4443,7 +4443,7 @@ both:
 - The `rev` is not in `uv.lock`, so nothing moves it; bump it by hand,
   re-measure, and fix what a newer pyright reports in the same PR.
 
-## D57. The mass-mobility heatmap is a mean over the summed table's rows
+## D58. The mass-mobility heatmap is a mean over the summed table's rows
 
 **Status:** Implemented (2026-10-16), issue #495.
 
@@ -4525,7 +4525,7 @@ the same six spectra on z 1 and 2.
   on such a plane in pass 2 is refused as a disagreement between the passes,
   as any other is.
 
-## D58. A store keeps its source's regions, and a region store describes only its own
+## D57. A store keeps its source's regions, and a region store describes only its own
 
 **Status:** Implemented (2026-10-16), issue #496.
 

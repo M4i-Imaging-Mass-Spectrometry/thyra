@@ -191,7 +191,7 @@ class TestASingleRegionSetStillChecksTheRequest:
         assert any("only region" in line for line in records)
 
     def test_the_name_list_regions_gives_a_cut_run_is_accepted(self) -> None:
-        """RegionNumber 0, spots ``R02``: the region is Area '03' (D58).
+        """RegionNumber 0, spots ``R02``: the region is Area '03' (D57).
 
         ``list_regions`` names it '03', so ``region='03'`` must select it,
         not be read as Area '03' at DB number 2 and refused.

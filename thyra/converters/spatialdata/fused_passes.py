@@ -152,7 +152,7 @@ class SiblingPasses:
         ``None`` when it gets none (an empty spectrum, a coordinate off
         the grid): the row-bound sinks skip it, exactly as their own pass
         skips a pixel that is not in ``obs``. So does the heatmap, which
-        is the mean over the summed table's rows (D57): a frame that adds
+        is the mean over the summed table's rows (D58): a frame that adds
         nothing to a row adds nothing to it either. A frame on a position
         already seen adds its points but no pixel, as the summed table
         sums it into that position's row (D38).

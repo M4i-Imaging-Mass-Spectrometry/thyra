@@ -639,7 +639,7 @@ class SiblingTables:
 
         ``has_row`` says whether a position has a row in the summed table
         of its plane (or the volume). Given, the heatmap keeps only those
-        spectra, so it is the mean over the summed table's rows (D57).
+        spectra, so it is the mean over the summed table's rows (D58).
         """
         self._heatmap_plane = z_value
         if self._sibling_scans_done:
