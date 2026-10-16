@@ -46,6 +46,20 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def log_interrupt_after_save(output_path: Union[str, "PathLike[str]"]) -> None:
+    """Say that an interrupt arrived too late to cost the store anything.
+
+    One message for both places that can catch it -- the converter's own
+    handler and ``convert_msi``'s -- so the user reads the same thing
+    wherever in the cleanup the Ctrl-C landed (issue #500).
+    """
+    logger.warning(
+        "Conversion interrupted after the store was saved. The store at %s "
+        "is complete and was kept.",
+        output_path,
+    )
+
+
 class PixelSizeSource(Enum):
     """Enum to track how pixel size was determined."""
 
@@ -170,6 +184,25 @@ class BaseMSIConverter(ABC):
         self._coordinate_bounds: Optional[Tuple[float, float, float, float]] = None
         self._n_spectra: Optional[int] = None
 
+        #: True once the store at :attr:`output_path` is written in full
+        #: and its metadata consolidated -- see :meth:`_mark_store_complete`.
+        #: Past that point nothing left to do can make the store
+        #: unusable, so an interrupt in the cleanup that follows keeps it
+        #: rather than moving a finished store to ``.failed`` (issue #500).
+        self.store_complete = False
+
+    def _mark_store_complete(self) -> None:
+        """Record that the store is finished and must be kept.
+
+        Called by :meth:`_save_output` the moment the last write lands
+        (the metadata consolidation), before the scratch release and the
+        log line that follow it, which is where a late Ctrl-C used to
+        turn a complete store into a failed one. :meth:`convert` calls it
+        again when the save returns ``True``, for a subclass whose save
+        does not.
+        """
+        self.store_complete = True
+
     def convert(self) -> bool:
         """Template method defining the conversion workflow.
 
@@ -184,6 +217,11 @@ class BaseMSIConverter(ABC):
         and (on a whole-slide mobility grid) 18 GB of scratch memmaps
         nothing came back to remove (issue #245).
 
+        The one exception is an interrupt that lands after the store is
+        complete (:attr:`store_complete`): the store holds every row and
+        opens, so it is kept and the conversion reports success
+        (issue #500).
+
         Returns:
             True if the conversion succeeded, False otherwise.
         """
@@ -193,6 +231,8 @@ class BaseMSIConverter(ABC):
             self._process_spectra(state)
             self._finalize_data(state)
             success = self._save_output(state)
+            if success:
+                self._mark_store_complete()
 
             return success
         except ConversionRefused as e:
@@ -216,6 +256,9 @@ class BaseMSIConverter(ABC):
             # built over the CSC scratch memmaps. Windows will not delete a
             # mapped file, so letting those frames go here is what lets the
             # scratch directories go in the converter's own cleanup.
+            if self.store_complete:
+                log_interrupt_after_save(self.output_path)
+                return True
             logger.error(
                 "Conversion interrupted. Nothing usable was written: any "
                 "partial store is moved aside and the scratch directories "
