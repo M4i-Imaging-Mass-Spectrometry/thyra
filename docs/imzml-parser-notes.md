@@ -164,6 +164,13 @@ either: it never follows `referenceableParamGroupRef`, so it returns `None` for
 every spectrum, with no signal that the lookup was structurally incapable of
 succeeding. That is exactly where SCiLS puts `MS:1000127`.
 
+The `list` mode also matches on the accession alone. pyimzml's
+`ACCESSION_FIX_MAPPING` turns a mislabelled pair such as `MS:1000128` named
+"positive scan" into `MS:1000130`, but only where it parses terms itself:
+`fileContent` and the parameter groups. On a spectrum the pair stated no
+polarity at all. Thyra's `_pyimzml_compat.ensure_spectrum_term_fix` applies
+the same correction to the per-spectrum values (D55).
+
 ---
 
 ## Two more constraints worth not rediscovering

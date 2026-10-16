@@ -130,7 +130,7 @@ from the format itself.
 
 | Source | polarity | ionisation source | analyzer | instrument model |
 |--------|----------|-------------------|----------|------------------|
-| imzML | from `MS:1000130` / `MS:1000129` in `fileContent`, a parameter group or the spectra, when all agree | -- | from the `<analyzer>` component cvParam | from the instrumentConfiguration (model term or `MS:1000031` value) |
+| imzML | from `MS:1000130` / `MS:1000129` in `fileContent`, a parameter group or the spectra, when all agree (`MS:1000128` named "positive scan", a known exporter mistake, counts as positive) | -- | from the `<analyzer>` component cvParam | from the instrumentConfiguration (model term or `MS:1000031` value) |
 | mzPeak | from `file_description.contents` and each spectrum's `scan_polarity`, when all agree | -- | as for imzML | as for imzML |
 | Bruker timsTOF `.d` | from `Frames.Polarity`, when every frame agrees | MALDI, when the laser tables are present | TOF | from the DB |
 | Bruker solariX `.d` | from the file | -- | -- | from the file |

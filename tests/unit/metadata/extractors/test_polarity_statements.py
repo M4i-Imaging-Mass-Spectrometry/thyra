@@ -25,6 +25,14 @@ POSITIVE_TERM = (
 NEGATIVE_TERM = (
     '<cvParam cvRef="MS" accession="MS:1000129" name="negative scan" value=""/>'
 )
+#: "positive scan" under the profile spectrum term's accession, as some
+#: exporters write it (D55).
+MISLABELLED_POSITIVE_TERM = (
+    '<cvParam cvRef="MS" accession="MS:1000128" name="positive scan" value=""/>'
+)
+PROFILE_TERM = (
+    '<cvParam cvRef="MS" accession="MS:1000128" name="profile spectrum" value=""/>'
+)
 
 
 def _write_imzml(
@@ -163,6 +171,79 @@ class TestImzML:
         block = next(iter(read_msi_metadata_blocks(out).values()))["ms_analysis"]
         assert block["polarity"] == "negative"
         assert block["polarity_term"]["accession"] == "MS:1000129"
+
+
+class TestMislabelledPositiveScan:
+    """MS:1000128 named "positive scan" is read wherever the file puts it (D55).
+
+    pyimzml corrects the pair in a parameter group and in ``fileContent``;
+    on a spectrum it looked the accession up alone and found nothing.
+    """
+
+    def test_every_spectrum_states_it(self, tmp_path):
+        path = _write_imzml(
+            tmp_path / "spectra.imzML", spectrum_terms=[MISLABELLED_POSITIVE_TERM] * 6
+        )
+
+        assert _conversion_polarity(path) == "positive"
+        assert _document_polarity(path) == "positive"
+
+    def test_the_store_records_the_corrected_term(self, tmp_path):
+        path = _write_imzml(
+            tmp_path / "store.imzML", spectrum_terms=[MISLABELLED_POSITIVE_TERM] * 6
+        )
+        out = tmp_path / "store.zarr"
+
+        assert thyra.convert_msi(path, out, pixel_size_um=10.0)
+
+        from thyra.metadata.schema.store_io import read_msi_metadata_blocks
+
+        block = next(iter(read_msi_metadata_blocks(out).values()))["ms_analysis"]
+        assert block["polarity"] == "positive"
+        assert block["polarity_term"]["accession"] == "MS:1000130"
+
+    def test_a_true_profile_term_states_no_polarity(self, tmp_path):
+        """The same accession under its own name is the spectrum type."""
+        path = _write_imzml(
+            tmp_path / "profile.imzML",
+            polarity="negative",
+            spectrum_terms=[PROFILE_TERM] * 6,
+        )
+
+        assert _conversion_polarity(path) == "negative"
+        assert _document_polarity(path) == "negative"
+
+    def test_it_disagrees_with_negative_spectra(self, tmp_path):
+        terms = [MISLABELLED_POSITIVE_TERM] * 5 + [NEGATIVE_TERM]
+        path = _write_imzml(tmp_path / "mixed.imzML", spectrum_terms=terms)
+
+        assert _conversion_polarity(path) is None
+
+    def test_it_is_not_read_as_the_spectrum_type(self, tmp_path):
+        """The XML fallback for a file whose ``fileContent`` states no type."""
+        from pyimzml.ImzMLParser import ImzMLParser
+
+        from thyra.metadata.extractors.imzml_extractor import ImzMLMetadataExtractor
+
+        path = _write_imzml(
+            tmp_path / "untyped.imzML", spectrum_terms=[MISLABELLED_POSITIVE_TERM] * 6
+        )
+        text = path.read_text()
+        for accession in ("MS:1000127", "MS:1000128"):
+            text = text.replace(
+                f'<cvParam cvRef="MS" accession="{accession}"',
+                '<cvParam cvRef="MS" accession="MS:0000000"',
+            )
+        text = text.replace(
+            'accession="MS:0000000" name="positive scan"',
+            'accession="MS:1000128" name="positive scan"',
+        )
+        path.write_text(text)
+        assert 'accession="MS:1000128" name="positive scan"' in text
+
+        extractor = ImzMLMetadataExtractor(ImzMLParser(str(path)), path)
+
+        assert extractor._check_xml_for_spectrum_type() is None
 
 
 class TestMzPeak:

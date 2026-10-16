@@ -15,7 +15,7 @@ module re-exports every name here, so both spellings keep working;
 ``Thresholds``, the one genuine resampling number in it, stayed there.
 """
 
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Optional, Tuple
 
 from ..errors import ConversionRefused
 
@@ -108,6 +108,33 @@ POLARITY_OF_ACCESSION: Dict[str, str] = {
     ImzMLAccessions.POSITIVE_SCAN: "positive",
     ImzMLAccessions.NEGATIVE_SCAN: "negative",
 }
+
+#: A scan polarity term some exporters write under the wrong accession, and
+#: the accession it means. "positive scan" goes with MS:1000130, but some
+#: files pair it with MS:1000128, the profile spectrum term. pyimzml corrects
+#: the pair where it parses terms itself (``fileContent`` and the parameter
+#: groups), not on a spectrum, so Thyra corrects it there (D55). Only the
+#: name tells it apart from a true profile spectrum term.
+MISLABELLED_POLARITY_TERMS: Dict[Tuple[str, str], str] = {
+    (ImzMLAccessions.PROFILE_SPECTRUM, "positive scan"): ImzMLAccessions.POSITIVE_SCAN,
+}
+
+
+def polarity_accession(accession: str, name: Optional[str]) -> Optional[str]:
+    """The scan polarity accession a cvParam states, ``None`` for none.
+
+    Args:
+        accession: The cvParam's ``accession``.
+        name: The cvParam's ``name``, which decides a mislabelled term.
+
+    Returns:
+        A key of :data:`POLARITY_OF_ACCESSION`, or ``None``.
+    """
+    if accession in POLARITY_OF_ACCESSION:
+        return accession
+    # The name as written, as pyimzml matches it; a looser match here would
+    # read a term the conversion route does not.
+    return MISLABELLED_POLARITY_TERMS.get((accession, name or ""))
 
 
 #: What an extractor records for a source that states both polarities:

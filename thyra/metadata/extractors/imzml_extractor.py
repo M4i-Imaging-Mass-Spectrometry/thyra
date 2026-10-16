@@ -20,6 +20,7 @@ from ..constants import (
     SpectrumType,
     agreed_polarity,
     normalize_spectrum_type,
+    polarity_accession,
 )
 from ..ontology.cache import ONTOLOGY
 from ..types import ComprehensiveMetadata, EssentialMetadata
@@ -294,6 +295,25 @@ def _analyzer_family(
     return None
 
 
+def _finite_extent(mzs: NDArray[np.float64]) -> Optional[Tuple[float, float]]:
+    """The smallest and largest finite m/z, ``None`` when none is finite.
+
+    A NaN or an infinite m/z is not a position on any axis (D55). Taken into
+    the extrema, an infinity made the source range infinite and the default
+    axis an infinite bin count, and a NaN made the spectrum's own extrema NaN,
+    which the running minimum then skipped along with its finite peaks.
+    """
+    low, high = float(np.min(mzs)), float(np.max(mzs))
+    if np.isfinite(low) and np.isfinite(high):
+        # Every ordinary spectrum: a NaN or an infinity shows in the extrema,
+        # so no mask is allocated per spectrum of the scan.
+        return low, high
+    finite = mzs[np.isfinite(mzs)]
+    if finite.size == 0:
+        return None
+    return float(np.min(finite)), float(np.max(finite))
+
+
 class ImzMLMetadataExtractor(MetadataExtractor):
     """ImzML-specific metadata extractor with optimized two-phase extraction."""
 
@@ -529,8 +549,15 @@ class ImzMLMetadataExtractor(MetadataExtractor):
                 "the m/z axis of spectrum 0 -- and spectrum 0 has no peaks."
             )
 
-        min_mass = float(np.min(mzs))
-        max_mass = float(np.max(mzs))
+        extent = _finite_extent(mzs)
+        if extent is None:
+            raise ValueError(
+                f"Could not determine the mass range of {self.imzml_path}: "
+                "the file declares continuous mode, so every spectrum shares "
+                "the m/z axis of spectrum 0 -- and not one of its m/z is a "
+                "finite number."
+            )
+        min_mass, max_mass = extent
         total_peaks = n_peaks_per_spectrum * n_spectra
 
         logger.info(f"Mass range: {min_mass:.2f} - {max_mass:.2f} m/z")
@@ -628,10 +655,12 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             mzs = read_spectrum_mzs_only(self.parser, idx)
             n_peaks = len(mzs)
 
-            if n_peaks > 0:
-                return (float(np.min(mzs)), float(np.max(mzs)), n_peaks)
-
-            return None
+            if n_peaks == 0:
+                return None
+            # The peaks still count; a spectrum with no finite m/z adds
+            # nothing to the range, as an empty one does.
+            min_mz, max_mz = _finite_extent(mzs) or (float("inf"), float("-inf"))
+            return (min_mz, max_mz, n_peaks)
 
         except Exception as e:
             logger.debug(f"Failed to read spectrum {idx}: {e}")
@@ -1213,7 +1242,11 @@ class ImzMLMetadataExtractor(MetadataExtractor):
                         )
                         del context
                         return SpectrumType.CENTROID
-                    if accession == ImzMLAccessions.PROFILE_SPECTRUM:
+                    # "positive scan" under the profile term's accession
+                    # states a polarity, not a representation (D55).
+                    if accession == ImzMLAccessions.PROFILE_SPECTRUM and (
+                        polarity_accession(accession, elem.get("name")) is None
+                    ):
                         logger.info(
                             f"Detected profile spectrum from {ImzMLAccessions.PROFILE_SPECTRUM}"
                         )

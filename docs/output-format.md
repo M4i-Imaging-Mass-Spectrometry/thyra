@@ -303,9 +303,12 @@ print(f"Non-zero: {X.nnz:,} ({X.nnz / (X.shape[0] * X.shape[1]) * 100:.2f}%)")
     on a source that carries them.
 
     Zero is not affected by this; the sparse write drops explicit zeros as it
-    always did. A source whose m/z values are non-finite is refused outright
-    instead, since those values *are* `var["mz"]` and dropping them would
-    desynchronise every index paired with them.
+    always did. A non-finite m/z is handled by the axis instead. With
+    `--no-resample` the source's m/z values *are* `var["mz"]`, so such a
+    source is refused outright: dropping them would desynchronise every
+    index paired with them. A resampled axis is laid over the finite m/z
+    only, and a point outside it is dropped like any other out-of-range
+    peak.
 
 ### Ion Images
 
