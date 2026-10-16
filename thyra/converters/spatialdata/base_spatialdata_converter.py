@@ -585,11 +585,12 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             # Only load comprehensive metadata if needed (lazy loading)
             self._metadata = None  # Will be loaded on demand
 
-            # Fetch region data from reader (available for multi-region datasets)
-            # Always populate region metadata for a consistent schema:
+            # Fetch region data from the reader. Always populate region
+            # metadata for a consistent schema:
             # - obs["region_number"] exists on every dataset
             # - uns["regions"] always has at least one entry
-            # Single-region or unknown-region datasets default to region 1.
+            # A reader that states its regions gives a map even for one
+            # (D58); a format with no region concept defaults to region 1.
             self._region_map = self.reader.get_region_map()
             self._region_info = self.reader.get_region_info()
             if self._region_info:
@@ -900,9 +901,10 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         Written on every dataset for a consistent schema, so a consumer
         does not have to branch on whether the acquisition had regions:
         without a region map every pixel is region 1, which is also what
-        ``uns["regions"]`` reports for that case. The timsTOF, rapifleX
-        and mzPeak readers produce a map for two or more regions, the
-        solariX reader always does; a position missing from it gets -1.
+        ``uns["regions"]`` reports for that case. The timsTOF, rapifleX,
+        mzPeak and solariX readers produce a map whenever the source
+        states its regions, one region included (D58); a position missing
+        from it gets -1.
 
         Kept as one method because the three write paths that used to
         build an obs table each had their own copy of this rule, and the

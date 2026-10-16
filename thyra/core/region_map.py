@@ -1,6 +1,7 @@
-"""The ``(x, y)`` to region map of a Bruker run, built from its scan list.
+"""The ``(x, y)`` to region map of a run, built from its scan list.
 
-The timsTOF and solariX readers record a region number per scan. A position
+The timsTOF and solariX readers, and an mzPeak archive of a Bruker run,
+record a region number per scan. A position
 measured in two regions is one row in the store, because the converter sums
 the spectra of a repeated position (D40). That row takes the region of its
 first scan, the same scan whose number becomes its ``acquisition_order``

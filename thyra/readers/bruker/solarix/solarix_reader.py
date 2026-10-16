@@ -39,11 +39,11 @@ from tqdm import tqdm
 
 from ....core.base_extractor import MetadataExtractor
 from ....core.mass_axis import MassAxisAccumulator
+from ....core.region_map import build_region_map
 from ....core.registry import register_reader
 from ....errors import ConversionRefused
 from ..base_bruker_reader import BrukerBaseMSIReader
 from ..mis_parser import parse_mis_file
-from ..region_map import build_region_map
 from ..vendor_db import read_only_uri
 
 logger = logging.getLogger(__name__)

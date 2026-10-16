@@ -232,10 +232,9 @@ Each region's vector is the mean of the rows in that region, on the same
 mean, so it has no entry. `uns["regions"]` still lists it, with its spectra.
 
 !!! note
-    This key is present whenever the reader records regions: on every
-    multi-region dataset, and on every solariX dataset, whose reader records
-    a region for each spectrum even when there is only one. Other datasets
-    only have the global `average_spectrum`.
+    This key is present when two regions or more hold rows. A dataset with
+    one region, or with no regions, has only the global `average_spectrum`,
+    which is that region's mean.
 
 !!! note "Regions span the slices"
     A region is an in-plane footprint: `get_region_map()` is keyed on `(x, y)`
@@ -946,8 +945,9 @@ and what else was considered, is in
 
 Datasets acquired from multi-region slides (e.g., multiple tissue sections on
 one slide) store region information in two places. The timsTOF, solariX,
-Rapiflex and mzPeak readers record regions; every other format writes region 1
-for each pixel. `thyra.list_regions` gives the same summary from the raw input,
+Rapiflex and mzPeak readers record regions, one region included: a run with one
+region keeps the number and name its source states, for example region 0 on
+most timsTOF runs. Every other format writes region 1 for each pixel. `thyra.list_regions` gives the same summary from the raw input,
 before converting.
 
 ### Per-Pixel Region Number

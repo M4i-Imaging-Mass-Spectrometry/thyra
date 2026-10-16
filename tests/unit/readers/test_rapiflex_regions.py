@@ -113,13 +113,16 @@ def test_region_info_has_counts_bounds_and_area_names(tmp_path):
     ]
 
 
-def test_one_region_gives_no_map(tmp_path):
-    """A single-region store keeps ``region_number`` 1, as before."""
-    cells = {(x, y): 0 for x in range(WIDTH) for y in range(HEIGHT)}
+def test_one_region_is_a_map_with_its_poslog_number(tmp_path):
+    """A single-region store keeps the poslog's number, not 1 (D58)."""
+    cells = {(x, y): 2 for x in range(WIDTH) for y in range(HEIGHT)}
     reader = RapiflexReader(_write(tmp_path / "rf", cells))
     try:
-        assert reader.get_region_map() is None
-        assert reader.get_region_info() is None
+        assert reader.get_region_map() == cells
+        (entry,) = reader.get_region_info()
+        assert entry["region_number"] == 2
+        assert entry["n_spectra"] == len(cells)
+        assert entry["bounds"] == (0, 0, WIDTH - 1, HEIGHT - 1)
     finally:
         reader.close()
 
@@ -166,8 +169,8 @@ def test_a_region_without_spectra_is_not_a_second_region(tmp_path):
         _write(tmp_path / "rf", cells, extra_poslog=[(4, 0, 1), (4, 1, 1)])
     )
     try:
-        assert reader.get_region_map() is None
-        assert reader.get_region_info() is None
+        assert reader.get_region_map() == cells
+        assert [e["region_number"] for e in reader.get_region_info()] == [0]
     finally:
         reader.close()
 
