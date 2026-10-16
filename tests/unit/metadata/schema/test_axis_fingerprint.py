@@ -116,3 +116,24 @@ class TestStoreCheck:
             ("error", "provenance.mass_axis")
         ]
         assert "not a mapping" in issues[0].message
+
+    @pytest.mark.parametrize("n_bins", ["many", [1, 2], 3.5, True, None])
+    def test_a_bin_count_that_is_not_an_integer_is_reported_not_raised(
+        self, tmp_path, n_bins
+    ):
+        """Issue #494 (D1): int() raised on text and lists, losing the verdict."""
+        recorded = {"sha256": mass_axis_sha256(AXIS)}
+        if n_bins is not None:
+            recorded["n_bins"] = n_bins
+        store = _store_with_block(tmp_path, AXIS, recorded)
+        issues = check_store_var_conventions(store)["t"]
+        assert [(i.severity, i.location) for i in issues] == [
+            ("error", "provenance.mass_axis")
+        ]
+        assert "no integer n_bins" in issues[0].message
+
+    @pytest.mark.parametrize("kind", [np.int64, float])
+    def test_a_whole_bin_count_of_another_type_is_accepted(self, tmp_path, kind):
+        recorded = {"sha256": mass_axis_sha256(AXIS), "n_bins": kind(AXIS.size)}
+        store = _store_with_block(tmp_path, AXIS, recorded)
+        assert check_store_var_conventions(store) == {"t": []}
