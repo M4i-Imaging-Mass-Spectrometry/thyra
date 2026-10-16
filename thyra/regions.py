@@ -21,10 +21,11 @@ from .preview import _build_reader, _close_quietly
 
 
 def _whole_run(reader: Any) -> Dict[str, Any]:
-    """One entry for an input with one region, or no region concept.
+    """One entry for an input with no region concept.
 
     Numbered 1, which is what ``obs["region_number"]`` holds when a reader
-    gives no region map.
+    gives no region map. A reader that states one region lists it itself,
+    with the number ``region=`` accepts (D58).
     """
     essential = reader.get_essential_metadata()
     width, height = essential.dimensions[0], essential.dimensions[1]
@@ -55,11 +56,12 @@ def list_regions(path: Union[str, Path]) -> List[Dict[str, Any]]:
     Each entry has four keys:
 
     * ``region_number``: the value the store writes to
-      ``obs["region_number"]`` for that region. On a multi-region timsTOF
-      ``.d`` it is the DB RegionNumber, which ``region=`` accepts.
-    * ``name``: the ``.mis`` Area name of a region of a multi-region
-      input, or ``None`` when the source names none. The whole-run entry
-      of a single-region input has no name.
+      ``obs["region_number"]`` for that region. On a timsTOF ``.d`` it is
+      the DB RegionNumber, which ``region=`` accepts, on a single-region
+      run too.
+    * ``name``: the ``.mis`` Area name of the region, or ``None`` when the
+      source names none. The whole-run entry of a format with no regions
+      has no name.
     * ``n_spectra``: how many spectra the region holds. A position
       measured twice counts twice. ``None`` when the format cannot count
       without reading spectra.
@@ -67,8 +69,8 @@ def list_regions(path: Union[str, Path]) -> List[Dict[str, Any]]:
       in the pixel grid of the converted store. ``None`` when the reader
       could not read a region's box.
 
-    An input with one region, or a format without regions, gives one entry
-    that covers the whole raster.
+    A format without regions gives one entry, numbered 1, that covers the
+    whole raster.
 
     Args:
         path: The input, as :func:`thyra.convert_msi` takes it.

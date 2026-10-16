@@ -74,6 +74,7 @@ from numpy.typing import NDArray
 
 from ...core.base_reader import SAME_PEAK_RELATIVE, BaseMSIReader, OpticalImageLabel
 from ...core.mass_axis import MassAxisAccumulator
+from ...core.region_map import build_region_map
 from ...core.registry import register_reader
 from ...errors import ConversionRefused
 from .chunk_decoding import (
@@ -293,7 +294,10 @@ def _integer_parameter(
     Returns:
         The values, 0 where there is none, and a mask that is ``True`` where
         the scan states the parameter as a whole number. ``None`` when the
-        column is not a list of such structs.
+        column is not a list of such structs, or when their ``integer`` slot
+        is not of an integer type: a writer that leaves every slot empty
+        gives it the null type, and a float or string slot states no whole
+        number either (D39).
     """
     import pyarrow as pa  # noqa: WPS433 - deliberate lazy import
     import pyarrow.compute as pc  # noqa: WPS433 - deliberate lazy import
@@ -311,6 +315,7 @@ def _integer_parameter(
         value is None
         or not pa.types.is_struct(value.type)
         or value.type.get_field_index("integer") < 0
+        or not pa.types.is_integer(value.type.field("integer").type)
     ):
         return None
     matched = pa.array(np.zeros(len(flat), dtype=bool))
@@ -1959,11 +1964,12 @@ class MzPeakReader(BaseMSIReader):
         return self.get_essential_metadata().total_peaks
 
     def get_region_map(self) -> Optional[Dict[Tuple[int, int], int]]:
-        """Each pixel's acquisition region, or ``None`` for one region.
+        """Each pixel's acquisition region, or ``None`` when none is stated.
 
         mzPeak has no region column. A Bruker archive from mzpeak-convert
         lists its regions under ``bruker_maldi.regions``; see
-        :meth:`_regions`.
+        :meth:`_regions`. One region is a map too, as from the ``.d``
+        (D58).
         """
         regions = self._regions()
         return regions[0] if regions is not None else None
@@ -1972,7 +1978,8 @@ class MzPeakReader(BaseMSIReader):
         """Region number, spectrum count and box of each region.
 
         The same keys, box frame and order as the timsTOF reader gives for
-        the ``.d`` the archive was made from. ``None`` for one region.
+        the ``.d`` the archive was made from. ``None`` when no region is
+        stated.
         """
         regions = self._regions()
         return regions[1] if regions is not None else None
@@ -1998,7 +2005,7 @@ class MzPeakReader(BaseMSIReader):
         if named is not None:
             self._region_cache = self._scan_regions(named, listed)
             return self._region_cache
-        if len(listed) <= 1:
+        if not listed:
             return None
 
         coordinates = self._require(self._coordinates)
@@ -2055,14 +2062,14 @@ class MzPeakReader(BaseMSIReader):
         named: NDArray[np.int64],
         listed: List[Tuple[int, Optional[str], int, List[int]]],
     ) -> Optional[Tuple[Dict[Tuple[int, int], int], List[Dict[str, Any]]]]:
-        """Regions from the region each scan names; ``None`` for one region.
+        """Regions from the region each scan names; ``None`` when none is named.
 
         The box and the name of a region come from its listing when it has
         one, as for the ``.d``. A region no listing describes is boxed by
-        its own pixels.
+        its own pixels. One region is a map too (D58).
         """
         numbers = sorted({int(n) for n in named.tolist()})
-        if len(numbers) <= 1:
+        if not numbers:
             return None
         coordinates = self._require(self._coordinates)
         offsets = self._require_offsets()
@@ -2083,18 +2090,20 @@ class MzPeakReader(BaseMSIReader):
             if name:
                 entry["name"] = name
             info.append(entry)
-        region_map = {
-            (int(x), int(y)): int(n)
+        # In spectrum order: a position two regions measured takes the
+        # region of its first scan, as on the .d (D58).
+        region_map = build_region_map(
+            (int(x), int(y), int(n))
             for (x, y), n in zip(coordinates.tolist(), named.tolist())
-        }
+        )
         info.sort(key=lambda entry: (-entry["n_spectra"], entry["region_number"]))
         return region_map, info
 
     def _single_region(self) -> Tuple[int, Optional[str]]:
         """Number and name of an archive's one region, for its alignment.
 
-        The region map is ``None`` for one region, as from the ``.d``, but
-        the archive still names it: in every scan, or in its one listing.
+        Asked when the archive states no region map: then it may still
+        name its region in every scan or in its one listing.
         """
         listed = self._listed_regions()
         named = self.archive.scan_regions()

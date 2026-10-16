@@ -489,6 +489,40 @@ class TestPositionZInScanParameters:
 
         assert self._offsets(archive) == (1, 1, 1)
 
+    def test_the_first_z_of_a_scan_wins(self, tmp_path):
+        """A scan that states z twice is read at its first statement (D39)."""
+        archive = build_mzpeak(
+            tmp_path / "twice.mzpeak",
+            grid_spectra(2, 2),
+            scan_columns={
+                "parameters": [_z_parameter(1) + _z_parameter(2) for _ in range(4)]
+            },
+        )
+
+        assert self._offsets(archive) == (1, 1, 1)
+
+    @pytest.mark.parametrize(
+        "integer",
+        [None, "1", 1.0],
+        ids=["null-typed", "string-typed", "float-typed"],
+    )
+    def test_an_integer_slot_of_another_type_states_no_plane(self, tmp_path, integer):
+        """Only an integer-typed slot states z (D39), so no plane is stated."""
+        parameter = _z_parameter(1)
+        parameter[0]["value"] = {
+            "integer": integer,
+            "float": 1.0,
+            "string": None,
+            "boolean": None,
+        }
+        archive = build_mzpeak(
+            tmp_path / "typed.mzpeak",
+            grid_spectra(2, 2),
+            scan_columns={"parameters": [parameter] * 4},
+        )
+
+        assert self._offsets(archive) == (1, 1, 0)
+
 
 def _region(number, frames, x_index, y_index, name=None):
     """One ``bruker_maldi.regions`` entry, as mzpeak-convert writes it."""
@@ -560,13 +594,16 @@ class TestRegions:
             {"region_number": 1, "n_spectra": 4, "bounds": (3, 0, 4, 1)},
         ]
 
-    def test_one_region_is_none_as_from_the_d(self, tmp_path):
-        """The timsTOF reader gives no region map for one region either."""
-        archive = _two_regions(tmp_path, [_region(0, 8, (101, 105), (11, 12))])
+    def test_one_region_is_a_map_as_from_the_d(self, tmp_path):
+        """One listed region keeps its number and box, as a ``.d`` does (D58)."""
+        archive = _two_regions(tmp_path, [_region(3, 8, (101, 105), (11, 12))])
 
         with MzPeakReader(archive) as reader:
-            assert reader.get_region_map() is None
-            assert reader.get_region_info() is None
+            assert set(reader.get_region_map().values()) == {3}
+            (entry,) = reader.get_region_info()
+
+        assert entry["region_number"] == 3
+        assert entry["n_spectra"] == 8
 
     @pytest.mark.parametrize(
         "regions",
@@ -1047,12 +1084,83 @@ class TestRegionNamedByEachScan:
         assert region_map[(0, 0)] == 0
         assert region_map[(3, 0)] == 1
 
-    def test_one_named_region_is_none_as_from_the_d(self, tmp_path):
-        """As for a ``.d`` of one region."""
-        archive = _named_regions(tmp_path, [0] * 8, [])
+    def test_one_named_region_is_a_map_as_from_the_d(self, tmp_path):
+        """As for a ``.d`` of one region (D58)."""
+        archive = _named_regions(tmp_path, [3] * 8, [])
 
         with MzPeakReader(archive) as reader:
-            assert reader.get_region_map() is None
+            assert set(reader.get_region_map().values()) == {3}
+            assert [e["region_number"] for e in reader.get_region_info()] == [3]
+
+    def test_the_first_region_of_a_scan_wins(self, tmp_path):
+        """A scan that names two regions is read at the first one."""
+        spectra = [
+            Spectrum(x, y, [100.0, 101.0], [float(x), float(y)])
+            for y in (1, 2)
+            for x in (1, 2, 4, 5)
+        ]
+        archive = build_mzpeak(
+            tmp_path / "twice.mzpeak",
+            spectra,
+            file_metadata={
+                "imaging": {
+                    "coordinate_base": 1,
+                    "position_offset": {"x": 100, "y": 10},
+                }
+            },
+            scan_columns={
+                "parameters": [
+                    _region_parameter(number) + _region_parameter(1 - number)
+                    for number in self.NUMBERS
+                ]
+            },
+        )
+
+        with MzPeakReader(archive) as reader:
+            region_map = reader.get_region_map()
+
+        assert region_map is not None
+        assert region_map[(0, 0)] == 0
+        assert region_map[(3, 0)] == 1
+
+    def test_a_null_typed_region_falls_back_to_the_boxes(self, tmp_path):
+        """No scan names a region as a whole number, so the boxes decide."""
+        spectra = [
+            Spectrum(x, y, [100.0, 101.0], [float(x), float(y)])
+            for y in (1, 2)
+            for x in (1, 2, 4, 5)
+        ]
+        parameter = _region_parameter(0)
+        parameter[0]["value"] = {
+            "integer": None,
+            "float": 0.0,
+            "string": None,
+            "boolean": None,
+        }
+        archive = build_mzpeak(
+            tmp_path / "typed.mzpeak",
+            spectra,
+            file_metadata={
+                "imaging": {
+                    "coordinate_base": 1,
+                    "position_offset": {"x": 100, "y": 10},
+                },
+                "bruker_maldi": {
+                    "regions": [
+                        _region(0, 4, (101, 102), (11, 12)),
+                        _region(1, 4, (104, 105), (11, 12)),
+                    ]
+                },
+            },
+            scan_columns={"parameters": [parameter] * 8},
+        )
+
+        with MzPeakReader(archive) as reader:
+            region_map = reader.get_region_map()
+
+        assert region_map is not None
+        assert region_map[(0, 0)] == 0
+        assert region_map[(3, 0)] == 1
 
 
 def _source(accession, name):
@@ -1340,7 +1448,7 @@ class TestTeachPointsImage:
         )
 
         with MzPeakReader(archive) as reader:
-            assert reader.get_region_map() is None
+            assert set(reader.get_region_map().values()) == {3}
             alignment = reader.get_image_alignment()
 
         (mapping,) = alignment.region_mappings

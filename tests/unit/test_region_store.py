@@ -22,7 +22,7 @@ import pytest
 import spatialdata
 
 from thyra.convert import convert_msi
-from thyra.readers.bruker.region_map import build_region_map
+from thyra.core.region_map import build_region_map
 from thyra.readers.bruker.timstof.timstof_reader import BrukerReader
 
 _TDF = Path(__file__).resolve().parents[1] / "data" / "fixtures" / "synthetic_tims.d"
@@ -213,7 +213,7 @@ class TestAPositionInTwoRegions:
         assert region_map == {(0, 0): 0, (1, 0): 0, (2, 0): 1}
 
     def test_the_warning_names_the_regions(self, thyra_logs):
-        with thyra_logs("thyra.readers.bruker.region_map", logging.WARNING) as logs:
+        with thyra_logs("thyra.core.region_map", logging.WARNING) as logs:
             build_region_map([(0, 0, 4), (5, 3, 4), (5, 3, 7)])
 
         assert len(logs) == 1
@@ -223,7 +223,7 @@ class TestAPositionInTwoRegions:
         assert "x=5, y=3" in message
 
     def test_one_region_per_position_is_quiet(self, thyra_logs):
-        with thyra_logs("thyra.readers.bruker.region_map", logging.WARNING) as logs:
+        with thyra_logs("thyra.core.region_map", logging.WARNING) as logs:
             build_region_map([(0, 0, 0), (0, 0, 0), (1, 0, 1)])
 
         assert not logs
@@ -239,7 +239,7 @@ class TestAPositionInTwoRegions:
         )
         reader = _reader(run)
         try:
-            with thyra_logs("thyra.readers.bruker.region_map", logging.WARNING) as logs:
+            with thyra_logs("thyra.core.region_map", logging.WARNING) as logs:
                 region_map = reader.get_region_map()
         finally:
             reader.close()
@@ -312,7 +312,21 @@ class TestARegionWithNoRowHasNoMean:
     """G6: ``uns["average_spectrum_per_region"]``."""
 
     def test_the_empty_region_has_no_entry(self, tmp_path):
-        # Frame 5 is alone in region 2 and holds no signal.
+        # Frames 4 and 6 are region 1; frame 5 is alone in region 2 and
+        # holds no signal.
+        run = _run(
+            tmp_path,
+            "UPDATE MaldiFrameInfo SET RegionNumber = 1 WHERE Frame IN (4, 6)",
+            "UPDATE MaldiFrameInfo SET RegionNumber = 2 WHERE Frame = 5",
+            "UPDATE Frames SET NumScans = 0, NumPeaks = 0 WHERE Id = 5",
+        )
+        table = next(iter(_convert(run, tmp_path / "out.zarr").values()))
+
+        assert set(table.obs["region_number"]) == {0, 1}
+        assert sorted(table.uns["average_spectrum_per_region"]) == ["0", "1"]
+
+    def test_one_region_with_rows_writes_no_per_region_mean(self, tmp_path):
+        """Its mean would be ``average_spectrum`` again (D58)."""
         run = _run(
             tmp_path,
             "UPDATE MaldiFrameInfo SET RegionNumber = 2 WHERE Frame = 5",
@@ -321,7 +335,7 @@ class TestARegionWithNoRowHasNoMean:
         table = next(iter(_convert(run, tmp_path / "out.zarr").values()))
 
         assert set(table.obs["region_number"]) == {0}
-        assert sorted(table.uns["average_spectrum_per_region"]) == ["0"]
+        assert "average_spectrum_per_region" not in table.uns
 
 
 class TestTheIntegerColumnsD26Names:
@@ -333,3 +347,63 @@ class TestTheIntegerColumnsD26Names:
         dtypes = {c: str(table.obs[c].dtype) for c in ("x", "y", "region_number")}
         assert dtypes == {"x": "int32", "y": "int32", "region_number": "int32"}
         assert str(table.obs["acquisition_order"].dtype) == "int64"
+
+
+class TestASingleRegionKeepsItsNumber:
+    """G3: one region is stored with the number and name the source states."""
+
+    def test_a_timstof_region_numbered_3(self, tmp_path):
+        run = _run(tmp_path, "UPDATE MaldiFrameInfo SET RegionNumber = 3")
+        table = next(iter(_convert(run, tmp_path / "out.zarr").values()))
+
+        assert set(table.obs["region_number"]) == {3}
+        (entry,) = json.loads(table.uns["regions"])
+        assert entry["region_number"] == 3
+        assert entry["n_spectra"] == 6
+        assert "bounds" in entry
+        assert "average_spectrum_per_region" not in table.uns
+
+    def test_two_regions_keep_their_numbers_and_means(self, tmp_path):
+        run = _run(
+            tmp_path,
+            "UPDATE MaldiFrameInfo SET RegionNumber = 0 WHERE Frame <= 3",
+            "UPDATE MaldiFrameInfo SET RegionNumber = 3 WHERE Frame > 3",
+        )
+        table = next(iter(_convert(run, tmp_path / "out.zarr").values()))
+
+        assert set(table.obs["region_number"]) == {0, 3}
+        assert sorted(table.uns["average_spectrum_per_region"]) == ["0", "3"]
+
+    def test_an_mzpeak_region_numbered_3_and_named(self, tmp_path):
+        from tests.fixtures.mzpeak_builder import Spectrum, build_mzpeak
+        from tests.unit.readers.test_mzpeak_archive_metadata import (
+            _region,
+            _region_parameter,
+        )
+
+        spectra = [
+            Spectrum(x, y, [100.0, 101.0], [1.0, 2.0])
+            for y in (1, 2)
+            for x in (1, 2, 3)
+        ]
+        archive = build_mzpeak(
+            tmp_path / "run.mzpeak",
+            spectra,
+            scan_columns={"parameters": [_region_parameter(3)] * 6},
+            file_metadata={
+                "bruker_maldi": {
+                    "regions": [_region(3, 6, (1, 3), (1, 2), name="tumour")]
+                }
+            },
+        )
+        assert convert_msi(
+            str(archive),
+            str(tmp_path / "out.zarr"),
+            pixel_size_um=20.0,
+            include_optical=False,
+        )
+        table = next(iter(spatialdata.read_zarr(tmp_path / "out.zarr").tables.values()))
+
+        assert set(table.obs["region_number"]) == {3}
+        (entry,) = json.loads(table.uns["regions"])
+        assert (entry["region_number"], entry["name"]) == (3, "tumour")

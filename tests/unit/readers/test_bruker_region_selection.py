@@ -58,6 +58,9 @@ class _NameResolutionHarness:
     _resolve_requested_region = BrukerReader._resolve_requested_region
     _check_region_on_single_region_set = BrukerReader._check_region_on_single_region_set
     _select_region = BrukerReader._select_region
+    _lone_region_name = BrukerReader._lone_region_name
+    _single_region_area = BrukerReader._single_region_area
+    _positions: List[Dict[str, Any]] = []
 
 
 def _harness(
@@ -183,6 +186,18 @@ class TestASingleRegionSetStillChecksTheRequest:
 
     def test_the_only_region_is_accepted_and_converts_everything(self) -> None:
         h = _harness(["01"], [(0, 713)], "01")
+        with _capture_module_logs() as records:
+            assert h._select_region() == (None, None)
+        assert any("only region" in line for line in records)
+
+    def test_the_name_list_regions_gives_a_cut_run_is_accepted(self) -> None:
+        """RegionNumber 0, spots ``R02``: the region is Area '03' (D58).
+
+        ``list_regions`` names it '03', so ``region='03'`` must select it,
+        not be read as Area '03' at DB number 2 and refused.
+        """
+        h = _harness(["01", "02", "03"], [(0, 713)], "03")
+        h._positions = [{"region": 2, "raster_x": 0, "raster_y": 0}]
         with _capture_module_logs() as records:
             assert h._select_region() == (None, None)
         assert any("only region" in line for line in records)
