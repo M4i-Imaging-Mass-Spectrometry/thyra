@@ -78,6 +78,10 @@ success = convert_msi(
 )
 ```
 
+Any integer type works as a RegionNumber, so a value read from
+`obs["region_number"]` selects its region. The store then describes only that
+region: its `uns["regions"]` entry and its MS/MS schedule.
+
 Thyra logs the RegionNumber-to-Area-Name mapping at `INFO` when it opens a
 multi-region dataset. See [`--region`](cli.md#conversion) for the detail.
 Only the timsTOF reader can select a region. Every other format refuses

@@ -6,12 +6,13 @@ comprehensive error handling.
 """
 
 import logging
+import numbers
 import os
 import re
 import sqlite3
 from contextlib import closing
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -51,6 +52,7 @@ from ....utils.bruker_exceptions import DataError, FileFormatError, SDKError
 from ..base_bruker_reader import BrukerBaseMSIReader
 from ..folder_structure import BrukerFolderStructure, BrukerFormat
 from ..mis_parser import parse_mis_file
+from ..region_map import build_region_map
 from ..vendor_db import open_read_only
 from .sdk.dll_manager import DLLManager
 from .sdk.sdk_functions import (
@@ -537,8 +539,10 @@ def _refuse_shifted_positional_types(
             "progress_callback takes a callable or None, got "
             f"{type(progress_callback).__name__}. {_POSITIONAL_SHIFT_NOTE}"
         )
+    # Any integer type counts, not only ``int``: a region number read back
+    # from ``obs["region_number"]`` is a numpy integer (issue #496).
     if region is not None and (
-        isinstance(region, bool) or not isinstance(region, (int, str))
+        isinstance(region, bool) or not isinstance(region, (numbers.Integral, str))
     ):
         raise ConversionRefused(
             "region takes a DB RegionNumber int, a .mis Area Name string or "
@@ -549,6 +553,20 @@ def _refuse_shifted_positional_types(
             "metadata_only takes True or False, got "
             f"{type(metadata_only).__name__}. {_POSITIONAL_SHIFT_NOTE}"
         )
+
+
+def _plain_region(region: object) -> Optional[Union[int, str]]:
+    """The checked ``region`` request, a numpy integer made a plain int.
+
+    Every later test of the request is ``isinstance(..., int)``, and
+    sqlite binds only plain ints. A numpy integer left as it was went
+    down the Area Name path as a string, where ``"1"`` could match an
+    Area named "1" (issue #496). Typed ``object`` for the reason given in
+    :func:`_refuse_shifted_positional_types`.
+    """
+    if isinstance(region, numbers.Integral):
+        return int(region)
+    return cast(Optional[Union[int, str]], region)
 
 
 @register_reader("bruker")
@@ -587,7 +605,9 @@ class BrukerReader(BrukerBaseMSIReader):
             progress_callback: Optional callback for progress updates
             region: Region selector for multi-region datasets.
                 None (default): convert all regions (no filtering).
-                int: select that DB RegionNumber (0-indexed).
+                int: select that DB RegionNumber (0-indexed). Any integer
+                type but bool, so a value read from
+                ``obs["region_number"]`` works.
                 str: select by FlexImaging .mis Area Name (e.g. "03"); falls back
                 to integer parse if the string doesn't match any area name.
             metadata_only: If True, skip the Bruker SDK DLL load and the
@@ -633,7 +653,7 @@ class BrukerReader(BrukerBaseMSIReader):
         super().__init__(data_path, **kwargs)
         self.use_recalibrated_state = use_recalibrated_state
         self.progress_callback = progress_callback
-        self._requested_region = region
+        self._requested_region = _plain_region(region)
         self._metadata_only = bool(metadata_only)
         if tdf_spectrum not in TDF_SPECTRUM_MODES:
             raise ConversionRefused(
@@ -1365,27 +1385,35 @@ class BrukerReader(BrukerBaseMSIReader):
             return None
 
         coordinate_offsets = self._get_coordinate_offsets()
-        region_map: Dict[tuple, int] = {}
+        x_off, y_off = (
+            (coordinate_offsets[0], coordinate_offsets[1])
+            if coordinate_offsets
+            else (0, 0)
+        )
 
         try:
             cursor = self._database().cursor()
+            # A position two regions measured takes the region of its first
+            # frame that holds peaks, whose id is also its acquisition_order
+            # (issue #496). An empty frame gives no row and no order, so it
+            # sorts after every frame with peaks.
             if self._selected_region is not None:
                 cursor.execute(
                     "SELECT XIndexPos, YIndexPos, RegionNumber "
-                    "FROM MaldiFrameInfo WHERE RegionNumber = ?",
+                    "FROM MaldiFrameInfo WHERE RegionNumber = ? ORDER BY Frame",
                     (self._selected_region,),
                 )
             else:
                 cursor.execute(
-                    "SELECT XIndexPos, YIndexPos, RegionNumber " "FROM MaldiFrameInfo"
+                    "SELECT m.XIndexPos, m.YIndexPos, m.RegionNumber "
+                    "FROM MaldiFrameInfo m LEFT JOIN Frames f ON f.Id = m.Frame "
+                    "ORDER BY COALESCE(f.NumPeaks, 1) = 0, m.Frame"
                 )
 
-            for x, y, region_num in cursor.fetchall():
-                nx, ny = int(x), int(y)
-                if coordinate_offsets:
-                    nx -= coordinate_offsets[0]
-                    ny -= coordinate_offsets[1]
-                region_map[(nx, ny)] = int(region_num)
+            region_map: Dict[tuple, int] = build_region_map(
+                (int(x) - x_off, int(y) - y_off, int(region_num))
+                for x, y, region_num in cursor.fetchall()
+            )
 
             logger.info(
                 f"Built region map: {len(region_map)} pixels across "
@@ -1455,6 +1483,10 @@ class BrukerReader(BrukerBaseMSIReader):
 
             Order follows ``_detect_regions``: frame count descending,
             NOT region number. Sort before displaying.
+
+            Under ``region=`` only the selected region is listed: the
+            store holds no other, and the other regions' boxes lie
+            outside its raster (issue #496).
         """
         if not self._region_info or len(self._region_info) <= 1:
             return None
@@ -1463,6 +1495,11 @@ class BrukerReader(BrukerBaseMSIReader):
         bounds = self._region_bounds()
         result = []
         for region_num, n_frames in self._region_info:
+            if (
+                self._selected_region is not None
+                and region_num != self._selected_region
+            ):
+                continue
             info: Dict[str, Any] = {
                 "region_number": region_num,
                 "n_spectra": n_frames,
@@ -1860,11 +1897,39 @@ class BrukerReader(BrukerBaseMSIReader):
             self._fragmentation_read = True
         return self._fragmentation
 
+    def _selected_frames(self, column: str) -> Tuple[str, Tuple[int, ...]]:
+        """A ``WHERE`` clause keeping the frames of the selected region.
+
+        Empty when every region is converted, so a file without
+        ``MaldiFrameInfo`` is asked exactly what it was asked before.
+        Under ``region=`` the schedule is judged on the frames the store
+        holds, as the mixed-level check already was (issue #496).
+
+        The queries that splice this clause in are marked ``nosec B608``:
+        the clause names a column of Thyra's own choosing, and the region
+        number is a bound parameter.
+
+        Args:
+            column: The frame id column of the table being filtered.
+
+        Returns:
+            The clause, with a leading space, and its parameters.
+        """
+        if self._selected_region is None:
+            return "", ()
+        return (
+            f" WHERE {column} IN "  # nosec B608
+            "(SELECT Frame FROM MaldiFrameInfo WHERE RegionNumber = ?)",
+            (self._selected_region,),
+        )
+
     def _build_fragmentation(self) -> Optional[FragmentationSchedule]:
+        where, params = self._selected_frames("Id")
         try:
             conn = self._database()
             rows = conn.execute(
-                "SELECT MsMsType, COUNT(*) FROM Frames GROUP BY MsMsType"
+                f"SELECT MsMsType, COUNT(*) FROM Frames{where} GROUP BY MsMsType",  # nosec B608
+                params,
             ).fetchall()
         except sqlite3.OperationalError as e:
             logger.debug(f"Frames has no MsMsType column: {e}")
@@ -1932,26 +1997,29 @@ class BrukerReader(BrukerBaseMSIReader):
                 scan_end=_optional_int(row[4]),
             )
 
+        where, params = self._selected_frames("Frame")
+        dia_where, _ = self._selected_frames("i.Frame")
         for query, build in (
             (
-                "SELECT IsolationMz, IsolationWidth, CollisionEnergy, "
+                "SELECT IsolationMz, IsolationWidth, CollisionEnergy, "  # nosec B608
                 "ScanNumBegin, ScanNumEnd, COUNT(DISTINCT Frame) "
-                "FROM PasefFrameMsMsInfo GROUP BY IsolationMz, IsolationWidth, "
-                "CollisionEnergy, ScanNumBegin, ScanNumEnd ORDER BY IsolationMz",
+                f"FROM PasefFrameMsMsInfo{where} GROUP BY IsolationMz, "
+                "IsolationWidth, CollisionEnergy, ScanNumBegin, ScanNumEnd "
+                "ORDER BY IsolationMz",
                 pasef_window,
             ),
             (
-                "SELECT w.IsolationMz, w.IsolationWidth, w.CollisionEnergy, "
+                "SELECT w.IsolationMz, w.IsolationWidth, w.CollisionEnergy, "  # nosec B608
                 "w.ScanNumBegin, w.ScanNumEnd, COUNT(DISTINCT i.Frame) "
                 "FROM DiaFrameMsMsWindows w JOIN DiaFrameMsMsInfo i "
-                "ON i.WindowGroup = w.WindowGroup "
+                f"ON i.WindowGroup = w.WindowGroup{dia_where} "
                 "GROUP BY w.IsolationMz, w.IsolationWidth, w.CollisionEnergy, "
                 "w.ScanNumBegin, w.ScanNumEnd ORDER BY w.IsolationMz",
                 pasef_window,
             ),
             (
-                "SELECT TriggerMass, IsolationWidth, CollisionEnergy, "
-                "COUNT(DISTINCT Frame) FROM FrameMsMsInfo "
+                "SELECT TriggerMass, IsolationWidth, CollisionEnergy, "  # nosec B608
+                f"COUNT(DISTINCT Frame) FROM FrameMsMsInfo{where} "
                 "GROUP BY TriggerMass, IsolationWidth, CollisionEnergy "
                 "ORDER BY TriggerMass",
                 lambda row: IsolationWindow.from_full_width(
@@ -1963,7 +2031,7 @@ class BrukerReader(BrukerBaseMSIReader):
         ):
             try:
                 conn = self._database()
-                rows = conn.execute(query).fetchall()
+                rows = conn.execute(query, params).fetchall()
             except sqlite3.OperationalError:
                 continue
             rows = [row for row in rows if row[0] is not None]

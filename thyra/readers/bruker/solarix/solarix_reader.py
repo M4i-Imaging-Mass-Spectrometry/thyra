@@ -43,6 +43,7 @@ from ....core.registry import register_reader
 from ....errors import ConversionRefused
 from ..base_bruker_reader import BrukerBaseMSIReader
 from ..mis_parser import parse_mis_file
+from ..region_map import build_region_map
 from ..vendor_db import read_only_uri
 
 logger = logging.getLogger(__name__)
@@ -648,13 +649,22 @@ class SolarixReader(BrukerBaseMSIReader):
             pbar.close()
 
     def get_region_map(self) -> Optional[dict]:
-        """Map 0-based ``(x, y)`` to the RegionNumber recorded per scan."""
+        """Map 0-based ``(x, y)`` to the RegionNumber recorded per scan.
+
+        A position two regions measured takes the region of its first
+        scan that holds peaks (issue #496): an empty scan gives no row and
+        no ``acquisition_order``, so it must not name the region either.
+        """
         index = self._load_spectra_index()
         x_min, y_min, _ = self.coordinate_offsets
-        return {
-            (int(x - x_min), int(y - y_min)): int(region)
-            for x, y, region in zip(index["x"], index["y"], index["region"])
-        }
+        # Stable sort on "empty", so the Id order stays within each kind.
+        order = np.argsort(index["num_peaks"] == 0, kind="stable")
+        return build_region_map(
+            (int(x - x_min), int(y - y_min), int(region))
+            for x, y, region in zip(
+                index["x"][order], index["y"][order], index["region"][order]
+            )
+        )
 
     def get_region_info(self) -> Optional[list]:
         """Summary of acquisition regions found in the Spectra table.

@@ -128,6 +128,12 @@ class TestRetiredConstructorKeywords:
 
         assert "region" in str(refusal.value)
 
+    @pytest.mark.parametrize("flag", [True, np.bool_(True)])
+    def test_region_refuses_a_bool_of_either_kind(self, flag):
+        """Any integer type is a region number (#496), but a bool is not."""
+        with pytest.raises(ConversionRefused, match="got bool"):
+            BrukerReader(Path("/fake/bruker.d"), region=flag)
+
     def test_metadata_only_refuses_the_type_batch_size_had(self):
         """An int metadata_only is the third; ``bool(100)`` would have been True."""
         with pytest.raises(ConversionRefused) as refusal:

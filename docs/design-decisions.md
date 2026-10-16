@@ -2235,11 +2235,16 @@ because a spectrum reached it, and every spectrum from a reader that knows the
 order carries one; the converter refuses a spectrum without it rather than
 leave a blank. "Unknown" is therefore a property of a whole table, and the
 store says it by leaving the column out, as it says "not stated" everywhere
-else. Plain `int64` is also what `x`, `y` and `region_number` are, and it is
-stored as one flat array, where anndata stores a nullable integer as values
+else. `x`, `y` and `region_number` are plain integers too, and a plain integer
+is stored as one flat array, where anndata stores a nullable integer as values
 plus a mask that any reader of the Zarr without anndata has to know about. The
 price: concatenating a table that has the column with one that has not gives
 pandas' `float64` with NaN, unless the caller asks for `Int64`.
+
+*Corrected 2026-10-16 (D58):* this entry first said `x`, `y` and
+`region_number` are `int64`. In a 2D store all three are `int32`; in a volume
+`x` and `y` are `int64` and `region_number` is `int32`. The reasoning holds:
+each is a plain integer column.
 
 **Why this name.** `spectrum_index` was the other candidate. mzML and mzPeak use
 it for a 0-based list position, while the Bruker value is a 1-based id with
@@ -4435,3 +4440,73 @@ both:
   Like D19's GitHub dependency, an outage there can turn `lint` red.
 - The `rev` is not in `uv.lock`, so nothing moves it; bump it by hand,
   re-measure, and fix what a newer pyright reports in the same PR.
+
+## D58. A region store describes the region it holds
+
+**Status:** Implemented (2026-10-16), issue #496.
+
+**Decision.** Under `region=`, everything the timsTOF reader reports is about
+the selected region. Four rules follow.
+
+- `get_region_info`, and with it `uns["regions"]`, lists only the selected
+  region. Its count and box are that region's, inside the stored raster.
+- The precursor schedule is read from the selected region's frames: the frame
+  types in `Frames`, and the windows in `PasefFrameMsMsInfo`,
+  `DiaFrameMsMsInfo` and `FrameMsMsInfo`. The mixed-level check already
+  filtered this way. Without `region=` the queries are unchanged.
+- A position measured in two regions is one row, as any repeated position is
+  (D40). On timsTOF and solariX that row takes the region of its first frame
+  that holds peaks, the frame whose number is its `acquisition_order` (D26).
+  An empty frame gives no row, so it names no region. The reader warns once,
+  naming the regions and the first shared position.
+- `region` takes any integer type except `bool`, so a value read back from
+  `obs["region_number"]`, which is a numpy integer, selects its region.
+
+A region with no row has no entry in `uns["average_spectrum_per_region"]`, on
+every reader. D26's note on column types is corrected in place, with a dated
+note: in a 2D store `x`, `y` and `region_number` are `int32`, not `int64`.
+
+**Why.** A `region=` store listed every region of the run, with whole-run
+counts and boxes outside its raster, some negative. A region on one constant
+schedule lost its MS/MS table when another region was survey only, because
+the survey frames of the other region made the file "mixed". A survey region
+was described as MS level 2. A shared position took the region of its last
+frame and the order of its first, so one row named two different frames. A
+region number read back from a store was refused with a message about
+positional arguments nobody passed. A region with no row got a mean of zeros,
+which is not a mean.
+
+**What changes in a store.**
+
+- A `region=` timsTOF store: `uns["regions"]` holds one entry. The
+  `fragmentation` block and whether an `_msms` table is written follow the
+  region's own frames.
+- A multi-region timsTOF or solariX store with a shared position: that row's
+  `region_number` is the region of its first frame (it was the last), and the
+  per-region means move with it.
+- A store with a region that has no row: that region's
+  `average_spectrum_per_region` entry is gone.
+
+**Alternatives.**
+
+- "Write no region map when two regions share a position", as the rapifleX
+  reader does (D44). Rejected for timsTOF and solariX: their region number is
+  a column of the vendor database, so one shared position does not cast doubt
+  on the others. The rapifleX map is rebuilt from spot names, and a conflict
+  there can mean the keying itself is wrong.
+- "Keep each region's spectrum in its own row." The store has one row per
+  position (D40); two rows at one `(x, y)` would break every consumer that
+  indexes by position. `region=` gives each region its own measurement.
+- "An all-NaN mean for an empty region." A consumer that plots every entry
+  then draws nothing under a legend label. No entry says the same thing.
+
+**Known limits.**
+
+- In the full store, a shared position's row sums the spectra of both
+  regions, so the earlier region's mean is not the one its `region=` store
+  gives. The warning says so.
+- The schedule filter needs `MaldiFrameInfo`. A `region=` request on a file
+  without it is already refused (issue #252).
+- A frame that lists peaks but loses all of them to `--intensity-threshold`
+  still counts as holding peaks, so on a shared position it can name the
+  region while a later frame gives the row its `acquisition_order`.

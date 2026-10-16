@@ -228,7 +228,8 @@ if "average_spectrum_per_region" in msi_table.uns:
 ```
 
 Each region's vector is the mean of the rows in that region, on the same
-"rows, not spectra" rule as `average_spectrum`.
+"rows, not spectra" rule as `average_spectrum`. A region with no rows has no
+mean, so it has no entry. `uns["regions"]` still lists it, with its spectra.
 
 !!! note
     This key is present whenever the reader records regions: on every
@@ -979,6 +980,11 @@ Example output:
 Region 0: E2506 (104,321 spectra)
 Region 1: Matrix (1,053 spectra)
 ```
+
+A store made with `--region` lists only the region it holds.
+
+A position measured in two regions is one row, as any repeated position is.
+That row takes the region of its first spectrum, and the conversion warns.
 
 !!! tip "Filtering by region"
     To work with only one region:

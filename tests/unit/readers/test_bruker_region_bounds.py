@@ -24,8 +24,8 @@ from thyra.readers.bruker.timstof.timstof_reader import BrukerReader
 class _BoundsHarness:
     """A stand-in exposing only what the two methods under test touch.
 
-    ``get_region_info`` reads ``_region_info`` and ``_mis_metadata`` and
-    calls ``_region_bounds``; ``_region_bounds`` reads ``conn`` (through
+    ``get_region_info`` reads ``_region_info``, ``_selected_region`` and
+    ``_mis_metadata`` and calls ``_region_bounds``; ``_region_bounds`` reads ``conn`` (through
     ``_database``) and ``_get_coordinate_offsets``.  Nothing else on the real reader is
     reachable from here, which is why the heavy SDK initialisation can
     be skipped.
@@ -33,6 +33,7 @@ class _BoundsHarness:
 
     _mis_metadata: Dict[str, Any]
     _region_info: List[Tuple[int, int]]
+    _selected_region: Optional[int]
     conn: sqlite3.Connection
     _offsets: Optional[Tuple[int, int, int]]
 
@@ -69,8 +70,10 @@ def _harness(
     offsets: Optional[Tuple[int, int, int]] = (10, 5, 0),
     frames: Optional[List[Tuple[int, int, int]]] = None,
     with_table: bool = True,
+    selected: Optional[int] = None,
 ) -> _BoundsHarness:
     h = _BoundsHarness()
+    h._selected_region = selected
     h._mis_metadata = {"areas": [{"name": n} for n in (areas or ["01", "02"])]}
     h._region_info = region_info if region_info is not None else [(0, 6), (1, 4)]
     h._offsets = offsets
@@ -166,6 +169,18 @@ class TestRegionInfoCarriesBounds:
         """
         h = _harness(areas=["01"], region_info=[(0, 6)])
         assert h.get_region_info() is None
+
+    def test_a_selected_region_is_the_only_entry(self) -> None:
+        """Under ``region=`` the store holds one region (issue #496)."""
+        h = _harness(selected=1)
+        assert h.get_region_info() == [
+            {
+                "region_number": 1,
+                "n_spectra": 4,
+                "bounds": (10, 2, 11, 3),
+                "name": "02",
+            },
+        ]
 
     def test_the_order_is_still_the_readers_own(self) -> None:
         """Frame-count order, NOT region number -- normalized by the caller.
