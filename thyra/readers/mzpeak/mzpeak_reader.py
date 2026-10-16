@@ -276,6 +276,23 @@ def _positions(column: Any) -> Tuple[NDArray[np.int64], NDArray[np.bool_]]:
     return values.astype(np.int64), present
 
 
+def _integers_or_zero(column: Any) -> NDArray[np.int64]:
+    """Read an integer column of the metadata member, 0 where it has a null.
+
+    A column with no value at all may have the null type, which cannot be
+    filled with 0. It reads as the same column typed as an integer would.
+
+    Args:
+        column: One column of the spectrum metadata member.
+
+    Returns:
+        One integer per row.
+    """
+    if column.null_count == len(column):
+        return np.zeros(len(column), dtype=np.int64)
+    return np.asarray(column.fill_null(0).to_numpy(), dtype=np.int64)
+
+
 def _integer_parameter(
     column: Any, *, name: Optional[str] = None, accession: Optional[str] = None
 ) -> Optional[Tuple[NDArray[np.int64], NDArray[np.bool_]]]:
@@ -748,14 +765,9 @@ class MzPeakArchive:
             columns=["index", column] + ([MS_LEVEL_COLUMN] if has_levels else [])
         )
         spectrum_index = np.asarray(metadata.column("index").to_numpy(), dtype=np.int64)
-        counts = np.asarray(
-            metadata.column(column).fill_null(0).to_numpy(), dtype=np.int64
-        )
+        counts = _integers_or_zero(metadata.column(column))
         levels = (
-            np.asarray(
-                metadata.column(MS_LEVEL_COLUMN).fill_null(0).to_numpy(),
-                dtype=np.int64,
-            )
+            _integers_or_zero(metadata.column(MS_LEVEL_COLUMN))
             if has_levels
             else np.zeros(spectrum_index.size, dtype=np.int64)
         )
