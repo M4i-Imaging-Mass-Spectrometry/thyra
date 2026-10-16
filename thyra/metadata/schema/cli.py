@@ -16,6 +16,7 @@ Exit status follows the conversion CLI's convention: 0 success,
 
 import json
 import logging
+import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -57,7 +58,12 @@ def _load_json(path: Path) -> Dict[str, Any]:
     apart and skips a byte-order mark. Windows PowerShell 5.1 writes
     ``thyra metadata src > meta.json`` as UTF-16, and with its Out-File
     default set to utf8 it writes UTF-8 with a mark. Text in any other
-    encoding, an ANSI code page for instance, is refused in one line.
+    encoding, an ANSI code page for instance, is refused in one line, and
+    so is JSON nested more than ``_MAX_JSON_DEPTH`` levels deep.
+
+    So is a number that is not finite. ``json.loads`` reads ``1e999`` and
+    the tokens ``Infinity`` and ``NaN``, none of which JSON has, and the
+    schema's bounds let positive infinity through (issue #494).
     """
     try:
         document = json.loads(path.read_bytes())
@@ -66,11 +72,99 @@ def _load_json(path: Path) -> Dict[str, Any]:
             f"Could not read {path}: it is not UTF-8, UTF-16 or UTF-32 text "
             f"({exc.reason} at byte {exc.start}). Save it as UTF-8."
         ) from exc
+    except RecursionError as exc:
+        raise click.ClickException(
+            f"Could not read {path}: its JSON is nested too deeply to parse."
+        ) from exc
     except (OSError, ValueError) as exc:
         raise click.ClickException(f"Could not read {path}: {exc}") from exc
     if not isinstance(document, dict):
         raise click.ClickException(f"{path} does not contain a JSON object")
+    if _nested_deeper_than(document, _MAX_JSON_DEPTH):
+        raise click.ClickException(
+            f"Could not read {path}: its JSON is nested too deeply (more than "
+            f"{_MAX_JSON_DEPTH} levels). A metadata document is a few levels deep."
+        )
+    location = _first_non_finite(document)
+    if location is not None:
+        raise click.ClickException(
+            f"Could not read {path}: {location} is not a finite number. JSON "
+            "has no NaN or infinity; give a number or leave the field out."
+        )
     return document
+
+
+# Far deeper than any metadata document (about six levels) or overlay. Where
+# the parser stops is no bound to rely on: Python 3.14 measures recursion
+# against the C stack, and on Linux it parses 100,000 levels, which the
+# merge, the validation and the encoder then recurse through (issue #494).
+_MAX_JSON_DEPTH = 100
+
+
+def _nested_deeper_than(document: Any, limit: int) -> bool:
+    """Whether ``document`` nests objects or arrays more than ``limit`` deep.
+
+    Walked with a stack rather than by recursion, and stopped at the first
+    node past the limit, so a pathological input costs little.
+    """
+    stack: List[Tuple[Any, int]] = [(document, 1)]
+    while stack:
+        node, depth = stack.pop()
+        if depth > limit:
+            return True
+        if isinstance(node, dict):
+            stack.extend((value, depth + 1) for value in node.values())
+        elif isinstance(node, list):
+            stack.extend((value, depth + 1) for value in node)
+    return False
+
+
+def _first_non_finite(document: Dict[str, Any]) -> Optional[str]:
+    """The dotted location of the first NaN or infinity in ``document``.
+
+    Walked with a stack rather than by recursion. It builds a location for
+    every node, so it runs only on a document within ``_MAX_JSON_DEPTH``
+    or one Thyra built itself.
+    """
+    stack: List[Tuple[str, Any]] = [("", document)]
+    while stack:
+        location, node = stack.pop()
+        if isinstance(node, float) and not math.isfinite(node):
+            return location or "the document"
+        if isinstance(node, dict):
+            children = [(str(key), value) for key, value in node.items()]
+        elif isinstance(node, list):
+            children = [(str(index), value) for index, value in enumerate(node)]
+        else:
+            continue
+        # Reversed, so the first child is popped first.
+        for key, value in reversed(children):
+            stack.append((f"{location}.{key}" if location else key, value))
+    return None
+
+
+def _render_json(document: Dict[str, Any]) -> str:
+    """``document`` as strict JSON, refusing NaN and infinity in one line.
+
+    ``json.dumps`` writes them as the tokens ``NaN`` and ``Infinity``,
+    which JSON does not have and a strict reader refuses (issue #494).
+    An input holding one is refused when it is read; this catches a value
+    that came from a store or a raw source instead.
+    """
+    try:
+        return json.dumps(document, indent=2, allow_nan=False)
+    except RecursionError as exc:
+        # A backstop: inputs are refused past _MAX_JSON_DEPTH when read, and
+        # Thyra's own documents are a few levels deep.
+        raise click.ClickException(
+            "Nothing was written: the metadata is nested too deeply to write."
+        ) from exc
+    except ValueError as exc:
+        location = _first_non_finite(document) or "a value"
+        raise click.ClickException(
+            f"Nothing was written: {location} is not a finite number "
+            "(NaN or infinity), which JSON cannot hold."
+        ) from exc
 
 
 def _load_documents(path: Path) -> Dict[str, Dict[str, Any]]:
@@ -272,7 +366,7 @@ def export_metaspace_command(
     for warning in warnings:
         click.echo(f"warning: {warning}", err=True)
 
-    rendered = json.dumps(metaspace_document, indent=2)
+    rendered = _render_json(metaspace_document)
     if output_path is not None and str(output_path) == "-":
         click.echo(rendered)
         return
@@ -323,7 +417,8 @@ def metadata_command(
     The document is written either way -- a metadata document that does
     not conform is still the metadata of that acquisition, and for a
     source with no raster it is the only kind there is, since the schema
-    requires a pixel size (see docs/design-decisions.md).
+    requires a pixel size (see docs/design-decisions.md). A document
+    holding a number JSON cannot hold (NaN or infinity) is not written.
     """
     # Imported here rather than at module scope: reading a source pulls
     # in the reader registry and with it every reader, which `thyra
@@ -341,7 +436,14 @@ def metadata_command(
     _, issues = validate_document(document)
     errors = [issue for issue in issues if issue.severity == "error"]
 
-    rendered = json.dumps(document, indent=2)
+    try:
+        rendered = _render_json(document)
+    except click.ClickException:
+        # Nothing is written, but what the document says is still reported.
+        if issues:
+            click.echo(f"{input.name}:", err=True)
+            _echo_issues(input.name, issues, err=True)
+        raise
     if output_path is None or str(output_path) == "-":
         click.echo(rendered)
     else:

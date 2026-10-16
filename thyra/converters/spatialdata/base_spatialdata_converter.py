@@ -1221,6 +1221,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 # stream into the store now that it exists.
                 self.optical.stream_pending_pixels()
                 zarr.consolidate_metadata(str(self.output_path))
+                self._mark_store_complete()
             logger.info(f"Successfully saved SpatialData to {self.output_path}")
             # Every table was written from its memmaps; nothing holds them
             # now but this object and the caller's mapping.

@@ -400,6 +400,12 @@ def preview_msi(path: Path) -> MsiPreview:
             essential = reader.get_essential_metadata()
         except Exception as exc:
             return _unreadable(path, f"Could not read essential metadata: {exc}")
+        # A metadata-only reader opens a run a conversion refuses (a Waters
+        # spot acquisition: one stage position, no raster). Its metadata is
+        # real, but the preview answers whether the input can be imported.
+        no_raster = getattr(reader, "no_raster_reason", None)
+        if isinstance(no_raster, str):
+            return _unreadable(path, f"Could not read essential metadata: {no_raster}")
 
         # Comprehensive metadata is needed only for the AxisType guess.
         # If it fails, the rest of the preview is still valid.

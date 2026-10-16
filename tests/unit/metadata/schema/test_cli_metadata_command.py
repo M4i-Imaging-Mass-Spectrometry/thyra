@@ -130,6 +130,62 @@ class TestMerge:
         # file and the overlay say.
         assert json.loads(result.stdout)["ms_analysis"]["polarity"] == "sideways"
 
+    @pytest.mark.parametrize("token", ["1e999", "Infinity", "NaN"])
+    def test_a_number_json_cannot_hold_is_not_written(
+        self, runner, source, tmp_path, token
+    ):
+        """Issue #494 (D2): it was written as the token ``Infinity``."""
+        overlay = tmp_path / "user.json"
+        overlay.write_text(
+            '{"ms_analysis": {"pixel_size_um": {"x": %s, "y": 20.0}}}' % token,
+            encoding="utf-8",
+        )
+        output = tmp_path / "out.json"
+        result = runner.invoke(
+            metadata_command,
+            [str(source), "--merge", str(overlay), "-o", str(output)],
+        )
+        assert result.exit_code == 1
+        assert not output.exists()
+        assert "ms_analysis.pixel_size_um.x is not a finite number" in result.stderr
+
+    def test_a_source_value_json_cannot_hold_is_not_written(
+        self, runner, source, tmp_path, monkeypatch
+    ):
+        """A NaN read from the source itself is refused, not written as ``NaN``."""
+        from thyra.metadata import document as document_module
+
+        real = document_module.read_metadata_document
+
+        def with_nan(path):
+            built = real(path)
+            built["ms_analysis"]["pixel_size_um"]["x"] = float("nan")
+            built["ms_analysis"]["polarity"] = "sideways"
+            return built
+
+        monkeypatch.setattr(document_module, "read_metadata_document", with_nan)
+        output = tmp_path / "out.json"
+        result = runner.invoke(metadata_command, [str(source), "-o", str(output)])
+        assert result.exit_code == 1
+        assert not output.exists()
+        assert "Nothing was written" in result.stderr
+        assert "ms_analysis.pixel_size_um.x is not a finite number" in result.stderr
+        # The validation issues are still reported.
+        assert "ms_analysis.polarity" in result.stderr
+
+    def test_an_overlay_nested_too_deeply_is_refused_in_one_line(
+        self, runner, source, tmp_path
+    ):
+        """Issue #494 (D3): it ended in a RecursionError traceback."""
+        overlay = tmp_path / "deep.json"
+        overlay.write_text(
+            '{"a": ' + "[" * 100_000 + "]" * 100_000 + "}", encoding="utf-8"
+        )
+        result = runner.invoke(metadata_command, [str(source), "--merge", str(overlay)])
+        assert result.exit_code == 1
+        assert not isinstance(result.exception, RecursionError)
+        assert "nested too deeply" in result.stderr
+
 
 class TestUsage:
     def test_a_missing_input_is_a_usage_error(self, runner, tmp_path):

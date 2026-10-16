@@ -196,6 +196,202 @@ class TestJsonFilesNotInPlainUtf8:
         assert "Traceback" not in message
 
 
+def _deep_json(path, levels=100_000):
+    """A JSON object nested past the parser's recursion limit."""
+    path.write_text('{"a": ' + "[" * levels + "]" * levels + "}", encoding="utf-8")
+    return path
+
+
+class TestJsonNestedTooDeeply:
+    """Issue #494 (D3): a RecursionError traceback, not a one-line refusal."""
+
+    def _assert_refused(self, result):
+        assert result.exit_code == 1
+        assert not isinstance(result.exception, RecursionError)
+        message = result.output + (result.stderr or "")
+        assert "nested too deeply" in message
+        assert "Traceback" not in message
+
+    def test_validate_refuses_it(self, runner, tmp_path):
+        deep = _deep_json(tmp_path / "deep.json")
+        self._assert_refused(runner.invoke(validate_command, [str(deep)]))
+
+    def test_validate_refuses_it_as_an_overlay(self, runner, tmp_path):
+        path = _write_doc(tmp_path)
+        deep = _deep_json(tmp_path / "deep.json")
+        result = runner.invoke(validate_command, [str(path), "--merge", str(deep)])
+        self._assert_refused(result)
+
+    def test_export_metaspace_refuses_it(self, runner, tmp_path):
+        deep = _deep_json(tmp_path / "deep.json")
+        out = tmp_path / "out.json"
+        result = runner.invoke(export_metaspace_command, [str(deep), "-o", str(out)])
+        self._assert_refused(result)
+        assert not out.exists()
+
+    def test_a_depth_the_parser_reads_is_refused_too(self, runner, tmp_path):
+        """Python 3.14 on Linux parses 100,000 levels; the bound is Thyra's own."""
+        path = _write_doc(tmp_path)
+        deep = _deep_json(tmp_path / "deep.json", levels=200)
+        result = runner.invoke(validate_command, [str(path), "--merge", str(deep)])
+        self._assert_refused(result)
+        assert "more than 100 levels" in result.output + (result.stderr or "")
+
+    def test_a_document_within_the_bound_is_read(self, runner, tmp_path):
+        """98 array levels inside two object levels: 100 in all."""
+        path = _write_doc(tmp_path)
+        overlay = tmp_path / "deep.json"
+        overlay.write_text(
+            '{"sample": {"a": ' + "[" * 98 + "]" * 98 + "}}", encoding="utf-8"
+        )
+        result = runner.invoke(validate_command, [str(path), "--merge", str(overlay)])
+        message = result.output + (result.stderr or "")
+        assert "nested too deeply" not in message
+        assert "sample.a" in message  # the schema has no such field
+
+    def test_export_metaspace_refuses_it_as_an_overlay(self, runner, tmp_path):
+        path = _write_doc(tmp_path)
+        deep = _deep_json(tmp_path / "deep.json")
+        out = tmp_path / "out.json"
+        result = runner.invoke(
+            export_metaspace_command, [str(path), "--merge", str(deep), "-o", str(out)]
+        )
+        self._assert_refused(result)
+        assert not out.exists()
+
+
+class TestNonFiniteNumbers:
+    """Issue #494 (D2): an infinite value passed and was written as ``Infinity``.
+
+    ``json.loads`` reads ``1e999`` and the tokens ``Infinity`` and ``NaN``
+    as floats, and ``json.dumps`` writes them back as tokens that JSON
+    does not have. A JSON input holding one is refused in one line that
+    names the field.
+    """
+
+    def _overlay(self, tmp_path, token):
+        overlay = tmp_path / "user.json"
+        overlay.write_text(
+            '{"ms_analysis": {"pixel_size_um": {"x": %s, "y": 20.0}}}' % token,
+            encoding="utf-8",
+        )
+        return overlay
+
+    @staticmethod
+    def _assert_refused(result, location):
+        assert result.exit_code == 1
+        message = result.output + (result.stderr or "")
+        assert "Could not read" in message
+        assert f"{location} is not a finite number" in message
+        assert "Traceback" not in message
+
+    @pytest.mark.parametrize("token", ["1e999", "Infinity", "-Infinity", "NaN"])
+    def test_validate_refuses_an_overlay_holding_one(self, runner, tmp_path, token):
+        path = _write_doc(tmp_path)
+        overlay = self._overlay(tmp_path, token)
+        result = runner.invoke(validate_command, [str(path), "--merge", str(overlay)])
+        self._assert_refused(result, "ms_analysis.pixel_size_um.x")
+
+    def test_validate_refuses_a_document_holding_one(self, runner, tmp_path):
+        path = _write_doc(tmp_path)
+        path.write_text(
+            path.read_text(encoding="utf-8").replace('"x": 20.0', '"x": Infinity'),
+            encoding="utf-8",
+        )
+        assert "Infinity" in path.read_text(encoding="utf-8")
+        result = runner.invoke(validate_command, [str(path)])
+        self._assert_refused(result, "ms_analysis.pixel_size_um.x")
+
+    def test_a_value_in_a_list_is_located_too(self, runner, tmp_path):
+        path = _write_doc(tmp_path)
+        overlay = tmp_path / "user.json"
+        overlay.write_text(
+            '{"processing": [{"parameters": {"a": 1.0}}, {"parameters": {"b": NaN}}]}',
+            encoding="utf-8",
+        )
+        result = runner.invoke(validate_command, [str(path), "--merge", str(overlay)])
+        self._assert_refused(result, "processing.1.parameters.b")
+
+    def test_export_metaspace_writes_nothing(self, runner, tmp_path):
+        path = _write_doc(tmp_path)
+        overlay = self._overlay(tmp_path, "1e999")
+        out = tmp_path / "out.json"
+        result = runner.invoke(
+            export_metaspace_command,
+            [str(path), "--merge", str(overlay), "-o", str(out)],
+        )
+        self._assert_refused(result, "ms_analysis.pixel_size_um.x")
+        assert not out.exists()
+
+    def test_the_json_writer_refuses_a_document_too_deep_to_write(self, monkeypatch):
+        """The encoder's own recursion limit is refused in one line too."""
+        import click
+
+        from thyra.metadata.schema import cli
+
+        def too_deep(*args, **kwargs):
+            raise RecursionError("maximum recursion depth exceeded")
+
+        monkeypatch.setattr(cli.json, "dumps", too_deep)
+        with pytest.raises(click.ClickException, match="nested too deeply"):
+            cli._render_json({"x": 1})
+
+    def test_the_json_writer_refuses_them_in_one_line(self):
+        """The backstop for a value from a store or a raw source."""
+        import click
+
+        from thyra.metadata.schema.cli import _render_json
+
+        assert json.loads(_render_json({"x": 1.5})) == {"x": 1.5}
+        for value in (float("inf"), float("-inf"), float("nan")):
+            with pytest.raises(click.ClickException, match="x.0 is not a finite"):
+                _render_json({"x": [value]})
+
+
+class TestABinCountThatIsNotANumber:
+    """Issue #494 (D1): ``int()`` raised and the verdict was lost."""
+
+    def test_validate_prints_its_verdict(self, runner, tmp_path):
+        import anndata as ad
+        import numpy as np
+        import zarr
+
+        from thyra.metadata.schema import mass_axis_sha256
+
+        mz = np.array([100.0, 200.0, 300.0])
+        root = zarr.open_group(str(tmp_path / "store.zarr"), mode="a")
+        table = root.create_group("tables").create_group("t")
+        table.create_group("var").create_array("mz", data=mz)
+        block = _json_doc()
+        block["provenance"]["mass_axis"] = {
+            "sha256": mass_axis_sha256(mz),
+            "n_bins": "many",
+        }
+        ad.io.write_elem(table.create_group("uns"), "msi_metadata", block)
+
+        result = runner.invoke(
+            validate_command, [str(tmp_path / "store.zarr"), "--json"]
+        )
+
+        assert result.exit_code == 1
+        assert not isinstance(result.exception, ValueError)
+        report = json.loads(result.stdout)
+        assert report["t"]["valid"] is False
+        locations = {issue["location"] for issue in report["t"]["issues"]}
+        assert "provenance.mass_axis" in locations
+
+
+def _json_doc():
+    """A conforming document as plain JSON types, ready for ``write_elem``."""
+    return json.loads(
+        json.dumps(
+            build_msi_metadata(
+                None, pixel_size_um=(20.0, 20.0), source_format="imzml"
+            ).to_uns_dict()
+        )
+    )
+
+
 class TestDispatcher:
     def test_subcommands_are_dispatched(self, monkeypatch, capsys):
         from thyra.__main__ import cli
