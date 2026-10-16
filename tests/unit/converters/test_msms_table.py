@@ -387,6 +387,26 @@ class TestIsomerPrecursors:
         assert list(table.var.index) == ["p313.275_mz2", "p313.275_mz2_1"]
         assert table.var.index.is_unique
 
+    def test_an_isomer_keeps_its_suffix_where_it_alone_holds_a_bin(self):
+        """The label names the isomer whatever the other one holds (#498).
+
+        The higher-mobility isomer (window 1) holds bins 2 and 4; the lower
+        one only bin 2. Its bin-4 column used to be ``p313.275_mz4``, the
+        name the lower isomer takes in a store where it holds bin 4.
+        """
+        spectra = [
+            ((0, 0, 0), 0, [300.0], [10.0]),
+            ((0, 0, 0), 1, [300.0, 500.0], [20.0, 30.0]),
+        ]
+        table = _build(_reader(schedule=self.SCHEDULE, spectra=spectra, ramp=RAMP))
+
+        labels = dict(zip(table.var.index, table.var["precursor_index"]))
+        assert labels == {
+            "p313.275_mz2": 0,
+            "p313.275_mz2_1": 1,
+            "p313.275_mz4_1": 1,
+        }
+
     def test_a_schedule_of_distinct_precursors_carries_no_repeat(self):
         """The ordinary case is unchanged: one block per m/z."""
         table = _build(_reader(ramp=RAMP))

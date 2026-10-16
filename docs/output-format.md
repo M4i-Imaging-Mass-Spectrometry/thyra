@@ -760,7 +760,9 @@ applies to every other table.
     The `var` index labels are named
     after the precursor's m/z for the same reason -- `p936.578_mz1732`,
     never `p14_mz1732` -- so `anndata.concat` cannot silently merge two
-    unrelated precursors. Measured on two real acquisitions in opposite
+    unrelated precursors. Two windows at one m/z (an isomer pair) are told
+    apart by their order in mobility: every column of the second ends in
+    `_1`, the third in `_2`, the first has no suffix (D60). Measured on two real acquisitions in opposite
     polarities, 15 precursors against 13 with none in common: **zero**
     labels shared, against **5,262** a rank-named scheme would have shared,
     every one of them naming two different precursors. Differing mass axes

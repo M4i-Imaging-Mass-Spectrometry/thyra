@@ -8,6 +8,7 @@ reconstructed from laser X/Y positions stored in each scan's metadata.
 
 import ctypes
 import logging
+import math
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, Set, Tuple
 
@@ -744,7 +745,9 @@ class WatersReader(BaseMSIReader):
         values = {
             round(float(info.precursor_mz), 4)
             for info in cls._positioned_scans(func, grid)
-            if info.precursor_mz > 0
+            # Finite as well as positive: an infinite target is no m/z
+            # (issue #498).
+            if math.isfinite(info.precursor_mz) and info.precursor_mz > 0
         }
         return sorted(values)
 
@@ -808,14 +811,14 @@ class WatersReader(BaseMSIReader):
         info = cls._positioned_scans(func, grid)[0]
         lower = upper = None
         start, end = float(info.quad_isolation_start), float(info.quad_isolation_end)
-        if 0.0 < start <= target <= end:
+        if 0.0 < start <= target <= end and math.isfinite(end):
             lower, upper = target - start, end - target
         energy = float(info.collision_energy)
         return IsolationWindow(
             target=target,
             lower_offset=lower,
             upper_offset=upper,
-            collision_energy=energy if energy > 0 else None,
+            collision_energy=(energy if math.isfinite(energy) and energy > 0 else None),
         )
 
     def _require_initialized(

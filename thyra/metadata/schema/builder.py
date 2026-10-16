@@ -1001,13 +1001,20 @@ def _build_fragmentation(
     if not present:
         return Fragmentation(present=False, ms_level=1)
 
+    entries = reported.get("windows") or []
     windows = [
         window
-        for window in (
-            _build_isolation_window(entry) for entry in reported.get("windows") or []
-        )
+        for window in (_build_isolation_window(entry) for entry in entries)
         if window is not None
     ]
+    if len(windows) < len(entries):
+        # One bad window costs that window, not the whole block (#498).
+        logger.warning(
+            "%d of %d isolation windows carry no usable target, width or "
+            "collision energy and are left out of the metadata",
+            len(entries) - len(windows),
+            len(entries),
+        )
     term = _optional_term(reported.get("dissociation_accession"))
     return Fragmentation(
         present=True,
@@ -1021,14 +1028,21 @@ def _build_fragmentation(
 
 
 def _build_isolation_window(entry: Any) -> Optional[IsolationWindow]:
-    """One isolation window, or ``None`` when it carries no usable target."""
+    """One isolation window, or ``None`` when it carries no usable values.
+
+    The target must be finite and above 0; an offset or a collision
+    energy, when given, finite and not negative. A window that breaks one
+    of those is left out rather than written: a negative offset made the
+    model raise and took the whole metadata block with it, and an
+    infinite value wrote ``Infinity``, which strict JSON refuses (#498).
+    """
     if not isinstance(entry, dict):
         return None
     try:
         target = float(entry["isolation_window_target"])
     except (KeyError, TypeError, ValueError):
         return None
-    if not target > 0:
+    if not (math.isfinite(target) and target > 0):
         return None
 
     fields: Dict[str, Any] = {"target": target}
@@ -1038,7 +1052,9 @@ def _build_isolation_window(entry: Any) -> Optional[IsolationWindow]:
         ("collision_energy", "collision_energy"),
     ):
         value = entry.get(key)
-        if isinstance(value, (int, float)):
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if not (math.isfinite(value) and value >= 0):
+                return None
             fields[field] = float(value)
     begin, end = entry.get("scan_begin"), entry.get("scan_end")
     if isinstance(begin, int) and isinstance(end, int) and end > begin >= 0:

@@ -184,7 +184,10 @@ single-precursor ones -- in a TSF acquisition as well as a TDF one. What
 stays TDF-only is the demultiplexed sibling table, which needs the mobility
 scan ranges only PASEF and DIA frames record. `present: false` records a survey
 acquisition; the field is left unset when the database cannot be asked at all,
-which means "not reported", not "MS1". `windows` is stored as a JSON string
+which means "not reported", not "MS1". A window with a target that is not a
+finite m/z above 0, or a negative or infinite offset or energy, is left out of
+`windows` with a warning, rather than failing the block (D60). `windows` is
+stored as a JSON string
 (a list of objects does not round-trip through AnnData/zarr) and decoded by
 `read_msi_metadata_blocks` and `thyra validate`. The field names and terms are
 mzPeak's, so an archive and a store describe a precursor the same way; see

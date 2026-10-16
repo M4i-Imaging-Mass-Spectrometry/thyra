@@ -6,6 +6,7 @@ comprehensive error handling.
 """
 
 import logging
+import math
 import numbers
 import os
 import re
@@ -242,6 +243,39 @@ def _get_frame_coordinates(
 def _optional_float(value: Any) -> Optional[float]:
     """A nullable numeric column as a float, keeping NULL as ``None``."""
     return None if value is None else float(value)
+
+
+def _usable_window_row(row: Tuple[Any, ...]) -> bool:
+    """Whether a schedule row's target, width and collision energy can be stored.
+
+    ``row`` starts ``(target, width, energy, ...)`` in every one of the
+    three tables. The target must be a finite m/z above 0; a width or an
+    energy, when the row has one, finite and not negative; a scan range,
+    when the row has one, ascending from 0 or above. A damaged row
+    stored as read became a ``precursor_mz`` of ``inf`` that ``thyra
+    validate`` refuses, a negative precursor, or an ``Infinity`` in the
+    metadata (issue #498).
+    """
+    target, width, energy = row[0], row[1], row[2]
+    try:
+        if not (math.isfinite(float(target)) and float(target) > 0):
+            return False
+        if not all(
+            value is None or (math.isfinite(float(value)) and float(value) >= 0)
+            for value in (width, energy)
+        ):
+            return False
+        # The PASEF and DIA rows go on with a scan range, ``[begin, end)``.
+        # A negative begin would slice the frame's scans from the end.
+        if len(row) > 5:
+            begin, end = row[3], row[4]
+            if begin is not None and end is not None:
+                if not (math.isfinite(float(begin)) and math.isfinite(float(end))):
+                    return False
+                return 0 <= int(begin) < int(end)
+        return True
+    except (TypeError, ValueError, OverflowError):
+        return False
 
 
 def _optional_int(value: Any) -> Optional[int]:
@@ -2005,7 +2039,7 @@ class BrukerReader(BrukerBaseMSIReader):
                 "ScanNumBegin, ScanNumEnd, COUNT(DISTINCT Frame) "
                 f"FROM PasefFrameMsMsInfo{where} GROUP BY IsolationMz, "
                 "IsolationWidth, CollisionEnergy, ScanNumBegin, ScanNumEnd "
-                "ORDER BY IsolationMz",
+                "ORDER BY IsolationMz, ScanNumBegin",
                 pasef_window,
             ),
             (
@@ -2014,7 +2048,8 @@ class BrukerReader(BrukerBaseMSIReader):
                 "FROM DiaFrameMsMsWindows w JOIN DiaFrameMsMsInfo i "
                 f"ON i.WindowGroup = w.WindowGroup{dia_where} "
                 "GROUP BY w.IsolationMz, w.IsolationWidth, w.CollisionEnergy, "
-                "w.ScanNumBegin, w.ScanNumEnd ORDER BY w.IsolationMz",
+                "w.ScanNumBegin, w.ScanNumEnd "
+                "ORDER BY w.IsolationMz, w.ScanNumBegin",
                 pasef_window,
             ),
             (
@@ -2037,6 +2072,22 @@ class BrukerReader(BrukerBaseMSIReader):
             rows = [row for row in rows if row[0] is not None]
             if not rows:
                 continue
+            usable = [row for row in rows if _usable_window_row(row)]
+            if len(usable) < len(rows):
+                logger.warning(
+                    "%d of %d isolation windows hold a target that is not a "
+                    "finite m/z above 0, a negative or non-finite width or "
+                    "collision energy, or a scan range that does not ascend "
+                    "from 0; they are left out of the precursor schedule",
+                    len(rows) - len(usable),
+                    len(rows),
+                )
+            if not usable:
+                # This is the table the frames use (the first with rows),
+                # so the next one is not asked: it is empty, and its
+                # emptiness would read as "no table carries a precursor".
+                return (), True
+            rows = usable
             windows = tuple(build(row) for row in rows)
             everywhere = all(int(row[-1]) == msms_frames for row in rows)
             if not everywhere:

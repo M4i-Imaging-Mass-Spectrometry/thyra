@@ -4592,3 +4592,81 @@ which is not a mean.
 - A frame that lists peaks but loses all of them to `--intensity-threshold`
   still counts as holding peaks, so on a shared position it can name the
   region while a later frame gives the row its `acquisition_order`.
+
+## D60. A damaged isolation window is left out, and an isomer's label is its rank
+
+**Status:** Implemented (2026-10-16), issue #498.
+
+**Decision.** Two rules for the MS/MS schedule.
+
+- The timsTOF reader screens every isolation window it reads, from
+  `PasefFrameMsMsInfo`, the DIA tables or `FrameMsMsInfo`. The target must
+  be a finite m/z above 0. The width and the collision energy, when the row
+  has them, must be finite and not negative, and a PASEF or DIA scan range
+  must ascend from 0. A row that breaks one of these is left out of the
+  schedule, with one warning that counts them. The table the frames use is
+  still the first one with a row that names a target (D37): when none of
+  those rows is usable, the schedule records the MS level with no windows,
+  and the next table is not asked. A row with no target is skipped silently,
+  as before. Isomer windows are listed by m/z, then by first scan.
+- The metadata builder applies the same test to each window it is given and
+  skips a bad one, instead of failing the whole `msi_metadata` block. The
+  Waters reader no longer reports an infinite precursor or energy.
+- In an `_msms` table, two windows at one m/z (an isomer pair) are told
+  apart by their rank in mobility among the windows of that m/z, over the
+  whole schedule. Every column of the second isomer ends in `_1`, the third
+  in `_2`, and so on. The first isomer has no suffix.
+
+**Why.** The schedule was stored as read. On a damaged `analysis.tdf`, an
+infinite target became a `precursor_mz` that `thyra validate` refuses, a
+negative target was stored as a precursor, an infinite energy wrote the
+token `Infinity` into the document, which strict JSON parsers reject, and
+one negative width made the builder raise. The assembler caught that and
+logged it, and the store had no `msi_metadata` at all, at exit 0.
+
+The suffix used to come from a collision: only a mass bin that both
+isomers held gave the second one `_1`. In a bin only the second isomer
+held, its column had no suffix and took the first isomer's name. So
+`p500_mz2209` named the isomer at 1/K0 1.092 in one store and the one at
+1.821 in another store of the same schedule. A join on the label merged
+two different isomers, and `anndata.concat(join="inner")` drops
+`precursor_mobility`, so nothing showed it. The docstring already said the
+suffix followed mobility order; now it does.
+
+**What changes in a store.**
+
+- A store whose source has a bad window: the window is gone from the
+  `_msms` table and from `ms_analysis.fragmentation.windows`, and the
+  `msi_metadata` block is there where it was missing.
+- An `_msms` table with an isomer pair: the second isomer's columns in bins
+  it alone holds gain `_1`. Columns in bins both hold, and every column of a
+  schedule without isomers, keep their names. With three or more windows at
+  one m/z, a bin held by the first and third gives the third `_2`, where it
+  was `_1`.
+- A schedule with an isomer pair whose windows differ in width or energy:
+  `uns["msms_schedule"]` and `fragmentation.windows` list the pair by first
+  scan, where SQLite's grouping order listed them before.
+- No `msi_metadata` field changes shape, so the schema version stays.
+
+**Alternatives.**
+
+- "Refuse the source." One damaged window out of a schedule is not a reason
+  to lose the conversion, and the warning names the count.
+- "Clamp a negative width to 0." That invents a value the source does not
+  state.
+- "Suffix by the isomer's scan range." A rank needs no other value in the
+  label and is the order the docstring promised.
+
+**Known limits.**
+
+- The screen tests the numbers, not whether they make sense together: a
+  window far outside the acquired mass range is kept.
+- A window left out of the schedule is also left out of the demultiplexing,
+  so the fragments in its scan range are in no precursor column, and
+  `demultiplexed_current` falls below 1 with its usual warning.
+- A value bad in some frames only splits one window into groups, and the
+  schedule then reads as varying, so no `_msms` table is written.
+- The stem keeps six significant digits (`p{mz:g}`), so two targets above
+  m/z 1000 that round alike share a stem and are ranked as isomers, by m/z.
+- Leaving an isomer out (a bad window, or a `region=` store whose region
+  lacks it, D58) re-ranks the other one.
