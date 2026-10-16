@@ -123,11 +123,23 @@ class TestAfterTheStoreIsComplete:
         assert _KEPT in _messages(records)
         assert _LOST not in _messages(records)
 
-    def test_the_scratch_still_goes(self, tmp_path):
-        """The release the interrupt cut short runs again in ``convert``'s
-        ``finally``, so keeping the store does not leave the scratch."""
-        converter = _interrupted_after_the_last_write(tmp_path / "a.zarr")
-        converter.convert()
+    def test_the_scratch_still_goes(self, tmp_path, monkeypatch):
+        """An interrupt *inside* the removal, after the release has begun.
+
+        The entry being removed stays listed until its directory is gone,
+        so ``convert``'s ``finally`` removes it. Keeping the store and
+        exiting 0 must not leave the scratch behind unannounced.
+        """
+        from thyra.converters.spatialdata import csc_assembly
+
+        monkeypatch.setattr(
+            csc_assembly,
+            "remove_scratch",
+            _interrupt_once(csc_assembly.remove_scratch),
+        )
+        converter = _converter(tmp_path / "a.zarr")
+
+        assert converter.convert() is True
 
         del converter
         gc.collect()

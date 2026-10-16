@@ -829,6 +829,12 @@ class SiblingTables:
         cannot be deleted on Windows and the AnnData is what keeps it
         mapped. Idempotent, so the ``finally`` of ``convert`` can call it
         too.
+
+        Each entry is dropped only once its directory is gone. A Ctrl-C
+        part-way through then leaves the rest listed, and the ``finally``
+        removes them; dropping the whole list up front left them on disk
+        with no warning, under a run that kept its store and exited 0
+        (issue #500). Both steps are safe to repeat.
         """
         from .csc_assembly import remove_scratch
 
@@ -836,12 +842,12 @@ class SiblingTables:
             return
         if tables is not None:
             tables.clear()
-        pending = self._table_scratch
-        self._table_scratch = []
-        for assembly, path in pending:
+        while self._table_scratch:
+            assembly, path = self._table_scratch[0]
             if assembly is not None:
                 assembly.release()
             remove_scratch(path)
+            self._table_scratch.pop(0)
 
     # -- Building --------------------------------------------------------
 

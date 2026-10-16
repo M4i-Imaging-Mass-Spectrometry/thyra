@@ -778,10 +778,11 @@ def convert_msi(
         # finished the store -- in its scratch release, in closing the
         # reader on the way out of the ``with``. That store is complete
         # and opens, so it stays where it is (#500). ``is True`` because
-        # tests stand a mock in for the converter.
+        # tests stand a mock in for the converter. ``succeeded`` first, so
+        # a second Ctrl-C during the log line cannot reach the quarantine.
         if converter is not None and converter.store_complete is True:
-            log_interrupt_after_save(output_path)
             succeeded = True
+            log_interrupt_after_save(output_path)
             return True
         logger.error("Conversion interrupted before it started reading.")
         return False
