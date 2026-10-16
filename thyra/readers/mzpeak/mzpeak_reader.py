@@ -183,7 +183,8 @@ TDF_INTENSITY_NUMERATOR = 100.0
 
 #: Two m/z of one TDF frame this close, relative, are one TOF bin. Bins of a
 #: timsTOF are some 1e-6 apart; one bin's copies differ in the last bit. The
-#: intensity threshold groups a spectrum's points into peaks by the same rule.
+#: intensity threshold groups a spectrum's points into peaks by the same rule,
+#: and neither sums a point that is not a measurement (D55, D61).
 SAME_BIN_RELATIVE = SAME_PEAK_RELATIVE
 
 #: Metadata column recording how many points each spectrum has in a signal
@@ -412,15 +413,40 @@ def _on_tdf_scale(
     of the same bin in the last bit, while neighbouring bins are some 1e-6
     apart.
 
+    Only measurements are summed (D61): a point whose m/z is not finite, or
+    whose count is not finite or is negative, joins no bin. Summed, an
+    infinite m/z added its count to the largest finite bin, and a NaN count
+    turned a real bin into NaN. Such a point is kept on its own, scaled but
+    not rounded, so the converter drops, counts or refuses it as it does
+    any other.
+
     Args:
         mzs: m/z of the frame's points.
         counts: The raw count of each point.
         accumulation_ms: The frame's accumulation time.
 
     Returns:
-        Distinct m/z, ascending, and the summed scaled intensity of each.
+        m/z, ascending, and the scaled intensity of each: one summed point
+        per bin, then each point that is not a measurement.
     """
     scaled = np.floor(counts * TDF_INTENSITY_NUMERATOR / accumulation_ms + 0.5)
+    usable = np.isfinite(mzs) & np.isfinite(scaled) & (counts >= 0)
+    if bool(usable.all()):
+        return _summed_per_bin(mzs, scaled)
+    bin_mzs, bin_intensities = _summed_per_bin(mzs[usable], scaled[usable])
+    left = ~usable
+    out_mzs = np.concatenate((bin_mzs, mzs[left]))
+    out_intensities = np.concatenate(
+        (bin_intensities, counts[left] * TDF_INTENSITY_NUMERATOR / accumulation_ms)
+    )
+    order = np.argsort(out_mzs, kind="stable")
+    return out_mzs[order], out_intensities[order]
+
+
+def _summed_per_bin(
+    mzs: NDArray[np.float64], scaled: NDArray[np.float64]
+) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """:func:`_on_tdf_scale`'s sum over points that are all measurements."""
     order = np.argsort(mzs, kind="stable")
     ordered = mzs[order]
     starts = np.concatenate(

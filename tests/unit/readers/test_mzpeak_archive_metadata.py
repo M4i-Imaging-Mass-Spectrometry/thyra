@@ -1421,3 +1421,57 @@ class TestOneTofBin:
 
         np.testing.assert_array_equal(out_mz, [bound, neighbour])
         np.testing.assert_array_equal(out_intensity, [4.0, 4.0])
+
+
+class TestOnlyMeasurementsAreSummed:
+    """A point that is not a measurement joins no TOF bin (D61)."""
+
+    @staticmethod
+    def _read(tmp_path, mzs, counts, threshold=None):
+        """The one pixel of a TDF archive at 100 ms, so counts stay as they are."""
+        archive = build_mzpeak(
+            tmp_path / "frame.mzpeak",
+            [Spectrum(1, 1, mzs, counts)],
+            file_metadata=TDF_SOURCE,
+            scan_columns={"ion_injection_time": [100.0]},
+        )
+        with MzPeakReader(archive, intensity_threshold=threshold) as reader:
+            ((_, out_mz, out_intensity),) = list(reader.iter_spectra())
+        return out_mz, out_intensity
+
+    def test_an_infinite_m_z_stays_out_of_the_largest_bin(self, tmp_path):
+        """Its step from the largest finite m/z is no step, relative to inf."""
+        out_mz, out_intensity = self._read(
+            tmp_path, [100.0, 101.0, 102.0, np.inf], [2.0, 3.0, 5.0, 7.0]
+        )
+
+        np.testing.assert_array_equal(out_mz, [100.0, 101.0, 102.0, np.inf])
+        np.testing.assert_array_equal(out_intensity, [2.0, 3.0, 5.0, 7.0])
+
+    def test_minus_infinite_m_z_are_not_summed_together(self, tmp_path):
+        """Each is the converter's to drop and count, one point at a time."""
+        out_mz, out_intensity = self._read(
+            tmp_path, [-np.inf, -np.inf, 100.0], [7.0, 4.0, 2.0]
+        )
+
+        np.testing.assert_array_equal(out_mz, [-np.inf, -np.inf, 100.0])
+        np.testing.assert_array_equal(out_intensity, [7.0, 4.0, 2.0])
+
+    @pytest.mark.parametrize("bad", [np.nan, np.inf, -4.0])
+    def test_a_bad_count_leaves_its_bin_whole(self, tmp_path, bad):
+        """A NaN would turn the bin into NaN; a negative would shrink it."""
+        out_mz, out_intensity = self._read(
+            tmp_path, [100.0, 100.0, 101.0], [9.0, bad, 3.0]
+        )
+
+        np.testing.assert_array_equal(out_mz, [100.0, 100.0, 101.0])
+        np.testing.assert_array_equal(out_intensity, [9.0, bad, 3.0])
+
+    def test_an_infinite_m_z_does_not_lift_a_bin_over_the_threshold(self, tmp_path):
+        """The 7 at inf would carry the 5 at m/z 102 past a threshold of 6."""
+        out_mz, out_intensity = self._read(
+            tmp_path, [100.0, 101.0, 102.0, np.inf], [2.0, 3.0, 5.0, 7.0], 6.0
+        )
+
+        np.testing.assert_array_equal(out_mz, [np.inf])
+        np.testing.assert_array_equal(out_intensity, [7.0])
