@@ -546,6 +546,35 @@ class SettledAxis:
     provenance: Optional[Dict[str, Any]]
 
 
+def _refuse_unusable_range(
+    config: ResamplingConfig, min_mz: float, max_mz: float
+) -> None:
+    """Refuse a resolved mass range no axis can be laid over.
+
+    Raises:
+        ConversionRefused: If either end is not finite, or the range is
+            empty or inverted.
+    """
+    # A non-finite end has no axis to lay. Unchecked, an infinite one
+    # reached the bin count as an infinite float and ended the conversion
+    # in an OverflowError traceback (D55).
+    if not (np.isfinite(min_mz) and np.isfinite(max_mz)):
+        raise ConversionRefused(
+            f"The resampling mass range [{min_mz:g}, {max_mz:g}] m/z is "
+            "not finite: each end of the axis has to be a real mass. "
+            + _range_origin(config)
+        )
+    # An inverted range has no axis to lay either. Unchecked, it built a
+    # descending one, dropped every peak against it, reported "4 of 3 in the
+    # first spectrum affected" from a negative count, and succeeded with an
+    # empty store (issue #250).
+    if not (min_mz < max_mz):
+        raise ConversionRefused(
+            f"The resampling mass range [{min_mz:g}, {max_mz:g}] m/z is "
+            "empty: the minimum has to be below the maximum. " + _range_origin(config)
+        )
+
+
 def _range_origin(config: ResamplingConfig) -> str:
     """Where a refused mass range came from, so the refusal names the fix."""
     if config.min_mz is None and config.max_mz is None:
@@ -1011,25 +1040,7 @@ class AxisPlanner:
         min_mz = mass_range[0] if config.min_mz is None else config.min_mz
         max_mz = mass_range[1] if config.max_mz is None else config.max_mz
 
-        # A non-finite end has no axis to lay either. Unchecked, an infinite
-        # one reached the bin count as an infinite float and ended the
-        # conversion in an OverflowError traceback (D55).
-        if not (np.isfinite(min_mz) and np.isfinite(max_mz)):
-            raise ConversionRefused(
-                f"The resampling mass range [{min_mz:g}, {max_mz:g}] m/z is "
-                "not finite: each end of the axis has to be a real mass. "
-                + _range_origin(config)
-            )
-        # An inverted range has no axis to lay. Unchecked, it built a
-        # descending one, dropped every peak against it, reported "4 of 3
-        # in the first spectrum affected" from a negative count, and
-        # succeeded with an empty store (issue #250).
-        if not (min_mz < max_mz):
-            raise ConversionRefused(
-                f"The resampling mass range [{min_mz:g}, {max_mz:g}] m/z is "
-                "empty: the minimum has to be below the maximum. "
-                + _range_origin(config)
-            )
+        _refuse_unusable_range(config, min_mz, max_mz)
 
         tree = ResamplingDecisionTree()
         if config.axis_type is not None:
