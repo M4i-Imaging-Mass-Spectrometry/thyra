@@ -4443,88 +4443,6 @@ both:
 - The `rev` is not in `uv.lock`, so nothing moves it; bump it by hand,
   re-measure, and fix what a newer pyright reports in the same PR.
 
-## D58. The mass-mobility heatmap is a mean over the summed table's rows
-
-**Status:** Implemented (2026-10-16), issue #495.
-
-**Decision.** A spectrum the summed table gives no row adds neither points
-nor a pixel to `uns["mobility_heatmap"]`. On the fused route (a TDF), a
-frame feeds the heatmap only when it gets a row. On the separate raw pass
-(imzML, Waters), the converter tells the heatmap which positions have a row
-once the passes have decided them. The heatmap's population is then the one
-`uns["average_spectrum"]` divides by, as D38 meant it to be.
-
-Three smaller rules come with it:
-
-- The shared-axis mobility table (a continuous imzML with a mobility array)
-  takes the grid route's memory guard (D4) before it builds anything. Past
-  half of free memory the table is left out with a `WARNING` naming
-  `--no-mobility-table`, once per table; past a quarter it warns and is
-  built.
-- A mobility spectrum with no row counts as skipped only when it is on the
-  table's own plane and carries signal. Another plane's spectrum has its row
-  in that plane's table, and an all-zero one loses nothing.
-- A 2D conversion of a multi-plane source plans a table for each plane the
-  pre-scan meets, not for every z in the span. A single plane and a volume
-  are planned up front, as before.
-
-**Why.** On a continuous imzML with one all-zero spectrum, `--no-resample`
-or not, the summed table had three rows and the heatmap four pixels:
-`current_ratio` 0.75 and a warning, though no current was lost. D38 kept
-the heatmap's own count of distinct positions and rejected taking the
-table's rows, because one raw pass served every plane and the fallback has
-no table. Both still hold, so the rows are not handed over as a number: the
-heatmap asks, per position, whether the table has a row there. The
-fallback, with no table, still counts every position.
-
-The other three were seen in the same run. A feature list the grid guard
-would refuse went through, and could end in a raw allocation error.
-Each plane of a two-plane conversion warned that the other
-plane's spectra "had no row ... and were skipped". A source stating z 1
-and z 120 planned 120 tables: 118 warnings, and 14.4 s against 4.5 s for
-the same six spectra on z 1 and 2.
-
-**What changes in a store.**
-
-- A store with a mobility heatmap and a spectrum that gets no row (all
-  zero, every point outside the kept mass range, off the grid, or a TDF
-  frame whose vendor centroid is empty while its raw scans are not):
-  `counts` and `current_ratio` change. `current_ratio` is 1.0 where only
-  rows were missing.
-- A store whose shared-axis feature list is too wide for the machine has no
-  `_mobility` table, and `uns` does not name one.
-- A TDF store under `scan_sum`, with the default mass range and no
-  intensity threshold, does not change: every frame with raw points then has
-  a summed spectrum, so every one already had a row. A narrowed range or a
-  threshold that empties a frame changes it as the first bullet says.
-- Planning tables per plane met changes no store: the planes the pre-scan
-  never met had no rows, so they wrote no table before either.
-
-**Alternatives.**
-
-- "Divide by the table's row count." The separate pass builds every plane's
-  heatmap at once (D41), so it would need every plane's count, and an
-  off-grid spectrum's points would stay in the numerator.
-- "Skip all-zero spectra in the imzML reader." The reader belongs to every
-  route, and a spectrum off the grid or outside the mass range would still
-  be counted. The converter is where rows are decided.
-- "One skip warning per conversion." Counting only the table's own plane
-  already counts each lost spectrum once; each plane's warning then names
-  its own.
-
-**Known limits.**
-
-- On the separate pass, a repeated position whose second spectrum is empty
-  in the summed table still adds that spectrum's raw points: the pass
-  knows positions, not which spectrum of a position gave the row. The fused
-  route leaves those points out.
-- `VAR_BYTES_PER_FEATURE` was measured on a grid `var`. The shared-axis
-  `var` is built differently and its cost per feature is not measured.
-- A plane the source states but whose every spectrum is empty gets no table
-  and no warning, since the pre-scan never meets it. A spectrum that turns up
-  on such a plane in pass 2 is refused as a disagreement between the passes,
-  as any other is.
-
 ## D57. A store keeps its source's regions, and a region store describes only its own
 
 **Status:** Implemented (2026-10-16), issue #496.
@@ -4636,3 +4554,85 @@ which is not a mean.
 - A frame that lists peaks but loses all of them to `--intensity-threshold`
   still counts as holding peaks, so on a shared position it can name the
   region while a later frame gives the row its `acquisition_order`.
+
+## D58. The mass-mobility heatmap is a mean over the summed table's rows
+
+**Status:** Implemented (2026-10-16), issue #495.
+
+**Decision.** A spectrum the summed table gives no row adds neither points
+nor a pixel to `uns["mobility_heatmap"]`. On the fused route (a TDF), a
+frame feeds the heatmap only when it gets a row. On the separate raw pass
+(imzML, Waters), the converter tells the heatmap which positions have a row
+once the passes have decided them. The heatmap's population is then the one
+`uns["average_spectrum"]` divides by, as D38 meant it to be.
+
+Three smaller rules come with it:
+
+- The shared-axis mobility table (a continuous imzML with a mobility array)
+  takes the grid route's memory guard (D4) before it builds anything. Past
+  half of free memory the table is left out with a `WARNING` naming
+  `--no-mobility-table`, once per table; past a quarter it warns and is
+  built.
+- A mobility spectrum with no row counts as skipped only when it is on the
+  table's own plane and carries signal. Another plane's spectrum has its row
+  in that plane's table, and an all-zero one loses nothing.
+- A 2D conversion of a multi-plane source plans a table for each plane the
+  pre-scan meets, not for every z in the span. A single plane and a volume
+  are planned up front, as before.
+
+**Why.** On a continuous imzML with one all-zero spectrum, `--no-resample`
+or not, the summed table had three rows and the heatmap four pixels:
+`current_ratio` 0.75 and a warning, though no current was lost. D38 kept
+the heatmap's own count of distinct positions and rejected taking the
+table's rows, because one raw pass served every plane and the fallback has
+no table. Both still hold, so the rows are not handed over as a number: the
+heatmap asks, per position, whether the table has a row there. The
+fallback, with no table, still counts every position.
+
+The other three were seen in the same run. A feature list the grid guard
+would refuse went through, and could end in a raw allocation error.
+Each plane of a two-plane conversion warned that the other
+plane's spectra "had no row ... and were skipped". A source stating z 1
+and z 120 planned 120 tables: 118 warnings, and 14.4 s against 4.5 s for
+the same six spectra on z 1 and 2.
+
+**What changes in a store.**
+
+- A store with a mobility heatmap and a spectrum that gets no row (all
+  zero, every point outside the kept mass range, off the grid, or a TDF
+  frame whose vendor centroid is empty while its raw scans are not):
+  `counts` and `current_ratio` change. `current_ratio` is 1.0 where only
+  rows were missing.
+- A store whose shared-axis feature list is too wide for the machine has no
+  `_mobility` table, and `uns` does not name one.
+- A TDF store under `scan_sum`, with the default mass range and no
+  intensity threshold, does not change: every frame with raw points then has
+  a summed spectrum, so every one already had a row. A narrowed range or a
+  threshold that empties a frame changes it as the first bullet says.
+- Planning tables per plane met changes no store: the planes the pre-scan
+  never met had no rows, so they wrote no table before either.
+
+**Alternatives.**
+
+- "Divide by the table's row count." The separate pass builds every plane's
+  heatmap at once (D41), so it would need every plane's count, and an
+  off-grid spectrum's points would stay in the numerator.
+- "Skip all-zero spectra in the imzML reader." The reader belongs to every
+  route, and a spectrum off the grid or outside the mass range would still
+  be counted. The converter is where rows are decided.
+- "One skip warning per conversion." Counting only the table's own plane
+  already counts each lost spectrum once; each plane's warning then names
+  its own.
+
+**Known limits.**
+
+- On the separate pass, a repeated position whose second spectrum is empty
+  in the summed table still adds that spectrum's raw points: the pass
+  knows positions, not which spectrum of a position gave the row. The fused
+  route leaves those points out.
+- `VAR_BYTES_PER_FEATURE` was measured on a grid `var`. The shared-axis
+  `var` is built differently and its cost per feature is not measured.
+- A plane the source states but whose every spectrum is empty gets no table
+  and no warning, since the pre-scan never meets it. A spectrum that turns up
+  on such a plane in pass 2 is refused as a disagreement between the passes,
+  as any other is.
