@@ -70,8 +70,8 @@ logger = logging.getLogger(__name__)
 BIN_WIDTH_CHUNK = 1 << 22
 
 #: The fewest bins a width lays. A width so wide that fewer bins span the
-#: range is raised to this count, so the axis is finer than asked for and
-#: the store records the width it has (D56).
+#: range is raised to this count, so the axis does not have the width asked
+#: for, and the store records the width it has (D56).
 MIN_WIDTH_BINS = 100
 
 
@@ -512,7 +512,7 @@ def bin_count_for_width(
     logger.info(f"Calculated {bins} bins for {name} axis type")
     if floor and bins < MIN_WIDTH_BINS:
         logger.info(
-            "Raised to the floor of %d bins, so the axis is finer than asked for",
+            "Raised to the floor of %d bins; the axis has the width they give",
             MIN_WIDTH_BINS,
         )
         bins = MIN_WIDTH_BINS
@@ -531,11 +531,14 @@ def realised_width(
 ) -> Tuple[float, Optional[float]]:
     """The bin width ``n_bins`` bins have at the reference m/z, and their ``k``.
 
-    The inverse of :func:`bin_count_for_width`, under the same law. Every
-    generator lays its bins from the range and the count alone, so the
-    count fixes the width. This is what the store records when a width did
-    not set the count: a ``target_bins`` request, or a width so wide that
-    the 100-bin floor raised the count (D56).
+    Every generator lays its bins from the range and the count alone, so the
+    count fixes the width. For the physics laws this inverts
+    :func:`bin_count_for_width`. A ``constant`` axis is the exception: the
+    count is of points, laid ``n - 1`` steps apart, while the count from a
+    width divides the range into ``n`` steps; this gives the laid step. It
+    is what the store records when a width did not set the count: a
+    ``target_bins`` request, or a width so wide that the 100-bin floor
+    raised the count (D56).
 
     Args:
         config: The caller's resampling request, for a tof axis's law.
@@ -657,11 +660,13 @@ def _refuse_unusable_range(
             f"The resampling mass range [{min_mz:g}, {max_mz:g}] m/z is "
             "empty: the minimum has to be below the maximum. "
             + _range_origin(config)
-            + _empty_source_range_remedy(config)
+            + _empty_source_range_remedy(config, min_mz, max_mz)
         )
 
 
-def _empty_source_range_remedy(config: ResamplingConfig) -> str:
+def _empty_source_range_remedy(
+    config: ResamplingConfig, min_mz: float, max_mz: float
+) -> str:
     """The way forward when the source's own range is empty (D56).
 
     Only when both bounds came from the source: a source whose peaks all sit
@@ -670,6 +675,9 @@ def _empty_source_range_remedy(config: ResamplingConfig) -> str:
     declares an empty range is refused on the raw axis too.
     """
     if config.min_mz is not None or config.max_mz is not None:
+        return ""
+    if min_mz != max_mz:
+        # An inverted declared range has no one m/z to set bounds around.
         return ""
     return (
         " Set --resample-min-mz and --resample-max-mz around its m/z; when "
@@ -1251,8 +1259,7 @@ class AxisPlanner:
         self._count_from_width = width_bins >= MIN_WIDTH_BINS
         if not self._count_from_width:
             logger.info(
-                "Raised to the floor of %d bins, so the axis is finer than "
-                "asked for",
+                "Raised to the floor of %d bins; the axis has the width they give",
                 MIN_WIDTH_BINS,
             )
         return max(MIN_WIDTH_BINS, width_bins)

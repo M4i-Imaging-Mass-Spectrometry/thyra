@@ -467,3 +467,51 @@ class TestAWidenedSourceRangeIsReportedWhereItSetsTheAxis:
         text = self._warnings(thyra_logs, inside, axis_type=AxisType.CONSTANT)
 
         assert "widened" not in text
+
+
+class TestEveryLawRecordsTheWidthItLays:
+    """C8 (D56) on the physics laws: the recorded width is the local step."""
+
+    @pytest.mark.parametrize(
+        "axis_type",
+        [
+            AxisType.LINEAR_TOF,
+            AxisType.REFLECTOR_TOF,
+            AxisType.ORBITRAP,
+            AxisType.FTICR,
+        ],
+    )
+    def test_a_bin_count(self, axis_type):
+        told = {"essential_metadata": {"mass_range": _RANGE}}
+        config = ResamplingConfig(axis_type=axis_type, target_bins=20_000)
+        settled = AxisPlanner.from_metadata(told, config).settle(lambda n: None)
+
+        reference_mz = settled.provenance["reference_mz"]
+        i = int(np.searchsorted(settled.axis, reference_mz))
+        local = float(settled.axis[i] - settled.axis[i - 1])
+        assert settled.provenance["mass_width_da"] == pytest.approx(local, rel=1e-3)
+
+
+class TestTheFloorIsReadFromTheCount:
+    """The laid step can come out wider than asked; the floor still applied."""
+
+    def test_a_width_just_too_wide_for_a_hundred_bins(self, thyra_logs):
+        told = {"essential_metadata": {"mass_range": (500.0, 510.0)}}
+        config = ResamplingConfig(axis_type=AxisType.CONSTANT, mass_width_da=0.1005)
+        planner = AxisPlanner.from_metadata(told, config)
+
+        with thyra_logs("thyra.resampling", logging.INFO) as records:
+            settled = planner.settle(lambda n: None)
+
+        assert settled.provenance["target_bins"] == 100
+        assert settled.provenance["mass_width_da"] == pytest.approx(10.0 / 99)
+        assert "floor of 100 bins" in records.text
+        assert "finer than asked" not in records.text
+
+    def test_an_inverted_source_range_is_not_told_to_set_bounds_around_it(self):
+        told = {"essential_metadata": {"mass_range": (600.0, 500.0)}}
+        planner = AxisPlanner.from_metadata(told, ResamplingConfig())
+
+        with pytest.raises(ConversionRefused, match="is empty") as refused:
+            planner.resolve()
+        assert "around its m/z" not in str(refused.value)

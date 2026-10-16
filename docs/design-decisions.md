@@ -4572,10 +4572,21 @@ did.
 
 **Why the recorded width is the count's in two cases only.** Every
 generator lays its bins from the range and the count alone, so the count
-fixes the width. When a width set the count, the width the axis has differs
-from it only by the truncation to a whole number of bins. Recording the
-request there keeps every other store unchanged. Where the count came from
-elsewhere, the request says nothing about the axis.
+fixes the width. When a width set the count on a physics axis, the width the
+axis has differs from it only by the truncation to a whole number of bins.
+Recording the request there keeps every other store unchanged. Where the
+count came from elsewhere, the request says nothing about the axis.
+
+A `constant` axis is the exception. A width `w` sets `n = (max - min) / w`,
+but the generator lays `n` points, so the step is `(max - min) / (n - 1)`,
+wider by `n / (n - 1)`. At the 5 mDa default over 900 Da that is about 6 parts in
+a million; at the 100-bin floor it is 1%. The step records the request
+there as before, so the same `constant` axis records `w` when a width laid
+it and the laid step when a count or the floor did. Recording the laid step
+always would change every `constant` store's step for a difference no
+reader acts on. Whether the floor applied is read from the count the width
+lays, never by comparing widths, since the laid step can come out wider
+than the width asked for.
 
 **Why refuse `bins_per_fwhm` off a `tof` axis, when `--tof-law` only warns.**
 `bins_per_fwhm` has no CLI flag, and `plan_mass_axis` already refuses it.

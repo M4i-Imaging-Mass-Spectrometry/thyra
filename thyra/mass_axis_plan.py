@@ -46,6 +46,7 @@ from .resampling.axis_planner import (
     AxisPlanner,
     _resolve_config_enum,
     axis_name,
+    bin_count_for_width,
     normalize_resampling_config,
     realised_width,
     reference_params,
@@ -420,9 +421,10 @@ def _note_floor(draft: MassAxisPlan, n_bins: int, notes: _Notes) -> Optional[flo
     """The width the laid axis has when the bin floor raised its count.
 
     A width so wide that fewer than ``MIN_WIDTH_BINS`` bins span the range
-    lays that many bins instead, so the axis is finer than the planned
-    width (D56). The plan keeps the width as its setting, since the count
-    follows from it; the origins say what the axis has.
+    lays that many bins instead, so the axis does not have the planned width
+    (D56). The plan keeps the width as its setting, since the count follows
+    from it; the origins say what the axis has. Whether the floor applied is
+    read from the count the width lays, as a conversion reads it.
 
     Returns:
         The laid width at the reference m/z, or ``None`` when the planned
@@ -430,7 +432,14 @@ def _note_floor(draft: MassAxisPlan, n_bins: int, notes: _Notes) -> Optional[flo
     """
     if n_bins != MIN_WIDTH_BINS:
         return None
-    config = ResamplingConfig(tof_a=draft.tof_a, tof_b=draft.tof_b)
+    settings = draft.to_resampling_config()
+    settings.pop("mass_axis_sha256")
+    config = normalize_resampling_config(settings)
+    width_bins = bin_count_for_width(
+        config, draft.min_mz, draft.max_mz, draft.axis_type, floor=False
+    )
+    if width_bins >= MIN_WIDTH_BINS:
+        return None
     laid, k = realised_width(
         config,
         draft.min_mz,
@@ -440,8 +449,6 @@ def _note_floor(draft: MassAxisPlan, n_bins: int, notes: _Notes) -> Optional[flo
         draft.reference_mz,
     )
     if k is not None:
-        if draft.bins_per_fwhm is None or k <= draft.bins_per_fwhm:
-            return None
         floor = f"the floor of {MIN_WIDTH_BINS} bins"
         notes.origins["bins_per_fwhm"] += f"; {floor} lays {k:.4g} per FWHM"
         notes.origins["width_at_mz"] = (
@@ -449,8 +456,6 @@ def _note_floor(draft: MassAxisPlan, n_bins: int, notes: _Notes) -> Optional[flo
             f"and {floor} (a result, not a setting of the plan)"
         )
     else:
-        if draft.width_at_mz is None or laid >= draft.width_at_mz:
-            return None
         notes.origins["width_at_mz"] += (
             f"; the floor of {MIN_WIDTH_BINS} bins lays {laid:.4g} Da at "
             f"m/z {draft.reference_mz:g}"

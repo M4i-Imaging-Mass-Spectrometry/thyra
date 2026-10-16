@@ -740,3 +740,14 @@ class TestThePlanFollowsTheLaidAxis:
     def test_one_source_at_one_mz(self):
         with pytest.raises(ConversionRefused, match="every peak sits at one m/z"):
             _plan_from_metadata([_src("a", _RAPIFLEX, (500.0, 500.0))])
+
+    def test_a_width_just_too_wide_for_a_hundred_bins_names_the_floor(self):
+        """99 bins of 0.1005 Da; the floor lays 100, 0.101 Da apart."""
+        plan = _plan_from_metadata(
+            [_src("a", _RAPIFLEX, (500.0, 510.0))],
+            axis_type="constant",
+            width_at_mz=0.1005,
+        )
+
+        assert plan.n_bins == 100
+        assert "floor of 100 bins lays 0.101 Da" in plan.origins["width_at_mz"]

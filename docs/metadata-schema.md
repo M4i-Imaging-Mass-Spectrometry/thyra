@@ -327,8 +327,10 @@ picking, annotation) append theirs when they modify the store.
 In `mass axis resampling`, `mass_width_da` is the bin width at
 `reference_mz`. It is the width asked for when that width set the bin count.
 When a bin count or the 100-bin floor set it instead, it is the width the
-count gives, and on a `tof` axis `bins_per_fwhm` is too. The width law
-(`tof_a`, `tof_b`) is recorded on a `tof` axis only.
+count gives, and on a `tof` axis `bins_per_fwhm` is too. A `constant` axis
+lays its count as points, so its step is `(max_mz - min_mz) / (n - 1)`: a
+recorded width that was asked for is that step up to a factor `n / (n - 1)`.
+The width law (`tof_a`, `tof_b`) is recorded on a `tof` axis only.
 
 ```python
 [
