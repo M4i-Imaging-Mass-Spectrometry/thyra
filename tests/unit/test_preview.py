@@ -160,6 +160,44 @@ class TestUnreadableInputs:
         assert ".ibd" in result.error
 
 
+class TestARunWithNoRaster:
+    """A run a conversion refuses stays unreadable in the preview (issue #494).
+
+    The Waters reader opens a spot acquisition when it reads metadata only,
+    so ``thyra metadata`` can describe it; the import wizard must still not
+    offer it as a 1x1 sample.
+    """
+
+    def test_it_is_reported_unreadable(self, temp_dir, monkeypatch):
+        import thyra.preview as preview_module
+
+        class _SpotReader:
+            no_raster_reason = "Every positioned scan reports the same stage position"
+
+            def get_essential_metadata(self):
+                return SimpleNamespace(
+                    dimensions=(1, 1, 1),
+                    mass_range=(50.0, 2000.0),
+                    n_spectra=848,
+                    pixel_size=None,
+                )
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(
+            preview_module, "_build_reader", lambda path: (_SpotReader(), None)
+        )
+        spot = temp_dir / "spot.raw"
+        spot.mkdir()
+
+        result = preview_msi(spot)
+
+        assert result.readable is False
+        assert result.error is not None
+        assert "same stage position" in result.error
+
+
 class TestEscDatProbe:
     """The EscDat folder probe is independent of format readability."""
 

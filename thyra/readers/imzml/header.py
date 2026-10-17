@@ -54,7 +54,7 @@ from pathlib import Path
 from typing import Any, Dict, FrozenSet, NamedTuple, Optional, Tuple, Union
 from xml.etree import ElementTree as ET  # nosec B405
 
-from ...metadata.constants import POLARITY_OF_ACCESSION
+from ...metadata.constants import polarity_accession
 from ._pyimzml_compat import ensure_lenient_cv_param_values
 
 logger = logging.getLogger(__name__)
@@ -232,8 +232,10 @@ def _parse_head(
                         position[accession] = int(element.get("value", ""))
                     except ValueError:
                         logger.debug("Unparseable %s on the first spectrum", accession)
-                elif accession in POLARITY_OF_ACCESSION:
-                    polarity.add(accession)
+                else:
+                    stated = polarity_accession(accession, element.get("name"))
+                    if stated is not None:
+                        polarity.add(stated)
         if root is None:
             raise ValueError(f"{path} contains no XML elements")
 

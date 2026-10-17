@@ -125,8 +125,13 @@ class WatersReader(BaseMSIReader):
                 Waters instrument. See :mod:`thyra.readers.waters.instrument`.
             intensity_threshold: Minimum intensity value to include.
             **kwargs: Additional arguments passed to BaseMSIReader.
+                ``metadata_only=True`` also opens a run whose scans all
+                report one stage position, which a conversion refuses:
+                its metadata is still read, and reading a spectrum is
+                refused with the same message.
         """
         super().__init__(data_path, intensity_threshold=intensity_threshold, **kwargs)
+        self._metadata_only = bool(kwargs.get("metadata_only", False))
 
         # Validate the .raw directory structure
         self._validate_raw_directory()
@@ -345,6 +350,7 @@ class WatersReader(BaseMSIReader):
             self._handle,
             self._function_types,
             include_functions=ms_functions,
+            allow_single_position=self._metadata_only,
         )
 
         # Which functions hold the image: the raster chunks MassLynx named
@@ -363,7 +369,9 @@ class WatersReader(BaseMSIReader):
         # grid has to grow to hold it; an excluded function's readings must
         # not leave their pitch behind in a grid it contributes no pixel to.
         self._imaging_grid = regrid_for_functions(
-            self._imaging_grid, self._ms_functions
+            self._imaging_grid,
+            self._ms_functions,
+            allow_single_position=self._metadata_only,
         )
 
         # Nothing so far has read a spectrum: the grid and the function
@@ -375,7 +383,9 @@ class WatersReader(BaseMSIReader):
         # A single-pixel grid is refused by build_imaging_grid() above rather
         # than warned about here: "this may not be true imaging data,
         # proceeding anyway" produced a 1x1 store with a 0.0 um pitch and
-        # reported success, which is the defect in issue #213.
+        # reported success, which is the defect in issue #213. A
+        # metadata-only reader gets the grid, and the refusal waits for the
+        # first spectrum read (_require_raster).
 
         logger.info(
             f"Initialized Waters reader: {self.data_path.name}, "
@@ -849,6 +859,27 @@ class WatersReader(BaseMSIReader):
         )
 
     @property
+    def no_raster_reason(self) -> Optional[str]:
+        """Why the run cannot be converted, when its scans share one position.
+
+        ``None`` for a raster, and before the run is opened. Only a
+        metadata-only reader opens such a run at all; :func:`thyra.preview_msi`
+        reads this to report it as unreadable, as it did before metadata
+        could be read from it (issue #494).
+        """
+        grid = self._imaging_grid
+        return grid.no_raster_reason if grid is not None else None
+
+    def _require_raster(self, grid: "ImagingGrid") -> None:
+        """Refuse to read spectra from a run that has no raster.
+
+        Only a metadata-only reader gets that far: everywhere else the
+        grid build refuses the run (issue #213).
+        """
+        if grid.no_raster_reason is not None:
+            raise ConversionRefused(grid.no_raster_reason)
+
+    @property
     def has_shared_mass_axis(self) -> bool:
         """Waters MSI data is typically processed/centroided with varying m/z per pixel."""
         return False
@@ -897,6 +928,7 @@ class WatersReader(BaseMSIReader):
         ml, handle, imaging_grid, function_types, ms_functions = (
             self._require_initialized()
         )
+        self._require_raster(imaging_grid)
 
         total = sum(ml.get_number_of_scans_in_function(handle, f) for f in ms_functions)
 
@@ -1015,6 +1047,7 @@ class WatersReader(BaseMSIReader):
         ml, handle, imaging_grid, function_types, ms_functions = (
             self._require_initialized()
         )
+        self._require_raster(imaging_grid)
 
         total = sum(ml.get_number_of_scans_in_function(handle, f) for f in ms_functions)
 
@@ -1175,6 +1208,7 @@ class WatersReader(BaseMSIReader):
                 f"{self.data_path.name} carries no readable drift bins"
             )
         ml, handle, imaging_grid, _types, ms_functions = self._require_initialized()
+        self._require_raster(imaging_grid)
         drift_times = axis.values
         n_bins = int(drift_times.size)
         for func in ms_functions:
