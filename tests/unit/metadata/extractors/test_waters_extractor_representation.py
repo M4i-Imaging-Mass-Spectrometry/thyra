@@ -95,7 +95,7 @@ class TestAxisMassRange:
         """A range that would drop measured data is not used."""
         mock_ml, handle, grid, ft, ms = _make_grid_and_ml(n_peaks=10)
         mock_ml.get_acquisition_range.return_value = (200.0, 1000.0)
-        with thyra_logs("thyra.metadata", logging.WARNING) as records:
+        with thyra_logs("thyra.metadata", logging.DEBUG) as records:
             essential = _extractor(mock_ml, handle, grid, ft, ms).get_essential()
         assert essential.mass_range[0] == pytest.approx(100.0)
         assert "outside the acquisition range" in records.text

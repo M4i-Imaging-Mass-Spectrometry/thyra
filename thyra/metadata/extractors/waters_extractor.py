@@ -165,8 +165,8 @@ class WatersMetadataExtractor(MetadataExtractor):
         ]
         if not acquired:
             logger.info(
-                "No acquisition mass range reported for %s; the resampled "
-                "axis spans the stored m/z values %.4f-%.4f",
+                "No acquisition mass range reported for %s; the source's mass "
+                "range is the span of the stored m/z values, %.4f-%.4f",
                 self._data_path.name,
                 *observed,
             )
@@ -178,7 +178,7 @@ class WatersMetadataExtractor(MetadataExtractor):
             logger.info(
                 "Mass range %.4f-%.4f taken from the acquisition setting "
                 "(stored values span %.4f-%.4f), so runs acquired with the "
-                "same method share one resampled axis",
+                "same method share one resampled axis unless a range is set",
                 lo,
                 hi,
                 *observed,
@@ -199,12 +199,16 @@ class WatersMetadataExtractor(MetadataExtractor):
         # not, so two runs of one method share an axis only when they
         # overshoot alike. That is the honest trade: an axis that drops
         # measured data is worse than one that varies.
+        #
+        # Logged at debug: whether the axis is widened is not known here.
+        # Typed bounds or a mass axis plan fix it later and drop those
+        # peaks, so the axis planner warns, and only when this range sets
+        # the axis (D56).
         widened = (min(lo, observed[0]), max(hi, observed[1]))
-        logger.warning(
+        logger.debug(
             "Stored m/z values %.4f-%.4f fall outside the acquisition range "
-            "%.4f-%.4f; the resampled axis is widened to %.4f-%.4f to cover "
-            "them. Runs of this method share one axis only if they overshoot "
-            "the acquisition range by the same amount.",
+            "%.4f-%.4f; the source's mass range is widened to %.4f-%.4f to "
+            "cover them.",
             *observed,
             lo,
             hi,
