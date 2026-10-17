@@ -157,6 +157,21 @@ class TestWatersMetadataExtractorEssential:
         assert essential.pixel_size[0] > 0
         assert essential.pixel_size[1] > 0
 
+    def test_a_single_position_states_no_pixel_size(self):
+        """A spot run read for its metadata alone (issue #494).
+
+        Its grid is one pixel with a 0.0 um pitch, which is no pitch:
+        ``thyra metadata`` then reports ``pixel_size_um`` as missing.
+        """
+        mock_ml, handle, grid, ft, ms = _make_grid_and_ml(n_x=1, n_y=1)
+        extractor = WatersMetadataExtractor(
+            mock_ml, handle, Path("/test/data.raw"), grid, ft, ms
+        )
+        essential = extractor.get_essential()
+
+        assert essential.dimensions == (1, 1, 1)
+        assert essential.pixel_size is None
+
     def test_spectrum_type_centroid(self):
         """Test centroid spectrum type detection."""
         mock_ml, handle, grid, ft, ms = _make_grid_and_ml()
