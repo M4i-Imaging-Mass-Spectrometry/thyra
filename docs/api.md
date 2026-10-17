@@ -225,7 +225,9 @@ for region in thyra.list_regions("data/slide.d"):
 
 When you pass `resampling_config` to `convert_msi`, the dictionary keys map
 to the fields of `ResamplingConfig`. You can pass a plain dict (as shown in
-the examples above) or construct the dataclass directly:
+the examples above) or construct the dataclass directly. Every number must
+be finite: a NaN or an infinity is refused, as is one given as
+`intensity_threshold`.
 
 ```python
 from thyra.resampling.types import ResamplingConfig, ResamplingMethod, AxisType

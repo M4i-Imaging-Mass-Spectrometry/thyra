@@ -27,6 +27,7 @@ spectrum count.
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -59,11 +60,25 @@ def _fragmentation_report(reader: Any) -> Optional[Dict[str, Any]]:
 
 
 def _pixel_size(essential: Any) -> Optional[Tuple[float, float]]:
-    """The in-plane pitch the source states, or ``None`` when it states none."""
+    """The in-plane pitch the source states, or ``None`` when it states none.
+
+    A pitch that is NaN, infinite or not above 0 states none either: the
+    schema refuses it, and refusing it there wrote no document at all
+    (#503). The document then has no pitch, as for a source with no raster.
+    """
     pitch = getattr(essential, "pixel_size", None)
     if pitch is None:
         return None
-    return (float(pitch[0]), float(pitch[1]))
+    x, y = float(pitch[0]), float(pitch[1])
+    if not all(math.isfinite(half) and half > 0 for half in (x, y)):
+        logger.warning(
+            "The source's pixel size (%r x %r um) is not a finite positive "
+            "number; the document leaves it out.",
+            pitch[0],
+            pitch[1],
+        )
+        return None
+    return (x, y)
 
 
 def read_metadata_document(path: Path | str) -> Dict[str, Any]:

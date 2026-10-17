@@ -355,9 +355,14 @@ class _SchemaModel(BaseModel):
     Unknown keys are rejected rather than silently carried, so a typo
     in a hand-authored document fails validation instead of being
     stored as an unread field.
+
+    A number must be finite. JSON has no NaN or infinity, so the
+    published JSON Schema already allowed neither; the models now agree
+    with it (#503). The builder leaves such a vendor value out before a
+    model sees it, so a conversion still writes the block.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
 class OntologyTerm(_SchemaModel):
@@ -1324,12 +1329,15 @@ class MSIMetadata(_SchemaModel):
         for section in ("sample", "preparation", "processing"):
             if not data.get(section):
                 data.pop(section, None)
+        # Strict JSON: the models hold finite numbers only, so this never
+        # writes the tokens NaN or Infinity, and would raise rather than
+        # write one (#503).
         if "processing" in data:
-            data["processing"] = json.dumps(data["processing"])
+            data["processing"] = json.dumps(data["processing"], allow_nan=False)
         for path in PACKED_OBJECT_LISTS:
             holder = holder_of(data, path)
             if holder is not None and path[-1] in holder:
-                holder[path[-1]] = json.dumps(holder[path[-1]])
+                holder[path[-1]] = json.dumps(holder[path[-1]], allow_nan=False)
         return data
 
 

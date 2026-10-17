@@ -124,6 +124,30 @@ def _as_number(value: Any) -> Optional[float]:
     return None
 
 
+def finite_parameters(parameters: Dict[str, Any]) -> Dict[str, Any]:
+    """``parameters`` without the numbers that are NaN or infinite.
+
+    For a processing step's parameters. Such a value is left out, the
+    way :func:`_as_number` leaves out a vendor field: the schema refuses
+    it, and refusing it there would cost the whole ``msi_metadata`` block
+    rather than the one parameter (#503). Every other value, including a
+    finite number of a numpy type, is kept as given.
+    """
+    kept: Dict[str, Any] = {}
+    for key, value in parameters.items():
+        if (
+            isinstance(value, numbers.Real)
+            and not isinstance(value, numbers.Integral)
+            and not math.isfinite(value)
+        ):
+            logger.debug(
+                "Processing parameter %s=%r is not finite; left out", key, value
+            )
+            continue
+        kept[key] = value
+    return kept
+
+
 # --- the ``acquisition`` section -------------------------------------------
 #
 # Key spellings per field, in preference order.  Each is a name an
@@ -962,13 +986,19 @@ def _mobility_axis_fields(reported: Dict[str, Any]) -> Dict[str, Any]:
             fields[field] = term
     mobility_range = reported.get("one_over_k0_range") or reported.get("range")
     if isinstance(mobility_range, (list, tuple)) and len(mobility_range) == 2:
-        try:
-            fields["range_lower"] = float(mobility_range[0])
-            fields["range_upper"] = float(mobility_range[1])
-        except (TypeError, ValueError):
-            pass
+        # Both edges or neither, and each finite: a NaN or infinite edge
+        # is no bound a consumer can use, and JSON cannot hold it (#503).
+        lower, upper = (_as_number(edge) for edge in mobility_range)
+        if lower is not None and upper is not None:
+            fields["range_lower"] = lower
+            fields["range_upper"] = upper
     num_scans = reported.get("num_scans_max", reported.get("num_scans"))
-    if isinstance(num_scans, (int, float)) and num_scans >= 1:
+    if (
+        isinstance(num_scans, (int, float))
+        and math.isfinite(num_scans)
+        and num_scans >= 1
+    ):
+        # ``int(inf)`` raised OverflowError, which stopped the conversion.
         fields["num_scans"] = int(num_scans)
     return fields
 
@@ -992,7 +1022,7 @@ def _build_fragmentation(
         return None
     try:
         ms_level = int(reported["ms_level"])
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if ms_level < 1:
         return None

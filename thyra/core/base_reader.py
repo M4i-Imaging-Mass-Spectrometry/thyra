@@ -50,6 +50,7 @@ for all seven readers at once, so the next change to it is a visible one.
 """
 
 import logging
+import math
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import (
@@ -192,6 +193,9 @@ class BaseMSIReader(ABC):
         Raises:
             ConversionRefused: When ``region`` is given. Dropping it
                 would convert every region of an input that has several.
+                Also when ``intensity_threshold`` is NaN or infinite: no
+                peak's sum reaches either, so the store would be empty or
+                untouched while recording a value JSON cannot hold (#503).
         """
         if kwargs.get("region") is not None:
             raise ConversionRefused(
@@ -199,6 +203,13 @@ class BaseMSIReader(ABC):
                 f"supported for Bruker timsTOF data. Convert the whole "
                 f"dataset; obs['region_number'] tells its regions apart, and "
                 f"thyra.list_regions() lists them."
+            )
+        if isinstance(
+            intensity_threshold, (int, float, np.integer, np.floating)
+        ) and not math.isfinite(intensity_threshold):
+            raise ConversionRefused(
+                f"intensity_threshold is {intensity_threshold!r}; it must be a "
+                "finite number, or None for no threshold."
             )
         self.data_path = Path(data_path)
         self._intensity_threshold = intensity_threshold
