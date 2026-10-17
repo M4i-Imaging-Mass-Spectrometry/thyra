@@ -36,7 +36,7 @@ from .mobility_heatmap import (
     map_indexed_points_to_axis,
     map_points_to_axis,
 )
-from .mobility_table import GridDiscovery, GridScatter, _report_discovery
+from .mobility_table import GridDiscovery, GridScatter, _report_discovery, loses_signal
 from .msms_table import MsmsAccumulator
 
 logger = logging.getLogger(__name__)
@@ -162,7 +162,11 @@ class SiblingPasses:
             if mapped is not None:
                 if self.heatmap is not None and row is not None:
                     self.heatmap.add_mapped(frame.coords, *mapped)
-                if self.discovery is not None:
+                # A frame with no row is counted as skipped only when it
+                # carries signal, as on the separate pass (D58).
+                if self.discovery is not None and (
+                    row is not None or loses_signal(frame.coords, None, mapped[2])
+                ):
                     self.discovery.add_mapped_row(row, *mapped)
         if self.msms is not None:
             self.msms.count(row, frame.precursor_spectra())

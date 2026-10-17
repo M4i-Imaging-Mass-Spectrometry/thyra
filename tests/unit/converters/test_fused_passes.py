@@ -691,6 +691,47 @@ class TestAPositionWithoutARow:
         )
 
 
+class _ZeroCloudFrame(_EmptySummedFrame):
+    """Pixel 3 as before, its raw points all zero: it carries no signal."""
+
+    def mobility_points(self):
+        mzs, mobility, intensities = _cloud(self._p)
+        if self._p == 3:
+            intensities = np.zeros_like(intensities)
+        return mzs, mobility, intensities
+
+
+class ZeroCloudStubReader(EmptySummedStubReader):
+    def iter_frame_scans(self) -> Generator:
+        self.frame_passes += 1
+        for p, (x, y) in enumerate(PIXELS):
+            yield _ZeroCloudFrame(p, (x, y, 0))
+
+
+class TestTheFusedGridCountsWhatIsLost:
+    """B3 on the fused route: a rowless frame is skipped only with signal (D58)."""
+
+    @pytest.mark.parametrize(
+        "reader_type, skipped",
+        [(EmptySummedStubReader, 1), (ZeroCloudStubReader, 0)],
+        ids=["with-signal", "all-zero"],
+    )
+    def test_the_skip_warning(self, tmp_path, thyra_logs, reader_type, skipped):
+        with thyra_logs("thyra.converters", logging.WARNING) as records:
+            _convert(reader_type(), tmp_path / "out.zarr")
+        said = [
+            r.getMessage()
+            for r in records
+            if "mobility spectra had no row" in r.getMessage()
+        ]
+
+        assert said == (
+            [f"{skipped} mobility spectra had no row in the MSI table and were skipped"]
+            if skipped
+            else []
+        )
+
+
 #: A laid non-constant axis over the range the clouds span (100 to 500).
 #: Its first and last centre sit inside that range, so the clouds' m/z 100
 #: and 500 points are in the half-bin margin the summed table keeps.

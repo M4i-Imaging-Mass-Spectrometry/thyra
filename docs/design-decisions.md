@@ -3214,7 +3214,8 @@ varies.
 
 ## D38. The mass-mobility heatmap is a mean over positions, not spectra
 
-**Status:** Implemented (2026-10-13).
+**Status:** Implemented (2026-10-13). Amended by D58 (the divisor is the
+summed table's rows).
 
 **Decision.** `uns["mobility_heatmap"]["counts"]` is the heatmap's total
 divided by the number of distinct pixel positions it was fed, the rows
@@ -4561,7 +4562,8 @@ which is not a mean.
 
 ## D58. The mass-mobility heatmap is a mean over the summed table's rows
 
-**Status:** Implemented (2026-10-16), issue #495.
+**Status:** Implemented (2026-10-16), issue #495. Narrows D38's divisor and
+lifts its first known limit.
 
 **Decision.** A spectrum the summed table gives no row adds neither points
 nor a pixel to `uns["mobility_heatmap"]`. On the fused route (a TDF), a
@@ -4573,13 +4575,16 @@ once the passes have decided them. The heatmap's population is then the one
 Three smaller rules come with it:
 
 - The shared-axis mobility table (a continuous imzML with a mobility array)
-  takes the grid route's memory guard (D4) before it builds anything. Past
+  takes the grid route's memory guard (D4) before it builds anything, on
+  the distinct `(m/z, mobility)` pairs the list holds, which are its
+  `var`. Past
   half of free memory the table is left out with a `WARNING` naming
   `--no-mobility-table`, once per table; past a quarter it warns and is
   built.
 - A mobility spectrum with no row counts as skipped only when it is on the
-  table's own plane and carries signal. Another plane's spectrum has its row
-  in that plane's table, and an all-zero one loses nothing.
+  table's own plane and carries signal, on the separate pass and the fused
+  one alike. Another plane's spectrum has its row in that plane's table,
+  and an all-zero one loses nothing.
 - A 2D conversion of a multi-plane source plans a table for each plane the
   pre-scan meets, not for every z in the span. A single plane and a volume
   are planned up front, as before.
@@ -4605,8 +4610,12 @@ the same six spectra on z 1 and 2.
 - A store with a mobility heatmap and a spectrum that gets no row (all
   zero, every point outside the kept mass range, off the grid, or a TDF
   frame whose vendor centroid is empty while its raw scans are not):
-  `counts` and `current_ratio` change. `current_ratio` is 1.0 where only
-  rows were missing.
+  `counts` changes from (all points) / (positions fed) to (points of the
+  spectra with a row) / (rows), and `current_ratio` with it. On the issue's
+  file, whose rowless spectrum is all zero, that is a factor of 4/3, and
+  `current_ratio` goes from 0.75 to 1.0.
+- Every store without a rowless spectrum is byte-identical: measured on the
+  eight default fixtures and two TDF runs, before and after.
 - A store whose shared-axis feature list is too wide for the machine has no
   `_mobility` table, and `uns` does not name one.
 - A TDF store under `scan_sum`, with the default mass range and no
