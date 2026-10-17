@@ -546,6 +546,44 @@ class SettledAxis:
     provenance: Optional[Dict[str, Any]]
 
 
+def _refuse_unusable_range(
+    config: ResamplingConfig, min_mz: float, max_mz: float
+) -> None:
+    """Refuse a resolved mass range no axis can be laid over.
+
+    Raises:
+        ConversionRefused: If either end is not finite, or the range is
+            empty or inverted.
+    """
+    # A non-finite end has no axis to lay. Unchecked, an infinite one
+    # reached the bin count as an infinite float and ended the conversion
+    # in an OverflowError traceback (D55).
+    if not (np.isfinite(min_mz) and np.isfinite(max_mz)):
+        raise ConversionRefused(
+            f"The resampling mass range [{min_mz:g}, {max_mz:g}] m/z is "
+            "not finite: each end of the axis has to be a real mass. "
+            + _range_origin(config)
+        )
+    # An inverted range has no axis to lay either. Unchecked, it built a
+    # descending one, dropped every peak against it, reported "4 of 3 in the
+    # first spectrum affected" from a negative count, and succeeded with an
+    # empty store (issue #250).
+    if not (min_mz < max_mz):
+        raise ConversionRefused(
+            f"The resampling mass range [{min_mz:g}, {max_mz:g}] m/z is "
+            "empty: the minimum has to be below the maximum. " + _range_origin(config)
+        )
+
+
+def _range_origin(config: ResamplingConfig) -> str:
+    """Where a refused mass range came from, so the refusal names the fix."""
+    if config.min_mz is None and config.max_mz is None:
+        return "Both come from the source's own mass range."
+    if config.mass_axis_sha256 is not None:
+        return "Check the mass axis plan's min_mz and max_mz."
+    return "Check --resample-min-mz / --resample-max-mz."
+
+
 class AxisPlanner:
     """The common mass axis of one conversion, decided from arguments.
 
@@ -989,8 +1027,8 @@ class AxisPlanner:
             The four numbers a resampled axis follows from.
 
         Raises:
-            ConversionRefused: If the range is empty or inverted, or fewer
-                than two bins span it.
+            ConversionRefused: If the range is not finite, empty or
+                inverted, or fewer than two bins span it.
         """
         if self._plan is not None:
             return self._plan
@@ -1002,24 +1040,7 @@ class AxisPlanner:
         min_mz = mass_range[0] if config.min_mz is None else config.min_mz
         max_mz = mass_range[1] if config.max_mz is None else config.max_mz
 
-        # An inverted range has no axis to lay. Unchecked, it built a
-        # descending one, dropped every peak against it, reported "4 of 3
-        # in the first spectrum affected" from a negative count, and
-        # succeeded with an empty store (issue #250).
-        if not (min_mz < max_mz):
-            raise ConversionRefused(
-                f"The resampling mass range [{min_mz:g}, {max_mz:g}] m/z is "
-                "empty: the minimum has to be below the maximum. "
-                + (
-                    "Both come from the source's own mass range."
-                    if config.min_mz is None and config.max_mz is None
-                    else (
-                        "Check the mass axis plan's min_mz and max_mz."
-                        if config.mass_axis_sha256 is not None
-                        else "Check --resample-min-mz / --resample-max-mz."
-                    )
-                )
-            )
+        _refuse_unusable_range(config, min_mz, max_mz)
 
         tree = ResamplingDecisionTree()
         if config.axis_type is not None:

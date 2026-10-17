@@ -60,3 +60,61 @@ def ensure_lenient_cv_param_values() -> None:
 
     _INSTALLED = True
     logger.debug("Installed the lenient cvParam value conversion for pyimzml")
+
+
+_SPECTRUM_TERMS_INSTALLED = False
+
+
+def ensure_spectrum_term_fix() -> None:
+    """Patch pyimzml to correct a mislabelled spectrum term as it does elsewhere.
+
+    pyimzml corrects a cvParam an exporter wrote under the wrong accession
+    ("positive scan" as ``MS:1000128``, the profile spectrum term) where it
+    parses terms itself: ``fileContent`` and the parameter groups. The
+    per-spectrum values asked for with ``include_spectra_metadata`` are
+    looked up by accession alone, so a file stating that pair on each
+    spectrum had no polarity at all, while the same pair in a group gave
+    "positive" (D55). After the patch, ``spectrum_metadata_fields`` reads as
+    if the file were written correctly. Nothing else the parser records
+    changes, and a parser built without ``include_spectra_metadata`` is
+    untouched.
+
+    The hook is pyimzml's per-spectrum step, which is private.
+    ``test_polarity_statements`` converts a file that states the pair on
+    each spectrum, so a pyimzml release that renames the step fails there
+    rather than losing the polarity without a word. Idempotent.
+    """
+    global _SPECTRUM_TERMS_INSTALLED
+    if _SPECTRUM_TERMS_INSTALLED:
+        return
+
+    from pyimzml import ImzMLParser as parser_module
+
+    from ...metadata.constants import MISLABELLED_POLARITY_TERMS
+
+    parser_class = parser_module.ImzMLParser
+    # Name-mangled, as pyimzml's own calls of it are.
+    step = "_ImzMLParser__process_spectrum"
+    original = getattr(parser_class, step)
+    prefix = parser_module.XMLNS_PREFIX
+    corrections = [
+        (f'.//{prefix}cvParam[@accession="{accession}"][@name="{name}"]', fixed)
+        for (accession, name), fixed in MISLABELLED_POLARITY_TERMS.items()
+    ]
+
+    def process_spectrum(self, elem, include_spectra_metadata):
+        original(self, elem, include_spectra_metadata)
+        fields = getattr(self, "spectrum_metadata_fields", None)
+        if not isinstance(fields, dict):
+            return
+        for path, fixed in corrections:
+            values = fields.get(fixed)
+            # The step above appended this spectrum's value last; it is None
+            # when the spectrum states no correct term.
+            if values and values[-1] is None and elem.find(path) is not None:
+                values[-1] = True
+
+    process_spectrum.__wrapped__ = original  # type: ignore[attr-defined]
+    setattr(parser_class, step, process_spectrum)
+    _SPECTRUM_TERMS_INSTALLED = True
+    logger.debug("Installed the spectrum term correction for pyimzml")
