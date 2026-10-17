@@ -62,7 +62,6 @@ from .mobility_table import (
     RowLookup,
     assemble_sibling_table,
     collapse_row,
-    disambiguate_labels,
     int_strings,
     row_lookup,
 )
@@ -201,23 +200,36 @@ def _var_labels(
     precursor_index: NDArray[np.int64],
     mz_index: NDArray[np.int64],
 ) -> NDArray[Any]:
-    """``p{precursor}_mz{i}`` per feature, disambiguated where two collide.
+    """``p{precursor}_mz{i}`` per feature, ``_{k}`` added for the k-th isomer.
 
     Named after the precursor's m/z rather than its position in the
     schedule: a rank is only meaningful inside one dataset, so labelling
     by it would let two samples with different schedules concatenate the
     wrong precursors onto each other without an error. Isomers share an
-    m/z and so share a stem; they are disambiguated in mobility order,
-    which is the same order in any dataset acquired the same way.
+    m/z and so share a stem. Each takes its rank among the windows of its
+    stem, in mobility order over the whole schedule (``precursor_mz`` is
+    the axis, sorted by m/z then mobility), and every one of its columns
+    carries that rank: the first isomer none, the second ``_1``. The
+    suffix used to be given only in a mass bin both isomers held, so one
+    label could name a different isomer in two stores (issue #498).
     """
     stems = np.array([f"p{mz:g}" for mz in precursor_mz.tolist()], dtype=_STRING)
+    _unique_stems, first, stem_id = np.unique(
+        stems, return_index=True, return_inverse=True
+    )
+    stem_id = np.asarray(stem_id).ravel().astype(np.int64)
+    # The axis is sorted, so a stem's windows are contiguous and its first
+    # is its lowest mobility: the rank is the distance from that one.
+    isomer = np.arange(stems.size, dtype=np.int64) - first[stem_id]
+    suffix = np.where(
+        isomer > 0,
+        np.strings.add("_", int_strings(isomer)),
+        np.array("", dtype=_STRING),
+    ).astype(_STRING)
     labels = np.strings.add(
         np.strings.add(stems[precursor_index], "_mz"), int_strings(mz_index)
     )
-    _unique_stems, stem_id = np.unique(stems, return_inverse=True)
-    stem_id = np.asarray(stem_id).ravel().astype(np.int64)
-    stride = int(mz_index.max()) + 1 if mz_index.size else 1
-    return disambiguate_labels(labels, stem_id[precursor_index] * stride + mz_index)
+    return np.strings.add(labels, suffix[precursor_index])
 
 
 def _bin_indices(

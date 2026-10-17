@@ -112,6 +112,22 @@ class TestSchedule:
             COLLISION_INDUCED_DISSOCIATION_ACCESSION
         )
 
+    def test_a_damaged_dia_window_is_left_out(self, tmp_path, thyra_logs):
+        """Issue #498: the DIA tables are screened as PASEF's are."""
+        path = _copy(tmp_path, "one_group")
+        with sqlite3.connect(path / "analysis.tdf") as db:
+            db.execute(
+                "UPDATE DiaFrameMsMsWindows SET IsolationWidth = -1 "
+                "WHERE IsolationMz = 500.0"
+            )
+        with thyra_logs(
+            "thyra.readers.bruker.timstof.timstof_reader", logging.WARNING
+        ) as logs:
+            schedule, _ = _schedule(path)
+
+        assert [w.target for w in schedule.windows] == [300.0, 700.0]
+        assert [r for r in logs if "isolation windows hold" in r.getMessage()]
+
     def test_survey_frames_keep_the_schedule_varying(self, tmp_path):
         """The gate that keeps survey frames from being split by scan range."""
         schedule, separable = _schedule(_copy(tmp_path))
