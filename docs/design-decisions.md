@@ -3214,7 +3214,8 @@ varies.
 
 ## D38. The mass-mobility heatmap is a mean over positions, not spectra
 
-**Status:** Implemented (2026-10-13).
+**Status:** Implemented (2026-10-13). Amended by D58 (the divisor is the
+summed table's rows).
 
 **Decision.** `uns["mobility_heatmap"]["counts"]` is the heatmap's total
 divided by the number of distinct pixel positions it was fed, the rows
@@ -4461,7 +4462,8 @@ reports is about the selected region. Five rules follow.
   region concept (imzML, PHI, Waters). On timsTOF the name of a lone region
   is the `.mis` Area the alignment pairs it with, which on a run cut from a
   multi-region slide is the one its spot names give, while the number stays
-  the database's, the one `region=` accepts. `region=` accepts that name too.
+  the database's, the one `region=` accepts. `region=` accepts that name too,
+  and refuses another Area's name on such a run.
 
 - `get_region_info`, and with it `uns["regions"]`, lists only the selected
   region. Its count and box are that region's, inside the stored raster.
@@ -4478,10 +4480,11 @@ reports is about the selected region. Five rules follow.
 - `region` takes any integer type except `bool`, so a value read back from
   `obs["region_number"]`, which is a numpy integer, selects its region.
 
-`uns["average_spectrum_per_region"]` is written when two regions or more hold
-rows: one region's mean is the table's own `average_spectrum`. A region with no
-row has no entry in it, on every reader. D26's note on column types is corrected in place, with a dated
-note: in a 2D store `x`, `y` and `region_number` are `int32`, not `int64`.
+`uns["average_spectrum_per_region"]` is written when the region map holds two
+regions or more: one region's mean is the table's own `average_spectrum`. A
+region with no row has no entry in it, on every reader. D26's note on column
+types is corrected in place, with a dated note: in a 2D store `x`, `y` and
+`region_number` are `int32`, not `int64`.
 
 **Why.** A single-region run was stored as region 1 with no name, whatever
 the source said: a timsTOF run with one region numbered 3, or an mzPeak
@@ -4510,9 +4513,10 @@ which is not a mean.
   gains `bounds` and, where the `.mis` has it, `name`. The same holds for a
   single-region rapifleX store (the poslog's number, usually 0) and a
   single-region mzPeak archive of a Bruker run.
-- A single-region solariX store, a `region=` timsTOF store, and any store in
-  which only one region holds rows lose `uns["average_spectrum_per_region"]`,
-  which held a copy of `average_spectrum`.
+- A single-region solariX store and a `region=` timsTOF store lose
+  `uns["average_spectrum_per_region"]`, which held a copy of
+  `average_spectrum`. A multi-region store keeps it, even when only one of
+  its regions holds rows.
 - A `region=` timsTOF store: `uns["regions"]` holds one entry. The
   `fragmentation` block and whether an `_msms` table is written follow the
   region's own frames.
@@ -4545,7 +4549,8 @@ which is not a mean.
   not part of this decision.
 - A rapifleX run whose poslog misses a spectrum's spot, and an older mzPeak
   archive whose one listed box does not hold every pixel, still get the
-  placeholder 1, with the warning they gave before.
+  placeholder 1, with a warning, new for a single-region run: before, one
+  region was not checked at all.
 - In the full store, a shared position's row sums the spectra of both
   regions, so the earlier region's mean is not the one its `region=` store
   gives. The warning says so.
@@ -4557,7 +4562,8 @@ which is not a mean.
 
 ## D58. The mass-mobility heatmap is a mean over the summed table's rows
 
-**Status:** Implemented (2026-10-16), issue #495.
+**Status:** Implemented (2026-10-16), issue #495. Narrows D38's divisor and
+lifts its first known limit.
 
 **Decision.** A spectrum the summed table gives no row adds neither points
 nor a pixel to `uns["mobility_heatmap"]`. On the fused route (a TDF), a
@@ -4569,13 +4575,16 @@ once the passes have decided them. The heatmap's population is then the one
 Three smaller rules come with it:
 
 - The shared-axis mobility table (a continuous imzML with a mobility array)
-  takes the grid route's memory guard (D4) before it builds anything. Past
+  takes the grid route's memory guard (D4) before it builds anything, on
+  the distinct `(m/z, mobility)` pairs the list holds, which are its
+  `var`. Past
   half of free memory the table is left out with a `WARNING` naming
   `--no-mobility-table`, once per table; past a quarter it warns and is
   built.
 - A mobility spectrum with no row counts as skipped only when it is on the
-  table's own plane and carries signal. Another plane's spectrum has its row
-  in that plane's table, and an all-zero one loses nothing.
+  table's own plane and carries signal, on the separate pass and the fused
+  one alike. Another plane's spectrum has its row in that plane's table,
+  and an all-zero one loses nothing.
 - A 2D conversion of a multi-plane source plans a table for each plane the
   pre-scan meets, not for every z in the span. A single plane and a volume
   are planned up front, as before.
@@ -4601,8 +4610,12 @@ the same six spectra on z 1 and 2.
 - A store with a mobility heatmap and a spectrum that gets no row (all
   zero, every point outside the kept mass range, off the grid, or a TDF
   frame whose vendor centroid is empty while its raw scans are not):
-  `counts` and `current_ratio` change. `current_ratio` is 1.0 where only
-  rows were missing.
+  `counts` changes from (all points) / (positions fed) to (points of the
+  spectra with a row) / (rows), and `current_ratio` with it. On the issue's
+  file, whose rowless spectrum is all zero, that is a factor of 4/3, and
+  `current_ratio` goes from 0.75 to 1.0.
+- Every store without a rowless spectrum is byte-identical: measured on the
+  eight default fixtures and two TDF runs, before and after.
 - A store whose shared-axis feature list is too wide for the machine has no
   `_mobility` table, and `uns` does not name one.
 - A TDF store under `scan_sum`, with the default mass range and no

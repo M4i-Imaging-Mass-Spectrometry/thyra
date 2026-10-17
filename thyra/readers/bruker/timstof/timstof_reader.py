@@ -1416,6 +1416,21 @@ class BrukerReader(BrukerBaseMSIReader):
         # names point to (D57), which on a run cut from a slide is not the
         # Area at the DB number; a request for that name is this region.
         lone_name = self._lone_region_name()
+        names = set(self._get_region_name_map().values())
+        if (
+            lone_name
+            and isinstance(self._requested_region, str)
+            and self._requested_region != lone_name
+            and self._requested_region in names
+        ):
+            # Read by position, '01' would resolve to DB number 0 and so to
+            # this run, whose own listed name is something else.
+            raise ConversionRefused(
+                f"--region {self._requested_region!r} names another Area of "
+                f"the slide; this single-region run is Area {lone_name!r}, "
+                "as its spot names and list_regions say. Pass that name, or "
+                "drop the option."
+            )
         if lone_name and self._requested_region == lone_name:
             logger.info(
                 "Region %r is the only region in this dataset; all %d frames "

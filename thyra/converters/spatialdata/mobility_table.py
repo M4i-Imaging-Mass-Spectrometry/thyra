@@ -401,8 +401,11 @@ def _build_from_shared_axis(
     listed = reader.get_shared_mobility_features()
     if listed is None or listed[0].size == 0:
         return None
+    # The guard is asked about the var the table would have: the distinct
+    # pairs, not the list, which may name a pair twice.
+    n_pairs = int(np.unique(np.column_stack(listed[:2]), axis=0).shape[0])
     refusal = var_ceiling_refusal(
-        int(listed[0].size),
+        n_pairs,
         features="the source lists {n} (m/z, mobility) features",
         levers="convert without this table (--no-mobility-table)",
     )

@@ -200,7 +200,8 @@ class TestTheSharedAxisTableIsGuarded:
 
         class Reader:
             def get_shared_mobility_features(self):
-                return np.array([100.0, 200.0]), np.array([1.0, 1.1])
+                # One pair listed twice: the var holds two features, not three.
+                return np.array([100.0, 100.0, 200.0]), np.array([1.0, 1.0, 1.1])
 
         monkeypatch.setattr(mobility_table, "var_ceiling_refusal", guard)
         monkeypatch.setattr(mobility_table, "CscAssembly", no_allocation)
