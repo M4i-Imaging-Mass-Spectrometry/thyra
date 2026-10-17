@@ -93,6 +93,32 @@ class TestNonFiniteIntensities:
         assert stub._unusable_intensities == 0
 
 
+class TestNonFiniteMz:
+    """D55: dropped before resampling, where tic_preserving would not."""
+
+    def _resampled(self):
+        stub = _stub()
+        stub._resampling_config = object()
+        return stub
+
+    @pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+    def test_they_are_dropped_on_a_resampled_axis(self, bad):
+        mzs, intensities = _drop(self._resampled(), [1.0, bad, 3.0], [10.0, 20.0, 30.0])
+        np.testing.assert_array_equal(mzs, [1.0, 3.0])
+        np.testing.assert_array_equal(intensities, [10.0, 30.0])
+
+    def test_the_raw_axis_leaves_them_to_its_own_refusal(self):
+        mzs, _ = _drop(_stub(), [1.0, np.inf], [10.0, 20.0])
+        assert mzs.size == 2
+
+    def test_the_warning_counts_them_apart(self, thyra_logs):
+        with thyra_logs(_MODULE_LOGGER, logging.WARNING) as records:
+            _drop(self._resampled(), [1.0, np.inf, 3.0], [np.nan, 20.0, -1.0])
+
+        assert "3 of 3" in records.text
+        assert "1 non-finite, 1 negative, 1 at a non-finite m/z" in records.text
+
+
 class TestNegativeIntensities:
     def test_they_are_dropped_too(self):
         _, intensities = _drop(_stub(), [1.0, 2.0, 3.0], [10.0, -5.0, 30.0])
@@ -121,7 +147,7 @@ class TestTheCount:
         warnings = [r.getMessage() for r in records]
         assert len(warnings) == 1
         assert "2 of 3" in warnings[0]
-        assert "1 non-finite, 1 negative" in warnings[0]
+        assert "1 non-finite, 1 negative, 0 at a non-finite m/z" in warnings[0]
 
     def test_the_running_total_accumulates(self):
         stub = _stub()

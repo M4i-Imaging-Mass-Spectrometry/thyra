@@ -39,7 +39,7 @@ from ...metadata.constants import (
 from ...metadata.extractors.imzml_extractor import ImzMLMetadataExtractor
 from ...utils.imzml_coordinate_base import coordinate_bases
 from ...utils.pyimzml_direct import read_spectrum_mzs_only
-from ._pyimzml_compat import ensure_lenient_cv_param_values
+from ._pyimzml_compat import ensure_lenient_cv_param_values, ensure_spectrum_term_fix
 from .mobility_array import (
     MobilityArraySpec,
     collect_array_offsets,
@@ -628,6 +628,7 @@ class ImzMLReader(BaseMSIReader):
             # TIMSCONVERT and TIMSImaging could not be opened at all: see
             # _pyimzml_compat.
             ensure_lenient_cv_param_values()
+            ensure_spectrum_term_fix()
             self.parser = ImzMLParser(
                 filename=str(imzml_path),
                 parse_lib="ElementTree",
@@ -635,6 +636,8 @@ class ImzMLReader(BaseMSIReader):
                 # Read off each spectrum during the one pass the parser
                 # makes anyway, so polarity stated per spectrum is seen
                 # (D35); pyimzml's own polarity looks at the first only.
+                # The parser reads a mislabelled "positive scan" there as
+                # pyimzml reads it in a group (D55).
                 include_spectra_metadata=list(POLARITY_OF_ACCESSION),
             )
         except Exception as e:

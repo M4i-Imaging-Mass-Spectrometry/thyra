@@ -17,6 +17,7 @@ import pytest
 from tests.fixtures.mzpeak_builder import (
     DELTA,
     GRID,
+    METADATA_MEMBER,
     NUMPRESS_LINEAR,
     PLAIN,
     POSITION_X_COLUMN,
@@ -956,6 +957,77 @@ def _assert_same_reading(candidate, reference):
         np.testing.assert_array_equal(ours[3], theirs[3])
         assert ours[2].dtype == np.float64
         assert ours[3].dtype == np.float64
+
+
+def _metadata_column_nulled(archive, tmp_path, column, null_type):
+    """Rewrite one column of the spectrum metadata member to hold no value.
+
+    With ``null_type`` the column gets the null type, as a writer with no
+    value to give for any spectrum may type it. Otherwise it keeps its own
+    integer type, full of nulls. The builder always writes an integer type.
+    """
+    import io
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    suffix = "null_type" if null_type else "typed"
+    rewritten = tmp_path / f"{column}_{suffix}_{archive.name}"
+    with (
+        zipfile.ZipFile(archive) as source,
+        zipfile.ZipFile(rewritten, "w", compression=zipfile.ZIP_STORED) as target,
+    ):
+        for name in source.namelist():
+            payload = source.read(name)
+            if name == METADATA_MEMBER:
+                table = pq.read_table(io.BytesIO(payload))
+                position = table.schema.get_field_index(column)
+                kind = pa.null() if null_type else table.schema.field(column).type
+                table = table.set_column(
+                    position, column, pa.nulls(table.num_rows, type=kind)
+                )
+                sink = pa.BufferOutputStream()
+                pq.write_table(table, sink)
+                payload = sink.getvalue().to_pybytes()
+            target.writestr(name, payload)
+    return rewritten
+
+
+class TestMetadataColumnWithNoValue:
+    """A spectrum metadata column that holds no value at all.
+
+    Parquet keeps the null type of a column that never held a value, and
+    pyarrow cannot fill a column of that type with 0. Read for the levels or
+    the point counts, such a column ended the read in a raw traceback.
+    """
+
+    @pytest.mark.parametrize("layout", ["point", "chunk"])
+    @pytest.mark.parametrize("column", ["ms_level", "number_of_data_points"])
+    def test_the_null_type_reads_as_a_typed_column_of_nulls(
+        self, tmp_path, column, layout
+    ):
+        """No level, or no count, for any spectrum: every spectrum is read."""
+        archive = build_mzpeak(
+            tmp_path / "whole.mzpeak", grid_spectra(3, 2), layout=layout
+        )
+        reference = _read(_metadata_column_nulled(archive, tmp_path, column, False))
+
+        candidate = _read(_metadata_column_nulled(archive, tmp_path, column, True))
+
+        _assert_same_reading(candidate, reference)
+        assert len(candidate["spectra"]) == 6
+
+    def test_no_level_for_any_spectrum_keeps_them_all(self, tmp_path):
+        """A level the archive does not give is 0, and such spectra are kept."""
+        archive = build_mzpeak(
+            tmp_path / "levels.mzpeak", grid_spectra(2, 1), ms_levels=[1, 2]
+        )
+
+        nulled = _metadata_column_nulled(archive, tmp_path, "ms_level", True)
+
+        with MzPeakReader(nulled) as reader:
+            index = reader.archive.spatial_index()
+        assert index.spectrum_indices.tolist() == [0, 1]
 
 
 class TestChunkedLayout:

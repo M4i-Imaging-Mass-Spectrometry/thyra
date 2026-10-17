@@ -110,6 +110,10 @@ class ImagingGrid:
     #: ``None`` on a hand-built grid, where every position is taken on trust.
     x_lattice: Optional[AxisLattice] = None
     y_lattice: Optional[AxisLattice] = None
+    #: Why this grid is no raster, when every positioned scan reports the
+    #: same stage position. Only a grid built with ``allow_single_position``
+    #: carries one; reading its spectra is refused with this message.
+    no_raster_reason: Optional[str] = None
 
     @property
     def dimensions(self) -> Tuple[int, int, int]:
@@ -315,6 +319,7 @@ def _census(
 def _grid_from_scan_map(
     scan_map: Dict[Tuple[int, int], ScanInfoData],
     functions: Optional[Iterable[int]] = None,
+    allow_single_position: bool = False,
 ) -> ImagingGrid:
     """Fit a grid to the stage readings already collected in ``scan_map``.
 
@@ -324,6 +329,11 @@ def _grid_from_scan_map(
     function selection then excludes -- let one off-raster reference spot
     turn a 10x5 image at 30 um into an 11x6 one at 1097 x 440 um
     (issue #232).
+
+    ``allow_single_position`` returns a one-pixel grid, carrying the
+    refusal as ``no_raster_reason``, where a conversion refuses the run:
+    a metadata document describes the acquisition whether or not it is
+    an image (issue #494).
     """
     census = _census(scan_map, functions)
 
@@ -391,8 +401,9 @@ def _grid_from_scan_map(
     # Real DESI images on that same share do carry stage coordinates in
     # these fields and grid normally (401x401, 247x140, ...), so this
     # refuses the non-images without costing anything real. See issue #213.
+    no_raster_reason: Optional[str] = None
     if x_lattice.count == 1 and y_lattice.count == 1:
-        raise ConversionRefused(
+        no_raster_reason = (
             f"Every positioned scan reports the same stage position "
             f"(x={x_lattice.origin:.1f} um, y={y_lattice.origin:.1f} um), so "
             f"this acquisition has a single pixel: {census.positioned} "
@@ -401,6 +412,8 @@ def _grid_from_scan_map(
             f"acquisition, not an image -- Thyra has no raster to build "
             f"from it."
         )
+        if not allow_single_position:
+            raise ConversionRefused(no_raster_reason)
 
     # Laser positions are pixel *centres*, so the span from the first to the
     # last is N - 1 pitches, not N. This used to divide by the count, which
@@ -417,7 +430,10 @@ def _grid_from_scan_map(
     lateral_width = x_lattice.pitch * (x_lattice.count - 1)
     lateral_height = y_lattice.pitch * (y_lattice.count - 1)
 
-    _warn_on_shared_pixels(scan_map, functions, x_index_map, y_index_map)
+    if no_raster_reason is None:
+        # On a single position every scan shares the one pixel; saying so
+        # adds nothing to the reason the grid carries.
+        _warn_on_shared_pixels(scan_map, functions, x_index_map, y_index_map)
 
     logger.info(
         f"Built imaging grid: {x_lattice.count}x{y_lattice.count} pixels, "
@@ -438,6 +454,7 @@ def _grid_from_scan_map(
         scan_map=scan_map,
         x_lattice=x_lattice,
         y_lattice=y_lattice,
+        no_raster_reason=no_raster_reason,
     )
 
 
@@ -499,6 +516,7 @@ def build_imaging_grid(
     handle,
     function_types: Dict[int, FunctionType],
     include_functions: Optional[Iterable[int]] = None,
+    allow_single_position: bool = False,
 ) -> ImagingGrid:
     """Build imaging grid by scanning all functions/scans for laser coordinates.
 
@@ -515,6 +533,9 @@ def build_imaging_grid(
         include_functions: Fit the raster to these functions' stage
             readings only. ``None`` fits it to every function, which is
             what a caller that has not classified them yet wants.
+        allow_single_position: Return a one-pixel grid that carries the
+            refusal as ``no_raster_reason`` instead of raising it, for a
+            caller that reads metadata only.
 
     Returns:
         ImagingGrid with coordinate maps and pixel metadata.
@@ -523,7 +544,7 @@ def build_imaging_grid(
         ValueError: If no scan carries a laser position, if the positions do
             not lie on a regular raster, or if every positioned scan carries
             the *same* one -- a single-pixel "raster" is a spot acquisition,
-            not an image.
+            not an image -- unless ``allow_single_position`` is set.
     """
     scan_map: Dict[Tuple[int, int], ScanInfoData] = {}
 
@@ -533,10 +554,14 @@ def build_imaging_grid(
         for scan in range(n_scans):
             scan_map[(func, scan)] = ml.get_scan_info(handle, func, scan)
 
-    return _grid_from_scan_map(scan_map, include_functions)
+    return _grid_from_scan_map(scan_map, include_functions, allow_single_position)
 
 
-def regrid_for_functions(grid: ImagingGrid, functions: Iterable[int]) -> ImagingGrid:
+def regrid_for_functions(
+    grid: ImagingGrid,
+    functions: Iterable[int],
+    allow_single_position: bool = False,
+) -> ImagingGrid:
     """Re-fit the raster to the stage readings of ``functions`` alone.
 
     Uses the scan records already cached on ``grid``, so this costs no
@@ -545,10 +570,12 @@ def regrid_for_functions(grid: ImagingGrid, functions: Iterable[int]) -> Imaging
     excluded functions sat on the raster with the rest, and when ``grid``
     carries no fitted lattice -- a hand-built grid is taken on trust, the
     same way :meth:`ImagingGrid.lies_on_raster` takes it.
+    ``allow_single_position`` is passed on as :func:`build_imaging_grid`
+    takes it.
     """
     if grid.x_lattice is None or grid.y_lattice is None:
         return grid
-    refitted = _grid_from_scan_map(grid.scan_map, functions)
+    refitted = _grid_from_scan_map(grid.scan_map, functions, allow_single_position)
     same = (
         refitted.pixel_count_x == grid.pixel_count_x
         and refitted.pixel_count_y == grid.pixel_count_y

@@ -99,6 +99,13 @@ def summed_peak_mask(
     scan keeps or drops all of that peak's points together, so the threshold
     acts on the peak the store holds, not on one scan's share of it.
 
+    Only measurements count (D55): a point whose m/z is not finite, or whose
+    intensity is not finite or is negative, is in no peak's sum. The
+    converter drops such an intensity before resampling, so a sum that held
+    it tested a peak the store never holds. The mask leaves those points in;
+    the converter drops, counts or refuses them exactly as it does with no
+    threshold set.
+
     Args:
         mzs: m/z of each point, in any order.
         intensities: Intensity of each point.
@@ -107,6 +114,18 @@ def summed_peak_mask(
     Returns:
         A mask over the points, in their order.
     """
+    usable = np.isfinite(mzs) & np.isfinite(intensities) & (intensities >= 0)
+    if bool(usable.all()):
+        return _summed_usable_mask(mzs, intensities, threshold)
+    keep = np.ones(mzs.size, dtype=bool)
+    keep[usable] = _summed_usable_mask(mzs[usable], intensities[usable], threshold)
+    return keep
+
+
+def _summed_usable_mask(
+    mzs: NDArray[np.float64], intensities: NDArray[np.float64], threshold: float
+) -> NDArray[np.bool_]:
+    """:func:`summed_peak_mask` over points that are all measurements."""
     if mzs.size < 2:
         return intensities >= threshold
     steps = np.diff(mzs)
@@ -118,9 +137,6 @@ def summed_peak_mask(
     starts = np.concatenate(
         ([True], np.diff(ordered) > SAME_PEAK_RELATIVE * np.abs(ordered[1:]))
     )
-    # argsort puts NaN last; each NaN point is its own peak, never part of
-    # the largest real one.
-    starts |= np.isnan(ordered)
     group = np.cumsum(starts) - 1
     sums = np.bincount(group, weights=intensities[order])
     keep = np.empty(mzs.size, dtype=bool)

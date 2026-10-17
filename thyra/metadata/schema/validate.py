@@ -17,6 +17,7 @@ on errors, so warnings do not break CI pipelines that gate on it.
 
 import json
 import logging
+import operator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -398,9 +399,17 @@ def _check_mass_axis_fingerprint(
             )
         )
         return
-    if recorded.get("sha256") != mass_axis_sha256(mz) or int(
-        recorded.get("n_bins", -1)
-    ) != int(mz.size):
+    n_bins = _recorded_bin_count(recorded.get("n_bins"))
+    if n_bins is None:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "provenance.mass_axis",
+                "the recorded mass axis fingerprint has no integer n_bins",
+            )
+        )
+        return
+    if recorded.get("sha256") != mass_axis_sha256(mz) or n_bins != int(mz.size):
         issues.append(
             ValidationIssue(
                 "error",
@@ -408,6 +417,24 @@ def _check_mass_axis_fingerprint(
                 "var['mz'] does not match the recorded mass axis fingerprint",
             )
         )
+
+
+def _recorded_bin_count(value: Any) -> Optional[int]:
+    """A recorded ``n_bins`` as an int, or ``None`` when it is not a whole number.
+
+    Any integer type is taken (numpy's included), and a whole number
+    written as a float, as the schema model takes it. Text, a fraction, a
+    boolean or a list is ``None``: ``int()`` truncated some of those and
+    raised on the rest with a message that named no field.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else None
+    try:
+        return operator.index(value)
+    except TypeError:
+        return None
 
 
 def _check_mobility_var(var_group: Any, mz: Any, issues: List[ValidationIssue]) -> None:

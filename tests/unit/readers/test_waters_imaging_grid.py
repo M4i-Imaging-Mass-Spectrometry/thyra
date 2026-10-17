@@ -13,6 +13,7 @@ from thyra.readers.waters.imaging_grid import (
     ImagingGrid,
     _mm_to_um_key,
     build_imaging_grid,
+    regrid_for_functions,
 )
 from thyra.readers.waters.masslynx_lib import FunctionType, ScanInfoData
 
@@ -231,6 +232,42 @@ class TestBuildImagingGrid:
 
         with pytest.raises(ConversionRefused, match="same stage position"):
             build_imaging_grid(mock_ml, "handle", func_types)
+
+    def test_single_pixel_grid_is_returned_for_metadata(self, thyra_logs):
+        """A metadata document describes a spot acquisition too (issue #494).
+
+        The grid carries the refusal instead of raising it, with a 0.0 um
+        pitch, which the metadata extractor reports as no pixel size. Every
+        scan shares the one pixel, so no shared-pixel warning is logged.
+        """
+        positions = [(0, 0, 0.5, 0.5), (0, 1, 0.5, 0.5), (1, 0, 0.5, 0.5)]
+        mock_ml = self._setup_mock_ml(positions)
+        func_types = {0: FunctionType.MS, 1: FunctionType.MS}
+
+        with thyra_logs("thyra.readers.waters.imaging_grid") as records:
+            grid = build_imaging_grid(
+                mock_ml, "handle", func_types, allow_single_position=True
+            )
+
+        assert (grid.pixel_count_x, grid.pixel_count_y) == (1, 1)
+        assert (grid.pixel_size_x, grid.pixel_size_y) == (0.0, 0.0)
+        assert grid.no_raster_reason is not None
+        assert "same stage position" in grid.no_raster_reason
+        assert not [r for r in records if "SUM" in r.getMessage()]
+        refitted = regrid_for_functions(grid, [0], allow_single_position=True)
+        assert refitted.no_raster_reason is not None
+        with pytest.raises(ConversionRefused, match="same stage position"):
+            regrid_for_functions(grid, [0])
+
+    def test_a_raster_carries_no_refusal(self):
+        positions = [(0, 0, 0.1, 0.05), (0, 1, 0.2, 0.05)]
+        mock_ml = self._setup_mock_ml(positions)
+
+        grid = build_imaging_grid(
+            mock_ml, "handle", {0: FunctionType.MS}, allow_single_position=True
+        )
+
+        assert grid.no_raster_reason is None
 
     def test_single_row_grid_is_kept(self):
         """One line of a raster is real data, and must survive the refusal.
