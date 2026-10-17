@@ -264,3 +264,25 @@ class TestARequestIsHonouredWholeOrRefused:
     )
     def test_a_whole_request_still_passes(self, config):
         normalize_resampling_config(config)
+
+
+class TestANonFiniteRangeIsRefused:
+    """D55: an infinite end used to reach the bin count and overflow."""
+
+    @pytest.mark.parametrize(
+        "mass_range", [(100.0, np.inf), (-np.inf, 1100.0), (100.0, np.nan)]
+    )
+    def test_from_the_source(self, mass_range):
+        told = {"essential_metadata": {"mass_range": mass_range}}
+        planner = AxisPlanner.from_metadata(told, ResamplingConfig())
+
+        with pytest.raises(ConversionRefused, match="not finite") as refused:
+            planner.resolve()
+        assert "source's own mass range" in str(refused.value)
+
+    def test_from_the_caller(self):
+        planner = _planner(max_mz=float("inf"))
+
+        with pytest.raises(ConversionRefused, match="not finite") as refused:
+            planner.resolve()
+        assert "--resample-max-mz" in str(refused.value)
