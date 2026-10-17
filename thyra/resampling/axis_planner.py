@@ -69,6 +69,11 @@ logger = logging.getLogger(__name__)
 #: float64 at a time; read at call time so a test can shrink it.
 BIN_WIDTH_CHUNK = 1 << 22
 
+#: The fewest bins a width lays. A width so wide that fewer bins span the
+#: range is raised to this count, so the axis does not have the width asked
+#: for, and the store records the width it has (D56).
+MIN_WIDTH_BINS = 100
+
 
 def bin_width_range(axis: NDArray[np.float64]) -> Tuple[float, float]:
     """The narrowest and widest gap between consecutive axis entries.
@@ -261,18 +266,34 @@ def _refuse_dropped_settings(config: ResamplingConfig) -> None:
     - one half of the TOF width law: the given half is dropped and both
       come from the detected instrument (:func:`tof_plan`). The CLI takes
       the law as one pair, so only the API can get here.
+    - ``bins_per_fwhm`` with a width or a bin count: either one fixes the
+      bin count of a tof axis, and ``bins_per_fwhm`` was dropped or, beside
+      a count, recorded as applied (D56). ``plan_mass_axis`` refuses the
+      same pairs. Off a tof axis it is refused in :meth:`AxisPlanner.resolve`,
+      where the axis type is known.
 
     The messages name the dict key first and the dataclass field second,
     since either may have been passed.
 
     Raises:
-        ConversionRefused: On either case.
+        ConversionRefused: On any of the cases.
     """
     if config.target_bins is not None and config.mass_width_da is not None:
         raise ConversionRefused(
             "resampling_config sets both 'target_bins' and 'width_at_mz' "
             "(ResamplingConfig.mass_width_da); they each fix the bin count, "
             "so pass only one."
+        )
+    if config.bins_per_fwhm is not None and config.mass_width_da is not None:
+        raise ConversionRefused(
+            "resampling_config sets both 'bins_per_fwhm' and 'width_at_mz' "
+            "(ResamplingConfig.mass_width_da); they each fix the bin count "
+            "of a tof axis, so pass only one."
+        )
+    if config.bins_per_fwhm is not None and config.target_bins is not None:
+        raise ConversionRefused(
+            "resampling_config sets both 'bins_per_fwhm' and 'target_bins'; "
+            "they each fix the bin count of a tof axis, so pass only one."
         )
     if (config.tof_a is None) != (config.tof_b is None):
         given, missing = (
@@ -397,6 +418,7 @@ def bin_count_for_width(
     *,
     detected_width: Optional[Tuple[float, float]] = None,
     detected_tof_law: Optional[Tuple[float, float]] = None,
+    floor: bool = True,
 ) -> int:
     """How many bins of the requested width span a mass range.
 
@@ -413,9 +435,13 @@ def bin_count_for_width(
         detected_width: What the detected instrument asked for, if
             anything; see :func:`reference_params`.
         detected_tof_law: The detected ``(A, B)``, for a ``tof`` axis.
+        floor: Raise the count to :data:`MIN_WIDTH_BINS`. ``False`` gives
+            the count the width alone lays, so a caller can tell whether
+            the floor applies.
 
     Returns:
-        The bin count, never below 100.
+        The bin count, never below :data:`MIN_WIDTH_BINS` unless ``floor``
+        is ``False``.
     """
     name = axis_name(axis_type)
     width_at_mz, ref_mz = reference_params(
@@ -483,11 +509,72 @@ def bin_count_for_width(
         # bins = (max_mz - min_mz) / width_at_mz
         bins = int((max_mz - min_mz) / width_at_mz)
 
-    # Ensure minimum bin count
-    bins = max(100, bins)
-
     logger.info(f"Calculated {bins} bins for {name} axis type")
+    if floor and bins < MIN_WIDTH_BINS:
+        logger.info(
+            "Raised to the floor of %d bins; the axis has the width they give",
+            MIN_WIDTH_BINS,
+        )
+        bins = MIN_WIDTH_BINS
     return bins
+
+
+def realised_width(
+    config: ResamplingConfig,
+    min_mz: float,
+    max_mz: float,
+    axis_type: Any,
+    n_bins: int,
+    reference_mz: float,
+    *,
+    detected_tof_law: Optional[Tuple[float, float]] = None,
+) -> Tuple[float, Optional[float]]:
+    """The bin width ``n_bins`` bins have at the reference m/z, and their ``k``.
+
+    Every generator lays its bins from the range and the count alone, so the
+    count fixes the width. For the physics laws this inverts
+    :func:`bin_count_for_width`. A ``constant`` axis is the exception: the
+    count is of points, laid ``n - 1`` steps apart, while the count from a
+    width divides the range into ``n`` steps; this gives the laid step. It
+    is what the store records when a width did not set the count: a
+    ``target_bins`` request, or a width so wide that the 100-bin floor
+    raised the count (D56).
+
+    Args:
+        config: The caller's resampling request, for a tof axis's law.
+        min_mz: Lower end of the mass range.
+        max_mz: Upper end of the mass range.
+        axis_type: The axis type, which decides the spacing law.
+        n_bins: The bin count of the axis.
+        reference_mz: Where the width is stated.
+        detected_tof_law: The detected ``(A, B)``, for a ``tof`` axis.
+
+    Returns:
+        ``(width_da, bins_per_fwhm)``; ``bins_per_fwhm`` is ``None`` off a
+        tof axis.
+    """
+    name = axis_name(axis_type)
+    ref_mz = float(reference_mz)
+    n = float(n_bins)
+    if name == "tof":
+        a, b, _ = tof_plan(config, detected_tof_law=detected_tof_law)
+        generator = TOFAxisGenerator(a, b)
+        span = float(generator.cumulative(max_mz) - generator.cumulative(min_mz))
+        k = n / (1e3 * span)
+        return float(generator.bin_width_at(ref_mz, k)), float(k)
+    if name == "linear_tof":
+        width = 2.0 * np.sqrt(ref_mz) * (np.sqrt(max_mz) - np.sqrt(min_mz)) / n
+    elif name == "reflector_tof":
+        width = np.log(max_mz / min_mz) * ref_mz / n
+    elif name == "orbitrap":
+        width = 2.0 * (1 / np.sqrt(min_mz) - 1 / np.sqrt(max_mz)) * ref_mz**1.5 / n
+    elif name == "fticr":
+        width = (1 / min_mz - 1 / max_mz) * ref_mz**2 / n
+    else:
+        # A constant axis is ``n`` points from end to end, not ``n`` bins
+        # of edges, so ``n - 1`` steps span it (LinearAxisGenerator).
+        width = (max_mz - min_mz) / (n - 1)
+    return float(width), None
 
 
 @dataclass(frozen=True)
@@ -571,8 +658,58 @@ def _refuse_unusable_range(
     if not (min_mz < max_mz):
         raise ConversionRefused(
             f"The resampling mass range [{min_mz:g}, {max_mz:g}] m/z is "
-            "empty: the minimum has to be below the maximum. " + _range_origin(config)
+            "empty: the minimum has to be below the maximum. "
+            + _range_origin(config)
+            + _empty_source_range_remedy(config, min_mz, max_mz)
         )
+
+
+def _empty_source_range_remedy(
+    config: ResamplingConfig, min_mz: float, max_mz: float
+) -> str:
+    """The way forward when the source's own range is empty (D56).
+
+    Only when both bounds came from the source: a source whose peaks all sit
+    at one m/z gives ``[x, x]``, and the refusal named no way through.
+    ``--no-resample`` is offered for that case only, since a source that
+    declares an empty range is refused on the raw axis too.
+    """
+    if config.min_mz is not None or config.max_mz is not None:
+        return ""
+    if min_mz != max_mz:
+        # An inverted declared range has no one m/z to set bounds around.
+        return ""
+    return (
+        " Set --resample-min-mz and --resample-max-mz around its m/z; when "
+        "every peak sits at that one m/z, --no-resample also converts it."
+    )
+
+
+def _acquisition_window(metadata: Dict[str, Any]) -> Optional[Tuple[float, float]]:
+    """The acquisition mass range a source's MS functions declare, if any.
+
+    The widest one, as the Waters extractor takes it: the lowest start and
+    the highest end of every ``function_<n>_acq_range_start`` / ``_end``.
+    """
+    params = metadata.get("acquisition_params")
+    if not isinstance(params, dict):
+        return None
+    starts: List[float] = []
+    ends: List[float] = []
+    for key, value in params.items():
+        if not (isinstance(key, str) and key.startswith("function_")):
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if key.endswith("_acq_range_start"):
+            starts.append(number)
+        elif key.endswith("_acq_range_end"):
+            ends.append(number)
+    if not starts or not ends:
+        return None
+    return min(starts), max(ends)
 
 
 def _range_origin(config: ResamplingConfig) -> str:
@@ -636,6 +773,9 @@ class AxisPlanner:
         # Filled by :meth:`resolve` when the detected instrument declares a
         # bin width or a TOF width law and the caller named neither.
         self._detected_reference_width: Optional[Tuple[float, float]] = None
+        # Whether a width set the bin count, unraised by the floor; when it
+        # did not, the provenance records the width the count gives (D56).
+        self._count_from_width = True
         self._detected_tof_law: Optional[Tuple[float, float]] = None
         self._plan: Optional[AxisPlan] = None
         # Metadata caches. Every extractor swallows its failures at DEBUG,
@@ -1041,6 +1181,7 @@ class AxisPlanner:
         max_mz = mass_range[1] if config.max_mz is None else config.max_mz
 
         _refuse_unusable_range(config, min_mz, max_mz)
+        self._warn_widened_range(min_mz, max_mz)
 
         tree = ResamplingDecisionTree()
         if config.axis_type is not None:
@@ -1056,24 +1197,8 @@ class AxisPlanner:
 
         self._regate_tic_preserving(tree, axis_type)
 
-        # A TOF axis without the caller's own coefficients takes the pair
-        # the instrument declares -- on the auto path (an MRT centroid
-        # conversion) and when --mass-axis-type tof was asked for by name
-        # (a timsTOF opting in).
-        if axis_type is AxisType.TOF and (config.tof_a is None or config.tof_b is None):
-            self._detected_tof_law = tree.select_tof_law(self.detection_metadata())
-        elif axis_type is not AxisType.TOF and config.tof_a is not None:
-            logger.warning(
-                "--tof-law was given but the mass axis resolved to %s, which "
-                "does not use a width law; it is ignored. Pass "
-                "--mass-axis-type tof to use it.",
-                getattr(axis_type, "value", axis_type),
-            )
-
-        if config.mass_width_da is not None or config.target_bins is None:
-            target_bins = self.bin_count(min_mz, max_mz, axis_type)
-        else:
-            target_bins = config.target_bins
+        self._settle_width_law(tree, axis_type)
+        target_bins = self._target_bins(min_mz, max_mz, axis_type)
 
         # A one-point axis has no bin width, and the log line that
         # reports one reduced an empty array: "zero-size array to
@@ -1089,7 +1214,92 @@ class AxisPlanner:
         self._plan = AxisPlan(min_mz, max_mz, axis_type, target_bins)
         return self._plan
 
-    def bin_count(self, min_mz: float, max_mz: float, axis_type: Any) -> int:
+    def _settle_width_law(self, tree: ResamplingDecisionTree, axis_type: Any) -> None:
+        """Take the instrument's width law for a tof axis, or check it is unused.
+
+        Raises:
+            ConversionRefused: If ``bins_per_fwhm`` is set for an axis that
+                is not tof.
+        """
+        config = cast(ResamplingConfig, self.config)
+        # A TOF axis without the caller's own coefficients takes the pair
+        # the instrument declares -- on the auto path (an MRT centroid
+        # conversion) and when --mass-axis-type tof was asked for by name
+        # (a timsTOF opting in).
+        if axis_type is AxisType.TOF and (config.tof_a is None or config.tof_b is None):
+            self._detected_tof_law = tree.select_tof_law(self.detection_metadata())
+        elif axis_type is not AxisType.TOF and config.bins_per_fwhm is not None:
+            # Refused rather than warned about, as plan_mass_axis refuses it:
+            # bins_per_fwhm is the API's alone, and on any other axis it was
+            # ignored and recorded as applied (D56).
+            raise ConversionRefused(
+                "resampling_config sets 'bins_per_fwhm', which sizes a tof "
+                f"axis, but the mass axis resolved to {axis_name(axis_type)}. "
+                "Pass axis_type 'tof' to use it, or 'width_at_mz' instead."
+            )
+        elif axis_type is not AxisType.TOF and config.tof_a is not None:
+            logger.warning(
+                "--tof-law was given but the mass axis resolved to %s, which "
+                "does not use a width law; it is ignored. Pass "
+                "--mass-axis-type tof to use it.",
+                getattr(axis_type, "value", axis_type),
+            )
+
+    def _target_bins(self, min_mz: float, max_mz: float, axis_type: Any) -> int:
+        """The bin count: the caller's, else the one the width lays.
+
+        Records whether a width set it, unraised by the floor, for the
+        provenance (D56).
+        """
+        config = cast(ResamplingConfig, self.config)
+        if config.target_bins is not None and config.mass_width_da is None:
+            self._count_from_width = False
+            return int(config.target_bins)
+        width_bins = self.bin_count(min_mz, max_mz, axis_type, floor=False)
+        self._count_from_width = width_bins >= MIN_WIDTH_BINS
+        if not self._count_from_width:
+            logger.info(
+                "Raised to the floor of %d bins; the axis has the width they give",
+                MIN_WIDTH_BINS,
+            )
+        return max(MIN_WIDTH_BINS, width_bins)
+
+    def _warn_widened_range(self, min_mz: float, max_mz: float) -> None:
+        """Warn when a source range wider than its acquisition range sets the axis.
+
+        A Waters source's range is its acquisition range, widened to cover
+        stored m/z outside it, and a widened range is run-specific. The
+        extractor used to warn while reading the metadata, before the
+        resampling settings applied, so it said "widened" also when typed
+        bounds or a plan fixed the axis and those peaks were dropped (D56).
+        Here only a bound that came from the source is reported.
+        """
+        config = self.config
+        if config is None or (config.min_mz is not None and config.max_mz is not None):
+            return
+        window = _acquisition_window(self.detection_metadata())
+        if window is None:
+            return
+        reaches = []
+        if config.min_mz is None and min_mz < window[0]:
+            reaches.append(f"down to {min_mz:.4f}")
+        if config.max_mz is None and max_mz > window[1]:
+            reaches.append(f"up to {max_mz:.4f}")
+        if not reaches:
+            return
+        logger.warning(
+            "Stored m/z values fall outside the acquisition range %.4f-%.4f; "
+            "the resampled axis is widened %s to cover them. Runs of this "
+            "method share one axis only if they overshoot the acquisition "
+            "range by the same amount.",
+            window[0],
+            window[1],
+            " and ".join(reaches),
+        )
+
+    def bin_count(
+        self, min_mz: float, max_mz: float, axis_type: Any, *, floor: bool = True
+    ) -> int:
         """How many bins of the requested width span a range, for this source.
 
         :func:`bin_count_for_width` with what the detectors declared for
@@ -1105,6 +1315,7 @@ class AxisPlanner:
             axis_type,
             detected_width=self._detected_reference_width,
             detected_tof_law=self._detected_tof_law,
+            floor=floor,
         )
 
     def reference_params(self, axis_type: Any) -> Tuple[float, float]:
@@ -1174,6 +1385,21 @@ class AxisPlanner:
             a, b, k = tof_plan(config, detected_tof_law=self._detected_tof_law)
             tof_law = (a, b)
             provenance.update({"tof_a": a, "tof_b": b, "bins_per_fwhm": k})
+        if not self._count_from_width:
+            # A bin count, or the floor, fixed the axis: the width asked
+            # for (or the default) is not the width it has (D56).
+            width, realised_k = realised_width(
+                config,
+                min_mz,
+                max_mz,
+                axis_type,
+                target_bins,
+                ref_mz,
+                detected_tof_law=self._detected_tof_law,
+            )
+            provenance["mass_width_da"] = width
+            if realised_k is not None:
+                provenance["bins_per_fwhm"] = realised_k
 
         if config.axis_type is not None:
             logger.info(f"Using manually specified axis type: {axis_type}")

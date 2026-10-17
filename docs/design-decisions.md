@@ -3480,7 +3480,7 @@ check.
 
 ## D43. A plan fixes one mass axis for several sources
 
-**Status:** Implemented (2026-10-13).
+**Status:** Implemented (2026-10-13). Amended by D56 (2026-10-16).
 
 **Decision.** `plan_mass_axis(sources)` reads each source's header, as
 `preview_msi` does, and returns a `MassAxisPlan`. The plan holds the axis
@@ -4551,6 +4551,98 @@ renames the step fails there.
   any peak outside the axis.
 - "Add `MS:1000128` to the polarity accessions." Every "profile spectrum"
   term would then read as positive.
+
+---
+
+## D56. The resampling step records the axis it describes, and refusals name the way forward
+
+**Status:** Implemented (2026-10-16). Amends D43.
+
+**Decision.** Four rules, so that what a conversion says matches what it
+did.
+
+- **`bins_per_fwhm` is honoured or refused.** It is refused beside
+  `width_at_mz` or `target_bins`, which each fix the bin count of a `tof`
+  axis too, and on an axis that resolves to any other type. These are the
+  rules `plan_mass_axis` already applied. The option exists only in the
+  Python API.
+- **The step records the width the axis has.** When a width set the bin
+  count, `mass_width_da` is that width, as before. When `target_bins` set
+  it, or the floor of 100 bins raised it, `mass_width_da` is the bin width
+  at `reference_mz` that the count gives, and on a `tof` axis so is
+  `bins_per_fwhm`. A width law (`tof_a`, `tof_b`, `bins_per_fwhm`) is
+  recorded on a `tof` axis only. A plan keeps its width as its setting, and
+  its origins and warnings state the width it lays.
+- **An empty range from the source names the way through.** When both
+  bounds came from the source and its range is a single m/z, the refusal
+  names `--resample-min-mz` / `--resample-max-mz` and, for a source whose
+  peaks all sit at that m/z, `--no-resample`. A plan of one such source
+  says its range is a single m/z.
+- **A Waters range widened past the acquisition range is reported where it
+  sets the axis.** The extractor logs the widening at debug. The axis
+  planner warns, and only for a bound the source's range set: typed bounds
+  and a plan give no such warning.
+
+**Why.** Each case was a statement that did not hold.
+
+- `bins_per_fwhm` beside a width was dropped without a word. Beside
+  `target_bins` it was recorded as applied, though the count fixed the
+  axis. On a `constant` axis it changed nothing and was still recorded.
+  `plan_mass_axis` refused the same requests, so a plan and a conversion
+  disagreed on what is allowed.
+- The step took `mass_width_da` from the request or the default, whatever
+  fixed the axis. A width of 1.0 Da over 500-510 m/z recorded 1 for an axis
+  of 100 points 0.101 Da apart. `target_bins` 100 on a `constant` axis over
+  100-1000 recorded the 5 mDa default for points 9.09 Da apart.
+- A source whose every peak sat at m/z 500 was refused as "[500, 500] is
+  empty" with no remedy. `--no-resample` and typed bounds both convert it.
+- The Waters extractor warned that "the resampled axis is widened" while it
+  read the metadata, before typed bounds or a plan applied. With
+  `--resample-min-mz 700 --resample-max-mz 900` the axis was 700-900 and
+  the next warning said those peaks were dropped.
+
+**Why the recorded width is the count's in two cases only.** Every
+generator lays its bins from the range and the count alone, so the count
+fixes the width. When a width set the count on a physics axis, the width the
+axis has differs from it only by the truncation to a whole number of bins.
+Recording the request there keeps every other store unchanged. Where the
+count came from elsewhere, the request says nothing about the axis.
+
+A `constant` axis is the exception. A width `w` sets `n = (max - min) / w`,
+but the generator lays `n` points, so the step is `(max - min) / (n - 1)`,
+wider by `n / (n - 1)`. At the 5 mDa default over 900 Da that is about 6 parts in
+a million; at the 100-bin floor it is 1%. The step records the request
+there as before, so the same `constant` axis records `w` when a width laid
+it and the laid step when a count or the floor did. Recording the laid step
+always would change every `constant` store's step for a difference no
+reader acts on. Whether the floor applied is read from the count the width
+lays, never by comparing widths, since the laid step can come out wider
+than the width asked for.
+
+**Why refuse `bins_per_fwhm` off a `tof` axis, when `--tof-law` only warns.**
+`bins_per_fwhm` has no CLI flag, and `plan_mass_axis` already refuses it.
+`--tof-law` is a CLI flag whose warning existing commands rely on; that
+warning stays, and its values are no longer recorded.
+
+**What changes in a store.** Only the `mass axis resampling` processing
+step in `msi_metadata`, for conversions that used `target_bins`, a width
+the floor raised, or a width law on a non-`tof` axis. The data, `var` and
+every other store are unchanged. No schema change: the step's parameters
+are free-form scalars.
+
+**What changes for callers.** API calls that set `bins_per_fwhm` beside
+`width_at_mz` or `target_bins`, or on a non-`tof` axis, are refused where
+they were accepted.
+
+**Alternatives.**
+
+- "Leave the fields out when the count fixed the axis." The step merges
+  the request under the resolved values, so a left-out field would fall
+  back to the request, the value this fixes.
+- "Always record the width the axis has." Every store's step would change
+  by the truncation, for no reader's benefit.
+- "Warn on `bins_per_fwhm` off a `tof` axis, as for `--tof-law`." A plan
+  would refuse what a conversion accepts.
 
 ---
 
