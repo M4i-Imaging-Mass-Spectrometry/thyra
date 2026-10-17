@@ -2824,7 +2824,7 @@ that.
 
 **Status:** Implemented (2026-10-06), issue #429. Extends D29, and replaces
 its "embedded images are carried into the store, unaligned" for an image
-fitted to the teaching points.
+fitted to the teaching points. Amended by D61 (2026-10-16).
 
 **Decision.** `mzpeak-convert` 0.17 states five more facts of a Bruker run.
 Thyra reads each the way it reads the `.d`.
@@ -4636,3 +4636,58 @@ they were accepted.
   by the truncation, for no reader's benefit.
 - "Warn on `bins_per_fwhm` off a `tof` axis, as for `--tof-law`." A plan
   would refuse what a conversion accepts.
+
+---
+
+## D61. An mzPeak TDF frame sums only measurements into a TOF bin
+
+**Status:** Implemented (2026-10-16). Amends D33, and applies D55's rule to
+the mzPeak reader's own grouping.
+
+**Decision.** When the mzPeak reader puts a TDF archive's raw counts on the
+`.d`'s scale (D33), it sums the points of one frame that fall on one TOF bin.
+A point whose m/z is not finite, or whose count is not finite or is
+negative, now joins no bin. It is passed on by itself, scaled but not
+rounded, and the converter drops, counts or refuses it as it does any other
+such point. A NaN m/z was already dropped earlier, as null-pair padding.
+
+**Why.** The grouping split two sorted points when their step exceeded
+`1e-12 x m/z`. Relative to an infinite m/z no step is large enough, so an
+`inf` point joined the largest finite bin. Its count was added there and
+kept at that finite m/z, with or without an intensity threshold. Two `-inf`
+points were summed into one. A NaN count made its whole bin NaN, and the
+converter then dropped the bin's real signal with it. A negative count
+shrank the bin it joined. D55 fixed the same split test in
+`summed_peak_mask`; this grouping is its own copy of the rule.
+
+Measured on a two-pixel fixture at 100 ms, so counts keep their values. Its
+first pixel holds 2, 3 and 5 at m/z 100, 101 and 102 and one extra point.
+Values stored for that pixel, resampled to 99.5-102.5, no threshold. A
+converter-level test holds each "Now" row, and the warning that says the
+extra point was dropped:
+
+| Extra point | Before | Now |
+|---|---|---|
+| 7 at m/z `inf` | 2, 3, 12 | 2, 3, 5 |
+| NaN on m/z 100 | -, 3, 5 | 2, 3, 5 |
+| -4 on m/z 100 (bin of 9) | 5 at m/z 100 | 9 at m/z 100 |
+
+**What changes in a store.** Only stores of TDF-sourced mzPeak archives with
+a non-finite m/z, or a non-finite or negative count, on a frame. Their bins
+hold the measured counts alone. With `--intensity-threshold`, the points
+passed on decide nothing either: the threshold, applied after this step,
+leaves them out of every sum (D55). Without resampling, a non-finite m/z is
+refused as before, since it would become `var["mz"]`. Archives whose m/z
+and counts are all finite and non-negative give the same stores, value for
+value. A count between -0.5 and 0 used to round to 0; it is now passed on
+unrounded and dropped with a warning. Real TDF counts are unsigned, so no
+real archive holds one. No schema change.
+
+**Alternatives.**
+
+- "Drop such points in the reader." Then the converter could not count or
+  refuse them, and a non-resampled conversion would quietly lose a point it
+  refuses on every other route. D55 rejected the same option.
+- "Reuse `summed_peak_mask`." It returns a keep mask, not the summed bins,
+  so it cannot replace this step. The two share the tolerance
+  (`SAME_PEAK_RELATIVE`) and now the rule for what counts.
