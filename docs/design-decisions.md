@@ -4442,7 +4442,7 @@ both:
 
 **Status:** Implemented (2026-10-16). Amends D34 and D35.
 
-**Decision.** Three rules, each about a value that is not what it claims to
+**Decision.** Four rules, each about a value that is not what it claims to
 be.
 
 - **The intensity threshold sums measurements only.** A point whose m/z is
@@ -4451,7 +4451,15 @@ be.
   refuses it exactly as it does with no threshold set. Every reader and
   both mobility passes call the one helper, `summed_peak_mask`. The
   timsTOF mobility and window tables test summed digitizer counts
-  instead, which cannot be NaN or negative.
+  instead, which cannot be NaN or negative. A spectrum of only finite,
+  non-negative values takes the helper's first branch, which is the old
+  body unchanged, so its store is byte-identical.
+- **A non-finite m/z is dropped before resampling, by either method.** The
+  converter drops it with the unusable intensities and counts it in the
+  same warning, on a resampled axis. `nearest_neighbor` already dropped it
+  as out of range, but `tic_preserving` interpolated over it: an infinity
+  gave the spectrum no bins at all, and a NaN made every bin NaN. On the
+  raw axis it is `var["mz"]` itself, and the axis check refuses it.
 - **The imzML source range is taken over finite m/z.** A spectrum's NaN or
   infinite m/z adds nothing to it, and a resolved range that is still not
   finite (an API bound of `inf`, or another reader's range) is refused in
@@ -4489,19 +4497,35 @@ same value wherever the file puts it.
   m/z: they keep or drop different peaks. Stores of sources with only
   finite, non-negative values do not change.
 - `--no-resample` with `--intensity-threshold` on a source with a NaN m/z
-  is now refused, as it is without a threshold. The threshold used to drop
-  the NaN point first, and the conversion succeeded.
+  is now refused, as it is without a threshold. Before, the threshold
+  dropped the NaN point whenever that point's group did not reach the
+  threshold (a NaN sum never does), and the conversion then succeeded.
 - Processed imzML with a NaN m/z: `essential_metadata.mass_range`, and so
-  the default axis, now covers every finite peak. Files with an infinite
-  m/z, and continuous files with a non-finite shared m/z, now convert by
-  default instead of failing. With `--no-resample` they are still refused,
-  since those values would become `var["mz"]`.
+  the default axis, now covers every finite peak. Such a file converted on
+  main too, on a range that could miss the spectra holding a NaN. Files
+  with an infinite m/z, and continuous files with a non-finite shared m/z,
+  now convert by default instead of failing. With `--no-resample` they are
+  still refused, since those values would become `var["mz"]`.
+- Resampled with `tic_preserving` (the default for some profile sources),
+  a spectrum with a non-finite m/z keeps its finite peaks, where an
+  infinity stored it empty and a NaN stored it as NaN.
 - imzML files that state "positive scan" under `MS:1000128` on each
   spectrum gain `polarity` and `polarity_term` (as `MS:1000130`), and the
   root `acquisition_parameters` polarity. When `fileContent` states no
   spectrum type, such a file is no longer stored as profile.
 
 No schema change: every field already exists.
+
+**Known limits.**
+
+- An mzPeak archive of a Bruker run sums raw counts per TDF-scale bin
+  (`_on_tdf_scale`) before the threshold helper runs, so a NaN count still
+  reaches that bin's sum there, and an infinite m/z still joins the largest
+  finite bin. "Every reader calls the one helper" holds for the threshold
+  test, not for that earlier grouping. PR #514 fixes it.
+- When the threshold removes every measurement and only unusable points
+  reach the converter, the empty-store refusal blames the unusable values
+  and does not name the threshold.
 
 **Costs, accepted.** The term correction runs one more XML lookup on each
 spectrum that states no correct polarity term itself. Measured on a 60,000

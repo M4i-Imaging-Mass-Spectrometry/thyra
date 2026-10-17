@@ -813,17 +813,33 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         if intensities.size == 0:
             return mzs, intensities
         keep = np.isfinite(intensities) & (intensities >= 0)
+        # A non-finite m/z has no place on a resampled axis (D55).
+        # nearest_neighbor drops it as out of range, but tic_preserving
+        # interpolates over it: an infinity zeroed the spectrum and a NaN
+        # filled it with NaN. On the raw axis it is var["mz"] itself, and
+        # the axis check refuses it before any spectrum is placed.
+        bad_mz = (
+            ~np.isfinite(mzs)
+            if getattr(self, "_resampling_config", None)
+            else np.zeros(mzs.size, dtype=bool)
+        )
+        keep &= ~bad_mz
         if bool(keep.all()):
             return mzs, intensities
         self._count_unusable_intensities(
             int(intensities.size - keep.sum()),
             int(intensities.size),
-            intensities[~keep],
+            intensities[~keep & ~bad_mz],
+            int(np.count_nonzero(bad_mz)),
         )
         return mzs[keep], intensities[keep]
 
     def _count_unusable_intensities(
-        self, n_dropped: int, n_total: int, dropped: NDArray[np.float64]
+        self,
+        n_dropped: int,
+        n_total: int,
+        dropped: NDArray[np.float64],
+        n_bad_mz: int = 0,
     ) -> None:
         """Record intensities dropped as unusable, warning once.
 
@@ -841,15 +857,17 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         n_nan = int(np.count_nonzero(~np.isfinite(dropped)))
         logger.warning(
             "Dropping intensities that are not a measurement -- %d of %d in "
-            "the first spectrum affected (%d non-finite, %d negative). A NaN "
-            "would make every aggregate over its column NaN, and a negative "
-            "value is a baseline subtraction that overshot, not signal. Both "
-            "resampling methods see the spectrum without them, so they agree "
-            "on what is stored.",
+            "the first spectrum affected (%d non-finite, %d negative, %d at a "
+            "non-finite m/z). A NaN would make every aggregate over its "
+            "column NaN, a negative value is a baseline subtraction that "
+            "overshot, not signal, and a non-finite m/z has no place on the "
+            "axis. Both resampling methods see the spectrum without them, so "
+            "they agree on what is stored.",
             n_dropped,
             n_total,
             n_nan,
-            n_dropped - n_nan,
+            n_dropped - n_nan - n_bad_mz,
+            n_bad_mz,
         )
 
     @staticmethod
@@ -1221,6 +1239,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 # stream into the store now that it exists.
                 self.optical.stream_pending_pixels()
                 zarr.consolidate_metadata(str(self.output_path))
+                self._mark_store_complete()
             logger.info(f"Successfully saved SpatialData to {self.output_path}")
             # Every table was written from its memmaps; nothing holds them
             # now but this object and the caller's mapping.

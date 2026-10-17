@@ -584,6 +584,12 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         min_mass, max_mass, total_peaks = self._scan_all_spectra(coords, n_spectra)
 
         if min_mass == float("inf"):
+            if total_peaks > 0:
+                raise ValueError(
+                    f"Could not determine the mass range of {self.imzml_path}: "
+                    f"the {n_spectra:,} spectra scanned hold {total_peaks:,} "
+                    "peaks, and not one of their m/z is a finite number."
+                )
             raise ValueError(
                 f"Could not determine the mass range of {self.imzml_path}: "
                 f"none of the {n_spectra:,} spectra scanned yielded a peak. "

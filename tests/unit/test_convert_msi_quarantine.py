@@ -128,6 +128,94 @@ class TestTheDestinationIsCleared:
         assert (tmp_path / "out.zarr.failed").is_dir()
 
 
+def _interrupt_once(original):
+    """Raise ``KeyboardInterrupt`` on the first call, then behave."""
+    calls = []
+
+    def replacement(*args, **kwargs):
+        calls.append(True)
+        if len(calls) == 1:
+            raise KeyboardInterrupt
+        return original(*args, **kwargs)
+
+    return replacement
+
+
+class TestAnInterruptAfterTheStoreIsComplete:
+    """Issue #500: a Ctrl-C in the cleanup must not move a finished store.
+
+    Real conversions, not a stand-in ``_perform_conversion``: what is
+    under test is whether the converter's own record of a complete store
+    reaches the quarantine decision.
+    """
+
+    def test_one_before_the_last_write_still_moves_the_store_aside(
+        self, imzml, tmp_path, monkeypatch
+    ):
+        from thyra.converters.spatialdata.optical_image import OpticalImages
+
+        monkeypatch.setattr(
+            OpticalImages,
+            "stream_pending_pixels",
+            _interrupt_once(OpticalImages.stream_pending_pixels),
+        )
+        out = tmp_path / "out.zarr"
+
+        assert convert_msi(str(imzml), str(out), pixel_size_um=25.0) is False
+        assert not out.exists()
+        assert (tmp_path / "out.zarr.failed").is_dir()
+
+    def test_one_in_the_scratch_release_keeps_the_store(
+        self, imzml, tmp_path, monkeypatch
+    ):
+        from thyra.converters.spatialdata.sibling_tables import SiblingTables
+
+        monkeypatch.setattr(
+            SiblingTables,
+            "release_scratch",
+            _interrupt_once(SiblingTables.release_scratch),
+        )
+        out = tmp_path / "out.zarr"
+
+        assert convert_msi(str(imzml), str(out), pixel_size_um=25.0) is True
+        assert out.is_dir()
+        assert not (tmp_path / "out.zarr.failed").exists()
+
+    def test_one_after_the_converter_returned_keeps_the_store(
+        self, imzml, tmp_path, monkeypatch
+    ):
+        """Past the converter's own handler: closing the reader, the log
+        line in ``_perform_conversion``. ``convert_msi`` catches these."""
+
+        def convert_then_interrupt(converter):
+            assert converter.convert() is True
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(
+            convert_module, "_perform_conversion", convert_then_interrupt
+        )
+        out = tmp_path / "out.zarr"
+
+        assert convert_msi(str(imzml), str(out), pixel_size_um=25.0) is True
+        assert out.is_dir()
+        assert not (tmp_path / "out.zarr.failed").exists()
+
+    def test_the_kept_store_opens(self, imzml, tmp_path, monkeypatch):
+        import spatialdata
+
+        from thyra.converters.spatialdata.sibling_tables import SiblingTables
+
+        monkeypatch.setattr(
+            SiblingTables,
+            "release_scratch",
+            _interrupt_once(SiblingTables.release_scratch),
+        )
+        out = tmp_path / "out.zarr"
+        convert_msi(str(imzml), str(out), pixel_size_um=25.0)
+
+        assert len(spatialdata.read_zarr(str(out)).tables) > 0
+
+
 class TestItDoesNotTouchWhatItDoesNotOwn:
     def test_a_pre_existing_destination_is_refused_and_left_alone(
         self, imzml, tmp_path
