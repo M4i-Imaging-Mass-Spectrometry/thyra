@@ -300,7 +300,10 @@ The optical image is whichever file the `.mis` `<ImageFile>` element names,
 resolved against the acquisition folder. Rapiflex slides commonly hold several
 images -- a slide overview and one or two more beside the alignment scan -- and
 they are frequently `.jpg` rather than `.tif`; all of them are carried into the
-store, but only the named one gets the teaching points' coordinate space.
+store, but only the named one gets the teaching points' coordinate space. A
+smaller copy of it is scaled onto it. The slide overview is not placed: it is
+the photo FlexImaging turned to make the alignment scan, so it keeps a
+coordinate system of its own.
 
 **The alignment image is cropped to the section it aligns.** This applies to
 Rapiflex and timsTOF acquisitions alike. The scan the `.mis` names is the whole
@@ -767,9 +770,10 @@ states, the store comes out as the store of that file. See
   0.17, an archive of a FlexImaging run fits its image to the spots through
   the teaching points, and marks that affine `teach_points`. The pixels are
   then placed on that image, as for the `.d`. Any other affine stretches the
-  image over the whole acquisition, which is not a registration: such an
-  image is carried over unaligned, and the affine is kept in the raw
-  metadata. An image is named after
+  image over the whole acquisition, which is not a registration: the affine
+  is kept in the raw metadata only. Such an image is scaled onto the
+  alignment image when it is a smaller copy of it, and otherwise not placed.
+  An image is named after
   its member, `<dataset_id>_optical_image_0000` for `images/image_0000.svs`,
   and the store records that member as its source. The media type the
   archive declares picks the decoder, so a slide scanner's TIFF named `.svs`

@@ -5,9 +5,9 @@
     This page is for programs that place Thyra's data on a slide or an image.
 
 Every SpatialData zarr Thyra writes carries a small but crucial promise:
-**all elements within the zarr resolve to the same physical frame at the
-``"global"`` coordinate system, and that frame is documented in the
-zarr metadata.** This page explains the contract so consumers (Ousia,
+**every placed element within the zarr resolves to the same physical
+frame at the ``"global"`` coordinate system, and that frame is documented
+in the zarr metadata.** This page explains the contract so consumers (Ousia,
 registration tooling, custom analysis scripts) can render and compute
 without guessing what the numbers mean.
 
@@ -20,7 +20,9 @@ In every Thyra-produced zarr,
 > the ``"global"`` coordinate system is one self-consistent frame, its
 > unit and pixel-size calibration are recorded under
 > ``zarr.attrs["coordinate_systems"]["global"]``, and every element
-> registers a transform that lands in that frame.
+> registers a transform that lands in that frame. The one exception is an
+> optical image Thyra cannot place: it is left out of ``"global"`` and
+> has a coordinate system of its own.
 
 If you only remember one thing, remember that.
 
@@ -265,8 +267,13 @@ pixel grid*, because the photo can be drawn with no transform.
   ``Translation`` by the crop's origin when the conversion covers one
   region and the image was cropped to it. The frame is still the whole
   scan's pixel grid.
-- Other optical images (overview, etc.): a ``Scale`` to align with
-  the primary image's pixel grid.
+- Other optical images: a ``Scale`` into the primary image's pixel grid
+  when the image is a resampled copy of it (one ratio on both axes, such
+  as FlexImaging's quarter-size scan). An image a ``Scale`` cannot place,
+  such as the overview photo FlexImaging turned to make the alignment
+  scan, is left out of ``"global"``: it has one coordinate system, named
+  after the element, with ``Identity``
+  ([D59](design-decisions.md#d59-a-fleximaging-run-that-stopped-early-is-placed-by-its-planned-grid)).
 - ``zarr.attrs["coordinate_systems"]["global"]`` declares
   ``unit="pixel"`` with ``reference_element`` set to the primary
   optical image's **element key**; ``pixel_size_um_x/y`` is typically

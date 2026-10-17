@@ -395,7 +395,8 @@ def test_rapiflex_acquisition_with_a_jpeg_optical_image(tmp_path: Path):
         whole[:, y0 : y0 + height, x0 : x0 + width],
     )
     # The image the .mis named is the alignment image; the other two are
-    # carried along beside it, scaled into its pixel space.
+    # carried along beside it, scaled into its pixel space when they are a
+    # resampled copy of it (D59).
     assert "rapiflex_optical_derived" in sdata.images
     assert "rapiflex_optical_slide_overview" in sdata.images
 

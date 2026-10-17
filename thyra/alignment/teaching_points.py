@@ -217,8 +217,29 @@ _LATTICE_AXIS_SIGNS: Tuple[Tuple[int, int], ...] = ((1, -1), (1, 1), (-1, -1), (
 #: outermost spots, so an exact test would reject them.
 _AREA_EDGE_TOLERANCE_STEPS = 0.1
 
-#: How far around the estimated reference node the integer search looks.
+#: The same tolerance's floor in photo pixels. The ``.mis`` stores Area
+#: corners in whole pixels, and rounding a corner moves an edge by up to
+#: half a pixel's diagonal (0.71 px). At a fine raster, 2.5 px per step,
+#: that is 0.28 step, more than the step tolerance above (#497).
+_AREA_EDGE_TOLERANCE_PX = 0.75
+
+#: The pixel floor never exceeds this many raster steps.
+_AREA_EDGE_TOLERANCE_MAX_STEPS = 0.4
+
+#: A planned grid whose size differs from the Areas' extent by more than
+#: this many raster steps does not cover them, and is not used.
+_PLANNED_GRID_SLACK_STEPS = 1.5
+
+#: How far around the estimated reference node the search looks when no
+#: node keeps every spot inside its Area (a ``.mis`` that may not belong to
+#: the run), or when too many do to try them all.
 _NODE_SEARCH_RADIUS = 3
+
+#: Most candidate nodes the full search tries for one pair of axis signs.
+_MAX_CANDIDATE_NODES = 250_000
+
+#: Most (candidate, spot) pairs scored in one vectorised batch.
+_BATCH_PAIRS = 2_000_000
 
 
 @dataclass(frozen=True)
@@ -243,6 +264,12 @@ class LatticeFit:
         nodes_unmeasured: Lattice nodes inside an Area that were not measured.
         reference_from: ``"ReferencePoint"``, or ``"first teaching point"``
             when the ``.mis`` has none.
+        chosen_by: What chose the node among those that keep every spot
+            inside: ``"Areas"`` (D31's fewest unmeasured nodes), or
+            ``"planned grid"`` when the source states the grid it planned
+            (D59).
+        nodes_tied: How many nodes fit equally well by that rule. More than
+            one means the placement is not determined (D59).
     """
 
     cell_to_image: np.ndarray
@@ -252,6 +279,8 @@ class LatticeFit:
     spots_outside: int
     nodes_unmeasured: int
     reference_from: str
+    chosen_by: str = "Areas"
+    nodes_tied: int = 1
 
     def cell_centre(self, norm_x: float, norm_y: float) -> Tuple[float, float]:
         """Image pixel of the spot in TIC cell ``(norm_x, norm_y)``."""
@@ -298,6 +327,14 @@ class _LatticeSearch:
     micrometres, the measured spots and each measured region's Area, and
     scores a candidate ``(node, axis signs)`` by how many spots fall outside
     their Area and how many Area nodes went unmeasured.
+
+    A whole-step change of the reference node only relabels the lattice:
+    its nodes stay where they are on the photo. So which raster offsets
+    from the reference node fall inside each Area is worked out once per
+    pair of axis signs, and candidate node ``n`` puts spot ``s`` inside
+    exactly when offset ``s - n`` is one of them. That makes it cheap to try
+    every node that could keep the spots inside, not only those near a
+    guess (D59): a run that stopped early fills only part of its Area.
     """
 
     def __init__(
@@ -322,12 +359,17 @@ class _LatticeSearch:
         # tolerance for the inside test.
         self.exact: Dict[int, Any] = {}
         self.padded: Dict[int, Any] = {}
+        # Every Area of the run, measured or not: a planned grid covers
+        # them all, including one the run stopped before reaching.
+        outlines = (_area_outline(area) for area in areas)
+        self.planned_areas = [Polygon(v) for v in outlines if v is not None]
         for region in np.unique(self.regions).tolist():
             if 0 <= region < len(areas):
                 vertices = _area_outline(areas[region])
                 if vertices is not None:
                     self.exact[region] = Polygon(vertices)
                     self.padded[region] = self.exact[region].buffer(tolerance_px)
+        self._nodes: Dict[Tuple[int, Tuple[int, int]], Dict[str, Any]] = {}
 
     def to_px(
         self, node: Tuple[int, int], signs: Tuple[int, int], xs: Any, ys: Any
@@ -341,50 +383,130 @@ class _LatticeSearch:
             m[1, 0] * stage_x + m[1, 1] * stage_y + m[1, 2],
         )
 
-    def outside(self, node: Tuple[int, int], signs: Tuple[int, int]) -> int:
-        """Measured spots that fall outside their own (padded) Area."""
+    def _offsets(
+        self, polygon: Any, signs: Tuple[int, int]
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """A polygon's vertices as raster offsets from the reference node."""
+        verts = np.array(polygon.exterior.coords)
+        stage = verts @ self.to_stage[:2, :2].T + self.to_stage[:2, 2]
+        gx = (stage[:, 0] - self.ref[0]) / (signs[0] * self.step_x)
+        gy = (stage[:, 1] - self.ref[1]) / (signs[1] * self.step_y)
+        return gx, gy
+
+    def _region_nodes(self, region: int, signs: Tuple[int, int]) -> Dict[str, Any]:
+        """One region's Area as a mask of raster offsets, and its spots."""
+        key = (region, signs)
+        if key in self._nodes:
+            return self._nodes[key]
         import shapely
 
-        count = 0
-        for region, polygon in self.padded.items():
-            sel = self.regions == region
-            px, py = self.to_px(node, signs, self.raster_x[sel], self.raster_y[sel])
-            count += int((~shapely.contains_xy(polygon, px, py)).sum())
-        return count
+        gx, gy = self._offsets(self.padded[region], signs)
+        xs = np.arange(np.floor(gx.min()), np.ceil(gx.max()) + 1).astype(np.int64)
+        ys = np.arange(np.floor(gy.min()), np.ceil(gy.max()) + 1).astype(np.int64)
+        grid_x, grid_y = np.meshgrid(xs, ys)
+        px, py = self.to_px((0, 0), signs, grid_x, grid_y)
+        padded = shapely.contains_xy(self.padded[region], px, py)
+        exact = shapely.contains_xy(self.exact[region], px, py)
+        sel = self.regions == region
+        spots = np.c_[self.raster_x[sel], self.raster_y[sel]].astype(np.int64)
+        unique = np.unique(spots, axis=0)
+        # Spots with a missing neighbour: the first to leave the Area when
+        # the node moves, so a cheap first pass over the candidates.
+        measured = {(int(x), int(y)) for x, y in unique}
+        edge = [
+            (x, y)
+            for x, y in measured
+            if any(
+                (x + dx, y + dy) not in measured
+                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))
+            )
+        ]
+        cols = np.flatnonzero(padded.any(axis=0))
+        rows = np.flatnonzero(padded.any(axis=1))
+        nodes = {
+            "origin": (int(xs[0]), int(ys[0])),
+            "padded": padded,
+            "exact": exact,
+            "n_exact": int(exact.sum()),
+            "spots": spots,
+            "unique": unique,
+            "edge": np.array(edge, dtype=np.int64).reshape(-1, 2),
+            "inside_x": (int(xs[cols[0]]), int(xs[cols[-1]])) if cols.size else None,
+            "inside_y": (int(ys[rows[0]]), int(ys[rows[-1]])) if rows.size else None,
+        }
+        self._nodes[key] = nodes
+        return nodes
 
-    def unmeasured(self, node: Tuple[int, int], signs: Tuple[int, int]) -> int:
+    @staticmethod
+    def _inside(
+        mask: np.ndarray,
+        origin: Tuple[int, int],
+        spots: np.ndarray,
+        nodes: np.ndarray,
+    ) -> np.ndarray:
+        """For each candidate node, how many spots land on the mask."""
+        counts = np.zeros(len(nodes), dtype=np.int64)
+        if not len(spots):
+            return counts
+        height, width = mask.shape
+        batch = max(1, _BATCH_PAIRS // len(spots))
+        for start in range(0, len(nodes), batch):
+            chunk = nodes[start : start + batch]
+            ix = spots[np.newaxis, :, 0] - chunk[:, np.newaxis, 0] - origin[0]
+            iy = spots[np.newaxis, :, 1] - chunk[:, np.newaxis, 1] - origin[1]
+            ok = (ix >= 0) & (ix < width) & (iy >= 0) & (iy < height)
+            hit = np.zeros(ok.shape, dtype=bool)
+            hit[ok] = mask[iy[ok], ix[ok]]
+            counts[start : start + batch] = hit.sum(axis=1)
+        return counts
+
+    def outside_counts(
+        self, nodes: np.ndarray, signs: Tuple[int, int], edge_only: bool = False
+    ) -> np.ndarray:
+        """Measured spots outside their own (padded) Area, per candidate."""
+        counts = np.zeros(len(nodes), dtype=np.int64)
+        for region in self.padded:
+            grid = self._region_nodes(region, signs)
+            spots = grid["edge"] if edge_only else grid["spots"]
+            counts += len(spots) - self._inside(
+                grid["padded"], grid["origin"], spots, nodes
+            )
+        return counts
+
+    def unmeasured_counts(
+        self, nodes: np.ndarray, signs: Tuple[int, int]
+    ) -> np.ndarray:
         """Lattice nodes inside an Area as drawn that no spot was measured on.
 
         Against the outline as drawn: FlexImaging measures the nodes inside
-        it, and the edge tolerance would count nodes it never meant to.
+        it, and the edge tolerance would count nodes it never meant to. The
+        nodes inside an Area do not move with the reference node, so this
+        is their number less the measured spots among them.
         """
-        import shapely
-
-        count = 0
-        for region, polygon in self.exact.items():
-            sel = self.regions == region
-            measured = set(
-                zip(self.raster_x[sel].astype(int), self.raster_y[sel].astype(int))
+        counts = np.zeros(len(nodes), dtype=np.int64)
+        for region in self.exact:
+            grid = self._region_nodes(region, signs)
+            counts += grid["n_exact"] - self._inside(
+                grid["exact"], grid["origin"], grid["unique"], nodes
             )
-            # The Area's outline in raster coordinates bounds the nodes to try.
-            verts = np.array(polygon.exterior.coords)
-            stage = verts @ self.to_stage[:2, :2].T + self.to_stage[:2, 2]
-            gx = node[0] + (stage[:, 0] - self.ref[0]) / (signs[0] * self.step_x)
-            gy = node[1] + (stage[:, 1] - self.ref[1]) / (signs[1] * self.step_y)
-            xs, ys = np.meshgrid(
-                np.arange(np.floor(gx.min()), np.ceil(gx.max()) + 1),
-                np.arange(np.floor(gy.min()), np.ceil(gy.max()) + 1),
-            )
-            xs, ys = xs.ravel(), ys.ravel()
-            px, py = self.to_px(node, signs, xs, ys)
-            inside = shapely.contains_xy(polygon, px, py)
-            nodes = zip(xs[inside].astype(int), ys[inside].astype(int))
-            count += sum(1 for xy in nodes if xy not in measured)
-        return count
+        return counts
 
-    def candidates(self, signs: Tuple[int, int]) -> List[Tuple[int, int]]:
-        """Nodes near where each region's centre puts the reference node."""
-        guesses = set()
+    def outside(self, node: Tuple[int, int], signs: Tuple[int, int]) -> int:
+        """Measured spots that fall outside their own (padded) Area."""
+        return int(self.outside_counts(np.array([node], dtype=np.int64), signs)[0])
+
+    def unmeasured(self, node: Tuple[int, int], signs: Tuple[int, int]) -> int:
+        """Lattice nodes inside an Area as drawn that no spot was measured on."""
+        nodes = np.array([node], dtype=np.int64)
+        return int(self.unmeasured_counts(nodes, signs)[0])
+
+    def guesses(self, signs: Tuple[int, int]) -> np.ndarray:
+        """Where each region's centre puts the reference node (D31's guess).
+
+        Right when the spots fill their Area. On a run that stopped early it
+        is only the tie-break of last resort.
+        """
+        guesses = []
         for region, polygon in self.padded.items():
             sel = self.regions == region
             centre = self.to_stage @ np.array(
@@ -396,30 +518,186 @@ class _LatticeSearch:
             gy = self.raster_y[sel].mean() - (centre[1] - self.ref[1]) / (
                 signs[1] * self.step_y
             )
-            guesses.add((int(round(gx)), int(round(gy))))
-        span = range(-_NODE_SEARCH_RADIUS, _NODE_SEARCH_RADIUS + 1)
-        return sorted(
-            {(gx + dx, gy + dy) for gx, gy in guesses for dx in span for dy in span}
-        )
+            guesses.append((float(gx), float(gy)))
+        return np.array(guesses)
 
-    def best(self) -> Tuple[int, int, Tuple[int, int], Tuple[int, int]]:
-        """``(spots outside, unmeasured nodes, node, signs)`` of the best fit.
+    def candidates(
+        self,
+        signs: Tuple[int, int],
+        planned: Optional[Tuple[int, int, int, int]] = None,
+    ) -> np.ndarray:
+        """Every node that keeps each region's spots inside its Area's box.
 
-        Fewest spots outside first, then fewest unmeasured nodes, then the
-        usual axis directions.
+        A node outside that range leaves a spot outside the Area. When no
+        node is in range (a ``.mis`` that may not belong to the run), or too
+        many are to try, the nodes near one seed: the node that centres the
+        planned grid on the Areas when there is one, else D31's guess. Where
+        no node keeps every spot inside, the edge-spot first pass in
+        :meth:`_score` may miss the node with the fewest spots outside; the
+        fit then warns that the ``.mis`` may not belong to the run either
+        way.
         """
-        scored = [
-            (self.outside(node, signs), preference, node, signs)
-            for preference, signs in enumerate(_LATTICE_AXIS_SIGNS)
-            for node in self.candidates(signs)
-        ]
-        fewest = min(s[0] for s in scored)
-        n_unmeasured, _, node, signs, n_outside = min(
-            (self.unmeasured(node, signs), preference, node, signs, n_out)
-            for n_out, preference, node, signs in scored
-            if n_out == fewest
+        lo_x = lo_y = -(10**12)
+        hi_x = hi_y = 10**12
+        for region in self.padded:
+            grid = self._region_nodes(region, signs)
+            spots = grid["spots"]
+            if grid["inside_x"] is None or grid["inside_y"] is None:
+                lo_x, hi_x = 1, 0
+                break
+            lo_x = max(lo_x, int(spots[:, 0].max()) - grid["inside_x"][1])
+            hi_x = min(hi_x, int(spots[:, 0].min()) - grid["inside_x"][0])
+            lo_y = max(lo_y, int(spots[:, 1].max()) - grid["inside_y"][1])
+            hi_y = min(hi_y, int(spots[:, 1].min()) - grid["inside_y"][0])
+        n_x, n_y = hi_x - lo_x + 1, hi_y - lo_y + 1
+        if n_x >= 1 and n_y >= 1 and n_x * n_y <= _MAX_CANDIDATE_NODES:
+            grid_x, grid_y = np.meshgrid(
+                np.arange(lo_x, hi_x + 1), np.arange(lo_y, hi_y + 1)
+            )
+            return np.c_[grid_x.ravel(), grid_y.ravel()].astype(np.int64)
+        seeds = (
+            np.array([self.grid_centre(signs, planned)])
+            if planned is not None
+            else self.guesses(signs)
         )
-        return n_outside, n_unmeasured, node, signs
+        span = range(-_NODE_SEARCH_RADIUS, _NODE_SEARCH_RADIUS + 1)
+        near = {
+            (int(round(gx)) + dx, int(round(gy)) + dy)
+            for gx, gy in seeds
+            for dx in span
+            for dy in span
+        }
+        return np.array(sorted(near), dtype=np.int64)
+
+    def _areas_offsets(self, signs: Tuple[int, int]) -> Tuple[np.ndarray, np.ndarray]:
+        """Every Area's outline as raster offsets from the reference node."""
+        offsets = [self._offsets(polygon, signs) for polygon in self.planned_areas]
+        return (
+            np.concatenate([o[0] for o in offsets]),
+            np.concatenate([o[1] for o in offsets]),
+        )
+
+    def grid_covers_areas(self, planned: Tuple[int, int, int, int]) -> bool:
+        """Whether the planned grid is the size of the Areas' extent.
+
+        A grid of ``n`` nodes spans ``n - 1`` steps, and the nodes inside an
+        Area span its extent less a fraction of a step at each side. A
+        larger gap means the grid covers other Areas than these, or fewer,
+        and its centre would place the raster wrongly.
+        """
+        if not self.planned_areas:
+            return False
+        gx, gy = self._areas_offsets(_LATTICE_AXIS_SIGNS[0])
+        _, _, width, height = planned
+        return (
+            abs((width - 1) - float(np.ptp(gx))) <= _PLANNED_GRID_SLACK_STEPS
+            and abs((height - 1) - float(np.ptp(gy))) <= _PLANNED_GRID_SLACK_STEPS
+        )
+
+    def grid_centre(
+        self, signs: Tuple[int, int], planned: Tuple[int, int, int, int]
+    ) -> Tuple[float, float]:
+        """The reference node, unrounded, that centres the grid on the Areas.
+
+        The grid a source plans covers its Areas, so on the right node the
+        two centres agree within half a step, and a whole-step shift moves
+        them further apart. The Areas' centre is the middle of their
+        outlines' box, which needs no rounding to whole nodes.
+        """
+        gx, gy = self._areas_offsets(signs)
+        first_x, first_y, width, height = planned
+        return (
+            first_x + (width - 1) / 2.0 - 0.5 * float(gx.min() + gx.max()),
+            first_y + (height - 1) / 2.0 - 0.5 * float(gy.min() + gy.max()),
+        )
+
+    def grid_distance(
+        self,
+        nodes: np.ndarray,
+        signs: Tuple[int, int],
+        planned: Tuple[int, int, int, int],
+    ) -> np.ndarray:
+        """Raster steps between each node and :meth:`grid_centre`."""
+        centre_x, centre_y = self.grid_centre(signs, planned)
+        return np.hypot(nodes[:, 0] - centre_x, nodes[:, 1] - centre_y)
+
+    def _score(
+        self, signs: Tuple[int, int], planned: Optional[Tuple[int, int, int, int]]
+    ) -> Tuple[int, np.ndarray, np.ndarray, np.ndarray]:
+        """``(fewest outside, nodes, grid distance, unmeasured)`` for signs.
+
+        Edge spots first, over every candidate; then all spots, over those
+        that did best. The two passes agree whenever a node keeps every
+        spot inside, which is the case that matters.
+        """
+        nodes = self.candidates(signs, planned)
+        edge = self.outside_counts(nodes, signs, edge_only=True)
+        nodes = nodes[edge == edge.min()]
+        outside = self.outside_counts(nodes, signs)
+        fewest = int(outside.min())
+        nodes = nodes[outside == fewest]
+        distance = (
+            np.round(self.grid_distance(nodes, signs, planned), 6)
+            if planned is not None
+            else np.zeros(len(nodes))
+        )
+        return fewest, nodes, distance, self.unmeasured_counts(nodes, signs)
+
+    def best(
+        self, planned: Optional[Tuple[int, int, int, int]] = None
+    ) -> Tuple[int, int, Tuple[int, int], Tuple[int, int], int]:
+        """``(outside, unmeasured, node, signs, tied)`` of the best fit.
+
+        Fewest spots outside first. Then, with a planned grid, the usual
+        axis directions and the node that centres the grid on the Areas
+        (D59); without one, D31's fewest unmeasured nodes and then the usual
+        axis directions. ``tied`` counts the nodes that rule cannot tell
+        apart; of those, the one nearest D31's guess is kept. Scored as
+        arrays: a run that stopped after a few spots in a large Area can
+        leave a quarter of a million nodes per pair of axis directions.
+        """
+        parts: List[Tuple[np.ndarray, ...]] = []
+        for rank, axes in enumerate(_LATTICE_AXIS_SIGNS):
+            fewest, nodes, distance, unmeasured = self._score(axes, planned)
+            guesses = self.guesses(axes)
+            near = np.hypot(
+                nodes[:, np.newaxis, 0] - guesses[np.newaxis, :, 0],
+                nodes[:, np.newaxis, 1] - guesses[np.newaxis, :, 1],
+            ).min(axis=1)
+            count = len(nodes)
+            parts.append(
+                (
+                    np.full(count, fewest),
+                    np.full(count, rank),
+                    distance,
+                    unmeasured,
+                    near,
+                    nodes[:, 0],
+                    nodes[:, 1],
+                )
+            )
+        outside, preference, distance, unmeasured, near, node_x, node_y = (
+            np.concatenate(values) for values in zip(*parts)
+        )
+        rule = (
+            [preference, distance, unmeasured]
+            if planned is not None
+            else [unmeasured, preference]
+        )
+        # np.lexsort sorts by its last key first.
+        order = np.lexsort((node_y, node_x, near, *reversed(rule), outside))
+        pick = int(order[0])
+        same = outside == outside[pick]
+        for column in rule:
+            same &= column == column[pick]
+        signs = _LATTICE_AXIS_SIGNS[int(preference[pick])]
+        return (
+            int(outside[pick]),
+            int(unmeasured[pick]),
+            (int(node_x[pick]), int(node_y[pick])),
+            signs,
+            int(same.sum()),
+        )
 
 
 def fit_raster_lattice(
@@ -430,6 +708,7 @@ def fit_raster_lattice(
     positions: List[Dict[str, Any]],
     first_raster_x: int,
     first_raster_y: int,
+    planned_grid: Optional[Tuple[int, int, int, int]] = None,
 ) -> Optional[LatticeFit]:
     """Place the run's raster on the alignment image the way FlexImaging does.
 
@@ -441,6 +720,11 @@ def fit_raster_lattice(
     MassIVE MSV000088438 runs this reproduces flexImaging's own spot list
     within 1 um.
 
+    A run that stopped early fills only part of its Area, and then many
+    nodes keep every spot inside with the same unmeasured count. With a
+    planned grid, the node that centres it on the Areas wins instead; with
+    none, the fit says the placement is not determined (D59).
+
     Args:
         teaching_points: ``.mis`` teaching points, ``{"image", "stage"}``.
         reference_point: ``.mis`` ``<ReferencePoint>`` in image pixels, or
@@ -451,14 +735,21 @@ def fit_raster_lattice(
         positions: Measured spots, ``{"raster_x", "raster_y", "region"}``.
         first_raster_x: Raster X of TIC cell 0.
         first_raster_y: Raster Y of TIC cell 0.
+        planned_grid: ``(first X, first Y, width, height)`` of the raster
+            the source planned over its Areas, as a rapifleX ``.dat``
+            header states it, or ``None``. Ignored when it does not hold
+            every measured spot.
 
     Returns:
         The fit, or ``None`` when the inputs cannot place a lattice: fewer
-        than three teaching points, no positive step, no Area that any
-        measured region maps to.
+        than three teaching points, no finite positive step, no Area that
+        any measured region maps to.
     """
     step_x, step_y = (float(raster_step[0]), float(raster_step[1]))
-    if len(teaching_points) < 3 or step_x <= 0 or step_y <= 0 or not positions:
+    finite_step = np.isfinite(step_x) and np.isfinite(step_y)
+    if len(teaching_points) < 3 or not finite_step or step_x <= 0 or step_y <= 0:
+        return None
+    if not positions:
         return None
 
     points = [TeachingPoint.from_dict(tp) for tp in teaching_points]
@@ -466,6 +757,12 @@ def fit_raster_lattice(
         [(float(p.image_x), float(p.image_y)) for p in points],
         [(float(p.stage_x), float(p.stage_y)) for p in points],
     )
+    if reference_point is not None and not np.all(np.isfinite(reference_point)):
+        logger.warning(
+            f"ReferencePoint {tuple(reference_point)} is not a finite pixel; "
+            "the lattice runs through the first teaching point instead."
+        )
+        reference_point = None
     if reference_point is None:
         reference_point = (float(points[0].image_x), float(points[0].image_y))
         reference_from = "first teaching point"
@@ -474,15 +771,29 @@ def fit_raster_lattice(
     to_stage = image_to_stage.matrix
     ref = to_stage @ np.array([reference_point[0], reference_point[1], 1.0])
 
-    # The edge tolerance in image pixels: steps times pixels per micrometre.
+    # The edge tolerance in image pixels: steps times pixels per micrometre,
+    # and not under the rounding of a whole-pixel corner -- unless a step is
+    # so few pixels that the floor would reach half a step, where a
+    # whole-step shift would pass it.
     um_per_px = 0.5 * (image_to_stage.scale_x + image_to_stage.scale_y)
-    tolerance_px = _AREA_EDGE_TOLERANCE_STEPS * min(step_x, step_y) / um_per_px
+    step_px = min(step_x, step_y) / um_per_px
+    tolerance_px = max(
+        _AREA_EDGE_TOLERANCE_STEPS * step_px,
+        min(_AREA_EDGE_TOLERANCE_PX, _AREA_EDGE_TOLERANCE_MAX_STEPS * step_px),
+    )
     search = _LatticeSearch(
         to_stage, ref, (step_x, step_y), positions, areas, tolerance_px
     )
     if not search.padded:
         return None
-    n_outside, n_unmeasured, node, signs = search.best()
+    planned = _planned_grid(planned_grid, positions)
+    if planned is not None and not search.grid_covers_areas(planned):
+        logger.info(
+            f"The planned grid {planned} is not the size of the .mis Areas; "
+            "the lattice fit does not use it."
+        )
+        planned = None
+    n_outside, n_unmeasured, node, signs, tied = search.best(planned)
 
     sx, sy = signs
     lattice = np.array(
@@ -500,25 +811,69 @@ def fit_raster_lattice(
         spots_outside=int(n_outside),
         nodes_unmeasured=int(n_unmeasured),
         reference_from=reference_from,
+        chosen_by="planned grid" if planned is not None else "Areas",
+        nodes_tied=int(tied),
     )
+    _log_fit(fit, len(positions))
+    return fit
+
+
+def _planned_grid(
+    planned_grid: Optional[Tuple[int, int, int, int]],
+    positions: List[Dict[str, Any]],
+) -> Optional[Tuple[int, int, int, int]]:
+    """The planned grid, or ``None`` when it does not hold every spot."""
+    if planned_grid is None:
+        return None
+    first_x, first_y, width, height = (int(v) for v in planned_grid)
+    holds = width > 0 and height > 0
+    holds = holds and all(
+        first_x <= p["raster_x"] < first_x + width
+        and first_y <= p["raster_y"] < first_y + height
+        for p in positions
+    )
+    if not holds:
+        logger.info(
+            f"The planned grid {planned_grid} does not hold every measured spot; "
+            "the lattice fit does not use it."
+        )
+        return None
+    return first_x, first_y, width, height
+
+
+def _log_fit(fit: LatticeFit, n_spots: int) -> None:
+    """Report the fit, and warn about what it could not settle."""
+    step_x, step_y = fit.raster_step_um
     logger.info(
         f"FlexImaging lattice: reference node {fit.reference_node} "
-        f"(from {reference_from}), step {step_x:g} x {step_y:g} um, "
-        f"axes {fit.axis_signs}, {n_outside} of {len(positions)} spots outside "
-        f"their Area, {n_unmeasured} unmeasured nodes inside the Areas"
+        f"(from {fit.reference_from}, chosen by the {fit.chosen_by}), step "
+        f"{step_x:g} x {step_y:g} um, axes {fit.axis_signs}, "
+        f"{fit.spots_outside} of {n_spots} spots outside their Area, "
+        f"{fit.nodes_unmeasured} unmeasured nodes inside the Areas"
     )
-    if n_outside:
+    if fit.spots_outside:
         logger.warning(
-            f"{n_outside} of {len(positions)} measured spots fall outside their "
-            f".mis Area on the best lattice; check that the .mis belongs to this "
-            f"run. The optical alignment may be off by whole raster steps."
+            f"{fit.spots_outside} of {n_spots} measured spots fall outside "
+            "their .mis Area on the best lattice; check that the .mis belongs "
+            "to this run. The optical alignment may be off by whole raster steps."
         )
-    if signs != _LATTICE_AXIS_SIGNS[0]:
+    elif fit.nodes_tied > 1:
+        how = (
+            "and its planned grid does not choose between them"
+            if fit.chosen_by == "planned grid"
+            else "and the source states no planned grid to choose between them"
+        )
         logger.warning(
-            f"FlexImaging raster axes {signs} differ from the usual (1, -1); "
-            "the optical alignment follows the Areas."
+            f"{fit.nodes_tied} lattice nodes keep every spot inside its .mis "
+            f"Area equally well, as when a run stopped before filling its Area, "
+            f"{how}. The optical alignment keeps the one nearest the Area's "
+            "centre and may be off by whole raster steps."
         )
-    return fit
+    if fit.axis_signs != _LATTICE_AXIS_SIGNS[0]:
+        logger.warning(
+            f"FlexImaging raster axes {fit.axis_signs} differ from the usual "
+            "(1, -1); the optical alignment follows the Areas."
+        )
 
 
 @dataclass
@@ -1048,6 +1403,7 @@ class TeachingPointAlignment:
         teaching_points: Optional[List[Dict[str, Any]]] = None,
         reference_point: Optional[Tuple[float, float]] = None,
         raster_step: Optional[Tuple[float, float]] = None,
+        planned_grid: Optional[Tuple[int, int, int, int]] = None,
     ) -> AreaAlignmentResult:
         """Compute alignment using Area definitions from .mis file.
 
@@ -1068,6 +1424,8 @@ class TeachingPointAlignment:
             reference_point: ``.mis`` ``<ReferencePoint>`` in image pixels
             raster_step: Raster step in micrometres, used when the Areas
                 state none of their own
+            planned_grid: ``(first X, first Y, width, height)`` of the
+                raster the source planned, when it states one (D59)
 
         Returns:
             AreaAlignmentResult with region mappings and coordinate transform
@@ -1152,6 +1510,7 @@ class TeachingPointAlignment:
             teaching_points,
             reference_point,
             raster_step,
+            planned_grid,
         )
 
         return AreaAlignmentResult(
@@ -1172,6 +1531,7 @@ class TeachingPointAlignment:
         teaching_points: Optional[List[Dict[str, Any]]],
         reference_point: Optional[Tuple[float, float]],
         raster_step: Optional[Tuple[float, float]],
+        planned_grid: Optional[Tuple[int, int, int, int]] = None,
     ) -> Optional[LatticeFit]:
         """The lattice fit, or ``None`` (with the reason logged) to fall back."""
         if not teaching_points or len(teaching_points) < 3:
@@ -1208,4 +1568,5 @@ class TeachingPointAlignment:
             positions=positions,
             first_raster_x=first_raster_x,
             first_raster_y=first_raster_y,
+            planned_grid=planned_grid,
         )

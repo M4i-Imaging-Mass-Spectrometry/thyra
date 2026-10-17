@@ -153,7 +153,7 @@ if optical:
 | Field | Meaning |
 |-------|---------|
 | `elements` | One entry per optical element in the store, keyed by element name. `source_file` is the name of the file it was read from (no directory: the acquiring machine's path does not travel with the store). An element cropped to one region also has `crop`: the crop's `origin` and `size` and the whole scan's `full_size`, in image pixels. |
-| `alignment_element` | The element the `.mis` `<ImageFile>` designates -- the one the teaching points are stated in, so the one the other images are scaled into. `None` when the source designates none, or when the designated file is not in this store. |
+| `alignment_element` | The element the `.mis` `<ImageFile>` designates -- the one the teaching points are stated in, so the one the other images are scaled into. An image that is not a resampled copy of it is not placed: it sits in a coordinate system of its own, not in `"global"`. `None` when the source designates none, or when the designated file is not in this store. |
 
 The whole section is **absent** when the conversion put no optical image in
 the store, and an image whose pixels could not be read is taken back out of

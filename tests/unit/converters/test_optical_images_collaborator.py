@@ -23,6 +23,7 @@ test gives it teaching points and gets the lattice (D31).
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
@@ -181,6 +182,41 @@ def test_with_teaching_points_the_affine_is_flexImagings_lattice(
     np.testing.assert_allclose(off_node, [0.0, 0.0], atol=1e-9)
     corners = np.array(optical.alignment.cell_corners(0, 0))
     np.testing.assert_allclose(corners.mean(axis=0), centre[:2])
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        {"planned_grid": (0, 0, 6, 5)},  # timsTOF, from GlobalMetadata
+        {"raster_width": 6, "raster_height": 5},  # the rapifleX .dat header
+    ],
+)
+def test_the_planned_grid_reaches_the_lattice_fit(
+    tmp_path: Path, header: Dict[str, Any]
+) -> None:
+    """Without it, the Area holds the 4 x 3 spots four ways (D59)."""
+    reader = _StubReader(areas=[{"name": "Area0", "p1": (99, 199), "p2": (110, 208)}])
+    reader.mis_metadata.update(
+        teaching_points=[
+            {"image": [0, 0], "stage": [0, 0]},
+            {"image": [100, 0], "stage": [1000, 0]},
+            {"image": [0, 100], "stage": [0, -1000]},
+        ],
+        reference_point=[0.0, 0.0],
+        raster=[20, 20],
+    )
+    optical = _optical(tmp_path, reader)
+    optical.compute_alignment()
+    unplanned = optical.alignment.lattice if optical.alignment else None
+    reader._header.update(header)
+    optical.compute_alignment()
+
+    assert unplanned is not None and unplanned.chosen_by == "Areas"
+    assert unplanned.nodes_tied > 1
+    assert optical.alignment is not None
+    lattice = optical.alignment.lattice
+    assert lattice is not None
+    assert (lattice.chosen_by, lattice.nodes_tied) == ("planned grid", 1)
 
 
 class _StatingReader(_StubReader):
@@ -431,6 +467,88 @@ def test_a_photo_with_no_readable_alignment_scan_has_no_acquisition_system(
     transformations = optical.pending[name].transformations
     assert isinstance(transformations["global"], Identity)
     assert set(transformations) == {"ds", "global"}
+
+
+def _second_image(tmp_path: Path, name: str, height: int, width: int) -> Path:
+    path = tmp_path / name
+    rng = np.random.default_rng(5)
+    tifffile.imwrite(str(path), rng.integers(0, 256, (height, width, 3), np.uint8))
+    return path
+
+
+@pytest.mark.parametrize("apply_alignment", [True, False])
+def test_a_resampled_copy_of_the_scan_is_scaled_into_it(
+    tmp_path: Path, tiff: Path, apply_alignment: bool
+) -> None:
+    """FlexImaging's quarter-size ``_0001``: one ratio on both axes (#497)."""
+    derived = _second_image(tmp_path, "SlideA_0001.tif", 12, 16)
+    optical = _optical(
+        tmp_path, _StubReader([tiff, derived]), apply_alignment=apply_alignment
+    )
+    optical.compute_alignment()
+    optical.build_tic_to_image_affine()
+    optical.add_images({})
+
+    transformations = optical.pending["ds_optical_derived"].transformations
+    assert set(transformations) == {"ds", "global"}
+    axes = ("x", "y")
+    matrix = transformations["global"].to_affine_matrix(
+        input_axes=axes, output_axes=axes
+    )
+    scale = np.diag([2.0, 2.0, 1.0])
+    if not apply_alignment:
+        primary = optical.pending["ds_optical_highres"].transformations["global"]
+        scale = primary.to_affine_matrix(input_axes=axes, output_axes=axes) @ scale
+    np.testing.assert_allclose(matrix, scale)
+
+
+def test_a_quarter_copy_of_an_odd_sized_scan_is_still_scaled(tmp_path: Path) -> None:
+    """22 rows at a quarter is 5.5: the copy rounds it, and is still a copy."""
+    primary = _second_image(tmp_path, IMAGE_FILE, 22, 32)
+    derived = _second_image(tmp_path, "SlideA_0001.tif", 5, 8)
+    optical = _optical(tmp_path, _StubReader([primary, derived]))
+    optical.compute_alignment()
+    optical.build_tic_to_image_affine()
+    optical.add_images({})
+
+    transformations = optical.pending["ds_optical_derived"].transformations
+    assert set(transformations) == {"ds", "global"}
+    axes = ("x", "y")
+    matrix = transformations["global"].to_affine_matrix(
+        input_axes=axes, output_axes=axes
+    )
+    np.testing.assert_allclose(np.diag(matrix)[:2], [4.0, 4.4])
+
+
+@pytest.mark.parametrize("apply_alignment", [True, False])
+def test_a_turned_overview_is_not_placed_by_a_scale(
+    tmp_path: Path, tiff: Path, apply_alignment: bool, thyra_logs
+) -> None:
+    """The overview photo the scan was made from, turned: two ratios (#497).
+
+    A Scale stretched it onto the scan, up to 300 photo pixels off at the
+    corners on a real run. It now keeps a coordinate system of its own.
+    """
+    overview = _second_image(tmp_path, "SlideA.tif", 10, 16)
+    optical = _optical(
+        tmp_path,
+        _StubReader([tiff, overview]),
+        apply_alignment=apply_alignment,
+        acquisition_origin=lambda: ORIGIN,
+    )
+    optical.compute_alignment()
+    optical.build_tic_to_image_affine()
+    with thyra_logs("thyra.converters", logging.WARNING) as records:
+        optical.add_images({})
+
+    (name,) = [n for n in optical.pending if n != "ds_optical_highres"]
+    transformations = optical.pending[name].transformations
+    assert set(transformations) == {name}
+    assert isinstance(transformations[name], Identity)
+    assert any("Not placed" in r.getMessage() for r in records)
+    # Still recorded as one of the store's optical images.
+    attr = optical.root_attr()
+    assert attr is not None and name in attr["elements"]
 
 
 def test_excluded_optical_images_leave_every_piece_of_state_empty(
