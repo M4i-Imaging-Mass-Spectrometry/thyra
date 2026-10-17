@@ -704,3 +704,50 @@ class TestTheAxisIsWhatEverySourceBuilds:
         assert mass_axis_sha256(first) == plan.sha256
         for other in axes[1:]:
             assert np.array_equal(first, other)
+
+
+class TestThePlanFollowsTheLaidAxis:
+    """C8 and A5 (D56), on the plan side."""
+
+    def test_a_floored_width_is_said_and_warned_about_as_laid(self):
+        plan = _plan_from_metadata(
+            [_src("a", _RAPIFLEX, (500.0, 510.0))],
+            axis_type="constant",
+            width_at_mz=1.0,
+        )
+
+        assert plan.n_bins == 100
+        # The setting stays the width; the count follows from it.
+        assert plan.width_at_mz == 1.0
+        assert "floor of 100 bins lays 0.101 Da" in plan.origins["width_at_mz"]
+        assert not any("planned 1 Da" in w for w in plan.warnings)
+        assert any("100-bin floor's 0.101 Da" in w for w in plan.warnings)
+
+    def test_a_floored_tof_plan_states_the_width_it_lays(self):
+        plan = _plan_from_metadata(
+            [_src("a", _RAPIFLEX, (500.0, 510.0))],
+            axis_type="tof",
+            tof_a=0.5,
+            tof_b=1e-8,
+            bins_per_fwhm=0.01,
+        )
+
+        assert plan.n_bins == 100
+        assert plan.bins_per_fwhm == 0.01
+        assert "floor of 100 bins" in plan.origins["bins_per_fwhm"]
+        assert "floor of 100 bins" in plan.origins["width_at_mz"]
+
+    def test_one_source_at_one_mz(self):
+        with pytest.raises(ConversionRefused, match="every peak sits at one m/z"):
+            _plan_from_metadata([_src("a", _RAPIFLEX, (500.0, 500.0))])
+
+    def test_a_width_just_too_wide_for_a_hundred_bins_names_the_floor(self):
+        """99 bins of 0.1005 Da; the floor lays 100, 0.101 Da apart."""
+        plan = _plan_from_metadata(
+            [_src("a", _RAPIFLEX, (500.0, 510.0))],
+            axis_type="constant",
+            width_at_mz=0.1005,
+        )
+
+        assert plan.n_bins == 100
+        assert "floor of 100 bins lays 0.101 Da" in plan.origins["width_at_mz"]
