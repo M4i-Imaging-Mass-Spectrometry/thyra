@@ -4671,6 +4671,8 @@ which is not a mean.
   still counts as holding peaks, so on a shared position it can name the
   region while a later frame gives the row its `acquisition_order`.
 
+---
+
 ## D58. The mass-mobility heatmap is a mean over the summed table's rows
 
 **Status:** Implemented (2026-10-16), issue #495. Narrows D38's divisor and
