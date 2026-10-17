@@ -9,6 +9,7 @@ import below for why there is no stdlib fallback.
 """
 
 import logging
+import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
@@ -254,7 +255,9 @@ def _extract_reference_point(root: "Element", metadata: Dict[str, Any]) -> None:
     """Extract the ``<ReferencePoint>``: the image pixel a raster node sits on.
 
     FlexImaging lays its spots on one lattice through this point (D31), so
-    it fixes where the raster falls between whole steps.
+    it fixes where the raster falls between whole steps. A value that is not
+    a finite number (``inf``, ``nan``) is unreadable too: the lattice fit
+    then uses the first teaching point, as for a ``.mis`` without one.
     """
     elem = root.find(".//ReferencePoint")
     if elem is None or not elem.text:
@@ -263,8 +266,12 @@ def _extract_reference_point(root: "Element", metadata: Dict[str, Any]) -> None:
     if len(parts) != 2:
         return
     try:
-        metadata["reference_point"] = [float(parts[0]), float(parts[1])]
+        point = [float(parts[0]), float(parts[1])]
     except ValueError:
+        point = []
+    if len(point) == 2 and all(math.isfinite(v) for v in point):
+        metadata["reference_point"] = point
+    else:
         logger.warning(f"Unreadable ReferencePoint in .mis: {elem.text!r}")
 
 
@@ -318,11 +325,14 @@ def _extract_areas(root: "Element", metadata: Dict[str, Any]) -> None:
                 if raster_elem is not None and raster_elem.text:
                     step = raster_elem.text.split(",")
                     try:
-                        if len(step) == 2:
-                            area["raster"] = [float(step[0]), float(step[1])]
+                        values = [float(v) for v in step]
                     except ValueError:
                         # The outline is still usable without its own step.
-                        pass
+                        values = []
+                    if len(values) == 2 and all(
+                        math.isfinite(v) and v > 0 for v in values
+                    ):
+                        area["raster"] = values
                 areas.append(area)
             except (ValueError, IndexError) as e:
                 logger.warning(f"Failed to parse Area '{area_name}': {e}")

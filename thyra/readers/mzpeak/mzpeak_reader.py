@@ -2199,9 +2199,11 @@ class MzPeakReader(BaseMSIReader):
         An image whose affine is marked ``teach_points`` is the alignment
         image, and the pixels are placed on it (:meth:`get_image_alignment`).
         Any other affine is not a registration: ``assumed_full_extent``
-        stretches the image over the whole acquisition. Such an image is
-        carried over unaligned, and its affine kept, with the rest of the
-        ``imaging`` block, in the store's raw metadata.
+        stretches the image over the whole acquisition. Such an image is not
+        placed by its affine, which is kept, with the rest of the
+        ``imaging`` block, in the store's raw metadata. The converter scales
+        it onto the alignment image only when it is a resampled copy of
+        that image, and otherwise leaves it out of ``"global"`` (D59).
         """
         if self._image_paths is None:
             self._image_paths = self._extract_images()

@@ -258,8 +258,9 @@ class BaseMSIReader(ABC):
 
         Some formats say which of an acquisition's images the registration is
         stated against -- FlexImaging names it in the .mis ``<ImageFile>``
-        element -- and that one gets the identity transform while the others
-        are scaled into its pixel space. Without it the converter has no way
+        element -- and that one gets the identity transform while a resampled
+        copy of it is scaled into its pixel space; any other image is left
+        out of ``"global"`` (D59). Without it the converter has no way
         to tell an alignment scan from a slide overview that happens to sit
         in the same folder.
 

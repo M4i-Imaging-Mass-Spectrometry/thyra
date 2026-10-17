@@ -159,6 +159,53 @@ def test_parse_mis_extracts_polygon_area_bounding_box(tmp_path: Path) -> None:
     assert len(area["points"]) == 10
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("1252,776", [1252.0, 776.0]),
+        ("1252.5,776.25", [1252.5, 776.25]),
+        ("abc,776", None),
+        ("1e999,776", None),
+        ("-inf,776", None),
+        ("nan,500", None),
+        ("1252,nan", None),
+    ],
+)
+def test_a_reference_point_must_be_a_finite_pixel(
+    tmp_path: Path, text: str, expected, thyra_logs
+) -> None:
+    """``float()`` reads ``inf`` and ``nan``; neither is a pixel (#497, L2).
+
+    ``inf`` crashed the lattice search with an OverflowError and ended the
+    conversion; ``nan`` dropped the optical alignment. Both now count as
+    unreadable: the key is left out and the lattice uses the first
+    teaching point.
+    """
+    area = RECTANGULAR_AREA + f"\n<ReferencePoint>{text}</ReferencePoint>"
+    mis = _write_mis(tmp_path, "reference.mis", area=area)
+    with thyra_logs("thyra.readers", logging.WARNING) as records:
+        data = parse_mis_file(mis)
+
+    assert data.get("reference_point") == expected
+    warned = any("Unreadable ReferencePoint" in r.getMessage() for r in records)
+    assert warned == (expected is None)
+
+
+@pytest.mark.parametrize("raster", ["inf,5", "nan,nan", "0,5", "-5,5", "a,5"])
+def test_an_area_raster_must_be_a_finite_positive_step(
+    tmp_path: Path, raster: str
+) -> None:
+    """The Area keeps its outline; only the unusable step is dropped (#497)."""
+    area = (
+        f'<Area Type="0" Name="01"><Raster>{raster}</Raster>'
+        "<Point>10,20</Point><Point>30,40</Point></Area>"
+    )
+    (parsed,) = parse_mis_file(_write_mis(tmp_path, "step.mis", area=area))["areas"]
+
+    assert "raster" not in parsed
+    assert parsed["p1"] == [10, 20]
+
+
 def _write_entity_mis(tmp_path: Path, name: str = "entity.mis") -> Path:
     mis = tmp_path / name
     mis.write_text("""<?xml version="1.0"?>

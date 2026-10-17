@@ -3014,6 +3014,34 @@ class BrukerReader(BrukerBaseMSIReader):
                     f"({n_areas}). Alignment may be incorrect."
                 )
 
+    @staticmethod
+    def _planned_grid(cursor: Any) -> Optional[Tuple[int, int, int, int]]:
+        """``(first X, first Y, width, height)`` of the raster the run planned.
+
+        GlobalMetadata's ImagingArea bounds are the planned raster, not the
+        acquired one: on runs that stopped early they span every row the
+        Area holds, and their width times height is the spot count the
+        FlexImaging info file planned. The lattice fit uses it to place a
+        run that did not fill its Area (D59). Whole-run bounds, also when
+        one region is selected: they cover every Area.
+        """
+        cursor.execute(
+            "SELECT Key, Value FROM GlobalMetadata WHERE Key IN "
+            "('ImagingAreaMinXIndexPos', 'ImagingAreaMaxXIndexPos', "
+            "'ImagingAreaMinYIndexPos', 'ImagingAreaMaxYIndexPos')"
+        )
+        bounds = {key: value for key, value in cursor.fetchall()}
+        try:
+            min_x = int(float(bounds["ImagingAreaMinXIndexPos"]))
+            max_x = int(float(bounds["ImagingAreaMaxXIndexPos"]))
+            min_y = int(float(bounds["ImagingAreaMinYIndexPos"]))
+            max_y = int(float(bounds["ImagingAreaMaxYIndexPos"]))
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return None
+        if max_x < min_x or max_y < min_y:
+            return None
+        return min_x, min_y, max_x - min_x + 1, max_y - min_y + 1
+
     def _build_header_alignment(self) -> Dict[str, Any]:
         """Build header dict with first_raster offsets for alignment.
 
@@ -3044,7 +3072,7 @@ class BrukerReader(BrukerBaseMSIReader):
                 )
                 result = cursor.fetchone()
                 if result and result[0] is not None and result[1] is not None:
-                    header = {
+                    header: Dict[str, Any] = {
                         "first_raster_x": int(result[0]),
                         "first_raster_y": int(result[1]),
                     }
@@ -3076,6 +3104,9 @@ class BrukerReader(BrukerBaseMSIReader):
                 f"{header['first_raster_x']}, "
                 f"{header['first_raster_y']})"
             )
+            planned = self._planned_grid(cursor)
+            if planned is not None:
+                header["planned_grid"] = planned
             return header
         except (sqlite3.OperationalError, TypeError) as e:
             logger.warning(f"Could not get alignment offsets: {e}")
