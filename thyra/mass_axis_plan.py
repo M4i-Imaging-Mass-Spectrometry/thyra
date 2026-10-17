@@ -42,10 +42,13 @@ from .preview import _build_reader, _close_quietly, _resampling_metadata_dict
 from .resampling.axis_planner import (
     AXIS_TYPE_BY_NAME,
     METHOD_BY_NAME,
+    MIN_WIDTH_BINS,
     AxisPlanner,
     _resolve_config_enum,
     axis_name,
+    bin_count_for_width,
     normalize_resampling_config,
+    realised_width,
     reference_params,
 )
 from .resampling.decision_tree import ResamplingDecisionTree
@@ -239,6 +242,12 @@ def _plan_range(
                 f"{low:g} (the sources' ranges: {ranges}). Pass a higher "
                 "max_mz, or pass min_mz too."
             )
+        if len(known) == 1:
+            raise ConversionRefused(
+                f"The source's own range [{low:g}, {high:g}] is empty ({ranges}): "
+                "every peak sits at one m/z. Pass min_mz and max_mz around it "
+                "to plan a range anyway."
+            )
         raise ConversionRefused(
             f"The sources have no m/z in common: the planned range "
             f"[{low:g}, {high:g}] is empty ({ranges}). Pass min_mz and max_mz "
@@ -368,8 +377,12 @@ def _plan_width(
     width_at_mz: Optional[float],
     reference_mz: float,
     notes: _Notes,
-) -> float:
-    """The forced width, else the widest width any source declares."""
+) -> Tuple[float, List[Tuple[_Source, float]]]:
+    """The forced width, else the widest width any source declares.
+
+    Returns the width and each source's own width; the warnings about the
+    sources it coarsens are made once the axis is laid (:func:`_warn_widths`).
+    """
     own = [(s, _own_width_at(s, kind, reference_mz)) for s in sources]
     if width_at_mz is not None:
         width = float(width_at_mz)
@@ -381,15 +394,73 @@ def _plan_width(
             + _fmt_each([(s.name, f"{w:.4g} Da") for s, w in own])
             + f" (each stated at m/z {reference_mz:g})"
         )
+    return width, own
+
+
+def _warn_widths(
+    own: Sequence[Tuple[_Source, float]],
+    width: float,
+    reference_mz: float,
+    notes: _Notes,
+    *,
+    floored: bool = False,
+) -> None:
+    """Say which sources the laid width coarsens."""
+    what = "the 100-bin floor's" if floored else "the planned"
     for s, w in own:
         if w >= width * (1.0 - _WIDTH_TOLERANCE):
             continue
         notes.warnings.append(
             f"{s.name}: its own bin width at m/z {reference_mz:g} is {w:.4g} Da, "
-            f"narrower than the planned {width:.4g} Da; it loses resolution in "
+            f"narrower than {what} {width:.4g} Da; it loses resolution in "
             "this store."
         )
-    return width
+
+
+def _note_floor(draft: MassAxisPlan, n_bins: int, notes: _Notes) -> Optional[float]:
+    """The width the laid axis has when the bin floor raised its count.
+
+    A width so wide that fewer than ``MIN_WIDTH_BINS`` bins span the range
+    lays that many bins instead, so the axis does not have the planned width
+    (D56). The plan keeps the width as its setting, since the count follows
+    from it; the origins say what the axis has. Whether the floor applied is
+    read from the count the width lays, as a conversion reads it.
+
+    Returns:
+        The laid width at the reference m/z, or ``None`` when the planned
+        width set the count.
+    """
+    if n_bins != MIN_WIDTH_BINS:
+        return None
+    settings = draft.to_resampling_config()
+    settings.pop("mass_axis_sha256")
+    config = normalize_resampling_config(settings)
+    width_bins = bin_count_for_width(
+        config, draft.min_mz, draft.max_mz, draft.axis_type, floor=False
+    )
+    if width_bins >= MIN_WIDTH_BINS:
+        return None
+    laid, k = realised_width(
+        config,
+        draft.min_mz,
+        draft.max_mz,
+        draft.axis_type,
+        n_bins,
+        draft.reference_mz,
+    )
+    if k is not None:
+        floor = f"the floor of {MIN_WIDTH_BINS} bins"
+        notes.origins["bins_per_fwhm"] += f"; {floor} lays {k:.4g} per FWHM"
+        notes.origins["width_at_mz"] = (
+            f"{laid:.4g} Da at m/z {draft.reference_mz:g}, from the width law "
+            f"and {floor} (a result, not a setting of the plan)"
+        )
+    else:
+        notes.origins["width_at_mz"] += (
+            f"; the floor of {MIN_WIDTH_BINS} bins lays {laid:.4g} Da at "
+            f"m/z {draft.reference_mz:g}"
+        )
+    return laid
 
 
 def _warn_spectrum_types(sources: Sequence[_Source], notes: _Notes) -> None:
@@ -492,12 +563,12 @@ def _plan_from_metadata(
         notes.origins["reference_mz"] = f"default for a {kind.value} axis"
 
     fields: Dict[str, Any] = {}
+    own: List[Tuple[_Source, float]] = []
     if is_tof:
         a, b, k = _plan_tof(srcs, tof_a, tof_b, bins_per_fwhm, width_at_mz, ref, notes)
         fields.update(tof_a=a, tof_b=b, bins_per_fwhm=k)
     else:
-        fields["width_at_mz"] = _plan_width(srcs, kind, width_at_mz, ref, notes)
-    _warn_spectrum_types(srcs, notes)
+        fields["width_at_mz"], own = _plan_width(srcs, kind, width_at_mz, ref, notes)
 
     draft = MassAxisPlan(
         axis_type=kind,
@@ -513,6 +584,16 @@ def _plan_from_metadata(
         n_bins, digest = _lay_axis(srcs[0], draft)
     except ConversionRefused as exc:
         raise ConversionRefused(f"The planned axis cannot be built: {exc}") from exc
+    laid = _note_floor(draft, n_bins, notes)
+    if not is_tof:
+        _warn_widths(
+            own,
+            fields["width_at_mz"] if laid is None else laid,
+            ref,
+            notes,
+            floored=laid is not None,
+        )
+    _warn_spectrum_types(srcs, notes)
 
     plan = replace(
         draft,

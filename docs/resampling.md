@@ -506,7 +506,9 @@ centroid, timsTOF, PHI nanoTOF); `--tof-law A B` supplies one for an
 instrument that has none, and it is an error to have neither. There is no separate flag for the
 bins per peak width: `--resample-width-at-mz` at `--resample-reference-mz`
 fixes it, since `k` is whatever puts a bin of that width at the reference m/z.
-The Python API's `ResamplingConfig` also accepts `bins_per_fwhm` directly.
+The Python API's `ResamplingConfig` also accepts `bins_per_fwhm` directly, on
+a `tof` axis only and never beside a width or a bin count: either of those
+fixes the bin count too, so the pair is refused.
 
 **Centroid axes follow peak width; profile axes follow the sample grid.** The
 law describes how wide a peak is, which is what the bins of a *centroid* list
@@ -566,7 +568,9 @@ The count is then derived per axis type:
 Each is the integral of `1 / width(m)` across the mass range, so the bin width
 the axis actually realizes at your reference m/z is the width you asked for.
 A count derived this way is floored at 100 bins; a count given with
-`--resample-bins` is used as it is.
+`--resample-bins` is used as it is. When the floor or a given count sets the
+axis, its bins are not the width asked for, and the stored resampling step
+records the width (and, on a `tof` axis, the bins per FWHM) the axis has.
 
 A worked example, from the [tutorial](tutorial.md)'s synthetic dataset --
 250-1200 Da, `constant` axis, default 5 mDa width:
