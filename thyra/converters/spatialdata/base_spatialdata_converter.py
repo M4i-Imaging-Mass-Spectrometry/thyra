@@ -58,7 +58,7 @@ from spatialdata import SpatialData
 from spatialdata.models import ShapesModel
 from spatialdata.transformations import Identity
 
-from ...core.base_converter import BaseMSIConverter, PixelSizeSource
+from ...core.base_converter import BaseMSIConverter, PixelSizeSource, is_usable_pitch
 from ...core.base_reader import BaseMSIReader
 from ...core.conversion_state import ConversionState
 from ...errors import ConversionRefused
@@ -235,9 +235,10 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             )
 
         # Validate inputs
-        if pixel_size_um <= 0:
+        # ``<= 0`` alone passed NaN and infinity on to the store (#503).
+        if not is_usable_pitch(pixel_size_um):
             raise ConversionRefused(
-                f"pixel_size_um must be positive, got {pixel_size_um}"
+                f"pixel_size_um must be a finite positive number, got {pixel_size_um}"
             )
         if not dataset_id.strip():
             raise ConversionRefused("dataset_id cannot be empty")
@@ -323,6 +324,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             detected_y is not None
             and pixel_size_source is PixelSizeSource.AUTO_DETECTED
         ):
+            if not is_usable_pitch(detected_y):
+                raise ConversionRefused(
+                    "pixel_size_detection_info['detected_y_um'] must be a "
+                    f"finite positive number, got {detected_y}"
+                )
             self.pixel_size_y_um = float(detected_y)
             self._log_anisotropic_raster()
         self._resampling_config = (

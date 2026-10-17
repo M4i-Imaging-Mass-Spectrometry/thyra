@@ -200,8 +200,13 @@ class MobilityAxis:
         if self.array_accession is not None:
             report["array_accession"] = self.array_accession
         lo_hi = self.acq_range
-        if lo_hi is None and self.values is not None and self.values.size:
-            lo_hi = (float(np.min(self.values)), float(np.max(self.values)))
+        if lo_hi is None and self.values is not None:
+            # Over the finite values only: np.min passes a NaN through, and
+            # the builder would then have no range to write (#503).
+            finite = np.asarray(self.values, dtype=np.float64)
+            finite = finite[np.isfinite(finite)]
+            if finite.size:
+                lo_hi = (float(finite.min()), float(finite.max()))
         if lo_hi is not None:
             report["range"] = [float(lo_hi[0]), float(lo_hi[1])]
         if self.values is not None:

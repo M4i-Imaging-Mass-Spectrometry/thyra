@@ -29,6 +29,8 @@ generator, so it has none.
 """
 
 import logging
+import math
+import numbers
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
@@ -194,8 +196,9 @@ def normalize_resampling_config(
     Raises:
         ConversionRefused: If ``method`` or ``axis_type`` is not a
             recognised value, if ``mass_axis_sha256`` is not a SHA-256,
-            or if the config asks for something the planner would otherwise
-            drop (see :func:`_refuse_dropped_settings`).
+            if the config asks for something the planner would otherwise
+            drop, or if one of its numbers is NaN or infinite (see
+            :func:`_refuse_dropped_settings`).
     """
     if isinstance(config, MassAxisPlan):
         config = config.to_resampling_config()
@@ -255,6 +258,21 @@ def normalize_resampling_config(
     return normalised
 
 
+# The ResamplingConfig fields that hold a number, checked for finiteness
+# by _refuse_dropped_settings.
+_NUMERIC_CONFIG_FIELDS = (
+    "target_bins",
+    "mass_width_da",
+    "reference_mz",
+    "min_mz",
+    "max_mz",
+    "gap_tolerance_da",
+    "tof_a",
+    "tof_b",
+    "bins_per_fwhm",
+)
+
+
 def _refuse_dropped_settings(config: ResamplingConfig) -> None:
     """Refuse a config whose settings the planner could not all honour.
 
@@ -275,9 +293,20 @@ def _refuse_dropped_settings(config: ResamplingConfig) -> None:
     The messages name the dict key first and the dataclass field second,
     since either may have been passed.
 
+    A number that is NaN or infinite is refused too: none of them means
+    anything as a width, a bound or a law, and the processing record
+    could not state it (#503). The CLI already refuses them.
+
     Raises:
         ConversionRefused: On any of the cases.
     """
+    for field_name in _NUMERIC_CONFIG_FIELDS:
+        value = getattr(config, field_name)
+        if isinstance(value, numbers.Real) and not math.isfinite(value):
+            raise ConversionRefused(
+                f"resampling_config sets {field_name!r} to {value!r}; it must "
+                "be a finite number, or left unset."
+            )
     if config.target_bins is not None and config.mass_width_da is not None:
         raise ConversionRefused(
             "resampling_config sets both 'target_bins' and 'width_at_mz' "

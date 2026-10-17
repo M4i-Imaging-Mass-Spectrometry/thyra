@@ -61,6 +61,7 @@ from ...metadata.schema import (
     build_msi_metadata,
     forget_resolved_table,
 )
+from ...metadata.schema.builder import finite_parameters
 from ...metadata.schema.vocab import term_from_accession
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -621,7 +622,7 @@ class UnsAssembler:
             ProcessingStep(
                 name="conversion",
                 software=thyra_ref,
-                parameters=conversion_parameters,
+                parameters=finite_parameters(conversion_parameters),
             )
         ]
 
@@ -636,7 +637,7 @@ class UnsAssembler:
                     name="m/z calibration",
                     action_term=term_from_accession(_MZ_CALIBRATION_ACCESSION),
                     software=thyra_ref,
-                    parameters=dict(applied),
+                    parameters=finite_parameters(dict(applied)),
                 )
             )
 
@@ -667,7 +668,7 @@ class UnsAssembler:
                 ProcessingStep(
                     name="mass axis resampling",
                     software=thyra_ref,
-                    parameters=parameters,
+                    parameters=finite_parameters(parameters),
                 )
             )
         return steps

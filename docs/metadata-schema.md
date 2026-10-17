@@ -122,6 +122,13 @@ coordinate system and its affine, the element transforms and
     (`format_specific`, `acquisition_params`, `raw_metadata` -- see
     [Output Format](output-format.md#provenance)).
 
+!!! note "Numbers are finite"
+    JSON has no NaN or infinity, so the schema allows neither. When the
+    vendor metadata holds one, the field is left out of the block. A
+    pixel size Thyra detects must be a finite number above 0; otherwise
+    `thyra convert` asks for `--pixel-size`. See D62 in the
+    [design decisions](design-decisions.md).
+
 ### What is auto-populated
 
 Auto-population is deliberately honest: a field the source does not report
@@ -660,7 +667,9 @@ would fail validation for the wrong reason (see
 [long paths](troubleshooting.md#windows-long-paths)).
 
 Errors mean the document does not conform: structural violations, unknown
-PSI-MS/IMS/UO accessions, version incompatibility. Warnings mean it
+PSI-MS/IMS/UO accessions, version incompatibility, or a number that is NaN
+or infinity. An older store can hold such a number; converting the source
+again leaves that field out. Warnings mean it
 conforms but says something suspicious: a term label that does not match
 its accession, or a term from an unexpected ontology.
 

@@ -17,6 +17,7 @@ on errors, so warnings do not break CI pipelines that gate on it.
 
 import json
 import logging
+import math
 import operator
 from dataclasses import dataclass
 from pathlib import Path
@@ -203,6 +204,52 @@ def _with_value_at(
     return copy
 
 
+def _non_finite_locations(doc: Dict[str, Any]) -> List[str]:
+    """The dotted location of every NaN or infinity in ``doc``, in order.
+
+    Spelled the way a pydantic error location is joined, list indices
+    included, so the model's own error at the same place can be told
+    apart. Walked with a stack rather than by recursion.
+    """
+    found: List[str] = []
+    stack: List[Tuple[str, Any]] = [("", doc)]
+    while stack:
+        location, node = stack.pop()
+        if isinstance(node, float) and not math.isfinite(node):
+            found.append(location)
+            continue
+        if isinstance(node, dict):
+            children = [(str(key), value) for key, value in node.items()]
+        elif isinstance(node, list):
+            children = [(str(index), value) for index, value in enumerate(node)]
+        else:
+            continue
+        # Reversed, so the first child is visited first.
+        for key, value in reversed(children):
+            stack.append((f"{location}.{key}" if location else key, value))
+    return found
+
+
+def _non_finite_issues(locations: List[str]) -> List[ValidationIssue]:
+    """One error per NaN or infinity, saying what to do about it (D62)."""
+    return [
+        ValidationIssue(
+            "error",
+            location,
+            "is NaN or infinity, which the schema does not allow: a number "
+            "must be finite. A store converted before this rule can hold "
+            "one from the vendor metadata; converting the source again "
+            "leaves the field out.",
+        )
+        for location in locations
+    ]
+
+
+def _at_or_below(location: str, roots: List[str]) -> bool:
+    """Whether ``location`` is one of ``roots`` or inside one of them."""
+    return any(location == root or location.startswith(root + ".") for root in roots)
+
+
 def validate_document(
     doc: Any,
 ) -> Tuple[Optional[MSIMetadata], List[ValidationIssue]]:
@@ -255,12 +302,24 @@ def validate_document(
     if any(issue.severity == "error" for issue in issues):
         return None, issues
 
+    # Said once per value in words a user can act on, in place of the
+    # model's own error there: inside a union pydantic reports one error
+    # per member type, none of which names the cause (#503).
+    non_finite = _non_finite_locations(doc)
+    issues.extend(_non_finite_issues(non_finite))
     try:
         meta = MSIMetadata.model_validate(doc)
     except ValidationError as exc:
         for error in exc.errors():
             location = ".".join(str(part) for part in error["loc"])
+            # An unknown key is still said, whatever its value holds.
+            if error["type"] != "extra_forbidden" and _at_or_below(
+                location, non_finite
+            ):
+                continue
             issues.append(ValidationIssue("error", location, error["msg"]))
+        return None, issues
+    if non_finite:  # pragma: no cover - every model refuses them
         return None, issues
 
     issues.extend(_check_ontology_terms(meta))

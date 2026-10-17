@@ -515,3 +515,33 @@ class TestTheFloorIsReadFromTheCount:
         with pytest.raises(ConversionRefused, match="is empty") as refused:
             planner.resolve()
         assert "around its m/z" not in str(refused.value)
+
+
+class TestANonFiniteSettingIsRefused:
+    """NaN or infinity means nothing as a width, bound or law (#503, D62).
+
+    It used to reach the processing record, where JSON cannot hold it. The
+    CLI refuses one already; the API now does too, in either spelling.
+    """
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+    @pytest.mark.parametrize(
+        "key",
+        ["gap_tolerance_da", "min_mz", "max_mz", "reference_mz", "width_at_mz"],
+    )
+    def test_in_a_dict(self, key, value):
+        with pytest.raises(ConversionRefused, match="finite number"):
+            normalize_resampling_config({key: value})
+
+    @pytest.mark.parametrize(
+        "field", ["gap_tolerance_da", "mass_width_da", "bins_per_fwhm"]
+    )
+    def test_in_a_dataclass(self, field):
+        with pytest.raises(ConversionRefused, match=field):
+            normalize_resampling_config(ResamplingConfig(**{field: float("nan")}))
+
+    def test_finite_settings_pass(self):
+        config = normalize_resampling_config(
+            {"gap_tolerance_da": 0.01, "min_mz": 100, "max_mz": 1000.0}
+        )
+        assert config.gap_tolerance_da == 0.01

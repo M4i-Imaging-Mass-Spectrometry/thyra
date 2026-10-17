@@ -24,6 +24,7 @@ the conversion is over.
 
 import logging
 import math
+import numbers
 from abc import ABC, abstractmethod
 from enum import Enum
 from os import PathLike
@@ -44,6 +45,19 @@ if TYPE_CHECKING:
     from ..metadata.types import EssentialMetadata
 
 logger = logging.getLogger(__name__)
+
+
+def is_usable_pitch(value: Any) -> bool:
+    """Whether ``value`` can be a raster pitch: a finite number above 0.
+
+    ``value <= 0`` is False for NaN and for +infinity, so a check that
+    tests only that passed both on to the store, where JSON cannot hold
+    them (#503). A numpy number counts; a bool does not.
+    """
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        return False
+    number = float(value)
+    return math.isfinite(number) and number > 0
 
 
 def log_interrupt_after_save(output_path: Union[str, "PathLike[str]"]) -> None:
@@ -351,11 +365,28 @@ class BaseMSIConverter(ABC):
         kept: taking only ``[0]`` is how an anisotropic raster came to be
         rendered square (issue #228). A pitch the caller stated applies to
         both axes and is not overridden here.
+
+        A source pitch that is NaN, infinite or not above 0 is not taken:
+        the default stays, and the store says so (#503).
         """
-        if self.pixel_size_source == PixelSizeSource.DEFAULT and essential.pixel_size:
+        pitch = essential.pixel_size
+        if (
+            self.pixel_size_source == PixelSizeSource.DEFAULT
+            and pitch
+            and not all(is_usable_pitch(half) for half in pitch)
+        ):
+            logger.warning(
+                "The source's pixel size (%r x %r um) is not a finite positive "
+                "number and was not used; the store keeps the default %s um. "
+                "Pass pixel_size_um to state the right one.",
+                pitch[0],
+                pitch[1],
+                self.pixel_size_um,
+            )
+        elif self.pixel_size_source == PixelSizeSource.DEFAULT and pitch:
             old_size = self.pixel_size_um
-            self.pixel_size_um = essential.pixel_size[0]
-            self.pixel_size_y_um = float(essential.pixel_size[1])
+            self.pixel_size_um = pitch[0]
+            self.pixel_size_y_um = float(pitch[1])
             self.pixel_size_source = PixelSizeSource.AUTO_DETECTED
             logger.info(
                 f"Auto-detected pixel size: {self.pixel_size_um} um "
