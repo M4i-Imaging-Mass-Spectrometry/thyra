@@ -24,8 +24,8 @@ from thyra.readers.bruker.timstof.timstof_reader import BrukerReader
 class _BoundsHarness:
     """A stand-in exposing only what the two methods under test touch.
 
-    ``get_region_info`` reads ``_region_info`` and ``_mis_metadata`` and
-    calls ``_region_bounds``; ``_region_bounds`` reads ``conn`` (through
+    ``get_region_info`` reads ``_region_info``, ``_selected_region`` and
+    ``_mis_metadata`` and calls ``_region_bounds``; ``_region_bounds`` reads ``conn`` (through
     ``_database``) and ``_get_coordinate_offsets``.  Nothing else on the real reader is
     reachable from here, which is why the heavy SDK initialisation can
     be skipped.
@@ -33,13 +33,16 @@ class _BoundsHarness:
 
     _mis_metadata: Dict[str, Any]
     _region_info: List[Tuple[int, int]]
+    _selected_region: Optional[int]
     conn: sqlite3.Connection
     _offsets: Optional[Tuple[int, int, int]]
 
     # Bound off the real class so a change in behaviour reaches the test.
     _region_bounds = BrukerReader._region_bounds
     get_region_info = BrukerReader.get_region_info
+    _single_region_area = BrukerReader._single_region_area
     _database = BrukerReader._database
+    _positions: List[Dict[str, Any]] = []
 
     def _get_coordinate_offsets(self) -> Optional[Tuple[int, int, int]]:
         return self._offsets
@@ -69,8 +72,10 @@ def _harness(
     offsets: Optional[Tuple[int, int, int]] = (10, 5, 0),
     frames: Optional[List[Tuple[int, int, int]]] = None,
     with_table: bool = True,
+    selected: Optional[int] = None,
 ) -> _BoundsHarness:
     h = _BoundsHarness()
+    h._selected_region = selected
     h._mis_metadata = {"areas": [{"name": n} for n in (areas or ["01", "02"])]}
     h._region_info = region_info if region_info is not None else [(0, 6), (1, 4)]
     h._offsets = offsets
@@ -158,14 +163,36 @@ class TestRegionInfoCarriesBounds:
         assert summary[2]["region_number"] == 2
         assert summary[2]["n_spectra"] == 9
 
-    def test_a_single_region_set_is_still_None(self) -> None:
-        """Unchanged: one region is not a region list.
-
-        Pinned here because ``_region_bounds`` runs a query and the
-        cheapest way to break this would be to run it before the guard.
-        """
+    def test_a_single_region_set_is_one_entry(self) -> None:
+        """One region is listed with its number, box and name (D57)."""
         h = _harness(areas=["01"], region_info=[(0, 6)])
-        assert h.get_region_info() is None
+        assert h.get_region_info() == [
+            {"region_number": 0, "n_spectra": 6, "bounds": (0, 0, 2, 1), "name": "01"}
+        ]
+
+    def test_a_lone_region_is_named_by_its_spot_names(self) -> None:
+        """A run cut from a slide states RegionNumber 0 but spots ``R02``.
+
+        The name is the Area the alignment pairs it with; the number stays
+        the database's, which ``region=`` accepts.
+        """
+        h = _harness(areas=["01", "02", "03"], region_info=[(0, 6)])
+        h._positions = [{"region": 2, "raster_x": 10, "raster_y": 5}]
+        (entry,) = h.get_region_info()
+        assert entry["region_number"] == 0
+        assert entry["name"] == "03"
+
+    def test_a_selected_region_is_the_only_entry(self) -> None:
+        """Under ``region=`` the store holds one region (issue #496)."""
+        h = _harness(selected=1)
+        assert h.get_region_info() == [
+            {
+                "region_number": 1,
+                "n_spectra": 4,
+                "bounds": (10, 2, 11, 3),
+                "name": "02",
+            },
+        ]
 
     def test_the_order_is_still_the_readers_own(self) -> None:
         """Frame-count order, NOT region number -- normalized by the caller.

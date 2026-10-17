@@ -17,7 +17,7 @@ import pytest
 from click.testing import CliRunner
 
 import thyra
-from tests.unit.readers.test_mzpeak_archive_metadata import _region
+from tests.fixtures.mzpeak_builder import bruker_region as _region
 from tests.unit.readers.test_mzpeak_archive_metadata import (
     _two_regions as _mzpeak_two_regions,
 )
@@ -148,6 +148,7 @@ class TestListRegions:
         ]
 
     def test_timstof_one_region(self, tmp_path):
+        """The DB RegionNumber, 0 here, not the placeholder 1 (D57)."""
         d_dir = tmp_path / _TDF.name
         shutil.copytree(_TDF, d_dir)
         preview = thyra.preview_msi(d_dir)
@@ -155,13 +156,35 @@ class TestListRegions:
 
         regions = thyra.list_regions(d_dir)
 
-        assert [r["region_number"] for r in regions] == [1]
+        assert [r["region_number"] for r in regions] == [0]
         assert regions[0]["bounds"] == (
             0,
             0,
             preview.grid_dims[0] - 1,
             preview.grid_dims[1] - 1,
         )
+        assert preview.regions is None
+
+    def test_the_documented_loop_works_on_a_single_region_run(self, tmp_path):
+        """docs/api.md: one store per region, from list_regions (#496 G3)."""
+        import spatialdata
+
+        d_dir = tmp_path / _TDF.name
+        shutil.copytree(_TDF, d_dir)
+
+        stores = []
+        for region in thyra.list_regions(d_dir):
+            number = region["region_number"]
+            out = tmp_path / f"region_{number}.zarr"
+            assert convert_msi(
+                str(d_dir), str(out), region=number, include_optical=False
+            )
+            stores.append((number, out))
+
+        assert [number for number, _ in stores] == [0]
+        table = spatialdata.read_zarr(stores[0][1]).tables["msi_dataset_z0"]
+        assert set(table.obs["region_number"]) == {0}
+        assert "average_spectrum_per_region" not in table.uns
 
     def test_an_unreadable_input_is_refused(self, tmp_path):
         with pytest.raises(ConversionRefused, match="could not be read"):

@@ -624,10 +624,11 @@ class RapiflexReader(BrukerBaseMSIReader):
 
         Returns:
             Cell to region for the cells that hold a spectrum, or ``None``
-            when those cells span fewer than two regions, or when a
-            spectrum has no poslog spot or sits under two regions: a map
-            that does not cover every pixel would write region -1 for the
-            gaps. Spots without a spectrum are not looked at.
+            when there is no poslog, or when a spectrum has no poslog spot
+            or sits under two regions: a map that does not cover every
+            pixel would write region -1 for the gaps. One region is a map
+            too, so the store keeps its number (D57). Spots without a
+            spectrum are not looked at.
 
         Raises:
             RuntimeError: On a closed reader, which no longer holds the
@@ -638,7 +639,7 @@ class RapiflexReader(BrukerBaseMSIReader):
         if self._closed:
             raise RuntimeError("Reader has been closed")
         self._region_cells_cache = {}
-        if len({pos["region"] for pos in self._positions}) < 2:
+        if not self._positions:
             return None
 
         x0 = self._header.get("first_raster_x", 0)
@@ -661,7 +662,7 @@ class RapiflexReader(BrukerBaseMSIReader):
                 )
                 return None
             cells[cell] = regions.pop()
-        if len(set(cells.values())) < 2:
+        if not cells:
             return None
         self._region_cells_cache = cells
         return cells
@@ -669,8 +670,8 @@ class RapiflexReader(BrukerBaseMSIReader):
     def get_region_map(self) -> Optional[Dict[Tuple[int, int], int]]:
         """Map 0-based ``(x, y)`` to the poslog region, or ``None``.
 
-        ``None`` for one region, as the timsTOF reader does, so a
-        single-region store keeps ``region_number`` 1.
+        One region is a map too, as on timsTOF, so a single-region store
+        keeps the poslog's number rather than the placeholder 1 (D57).
         """
         cells = self._poslog_regions()
         return dict(cells) if cells else None
@@ -680,7 +681,7 @@ class RapiflexReader(BrukerBaseMSIReader):
 
         The same keys and box frame as the timsTOF reader. The name is
         the i-th ``.mis`` Area for poslog region i, the pairing the
-        alignment already uses. ``None`` for one region.
+        alignment already uses. ``None`` when there is no map.
         """
         cells = self._poslog_regions()
         if not cells:

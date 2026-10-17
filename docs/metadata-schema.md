@@ -80,7 +80,7 @@ the sample's id and name, which a conversion writes when it is given them
 | | `pixel_size_um` | `{x, y}`, **required** | -- |
 | | `n_spectra` | integer, the spectra the source holds as its reader counted them | -- |
 | | `ion_mobility` | `{present, separation, separation_term, unit_term, range_lower, range_upper, num_scans, resolved_table, grid}` | PSI-MS (`MS:1002815` / `MS:1002476`, unit `MS:1002814`) |
-| | `fragmentation` | `{present, ms_level, constant_across_pixels, merges_precursors, dissociation_term, windows, resolved_table}` | PSI-MS (`MS:1000511`; windows `MS:1000827` / `828` / `829`, `MS:1000045`, `MS:1000133`) |
+| | `fragmentation` | `{present, ms_level, constant_across_pixels, merges_precursors, dissociation_term, windows, resolved_table}`; under `--region`, the region's own frames | PSI-MS (`MS:1000511`; windows `MS:1000827` / `828` / `829`, `MS:1000045`, `MS:1000133`) |
 | `acquisition` | `acquisition_datetime` | ISO 8601 `YYYY-MM-DDThh:mm:ss[.fff]`, with a UTC offset only when the source recorded one | -- |
 | | `laser_power_percent` | number, percent of the laser's range | -- |
 | | `laser_frequency_hz` | number, hertz | IMS (`IMS:1006000`) |

@@ -16,13 +16,10 @@ import zipfile
 import numpy as np
 import pytest
 
-from tests.fixtures.mzpeak_builder import (
-    INDEX_MEMBER,
-    SCANS_MEMBER,
-    Spectrum,
-    build_mzpeak,
-    grid_spectra,
-)
+from tests.fixtures.mzpeak_builder import INDEX_MEMBER, SCANS_MEMBER, Spectrum
+from tests.fixtures.mzpeak_builder import bruker_region as _region
+from tests.fixtures.mzpeak_builder import build_mzpeak, grid_spectra
+from tests.fixtures.mzpeak_builder import region_parameter as _region_parameter
 from thyra.core.base_reader import OpticalImageLabel
 from thyra.errors import ConversionRefused
 from thyra.readers.mzpeak import MzPeakReader
@@ -524,18 +521,6 @@ class TestPositionZInScanParameters:
         assert self._offsets(archive) == (1, 1, 0)
 
 
-def _region(number, frames, x_index, y_index, name=None):
-    """One ``bruker_maldi.regions`` entry, as mzpeak-convert writes it."""
-    return {
-        "frames": frames,
-        "name": name,
-        "raster_step_um": None,
-        "region_number": number,
-        "x_index": list(x_index),
-        "y_index": list(y_index),
-    }
-
-
 def _two_regions(tmp_path, regions, name="regions.mzpeak"):
     """Two 2x2 blocks side by side, raster indices 101-102 and 104-105.
 
@@ -594,13 +579,16 @@ class TestRegions:
             {"region_number": 1, "n_spectra": 4, "bounds": (3, 0, 4, 1)},
         ]
 
-    def test_one_region_is_none_as_from_the_d(self, tmp_path):
-        """The timsTOF reader gives no region map for one region either."""
-        archive = _two_regions(tmp_path, [_region(0, 8, (101, 105), (11, 12))])
+    def test_one_region_is_a_map_as_from_the_d(self, tmp_path):
+        """One listed region keeps its number and box, as a ``.d`` does (D57)."""
+        archive = _two_regions(tmp_path, [_region(3, 8, (101, 105), (11, 12))])
 
         with MzPeakReader(archive) as reader:
-            assert reader.get_region_map() is None
-            assert reader.get_region_info() is None
+            assert set(reader.get_region_map().values()) == {3}
+            (entry,) = reader.get_region_info()
+
+        assert entry["region_number"] == 3
+        assert entry["n_spectra"] == 8
 
     @pytest.mark.parametrize(
         "regions",
@@ -971,23 +959,6 @@ class TestEmbeddedImages:
 # ----------------------------------------------------------------------
 
 
-def _region_parameter(number):
-    """A scan's ``acquisition region`` parameter, as mzpeak-convert 0.17 writes it."""
-    return [
-        {
-            "value": {
-                "integer": number,
-                "float": None,
-                "string": None,
-                "boolean": None,
-            },
-            "accession": None,
-            "name": "acquisition region",
-            "unit": None,
-        }
-    ]
-
-
 def _named_regions(tmp_path, numbers, regions, name="named.mzpeak"):
     """The layout of :func:`_two_regions`, each scan naming its region."""
     spectra = [
@@ -1081,12 +1052,13 @@ class TestRegionNamedByEachScan:
         assert region_map[(0, 0)] == 0
         assert region_map[(3, 0)] == 1
 
-    def test_one_named_region_is_none_as_from_the_d(self, tmp_path):
-        """As for a ``.d`` of one region."""
-        archive = _named_regions(tmp_path, [0] * 8, [])
+    def test_one_named_region_is_a_map_as_from_the_d(self, tmp_path):
+        """As for a ``.d`` of one region (D57)."""
+        archive = _named_regions(tmp_path, [3] * 8, [])
 
         with MzPeakReader(archive) as reader:
-            assert reader.get_region_map() is None
+            assert set(reader.get_region_map().values()) == {3}
+            assert [e["region_number"] for e in reader.get_region_info()] == [3]
 
     def test_the_first_region_of_a_scan_wins(self, tmp_path):
         """A scan that names two regions is read at the first one."""
@@ -1444,7 +1416,7 @@ class TestTeachPointsImage:
         )
 
         with MzPeakReader(archive) as reader:
-            assert reader.get_region_map() is None
+            assert set(reader.get_region_map().values()) == {3}
             alignment = reader.get_image_alignment()
 
         (mapping,) = alignment.region_mappings

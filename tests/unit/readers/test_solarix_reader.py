@@ -361,6 +361,57 @@ class TestSolarixReader:
                 {"region_number": 1, "n_spectra": 1, "bounds": (1, 0, 1, 0)},
             ]
 
+    def test_a_position_in_two_regions_takes_its_first_scan(self, tmp_path, thyra_logs):
+        """Issue #496: the Id order decides, and the reader says so."""
+
+        def spot(spectrum_id, x, region):
+            return {
+                "id": spectrum_id,
+                "x": x,
+                "y": 5,
+                "mzs": [100.0],
+                "intensities": [1.0],
+                "region": region,
+            }
+
+        d_dir = make_solarix_d(
+            tmp_path, spectra=[spot(1, 5, 2), spot(2, 6, 2), spot(3, 5, 1)]
+        )
+
+        with SolarixReader(d_dir) as reader:
+            with thyra_logs("thyra.core.region_map", logging.WARNING) as logs:
+                region_map = reader.get_region_map()
+
+        assert region_map == {(0, 0): 2, (1, 0): 2}
+        assert len(logs) == 1
+        assert "regions 1, 2" in logs[0].getMessage()
+
+    def test_an_empty_first_scan_does_not_name_the_region(self, tmp_path):
+        """An empty scan gives no row, so the next scan there decides."""
+        spectra = [
+            {"id": 1, "x": 5, "y": 5, "mzs": [], "intensities": [], "region": 2},
+            {
+                "id": 2,
+                "x": 6,
+                "y": 5,
+                "mzs": [100.0],
+                "intensities": [1.0],
+                "region": 2,
+            },
+            {
+                "id": 3,
+                "x": 5,
+                "y": 5,
+                "mzs": [100.0],
+                "intensities": [1.0],
+                "region": 1,
+            },
+        ]
+        d_dir = make_solarix_d(tmp_path, spectra=spectra)
+
+        with SolarixReader(d_dir) as reader:
+            assert reader.get_region_map() == {(0, 0): 1, (1, 0): 2}
+
     def test_closed_reader_refuses_iteration(self, solarix_d):
         reader = SolarixReader(solarix_d)
         reader.close()

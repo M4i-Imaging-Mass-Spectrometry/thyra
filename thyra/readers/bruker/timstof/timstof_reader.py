@@ -6,12 +6,13 @@ comprehensive error handling.
 """
 
 import logging
+import numbers
 import os
 import re
 import sqlite3
 from contextlib import closing
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -43,6 +44,7 @@ from ....core.msms import (
     IsolationWindow,
     windows_overlap,
 )
+from ....core.region_map import build_region_map
 from ....core.registry import register_reader
 from ....errors import ConversionRefused
 from ....metadata.constants import SpectrumType
@@ -537,8 +539,10 @@ def _refuse_shifted_positional_types(
             "progress_callback takes a callable or None, got "
             f"{type(progress_callback).__name__}. {_POSITIONAL_SHIFT_NOTE}"
         )
+    # Any integer type counts, not only ``int``: a region number read back
+    # from ``obs["region_number"]`` is a numpy integer (issue #496).
     if region is not None and (
-        isinstance(region, bool) or not isinstance(region, (int, str))
+        isinstance(region, bool) or not isinstance(region, (numbers.Integral, str))
     ):
         raise ConversionRefused(
             "region takes a DB RegionNumber int, a .mis Area Name string or "
@@ -549,6 +553,20 @@ def _refuse_shifted_positional_types(
             "metadata_only takes True or False, got "
             f"{type(metadata_only).__name__}. {_POSITIONAL_SHIFT_NOTE}"
         )
+
+
+def _plain_region(region: object) -> Optional[Union[int, str]]:
+    """The checked ``region`` request, a numpy integer made a plain int.
+
+    Every later test of the request is ``isinstance(..., int)``, and
+    sqlite binds only plain ints. A numpy integer left as it was went
+    down the Area Name path as a string, where ``"1"`` could match an
+    Area named "1" (issue #496). Typed ``object`` for the reason given in
+    :func:`_refuse_shifted_positional_types`.
+    """
+    if isinstance(region, numbers.Integral):
+        return int(region)
+    return cast(Optional[Union[int, str]], region)
 
 
 @register_reader("bruker")
@@ -587,7 +605,9 @@ class BrukerReader(BrukerBaseMSIReader):
             progress_callback: Optional callback for progress updates
             region: Region selector for multi-region datasets.
                 None (default): convert all regions (no filtering).
-                int: select that DB RegionNumber (0-indexed).
+                int: select that DB RegionNumber (0-indexed). Any integer
+                type but bool, so a value read from
+                ``obs["region_number"]`` works.
                 str: select by FlexImaging .mis Area Name (e.g. "03"); falls back
                 to integer parse if the string doesn't match any area name.
             metadata_only: If True, skip the Bruker SDK DLL load and the
@@ -633,7 +653,7 @@ class BrukerReader(BrukerBaseMSIReader):
         super().__init__(data_path, **kwargs)
         self.use_recalibrated_state = use_recalibrated_state
         self.progress_callback = progress_callback
-        self._requested_region = region
+        self._requested_region = _plain_region(region)
         self._metadata_only = bool(metadata_only)
         if tdf_spectrum not in TDF_SPECTRUM_MODES:
             raise ConversionRefused(
@@ -675,10 +695,13 @@ class BrukerReader(BrukerBaseMSIReader):
 
         # Region detection and selection (must be after database init)
         self._region_info: List[Tuple[int, int]] = self._detect_regions()
+        # Before the selection: a lone region's Area Name comes from the
+        # spot names these positions carry (_single_region_area), and a
+        # request naming it is answered from there.
+        self._positions: List[Dict[str, Any]] = self._build_positions_from_db()
         self._selected_region: Optional[int]
         self._region_frame_ids: Optional[set]
         self._selected_region, self._region_frame_ids = self._select_region()
-        self._positions: List[Dict[str, Any]] = self._build_positions_from_db()
         self._header: Dict[str, Any] = self._build_header_alignment()
 
         # Cached properties (lazy loaded)
@@ -1337,6 +1360,34 @@ class BrukerReader(BrukerBaseMSIReader):
                 "convert it."
             )
 
+        # The name list_regions gives the lone region is the Area its spot
+        # names point to (D57), which on a run cut from a slide is not the
+        # Area at the DB number; a request for that name is this region.
+        lone_name = self._lone_region_name()
+        names = set(self._get_region_name_map().values())
+        if (
+            lone_name
+            and isinstance(self._requested_region, str)
+            and self._requested_region != lone_name
+            and self._requested_region in names
+        ):
+            # Read by position, '01' would resolve to DB number 0 and so to
+            # this run, whose own listed name is something else.
+            raise ConversionRefused(
+                f"--region {self._requested_region!r} names another Area of "
+                f"the slide; this single-region run is Area {lone_name!r}, "
+                "as its spot names and list_regions say. Pass that name, or "
+                "drop the option."
+            )
+        if lone_name and self._requested_region == lone_name:
+            logger.info(
+                "Region %r is the only region in this dataset; all %d frames "
+                "are converted.",
+                lone_name,
+                self._region_info[0][1],
+            )
+            return
+
         resolved = self._resolve_requested_region()
         valid_regions = [r for r, _ in self._region_info]
         if resolved not in valid_regions:
@@ -1357,35 +1408,46 @@ class BrukerReader(BrukerBaseMSIReader):
         region number. Uses the same coordinate offsets as iter_spectra() so
         the mapping is consistent with obs indices.
 
+        One region is a map too, so the store keeps the number the
+        database states rather than a placeholder (D57).
+
         Returns:
             Dict mapping (x, y) tuples to region numbers, or None if
-            region information is not available (single-region dataset).
+            region information is not available (no MaldiFrameInfo).
         """
-        if not self._region_info or len(self._region_info) <= 1:
+        if not self._region_info:
             return None
 
         coordinate_offsets = self._get_coordinate_offsets()
-        region_map: Dict[tuple, int] = {}
+        x_off, y_off = (
+            (coordinate_offsets[0], coordinate_offsets[1])
+            if coordinate_offsets
+            else (0, 0)
+        )
 
         try:
             cursor = self._database().cursor()
+            # A position two regions measured takes the region of its first
+            # frame that holds peaks, whose id is also its acquisition_order
+            # (issue #496). An empty frame gives no row and no order, so it
+            # sorts after every frame with peaks.
             if self._selected_region is not None:
                 cursor.execute(
                     "SELECT XIndexPos, YIndexPos, RegionNumber "
-                    "FROM MaldiFrameInfo WHERE RegionNumber = ?",
+                    "FROM MaldiFrameInfo WHERE RegionNumber = ? ORDER BY Frame",
                     (self._selected_region,),
                 )
             else:
                 cursor.execute(
-                    "SELECT XIndexPos, YIndexPos, RegionNumber " "FROM MaldiFrameInfo"
+                    "SELECT m.XIndexPos, m.YIndexPos, m.RegionNumber "
+                    "FROM MaldiFrameInfo m LEFT JOIN Frames f ON f.Id = m.Frame "
+                    "ORDER BY COALESCE(f.NumPeaks, 1) = 0, m.Frame"
                 )
 
-            for x, y, region_num in cursor.fetchall():
-                nx, ny = int(x), int(y)
-                if coordinate_offsets:
-                    nx -= coordinate_offsets[0]
-                    ny -= coordinate_offsets[1]
-                region_map[(nx, ny)] = int(region_num)
+            region_map: Dict[tuple, int] = build_region_map(
+                (int(x) - x_off, int(y) - y_off, int(region_num))
+                for x, y, region_num in cursor.fetchall()
+            )
 
             logger.info(
                 f"Built region map: {len(region_map)} pixels across "
@@ -1451,18 +1513,31 @@ class BrukerReader(BrukerBaseMSIReader):
             bounds (``(x_min, y_min, x_max, y_max)``, 0-based, in the
             frame of :attr:`EssentialMetadata.dimensions`), and name
             (from .mis Area definitions when available), or None if
-            region information is not available.
+            region information is not available. One region is one
+            entry (D57).
 
             Order follows ``_detect_regions``: frame count descending,
             NOT region number. Sort before displaying.
+
+            Under ``region=`` only the selected region is listed: the
+            store holds no other, and the other regions' boxes lie
+            outside its raster (issue #496).
         """
-        if not self._region_info or len(self._region_info) <= 1:
+        if not self._region_info:
             return None
 
         areas = self._mis_metadata.get("areas", [])
+        single_area = (
+            self._single_region_area() if len(self._region_info) == 1 else None
+        )
         bounds = self._region_bounds()
         result = []
         for region_num, n_frames in self._region_info:
+            if (
+                self._selected_region is not None
+                and region_num != self._selected_region
+            ):
+                continue
             info: Dict[str, Any] = {
                 "region_number": region_num,
                 "n_spectra": n_frames,
@@ -1470,10 +1545,39 @@ class BrukerReader(BrukerBaseMSIReader):
             box = bounds.get(region_num)
             if box is not None:
                 info["bounds"] = box
-            if region_num < len(areas) and areas[region_num].get("name"):
-                info["name"] = areas[region_num]["name"]
+            area = region_num if single_area is None else single_area
+            if area < len(areas) and areas[area].get("name"):
+                info["name"] = areas[area]["name"]
             result.append(info)
         return result
+
+    def _single_region_area(self) -> int:
+        """Which ``.mis`` Area a run's one region is, by the alignment's rule.
+
+        A single-region ``.d`` cut from a multi-region slide often states
+        RegionNumber 0 whatever area it was, and names the true one in its
+        spot names (``R03X...``); the alignment already reads it from
+        there (:meth:`_query_maldi_frame_positions`). The name follows
+        that area, while the number stays the database's, the one
+        ``region=`` accepts.
+        """
+        areas = self._mis_metadata.get("areas", []) if self._mis_metadata else []
+        regions = {position["region"] for position in self._positions}
+        if len(regions) == 1:
+            area = int(regions.pop())
+            if area < len(areas):
+                return area
+        return int(self._region_info[0][0])
+
+    def _lone_region_name(self) -> Optional[str]:
+        """The ``.mis`` Area Name of a single-region run, or ``None``."""
+        if not self._region_info or len(self._region_info) != 1:
+            return None
+        areas = self._mis_metadata.get("areas", []) if self._mis_metadata else []
+        area = self._single_region_area()
+        if area < len(areas) and areas[area].get("name"):
+            return str(areas[area]["name"])
+        return None
 
     def get_common_mass_axis(self) -> NDArray[np.float64]:
         """Return the common mass axis composed of all unique m/z values.
@@ -1860,11 +1964,39 @@ class BrukerReader(BrukerBaseMSIReader):
             self._fragmentation_read = True
         return self._fragmentation
 
+    def _selected_frames(self, column: str) -> Tuple[str, Tuple[int, ...]]:
+        """A ``WHERE`` clause keeping the frames of the selected region.
+
+        Empty when every region is converted, so a file without
+        ``MaldiFrameInfo`` is asked exactly what it was asked before.
+        Under ``region=`` the schedule is judged on the frames the store
+        holds, as the mixed-level check already was (issue #496).
+
+        The queries that splice this clause in are marked ``nosec B608``:
+        the clause names a column of Thyra's own choosing, and the region
+        number is a bound parameter.
+
+        Args:
+            column: The frame id column of the table being filtered.
+
+        Returns:
+            The clause, with a leading space, and its parameters.
+        """
+        if self._selected_region is None:
+            return "", ()
+        return (
+            f" WHERE {column} IN "  # nosec B608
+            "(SELECT Frame FROM MaldiFrameInfo WHERE RegionNumber = ?)",
+            (self._selected_region,),
+        )
+
     def _build_fragmentation(self) -> Optional[FragmentationSchedule]:
+        where, params = self._selected_frames("Id")
         try:
             conn = self._database()
             rows = conn.execute(
-                "SELECT MsMsType, COUNT(*) FROM Frames GROUP BY MsMsType"
+                f"SELECT MsMsType, COUNT(*) FROM Frames{where} GROUP BY MsMsType",  # nosec B608
+                params,
             ).fetchall()
         except sqlite3.OperationalError as e:
             logger.debug(f"Frames has no MsMsType column: {e}")
@@ -1932,26 +2064,29 @@ class BrukerReader(BrukerBaseMSIReader):
                 scan_end=_optional_int(row[4]),
             )
 
+        where, params = self._selected_frames("Frame")
+        dia_where, _ = self._selected_frames("i.Frame")
         for query, build in (
             (
-                "SELECT IsolationMz, IsolationWidth, CollisionEnergy, "
+                "SELECT IsolationMz, IsolationWidth, CollisionEnergy, "  # nosec B608
                 "ScanNumBegin, ScanNumEnd, COUNT(DISTINCT Frame) "
-                "FROM PasefFrameMsMsInfo GROUP BY IsolationMz, IsolationWidth, "
-                "CollisionEnergy, ScanNumBegin, ScanNumEnd ORDER BY IsolationMz",
+                f"FROM PasefFrameMsMsInfo{where} GROUP BY IsolationMz, "
+                "IsolationWidth, CollisionEnergy, ScanNumBegin, ScanNumEnd "
+                "ORDER BY IsolationMz",
                 pasef_window,
             ),
             (
-                "SELECT w.IsolationMz, w.IsolationWidth, w.CollisionEnergy, "
+                "SELECT w.IsolationMz, w.IsolationWidth, w.CollisionEnergy, "  # nosec B608
                 "w.ScanNumBegin, w.ScanNumEnd, COUNT(DISTINCT i.Frame) "
                 "FROM DiaFrameMsMsWindows w JOIN DiaFrameMsMsInfo i "
-                "ON i.WindowGroup = w.WindowGroup "
+                f"ON i.WindowGroup = w.WindowGroup{dia_where} "
                 "GROUP BY w.IsolationMz, w.IsolationWidth, w.CollisionEnergy, "
                 "w.ScanNumBegin, w.ScanNumEnd ORDER BY w.IsolationMz",
                 pasef_window,
             ),
             (
-                "SELECT TriggerMass, IsolationWidth, CollisionEnergy, "
-                "COUNT(DISTINCT Frame) FROM FrameMsMsInfo "
+                "SELECT TriggerMass, IsolationWidth, CollisionEnergy, "  # nosec B608
+                f"COUNT(DISTINCT Frame) FROM FrameMsMsInfo{where} "
                 "GROUP BY TriggerMass, IsolationWidth, CollisionEnergy "
                 "ORDER BY TriggerMass",
                 lambda row: IsolationWindow.from_full_width(
@@ -1963,7 +2098,7 @@ class BrukerReader(BrukerBaseMSIReader):
         ):
             try:
                 conn = self._database()
-                rows = conn.execute(query).fetchall()
+                rows = conn.execute(query, params).fetchall()
             except sqlite3.OperationalError:
                 continue
             rows = [row for row in rows if row[0] is not None]

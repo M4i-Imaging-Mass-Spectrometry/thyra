@@ -583,8 +583,11 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # ``get_region_map`` is keyed on ``(x, y)`` with no z, so one
         # region is one in-plane footprint sampled on every plane. See
         # _finalize_table for what that means for a multi-plane store.
-        if self._region_map is not None:
-            unique_regions = sorted(set(self._region_map.values()))
+        # Only for two regions or more: one region's mean is the table's
+        # own average_spectrum, so a single-region store does not get the
+        # same vector twice (D57).
+        unique_regions = sorted(set((self._region_map or {}).values()))
+        if len(unique_regions) >= 2:
             state.region_total_intensity = {
                 r: np.zeros(n_cols, dtype=np.float64) for r in unique_regions
             }
@@ -825,6 +828,9 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         component, so one region is one in-plane footprint sampled on
         every plane, and splitting it per plane would answer a question
         the source never asked.
+
+        A region with no row has no mean, so it gets no entry (issue
+        #496): dividing by ``max(rows, 1)`` wrote it a vector of zeros.
         """
         region_total = state.region_total_intensity
         rows = state.region_row_count
@@ -840,9 +846,13 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 if region in rows:
                     rows[region] += int(count)
 
+        # The accumulators exist only for a map of two regions or more
+        # (D57), so a multi-region store keeps the key even when only one
+        # of its regions holds rows.
         state.avg_spectrum_per_region = {
-            str(region): total / max(rows.get(region, 0), 1)
+            str(region): total / rows[region]
             for region, total in region_total.items()
+            if rows.get(region, 0) > 0
         }
 
     def _count_pass(self, state: ConversionState) -> None:
