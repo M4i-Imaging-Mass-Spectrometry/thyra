@@ -4763,6 +4763,8 @@ the same six spectra on z 1 and 2.
   on such a plane in pass 2 is refused as a disagreement between the passes,
   as any other is.
 
+---
+
 ## D60. A damaged isolation window is left out, and an isomer's label is its rank
 
 **Status:** Implemented (2026-10-16), issue #498.
