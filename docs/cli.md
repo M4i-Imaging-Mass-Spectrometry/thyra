@@ -446,6 +446,10 @@ thyra tims_data.d output.zarr --tdf-spectrum vendor_centroid
     of the pixel. Every table keeps or drops the peak by that one sum. The
     store records the threshold as `intensity_threshold`.
 
+    Only real measurements count toward that sum. A NaN, an infinite or a
+    negative intensity adds nothing, and neither does a point whose m/z is
+    not a finite number.
+
 ---
 
 ## Waters-Specific
