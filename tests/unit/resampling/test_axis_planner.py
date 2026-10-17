@@ -19,6 +19,8 @@ axis silently falls back to a binary search (D21).
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pytest
 
@@ -28,6 +30,7 @@ from thyra.resampling.axis_planner import AxisPlanner, normalize_resampling_conf
 from thyra.resampling.mass_axis.tof_generator import (
     DEFAULT_BINS_PER_FWHM,
     PHI_NANOTOF_LAW,
+    TOFAxisGenerator,
 )
 from thyra.resampling.types import AxisType, ResamplingConfig, ResamplingMethod
 
@@ -135,7 +138,8 @@ class TestWhatTheStrategyIsBuiltFrom:
             "target_bins": 4_000,
             "min_mz": 100.0,
             "max_mz": 1100.0,
-            "mass_width_da": 0.005,
+            # The width the 4,000 points have, not the 5 mDa default (D56).
+            "mass_width_da": pytest.approx(1000.0 / 3_999),
             "reference_mz": 1000.0,
         }
 
@@ -145,7 +149,11 @@ class TestWhatTheStrategyIsBuiltFrom:
 
         assert settled.provenance["tof_a"] == pytest.approx(PHI_NANOTOF_LAW[0])
         assert settled.provenance["tof_b"] == pytest.approx(PHI_NANOTOF_LAW[1])
-        assert settled.provenance["bins_per_fwhm"] == DEFAULT_BINS_PER_FWHM
+        # The count fixed the axis, so k is the one 4,000 bins give (D56).
+        law = TOFAxisGenerator(*PHI_NANOTOF_LAW)
+        k = 4_000 / (1e3 * (law.cumulative(1100.0) - law.cumulative(100.0)))
+        assert settled.provenance["bins_per_fwhm"] == pytest.approx(k)
+        assert settled.provenance["bins_per_fwhm"] != DEFAULT_BINS_PER_FWHM
 
 
 class TestTheMemoryBudgetIsAskedFirst:
@@ -286,3 +294,224 @@ class TestANonFiniteRangeIsRefused:
         with pytest.raises(ConversionRefused, match="not finite") as refused:
             planner.resolve()
         assert "--resample-max-mz" in str(refused.value)
+
+
+class TestBinsPerFwhmIsHonouredOrRefused:
+    """C7 (D56): no setting is dropped, or recorded as applied when it was not."""
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"axis_type": "tof", "width_at_mz": 0.01, "bins_per_fwhm": 2.0},
+            ResamplingConfig(
+                axis_type=AxisType.TOF, mass_width_da=0.01, bins_per_fwhm=2.0
+            ),
+        ],
+    )
+    def test_beside_a_width(self, config):
+        with pytest.raises(ConversionRefused, match="'bins_per_fwhm' and 'width_at"):
+            normalize_resampling_config(config)
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"axis_type": "tof", "target_bins": 5000, "bins_per_fwhm": 2.0},
+            ResamplingConfig(
+                axis_type=AxisType.TOF, target_bins=5000, bins_per_fwhm=2.0
+            ),
+        ],
+    )
+    def test_beside_a_bin_count(self, config):
+        with pytest.raises(ConversionRefused, match="'bins_per_fwhm' and 'target"):
+            normalize_resampling_config(config)
+
+    def test_on_a_named_axis_that_is_not_tof(self):
+        planner = _planner(axis_type=AxisType.CONSTANT, bins_per_fwhm=2.0)
+
+        with pytest.raises(ConversionRefused, match="resolved to constant"):
+            planner.resolve()
+
+    def test_on_a_detected_axis_that_is_not_tof(self):
+        """Only the resolved axis type says whether it applies."""
+        planner = _planner(_RAPIFLEX, bins_per_fwhm=2.0)
+
+        with pytest.raises(ConversionRefused, match="sizes a tof axis"):
+            planner.resolve()
+
+    def test_alone_on_a_tof_axis_it_sizes_the_axis(self):
+        planner = _planner(_PHI, bins_per_fwhm=2.0)
+        settled = planner.settle(lambda n_bins: None)
+
+        assert settled.provenance["bins_per_fwhm"] == 2.0
+
+
+class TestTheRecordedWidthIsTheAxisWidth:
+    """C8 (D56): the step records the width the axis has."""
+
+    def _settle(self, mass_range, **config):
+        told = {"essential_metadata": {"mass_range": mass_range}}
+        planner = AxisPlanner.from_metadata(told, ResamplingConfig(**config))
+        return planner.settle(lambda n_bins: None)
+
+    def test_a_width_the_floor_raised(self):
+        """1 Da over 500-510 is 10 bins; the floor lays 100 points 0.101 Da apart."""
+        settled = self._settle(
+            (500.0, 510.0), axis_type=AxisType.CONSTANT, mass_width_da=1.0
+        )
+
+        assert settled.provenance["target_bins"] == 100
+        recorded = settled.provenance["mass_width_da"]
+        np.testing.assert_allclose(np.diff(settled.axis), recorded, rtol=1e-9)
+        assert recorded == pytest.approx(10.0 / 99)
+
+    def test_a_width_that_set_the_count_is_recorded_as_given(self):
+        settled = self._settle(_RANGE, axis_type=AxisType.CONSTANT, mass_width_da=0.05)
+
+        assert settled.provenance["mass_width_da"] == 0.05
+
+    def test_a_bin_count_on_a_constant_axis(self):
+        settled = self._settle(_RANGE, axis_type=AxisType.CONSTANT, target_bins=100)
+
+        recorded = settled.provenance["mass_width_da"]
+        np.testing.assert_allclose(np.diff(settled.axis), recorded, rtol=1e-9)
+        assert recorded == pytest.approx(1000.0 / 99)
+
+    def test_a_floored_tof_axis_records_the_k_it_has(self):
+        law = (0.5, 1e-8)
+        settled = self._settle(
+            (500.0, 510.0),
+            axis_type=AxisType.TOF,
+            tof_a=law[0],
+            tof_b=law[1],
+            bins_per_fwhm=0.01,
+        )
+
+        generator = TOFAxisGenerator(*law)
+        k = 100 / (1e3 * (generator.cumulative(510.0) - generator.cumulative(500.0)))
+        assert settled.provenance["target_bins"] == 100
+        assert settled.provenance["bins_per_fwhm"] == pytest.approx(k)
+        assert settled.provenance["mass_width_da"] == pytest.approx(
+            generator.bin_width_at(1000.0, k)
+        )
+
+
+class TestAnEmptySourceRangeNamesTheWayForward:
+    """A5 (D56)."""
+
+    def test_every_peak_at_one_mz(self):
+        told = {"essential_metadata": {"mass_range": (500.0, 500.0)}}
+        planner = AxisPlanner.from_metadata(told, ResamplingConfig())
+
+        with pytest.raises(ConversionRefused, match="is empty") as refused:
+            planner.resolve()
+        assert "--no-resample" in str(refused.value)
+        assert "--resample-min-mz" in str(refused.value)
+
+    def test_typed_bounds_are_not_told_to_drop_resampling(self):
+        planner = _planner(min_mz=600.0, max_mz=600.0)
+
+        with pytest.raises(ConversionRefused, match="is empty") as refused:
+            planner.resolve()
+        assert "--no-resample" not in str(refused.value)
+
+    def test_a_non_finite_source_range_is_not_offered_the_raw_axis(self):
+        """A non-finite m/z is refused on the raw axis too (D55)."""
+        told = {"essential_metadata": {"mass_range": (100.0, np.inf)}}
+        planner = AxisPlanner.from_metadata(told, ResamplingConfig())
+
+        with pytest.raises(ConversionRefused, match="not finite") as refused:
+            planner.resolve()
+        assert "--no-resample" not in str(refused.value)
+
+
+class TestAWidenedSourceRangeIsReportedWhereItSetsTheAxis:
+    """K2 (D56): the warning follows what the axis does."""
+
+    _WATERS = {
+        "essential_metadata": {"mass_range": (99.9878, 1200.2158)},
+        "acquisition_params": {
+            "function_1_acq_range_start": 100.0,
+            "function_1_acq_range_end": 1200.0,
+        },
+    }
+
+    def _warnings(self, thyra_logs, metadata=None, **config):
+        planner = AxisPlanner.from_metadata(
+            metadata or self._WATERS, ResamplingConfig(**config)
+        )
+        with thyra_logs("thyra.resampling", logging.WARNING) as records:
+            planner.resolve()
+        return records.text
+
+    def test_the_source_range_sets_the_axis(self, thyra_logs):
+        text = self._warnings(thyra_logs, axis_type=AxisType.CONSTANT)
+
+        assert "widened down to 99.9878 and up to 1200.2158" in text
+
+    def test_typed_bounds_set_the_axis(self, thyra_logs):
+        text = self._warnings(
+            thyra_logs, axis_type=AxisType.CONSTANT, min_mz=700.0, max_mz=900.0
+        )
+
+        assert "widened" not in text
+
+    def test_one_typed_bound_leaves_the_other_side(self, thyra_logs):
+        text = self._warnings(thyra_logs, axis_type=AxisType.CONSTANT, min_mz=700.0)
+
+        assert "widened up to 1200.2158" in text
+        assert "down to" not in text
+
+    def test_a_range_inside_the_acquisition_range_is_silent(self, thyra_logs):
+        inside = dict(self._WATERS, essential_metadata={"mass_range": (100.0, 1200.0)})
+
+        text = self._warnings(thyra_logs, inside, axis_type=AxisType.CONSTANT)
+
+        assert "widened" not in text
+
+
+class TestEveryLawRecordsTheWidthItLays:
+    """C8 (D56) on the physics laws: the recorded width is the local step."""
+
+    @pytest.mark.parametrize(
+        "axis_type",
+        [
+            AxisType.LINEAR_TOF,
+            AxisType.REFLECTOR_TOF,
+            AxisType.ORBITRAP,
+            AxisType.FTICR,
+        ],
+    )
+    def test_a_bin_count(self, axis_type):
+        told = {"essential_metadata": {"mass_range": _RANGE}}
+        config = ResamplingConfig(axis_type=axis_type, target_bins=20_000)
+        settled = AxisPlanner.from_metadata(told, config).settle(lambda n: None)
+
+        reference_mz = settled.provenance["reference_mz"]
+        i = int(np.searchsorted(settled.axis, reference_mz))
+        local = float(settled.axis[i] - settled.axis[i - 1])
+        assert settled.provenance["mass_width_da"] == pytest.approx(local, rel=1e-3)
+
+
+class TestTheFloorIsReadFromTheCount:
+    """The laid step can come out wider than asked; the floor still applied."""
+
+    def test_a_width_just_too_wide_for_a_hundred_bins(self, thyra_logs):
+        told = {"essential_metadata": {"mass_range": (500.0, 510.0)}}
+        config = ResamplingConfig(axis_type=AxisType.CONSTANT, mass_width_da=0.1005)
+        planner = AxisPlanner.from_metadata(told, config)
+
+        with thyra_logs("thyra.resampling", logging.INFO) as records:
+            settled = planner.settle(lambda n: None)
+
+        assert settled.provenance["target_bins"] == 100
+        assert settled.provenance["mass_width_da"] == pytest.approx(10.0 / 99)
+        assert "floor of 100 bins" in records.text
+        assert "finer than asked" not in records.text
+
+    def test_an_inverted_source_range_is_not_told_to_set_bounds_around_it(self):
+        told = {"essential_metadata": {"mass_range": (600.0, 500.0)}}
+        planner = AxisPlanner.from_metadata(told, ResamplingConfig())
+
+        with pytest.raises(ConversionRefused, match="is empty") as refused:
+            planner.resolve()
+        assert "around its m/z" not in str(refused.value)

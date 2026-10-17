@@ -194,7 +194,9 @@ class ResamplingConfig:
         tof_b: ``B`` of the same law (dimensionless).
         bins_per_fwhm: Bins per peak width for ``AxisType.TOF``.  ``None``
             means 3, or -- when ``mass_width_da`` is set -- whatever puts
-            a bin of that width at ``reference_mz``.
+            a bin of that width at ``reference_mz``.  Refused beside
+            ``mass_width_da`` or ``target_bins``, which each fix the bin
+            count too, and on any other axis type (D56).
         mass_axis_sha256: The SHA-256 of the mass axis this conversion is
             expected to build (:func:`thyra.metadata.schema.mass_axis_sha256`,
             design decision D42). ``None`` -- the default -- expects

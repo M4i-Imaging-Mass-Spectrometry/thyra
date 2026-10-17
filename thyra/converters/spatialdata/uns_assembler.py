@@ -656,6 +656,12 @@ class UnsAssembler:
                 if value is None:
                     continue
                 parameters[field_name] = getattr(value, "value", value)
+            # The width law sizes a tof axis only. On any other axis a
+            # requested law is ignored (with a warning), so it is not a
+            # setting the axis was made with (D56).
+            if parameters.get("axis_type", "tof") != "tof":
+                for field_name in ("tof_a", "tof_b", "bins_per_fwhm"):
+                    parameters.pop(field_name, None)
             steps.append(
                 ProcessingStep(
                     name="mass axis resampling",
