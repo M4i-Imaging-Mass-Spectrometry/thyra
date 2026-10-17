@@ -2235,11 +2235,16 @@ because a spectrum reached it, and every spectrum from a reader that knows the
 order carries one; the converter refuses a spectrum without it rather than
 leave a blank. "Unknown" is therefore a property of a whole table, and the
 store says it by leaving the column out, as it says "not stated" everywhere
-else. Plain `int64` is also what `x`, `y` and `region_number` are, and it is
-stored as one flat array, where anndata stores a nullable integer as values
+else. `x`, `y` and `region_number` are plain integers too, and a plain integer
+is stored as one flat array, where anndata stores a nullable integer as values
 plus a mask that any reader of the Zarr without anndata has to know about. The
 price: concatenating a table that has the column with one that has not gives
 pandas' `float64` with NaN, unless the caller asks for `Int64`.
+
+*Corrected 2026-10-16 (D57):* this entry first said `x`, `y` and
+`region_number` are `int64`. In a 2D store all three are `int32`; in a volume
+`x` and `y` are `int64` and `region_number` is `int32`. The reasoning holds:
+each is a plain integer column.
 
 **Why this name.** `spectrum_index` was the other candidate. mzML and mzPeak use
 it for a 0-based list position, while the Bruker value is a 1-based id with
@@ -2826,7 +2831,7 @@ that.
 
 **Status:** Implemented (2026-10-06), issue #429. Extends D29, and replaces
 its "embedded images are carried into the store, unaligned" for an image
-fitted to the teaching points.
+fitted to the teaching points. Amended by D61 (2026-10-16).
 
 **Decision.** `mzpeak-convert` 0.17 states five more facts of a Bruker run.
 Thyra reads each the way it reads the `.d`.
@@ -3211,7 +3216,8 @@ varies.
 
 ## D38. The mass-mobility heatmap is a mean over positions, not spectra
 
-**Status:** Implemented (2026-10-13).
+**Status:** Implemented (2026-10-13). Amended by D58 (the divisor is the
+summed table's rows).
 
 **Decision.** `uns["mobility_heatmap"]["counts"]` is the heatmap's total
 divided by the number of distinct pixel positions it was fed, the rows
@@ -3269,7 +3275,7 @@ per position do not change.
 - A frame with no points never reaches the heatmap. A position whose
   points all fall outside the mass axis, or one off the grid, still counts
   as a pixel while the table gives it no row, as before. Neither has been
-  seen on a real file.
+  seen on a real file. (Lifted by D58: a position with no row is no pixel.)
 - On a store with more than one plane, the heatmap covers every plane
   while each table's mean spectrum covers its own; `current_ratio` there
   compares the two and is not 1. The new `WARNING` says so.
@@ -3526,7 +3532,9 @@ exist. The new check refuses a conversion; it writes nothing.
 
 ## D44. Only a reader that can select a region accepts the region option
 
-**Status:** Implemented (2026-10-13).
+**Status:** Implemented (2026-10-13). Superseded in part by D57
+(2026-10-16): one region now gives a region map, so a single-region store
+keeps the source's region number and name.
 
 **Decision.** `region` selects one region, and only the timsTOF reader can do
 that. Every other reader refuses it, through the API as well as the CLI. The
@@ -4641,6 +4649,216 @@ they were accepted.
 
 ---
 
+## D57. A store keeps its source's regions, and a region store describes only its own
+
+**Status:** Implemented (2026-10-16), issue #496.
+
+**Decision.** A store describes the regions it holds, with the numbers and
+names its source states. Under `region=`, everything the timsTOF reader
+reports is about the selected region. Five rules follow.
+
+- A reader that knows its regions gives a region map and a region summary
+  for one region too: timsTOF (the DB RegionNumber), rapifleX (the poslog's
+  `R{n}`), mzPeak (the region each scan names, or its one listing) and
+  solariX, which already did. A single-region store then keeps the source's
+  number, name and box instead of the placeholder region 1. This supersedes
+  D44's "As on timsTOF, one region gives no map" and its "A single-region
+  Rapiflex store is unchanged". Region 1 stays only for formats with no
+  region concept (imzML, PHI, Waters). On timsTOF the name of a lone region
+  is the `.mis` Area the alignment pairs it with, which on a run cut from a
+  multi-region slide is the one its spot names give, while the number stays
+  the database's, the one `region=` accepts. `region=` accepts that name too,
+  and refuses another Area's name on such a run.
+
+- `get_region_info`, and with it `uns["regions"]`, lists only the selected
+  region. Its count and box are that region's, inside the stored raster.
+- The precursor schedule is read from the selected region's frames: the frame
+  types in `Frames`, and the windows in `PasefFrameMsMsInfo`,
+  `DiaFrameMsMsInfo` and `FrameMsMsInfo`. The mixed-level check already
+  filtered this way. Without `region=` the queries are unchanged.
+- A position measured in two regions is one row, as any repeated position is
+  (D40). On timsTOF and solariX that row takes the region of its first frame
+  that holds peaks, the frame whose number is its `acquisition_order` (D26),
+  and on mzPeak the region of its first scan. An empty frame gives no row, so
+  it names no region. The reader warns once, naming the regions and the first
+  shared position.
+- `region` takes any integer type except `bool`, so a value read back from
+  `obs["region_number"]`, which is a numpy integer, selects its region.
+
+`uns["average_spectrum_per_region"]` is written when the region map holds two
+regions or more: one region's mean is the table's own `average_spectrum`. A
+region with no row has no entry in it, on every reader. D26's note on column
+types is corrected in place, with a dated note: in a 2D store `x`, `y` and
+`region_number` are `int32`, not `int64`.
+
+**Why.** A single-region run was stored as region 1 with no name, whatever
+the source said: a timsTOF run with one region numbered 3, or an mzPeak
+archive naming region 3 "tumour", came out as region 1, while the optical
+crop record of the same store named region 0 and Area "01". The placeholder
+also broke the region loop: `list_regions` answered 1 for a single-region
+`.d` whose region is 0, and `region=1` was then refused. Runs of one slide
+merged on `region_number` could collide, because the placeholder 1 equals
+another run's real region 1.
+
+A `region=` store listed every region of the run, with whole-run
+counts and boxes outside its raster, some negative. A region on one constant
+schedule lost its MS/MS table when another region was survey only, because
+the survey frames of the other region made the file "mixed". A survey region
+was described as MS level 2. A shared position took the region of its last
+frame and the order of its first, so one row named two different frames. A
+region number read back from a store was refused with a message about
+positional arguments nobody passed. A region with no row got a mean of zeros,
+which is not a mean.
+
+**What changes in a store.**
+
+- A single-region timsTOF store: `obs["region_number"]` changes from 1 to the
+  DB RegionNumber, which was 0 on all five single-region runs measured
+  (2026-10-16), and the `uns["regions"]` entry
+  gains `bounds` and, where the `.mis` has it, `name`. The same holds for a
+  single-region rapifleX store (the poslog's number, usually 0) and a
+  single-region mzPeak archive of a Bruker run.
+- A single-region solariX store and a `region=` timsTOF store lose
+  `uns["average_spectrum_per_region"]`, which held a copy of
+  `average_spectrum`. A multi-region store keeps it, even when only one of
+  its regions holds rows.
+- A `region=` timsTOF store: `uns["regions"]` holds one entry. The
+  `fragmentation` block and whether an `_msms` table is written follow the
+  region's own frames.
+- A multi-region timsTOF or solariX store with a shared position: that row's
+  `region_number` is the region of its first frame (it was the last), and the
+  per-region means move with it.
+- A store with a region that has no row: that region's
+  `average_spectrum_per_region` entry is gone.
+
+**Alternatives.**
+
+- "Write no region map when two regions share a position", as the rapifleX
+  reader does (D44). Rejected for timsTOF and solariX: their region number is
+  a column of the vendor database, so one shared position does not cast doubt
+  on the others. The rapifleX map is rebuilt from spot names, and a conflict
+  there can mean the keying itself is wrong.
+- "Keep each region's spectrum in its own row." The store has one row per
+  position (D40); two rows at one `(x, y)` would break every consumer that
+  indexes by position. `region=` gives each region its own measurement.
+- "An all-NaN mean for an empty region." A consumer that plots every entry
+  then draws nothing under a legend label. No entry says the same thing.
+
+**Known limits.**
+
+- A consumer that picked a single-region store's rows with
+  `region_number == 1` now finds none on timsTOF, rapifleX and mzPeak.
+- On a timsTOF run cut from a multi-region slide (RegionNumber 0, spot names
+  `R02...`), the optical crop record names region 2 while
+  `obs["region_number"]` is 0. The name agrees; the alignment's number is
+  not part of this decision.
+- A rapifleX run whose poslog misses a spectrum's spot, and an older mzPeak
+  archive whose one listed box does not hold every pixel, still get the
+  placeholder 1, with a warning, new for a single-region run: before, one
+  region was not checked at all.
+- In the full store, a shared position's row sums the spectra of both
+  regions, so the earlier region's mean is not the one its `region=` store
+  gives. The warning says so.
+- The schedule filter needs `MaldiFrameInfo`. A `region=` request on a file
+  without it is already refused (issue #252).
+- A frame that lists peaks but loses all of them to `--intensity-threshold`
+  still counts as holding peaks, so on a shared position it can name the
+  region while a later frame gives the row its `acquisition_order`.
+
+---
+
+## D58. The mass-mobility heatmap is a mean over the summed table's rows
+
+**Status:** Implemented (2026-10-16), issue #495. Narrows D38's divisor and
+lifts its first known limit.
+
+**Decision.** A spectrum the summed table gives no row adds neither points
+nor a pixel to `uns["mobility_heatmap"]`. On the fused route (a TDF), a
+frame feeds the heatmap only when it gets a row. On the separate raw pass
+(imzML, Waters), the converter tells the heatmap which positions have a row
+once the passes have decided them. The heatmap's population is then the one
+`uns["average_spectrum"]` divides by, as D38 meant it to be.
+
+Three smaller rules come with it:
+
+- The shared-axis mobility table (a continuous imzML with a mobility array)
+  takes the grid route's memory guard (D4) before it builds anything, on
+  the distinct `(m/z, mobility)` pairs the list holds, which are its
+  `var`. Past
+  half of free memory the table is left out with a `WARNING` naming
+  `--no-mobility-table`, once per table; past a quarter it warns and is
+  built.
+- A mobility spectrum with no row counts as skipped only when it is on the
+  table's own plane and carries signal, on the separate pass and the fused
+  one alike. Another plane's spectrum has its row in that plane's table,
+  and an all-zero one loses nothing.
+- A 2D conversion of a multi-plane source plans a table for each plane the
+  pre-scan meets, not for every z in the span. A single plane and a volume
+  are planned up front, as before.
+
+**Why.** On a continuous imzML with one all-zero spectrum, `--no-resample`
+or not, the summed table had three rows and the heatmap four pixels:
+`current_ratio` 0.75 and a warning, though no current was lost. D38 kept
+the heatmap's own count of distinct positions and rejected taking the
+table's rows, because one raw pass served every plane and the fallback has
+no table. Both still hold, so the rows are not handed over as a number: the
+heatmap asks, per position, whether the table has a row there. The
+fallback, with no table, still counts every position.
+
+The other three were seen in the same run. A feature list the grid guard
+would refuse went through, and could end in a raw allocation error.
+Each plane of a two-plane conversion warned that the other
+plane's spectra "had no row ... and were skipped". A source stating z 1
+and z 120 planned 120 tables: 118 warnings, and 14.4 s against 4.5 s for
+the same six spectra on z 1 and 2.
+
+**What changes in a store.**
+
+- A store with a mobility heatmap and a spectrum that gets no row (all
+  zero, every point outside the kept mass range, off the grid, or a TDF
+  frame whose vendor centroid is empty while its raw scans are not):
+  `counts` changes from (all points) / (positions fed) to (points of the
+  spectra with a row) / (rows), and `current_ratio` with it. On the issue's
+  file, whose rowless spectrum is all zero, that is a factor of 4/3, and
+  `current_ratio` goes from 0.75 to 1.0.
+- Every store without a rowless spectrum is byte-identical: measured on the
+  eight default fixtures and two TDF runs, before and after.
+- A store whose shared-axis feature list is too wide for the machine has no
+  `_mobility` table, and `uns` does not name one.
+- A TDF store under `scan_sum`, with the default mass range and no
+  intensity threshold, does not change: every frame with raw points then has
+  a summed spectrum, so every one already had a row. A narrowed range or a
+  threshold that empties a frame changes it as the first bullet says.
+- Planning tables per plane met changes no store: the planes the pre-scan
+  never met had no rows, so they wrote no table before either.
+
+**Alternatives.**
+
+- "Divide by the table's row count." The separate pass builds every plane's
+  heatmap at once (D41), so it would need every plane's count, and an
+  off-grid spectrum's points would stay in the numerator.
+- "Skip all-zero spectra in the imzML reader." The reader belongs to every
+  route, and a spectrum off the grid or outside the mass range would still
+  be counted. The converter is where rows are decided.
+- "One skip warning per conversion." Counting only the table's own plane
+  already counts each lost spectrum once; each plane's warning then names
+  its own.
+
+**Known limits.**
+
+- On the separate pass, a repeated position whose second spectrum is empty
+  in the summed table still adds that spectrum's raw points: the pass
+  knows positions, not which spectrum of a position gave the row. The fused
+  route leaves those points out.
+- `VAR_BYTES_PER_FEATURE` was measured on a grid `var`. The shared-axis
+  `var` is built differently and its cost per feature is not measured.
+- A plane the source states but whose every spectrum is empty gets no table
+  and no warning, since the pre-scan never meets it. A spectrum that turns up
+  on such a plane in pass 2 is refused as a disagreement between the passes,
+  as any other is.
+
+---
+
 ## D59. A FlexImaging run that stopped early is placed by its planned grid
 
 **Status:** Implemented (2026-10-16), issue #497. Amends
@@ -4766,3 +4984,58 @@ that anchor is a step off.
   warning about spots outside the Area.
 - A planned grid cannot tell a mirrored stage from the usual one. With one,
   the usual axis directions are preferred before the grid is consulted.
+
+---
+
+## D61. An mzPeak TDF frame sums only measurements into a TOF bin
+
+**Status:** Implemented (2026-10-16). Amends D33, and applies D55's rule to
+the mzPeak reader's own grouping.
+
+**Decision.** When the mzPeak reader puts a TDF archive's raw counts on the
+`.d`'s scale (D33), it sums the points of one frame that fall on one TOF bin.
+A point whose m/z is not finite, or whose count is not finite or is
+negative, now joins no bin. It is passed on by itself, scaled but not
+rounded, and the converter drops, counts or refuses it as it does any other
+such point. A NaN m/z was already dropped earlier, as null-pair padding.
+
+**Why.** The grouping split two sorted points when their step exceeded
+`1e-12 x m/z`. Relative to an infinite m/z no step is large enough, so an
+`inf` point joined the largest finite bin. Its count was added there and
+kept at that finite m/z, with or without an intensity threshold. Two `-inf`
+points were summed into one. A NaN count made its whole bin NaN, and the
+converter then dropped the bin's real signal with it. A negative count
+shrank the bin it joined. D55 fixed the same split test in
+`summed_peak_mask`; this grouping is its own copy of the rule.
+
+Measured on a two-pixel fixture at 100 ms, so counts keep their values. Its
+first pixel holds 2, 3 and 5 at m/z 100, 101 and 102 and one extra point.
+Values stored for that pixel, resampled to 99.5-102.5, no threshold. A
+converter-level test holds each "Now" row, and the warning that says the
+extra point was dropped:
+
+| Extra point | Before | Now |
+|---|---|---|
+| 7 at m/z `inf` | 2, 3, 12 | 2, 3, 5 |
+| NaN on m/z 100 | -, 3, 5 | 2, 3, 5 |
+| -4 on m/z 100 (bin of 9) | 5 at m/z 100 | 9 at m/z 100 |
+
+**What changes in a store.** Only stores of TDF-sourced mzPeak archives with
+a non-finite m/z, or a non-finite or negative count, on a frame. Their bins
+hold the measured counts alone. With `--intensity-threshold`, the points
+passed on decide nothing either: the threshold, applied after this step,
+leaves them out of every sum (D55). Without resampling, a non-finite m/z is
+refused as before, since it would become `var["mz"]`. Archives whose m/z
+and counts are all finite and non-negative give the same stores, value for
+value. A count between -0.5 and 0 used to round to 0; it is now passed on
+unrounded and dropped with a warning. Real TDF counts are unsigned, so no
+real archive holds one. No schema change.
+
+**Alternatives.**
+
+- "Drop such points in the reader." Then the converter could not count or
+  refuse them, and a non-resampled conversion would quietly lose a point it
+  refuses on every other route. D55 rejected the same option.
+- "Reuse `summed_peak_mask`." It returns a keep mask, not the summed bins,
+  so it cannot replace this step. The two share the tolerance
+  (`SAME_PEAK_RELATIVE`) and now the rule for what counts.

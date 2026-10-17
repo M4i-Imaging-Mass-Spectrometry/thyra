@@ -74,6 +74,7 @@ from numpy.typing import NDArray
 
 from ...core.base_reader import SAME_PEAK_RELATIVE, BaseMSIReader, OpticalImageLabel
 from ...core.mass_axis import MassAxisAccumulator
+from ...core.region_map import build_region_map
 from ...core.registry import register_reader
 from ...errors import ConversionRefused
 from .chunk_decoding import (
@@ -183,7 +184,8 @@ TDF_INTENSITY_NUMERATOR = 100.0
 
 #: Two m/z of one TDF frame this close, relative, are one TOF bin. Bins of a
 #: timsTOF are some 1e-6 apart; one bin's copies differ in the last bit. The
-#: intensity threshold groups a spectrum's points into peaks by the same rule.
+#: intensity threshold groups a spectrum's points into peaks by the same rule,
+#: and neither sums a point that is not a measurement (D55, D61).
 SAME_BIN_RELATIVE = SAME_PEAK_RELATIVE
 
 #: Metadata column recording how many points each spectrum has in a signal
@@ -433,15 +435,40 @@ def _on_tdf_scale(
     of the same bin in the last bit, while neighbouring bins are some 1e-6
     apart.
 
+    Only measurements are summed (D61): a point whose m/z is not finite, or
+    whose count is not finite or is negative, joins no bin. Summed, an
+    infinite m/z added its count to the largest finite bin, and a NaN count
+    turned a real bin into NaN. Such a point is kept on its own, scaled but
+    not rounded, so the converter drops, counts or refuses it as it does
+    any other.
+
     Args:
         mzs: m/z of the frame's points.
         counts: The raw count of each point.
         accumulation_ms: The frame's accumulation time.
 
     Returns:
-        Distinct m/z, ascending, and the summed scaled intensity of each.
+        m/z, ascending, and the scaled intensity of each: one summed point
+        per bin, then each point that is not a measurement.
     """
     scaled = np.floor(counts * TDF_INTENSITY_NUMERATOR / accumulation_ms + 0.5)
+    usable = np.isfinite(mzs) & np.isfinite(scaled) & (counts >= 0)
+    if bool(usable.all()):
+        return _summed_per_bin(mzs, scaled)
+    bin_mzs, bin_intensities = _summed_per_bin(mzs[usable], scaled[usable])
+    left = ~usable
+    out_mzs = np.concatenate((bin_mzs, mzs[left]))
+    out_intensities = np.concatenate(
+        (bin_intensities, counts[left] * TDF_INTENSITY_NUMERATOR / accumulation_ms)
+    )
+    order = np.argsort(out_mzs, kind="stable")
+    return out_mzs[order], out_intensities[order]
+
+
+def _summed_per_bin(
+    mzs: NDArray[np.float64], scaled: NDArray[np.float64]
+) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """:func:`_on_tdf_scale`'s sum over points that are all measurements."""
     order = np.argsort(mzs, kind="stable")
     ordered = mzs[order]
     starts = np.concatenate(
@@ -1975,11 +2002,12 @@ class MzPeakReader(BaseMSIReader):
         return self.get_essential_metadata().total_peaks
 
     def get_region_map(self) -> Optional[Dict[Tuple[int, int], int]]:
-        """Each pixel's acquisition region, or ``None`` for one region.
+        """Each pixel's acquisition region, or ``None`` when none is stated.
 
         mzPeak has no region column. A Bruker archive from mzpeak-convert
         lists its regions under ``bruker_maldi.regions``; see
-        :meth:`_regions`.
+        :meth:`_regions`. One region is a map too, as from the ``.d``
+        (D57).
         """
         regions = self._regions()
         return regions[0] if regions is not None else None
@@ -1988,7 +2016,8 @@ class MzPeakReader(BaseMSIReader):
         """Region number, spectrum count and box of each region.
 
         The same keys, box frame and order as the timsTOF reader gives for
-        the ``.d`` the archive was made from. ``None`` for one region.
+        the ``.d`` the archive was made from. ``None`` when no region is
+        stated.
         """
         regions = self._regions()
         return regions[1] if regions is not None else None
@@ -2014,7 +2043,7 @@ class MzPeakReader(BaseMSIReader):
         if named is not None:
             self._region_cache = self._scan_regions(named, listed)
             return self._region_cache
-        if len(listed) <= 1:
+        if not listed:
             return None
 
         coordinates = self._require(self._coordinates)
@@ -2071,14 +2100,14 @@ class MzPeakReader(BaseMSIReader):
         named: NDArray[np.int64],
         listed: List[Tuple[int, Optional[str], int, List[int]]],
     ) -> Optional[Tuple[Dict[Tuple[int, int], int], List[Dict[str, Any]]]]:
-        """Regions from the region each scan names; ``None`` for one region.
+        """Regions from the region each scan names; ``None`` when none is named.
 
         The box and the name of a region come from its listing when it has
         one, as for the ``.d``. A region no listing describes is boxed by
-        its own pixels.
+        its own pixels. One region is a map too (D57).
         """
         numbers = sorted({int(n) for n in named.tolist()})
-        if len(numbers) <= 1:
+        if not numbers:
             return None
         coordinates = self._require(self._coordinates)
         offsets = self._require_offsets()
@@ -2099,18 +2128,20 @@ class MzPeakReader(BaseMSIReader):
             if name:
                 entry["name"] = name
             info.append(entry)
-        region_map = {
-            (int(x), int(y)): int(n)
+        # In spectrum order: a position two regions measured takes the
+        # region of its first scan, as on the .d (D57).
+        region_map = build_region_map(
+            (int(x), int(y), int(n))
             for (x, y), n in zip(coordinates.tolist(), named.tolist())
-        }
+        )
         info.sort(key=lambda entry: (-entry["n_spectra"], entry["region_number"]))
         return region_map, info
 
     def _single_region(self) -> Tuple[int, Optional[str]]:
         """Number and name of an archive's one region, for its alignment.
 
-        The region map is ``None`` for one region, as from the ``.d``, but
-        the archive still names it: in every scan, or in its one listing.
+        Asked when the archive states no region map: then it may still
+        name its region in every scan or in its one listing.
         """
         listed = self._listed_regions()
         named = self.archive.scan_regions()

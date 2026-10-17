@@ -219,9 +219,10 @@ def record_heatmap_current(
         return
     logger.warning(
         "The mass-mobility heatmap holds %.4fx the stored mean spectrum's "
-        "ion current, though both are built from the same raw points. A "
-        "spectrum the table has no row for (empty, or off the grid) makes "
-        'them differ. uns["mobility_heatmap"]["current_ratio"] records it.',
+        "ion current, though both are built from the same raw points over "
+        "the same rows. A point the two map onto the mass axis differently "
+        'makes them differ. uns["mobility_heatmap"]["current_ratio"] records '
+        "it.",
         ratio,
     )
 
@@ -716,8 +717,9 @@ class UnsAssembler:
         a list of dicts (they get stringified individually). JSON
         preserves the structure and can be parsed with json.loads().
 
-        Always written for a consistent schema. Single-region datasets
-        get a single-entry list with region_number=1.
+        Always written for a consistent schema. A reader that states one
+        region gives its one entry (D57); a format with no regions gets a
+        single entry with region_number=1.
         """
         region_info = ctx.region_info
         if region_info:

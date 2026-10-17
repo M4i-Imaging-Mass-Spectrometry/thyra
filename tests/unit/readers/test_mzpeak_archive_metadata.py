@@ -16,13 +16,10 @@ import zipfile
 import numpy as np
 import pytest
 
-from tests.fixtures.mzpeak_builder import (
-    INDEX_MEMBER,
-    SCANS_MEMBER,
-    Spectrum,
-    build_mzpeak,
-    grid_spectra,
-)
+from tests.fixtures.mzpeak_builder import INDEX_MEMBER, SCANS_MEMBER, Spectrum
+from tests.fixtures.mzpeak_builder import bruker_region as _region
+from tests.fixtures.mzpeak_builder import build_mzpeak, grid_spectra
+from tests.fixtures.mzpeak_builder import region_parameter as _region_parameter
 from thyra.core.base_reader import OpticalImageLabel
 from thyra.errors import ConversionRefused
 from thyra.readers.mzpeak import MzPeakReader
@@ -524,18 +521,6 @@ class TestPositionZInScanParameters:
         assert self._offsets(archive) == (1, 1, 0)
 
 
-def _region(number, frames, x_index, y_index, name=None):
-    """One ``bruker_maldi.regions`` entry, as mzpeak-convert writes it."""
-    return {
-        "frames": frames,
-        "name": name,
-        "raster_step_um": None,
-        "region_number": number,
-        "x_index": list(x_index),
-        "y_index": list(y_index),
-    }
-
-
 def _two_regions(tmp_path, regions, name="regions.mzpeak"):
     """Two 2x2 blocks side by side, raster indices 101-102 and 104-105.
 
@@ -594,13 +579,16 @@ class TestRegions:
             {"region_number": 1, "n_spectra": 4, "bounds": (3, 0, 4, 1)},
         ]
 
-    def test_one_region_is_none_as_from_the_d(self, tmp_path):
-        """The timsTOF reader gives no region map for one region either."""
-        archive = _two_regions(tmp_path, [_region(0, 8, (101, 105), (11, 12))])
+    def test_one_region_is_a_map_as_from_the_d(self, tmp_path):
+        """One listed region keeps its number and box, as a ``.d`` does (D57)."""
+        archive = _two_regions(tmp_path, [_region(3, 8, (101, 105), (11, 12))])
 
         with MzPeakReader(archive) as reader:
-            assert reader.get_region_map() is None
-            assert reader.get_region_info() is None
+            assert set(reader.get_region_map().values()) == {3}
+            (entry,) = reader.get_region_info()
+
+        assert entry["region_number"] == 3
+        assert entry["n_spectra"] == 8
 
     @pytest.mark.parametrize(
         "regions",
@@ -971,23 +959,6 @@ class TestEmbeddedImages:
 # ----------------------------------------------------------------------
 
 
-def _region_parameter(number):
-    """A scan's ``acquisition region`` parameter, as mzpeak-convert 0.17 writes it."""
-    return [
-        {
-            "value": {
-                "integer": number,
-                "float": None,
-                "string": None,
-                "boolean": None,
-            },
-            "accession": None,
-            "name": "acquisition region",
-            "unit": None,
-        }
-    ]
-
-
 def _named_regions(tmp_path, numbers, regions, name="named.mzpeak"):
     """The layout of :func:`_two_regions`, each scan naming its region."""
     spectra = [
@@ -1081,12 +1052,13 @@ class TestRegionNamedByEachScan:
         assert region_map[(0, 0)] == 0
         assert region_map[(3, 0)] == 1
 
-    def test_one_named_region_is_none_as_from_the_d(self, tmp_path):
-        """As for a ``.d`` of one region."""
-        archive = _named_regions(tmp_path, [0] * 8, [])
+    def test_one_named_region_is_a_map_as_from_the_d(self, tmp_path):
+        """As for a ``.d`` of one region (D57)."""
+        archive = _named_regions(tmp_path, [3] * 8, [])
 
         with MzPeakReader(archive) as reader:
-            assert reader.get_region_map() is None
+            assert set(reader.get_region_map().values()) == {3}
+            assert [e["region_number"] for e in reader.get_region_info()] == [3]
 
     def test_the_first_region_of_a_scan_wins(self, tmp_path):
         """A scan that names two regions is read at the first one."""
@@ -1444,7 +1416,7 @@ class TestTeachPointsImage:
         )
 
         with MzPeakReader(archive) as reader:
-            assert reader.get_region_map() is None
+            assert set(reader.get_region_map().values()) == {3}
             alignment = reader.get_image_alignment()
 
         (mapping,) = alignment.region_mappings
@@ -1525,3 +1497,125 @@ class TestOneTofBin:
 
         np.testing.assert_array_equal(out_mz, [bound, neighbour])
         np.testing.assert_array_equal(out_intensity, [4.0, 4.0])
+
+
+class TestOnlyMeasurementsAreSummed:
+    """A point that is not a measurement joins no TOF bin (D61)."""
+
+    @staticmethod
+    def _read(tmp_path, mzs, counts, threshold=None):
+        """The one pixel of a TDF archive at 100 ms, so counts stay as they are."""
+        archive = build_mzpeak(
+            tmp_path / "frame.mzpeak",
+            [Spectrum(1, 1, mzs, counts)],
+            file_metadata=TDF_SOURCE,
+            scan_columns={"ion_injection_time": [100.0]},
+        )
+        with MzPeakReader(archive, intensity_threshold=threshold) as reader:
+            ((_, out_mz, out_intensity),) = list(reader.iter_spectra())
+        return out_mz, out_intensity
+
+    def test_an_infinite_m_z_stays_out_of_the_largest_bin(self, tmp_path):
+        """Its step from the largest finite m/z is no step, relative to inf."""
+        out_mz, out_intensity = self._read(
+            tmp_path, [100.0, 101.0, 102.0, np.inf], [2.0, 3.0, 5.0, 7.0]
+        )
+
+        np.testing.assert_array_equal(out_mz, [100.0, 101.0, 102.0, np.inf])
+        np.testing.assert_array_equal(out_intensity, [2.0, 3.0, 5.0, 7.0])
+
+    def test_minus_infinite_m_z_are_not_summed_together(self, tmp_path):
+        """Each is the converter's to drop and count, one point at a time."""
+        out_mz, out_intensity = self._read(
+            tmp_path, [-np.inf, -np.inf, 100.0], [7.0, 4.0, 2.0]
+        )
+
+        np.testing.assert_array_equal(out_mz, [-np.inf, -np.inf, 100.0])
+        np.testing.assert_array_equal(out_intensity, [7.0, 4.0, 2.0])
+
+    @pytest.mark.parametrize("bad", [np.nan, np.inf, -4.0])
+    def test_a_bad_count_leaves_its_bin_whole(self, tmp_path, bad):
+        """A NaN would turn the bin into NaN; a negative would shrink it."""
+        out_mz, out_intensity = self._read(
+            tmp_path, [100.0, 100.0, 101.0], [9.0, bad, 3.0]
+        )
+
+        np.testing.assert_array_equal(out_mz, [100.0, 100.0, 101.0])
+        np.testing.assert_array_equal(out_intensity, [9.0, bad, 3.0])
+
+    def test_an_infinite_m_z_does_not_lift_a_bin_over_the_threshold(self, tmp_path):
+        """The 7 at inf would carry the 5 at m/z 102 past a threshold of 6."""
+        out_mz, out_intensity = self._read(
+            tmp_path, [100.0, 101.0, 102.0, np.inf], [2.0, 3.0, 5.0, 7.0], 6.0
+        )
+
+        np.testing.assert_array_equal(out_mz, [np.inf])
+        np.testing.assert_array_equal(out_intensity, [7.0])
+
+    @pytest.mark.parametrize(
+        "mzs, counts, expected, said",
+        [
+            # Stored inside the bin at m/z 102 before: 2, 3 and 12.
+            (
+                [100.0, 101.0, 102.0, np.inf],
+                [2.0, 3.0, 5.0, 7.0],
+                [2.0, 3.0, 5.0],
+                "(0 non-finite, 0 negative, 1 at a non-finite m/z)",
+            ),
+            # Made the bin at m/z 100 NaN before, and the 2 was dropped with it.
+            (
+                [100.0, 100.0, 101.0, 102.0],
+                [2.0, np.nan, 3.0, 5.0],
+                [2.0, 3.0, 5.0],
+                "(1 non-finite, 0 negative, 0 at a non-finite m/z)",
+            ),
+            # Shrank the bin at m/z 100 to 5 before, with no warning.
+            (
+                [100.0, 100.0, 101.0, 102.0],
+                [9.0, -4.0, 3.0, 5.0],
+                [9.0, 3.0, 5.0],
+                "(0 non-finite, 1 negative, 0 at a non-finite m/z)",
+            ),
+        ],
+        ids=["inf-mz", "nan-count", "negative-count"],
+    )
+    def test_the_store_holds_the_measured_bins(
+        self, tmp_path, thyra_logs, mzs, counts, expected, said
+    ):
+        """The point that is not a measurement is dropped by the converter, said once."""
+        import anndata
+
+        from thyra.convert import convert_msi
+
+        archive = build_mzpeak(
+            tmp_path / "frame.mzpeak",
+            [
+                Spectrum(1, 1, mzs, counts),
+                Spectrum(2, 1, [100.0, 101.0, 102.0], [1.0, 1.0, 1.0]),
+            ],
+            file_metadata=TDF_SOURCE,
+            scan_columns={"ion_injection_time": [100.0, 100.0]},
+        )
+        out = tmp_path / "frame.zarr"
+
+        with thyra_logs("thyra.converters", logging.WARNING) as records:
+            assert convert_msi(
+                str(archive),
+                str(out),
+                dataset_id="ds",
+                resampling_config={
+                    "method": "nearest_neighbor",
+                    "min_mz": 99.5,
+                    "max_mz": 102.5,
+                    "target_bins": 7,
+                },
+            )
+
+        table = anndata.read_zarr(str(out / "tables" / "ds_z0"))
+        first = table.X.toarray()[0]
+        stored = table.var["mz"].to_numpy()[first > 0]
+        np.testing.assert_allclose(stored, [100.0, 101.0, 102.0])
+        np.testing.assert_array_equal(first[first > 0], expected)
+        dropped = [r.getMessage() for r in records if "Dropping" in r.getMessage()]
+        assert len(dropped) == 1
+        assert "1 of 4 in the first spectrum affected " + said in dropped[0]

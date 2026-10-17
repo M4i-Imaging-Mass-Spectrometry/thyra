@@ -129,7 +129,11 @@ class TestSpatialDataConverter:
         assert converter.handle_3d is True
 
     def test_plans_one_table_per_plane(self, temp_dir):
-        """Without 3D handling, a two-plane dataset gets two plane tables."""
+        """Without 3D handling, a two-plane dataset gets two plane tables.
+
+        The pre-scan plans them as it meets each plane (issue #495), so
+        before it there are none.
+        """
         output_path = temp_dir / "test_output.zarr"
         mock_reader = create_mock_reader_with_dimensions((3, 3, 2))
 
@@ -138,6 +142,11 @@ class TestSpatialDataConverter:
         )
         converter._initialize_conversion()
         data_structures = converter._create_data_structures()
+        assert data_structures.units == []
+        try:
+            converter._process_spectra(data_structures)
+        finally:
+            converter.siblings.release_scratch()
 
         assert converter.handle_3d is False
         units = data_structures.units
@@ -154,6 +163,32 @@ class TestSpatialDataConverter:
         assert data_structures.tables == {}
         assert data_structures.shapes == {}
         assert data_structures.images == {}
+
+    def test_a_plane_that_appears_only_in_pass_two_is_refused(self, temp_dir):
+        """Pass 1 met plane 0 only; pass 2 finding plane 1 is a disagreement."""
+        from thyra.errors import ConversionRefused
+
+        mock_reader = create_mock_reader_with_dimensions((3, 3, 2))
+        reads = []
+
+        def iter_spectra():
+            reads.append(1)
+            for coords, mzs, intensities in _generate_spectrum_data((3, 3, 2)):
+                if coords[2] == 0 or len(reads) > 1:
+                    yield coords, mzs, intensities
+
+        mock_reader.iter_spectra = iter_spectra
+        converter = SpatialDataConverter(
+            mock_reader,
+            temp_dir / "test_output.zarr",
+            handle_3d=False,
+            dataset_id="test_dataset",
+        )
+        try:
+            with pytest.raises(ConversionRefused, match="passes over the source"):
+                _run_passes(converter)
+        finally:
+            converter.siblings.release_scratch()
 
     def test_plans_one_volume_table(self, temp_dir):
         """With 3D handling, the same dataset is one volume table."""

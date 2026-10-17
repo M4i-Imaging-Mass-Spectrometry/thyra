@@ -387,6 +387,8 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             passed to the reader constructor.
         """
         super().__init__(*args, **kwargs)
+        #: Each plane's table, once the pre-scan has met the plane.
+        self._units_by_plane: Dict[int, _TableUnit] = {}
 
         if use_csc is False:
             raise ConversionRefused(
@@ -497,19 +499,23 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         return self._resampler.resample(mzs, intensities)
 
     def _plan_tables(self) -> List[_TableUnit]:
-        """The tables this conversion writes: one per plane, or one volume.
+        """The tables known before the pre-scan: the volume, or a lone plane.
 
         A plane's table indexes its rows by ``y * n_x + x`` and is named
         ``{id}_z{z}``; the volume's by ``z * n_x * n_y + y * n_x + x`` and
         is named ``{id}``, with ``z`` and ``spatial_z`` in ``obs``. Those
         are the layouts the per-slice and volume converters wrote before
         they were folded in here, kept so a store reads back the same.
+
+        With several planes and no volume, the list starts empty and the
+        pre-scan adds a plane's table when it meets the plane's first
+        spectrum (:meth:`_locate`). The z span is not the planes: a source
+        stating z 1 and z 120 has two, and planning the 118 between cost a
+        table, a scratch folder and a warning each (issue #495).
         """
         n_x, n_y, n_z = self._grid_dimensions()
         if self._common_mass_axis is None:
             raise ValueError("Common mass axis is not initialized")
-        n_cols = len(self._common_mass_axis)
-        records_order = bool(self.reader.has_acquisition_order)
         if self.handle_3d:
             return [
                 _TableUnit(
@@ -517,23 +523,27 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                     f"{self.dataset_id}_pixels",
                     None,
                     n_x * n_y * n_z,
-                    n_cols,
+                    len(self._common_mass_axis),
                     (n_z, n_y, n_x),
-                    records_order,
+                    bool(self.reader.has_acquisition_order),
                 )
             ]
-        return [
-            _TableUnit(
-                f"{self.dataset_id}_z{z}",
-                f"{self.dataset_id}_z{z}_pixels",
-                z,
-                n_x * n_y,
-                n_cols,
-                (n_y, n_x),
-                records_order,
-            )
-            for z in range(n_z)
-        ]
+        return [self._plane_unit(0)] if n_z == 1 else []
+
+    def _plane_unit(self, z: int) -> _TableUnit:
+        """A new table for plane ``z``."""
+        n_x, n_y, _ = self._grid_dimensions()
+        if self._common_mass_axis is None:
+            raise ValueError("Common mass axis is not initialized")
+        return _TableUnit(
+            f"{self.dataset_id}_z{z}",
+            f"{self.dataset_id}_z{z}_pixels",
+            z,
+            n_x * n_y,
+            len(self._common_mass_axis),
+            (n_y, n_x),
+            bool(self.reader.has_acquisition_order),
+        )
 
     def _create_data_structures(self) -> ConversionState:
         """Plan the tables and the accumulators the two passes fill.
@@ -549,13 +559,23 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             raise ValueError("Common mass axis is not initialized")
 
         units = self._plan_tables()
+        self._units_by_plane = {
+            unit.plane: unit for unit in units if unit.plane is not None
+        }
         n_cols = len(self._common_mass_axis)
-        logger.info(
-            "Streaming CSC: %s grid positions x %s m/z bins in %d table(s)",
-            f"{sum(unit.n_grid for unit in units):,}",
-            f"{n_cols:,}",
-            len(units),
-        )
+        if units:
+            logger.info(
+                "Streaming CSC: %s grid positions x %s m/z bins in %d table(s)",
+                f"{sum(unit.n_grid for unit in units):,}",
+                f"{n_cols:,}",
+                len(units),
+            )
+        else:
+            logger.info(
+                "Streaming CSC: %s m/z bins, one table per plane the pre-scan "
+                "finds a spectrum on",
+                f"{n_cols:,}",
+            )
 
         # The sibling tables' sinks, fed from the two passes below when the
         # reader hands its frames over as records (design decision D5): one
@@ -583,8 +603,11 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # ``get_region_map`` is keyed on ``(x, y)`` with no z, so one
         # region is one in-plane footprint sampled on every plane. See
         # _finalize_table for what that means for a multi-plane store.
-        if self._region_map is not None:
-            unique_regions = sorted(set(self._region_map.values()))
+        # Only for two regions or more: one region's mean is the table's
+        # own average_spectrum, so a single-region store does not get the
+        # same vector twice (D57).
+        unique_regions = sorted(set((self._region_map or {}).values()))
+        if len(unique_regions) >= 2:
             state.region_total_intensity = {
                 r: np.zeros(n_cols, dtype=np.float64) for r in unique_regions
             }
@@ -603,7 +626,12 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         return self._dimensions
 
     def _locate(
-        self, units: List[_TableUnit], x: int, y: int, z: int
+        self,
+        units: List[_TableUnit],
+        x: int,
+        y: int,
+        z: int,
+        create: bool = False,
     ) -> Tuple[Optional[_TableUnit], int]:
         """The table a coordinate belongs to and its grid index there.
 
@@ -611,13 +639,46 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         unchecked, a negative coordinate is a legal negative numpy index
         and wraps silently onto an unrelated pixel; a ``z`` past the
         planes would pick a table that does not exist.
+
+        ``create`` is the pre-scan's: a plane with no table yet gets one,
+        appended to ``units``. Later passes only look tables up, so a
+        plane the pre-scan gave no table gives ``(None, -1)``.
         """
         n_x, n_y, n_z = self._grid_dimensions()
         if not (0 <= x < n_x and 0 <= y < n_y and 0 <= z < n_z):
             return None, -1
         if self.handle_3d:
             return units[0], z * n_x * n_y + y * n_x + x
-        return units[z], y * n_x + x
+        by_plane = self._units_by_plane
+        unit = by_plane.get(z)
+        if unit is None:
+            if not create:
+                return None, -1
+            unit = self._plane_unit(z)
+            by_plane[z] = unit
+            units.append(unit)
+        return unit, y * n_x + x
+
+    def _on_an_unmet_plane(
+        self, units: List[_TableUnit], coords: Tuple[int, int, int]
+    ) -> bool:
+        """Whether an in-grid coordinate sits on a plane the pre-scan gave no table."""
+        if self.handle_3d:
+            return False
+        n_x, n_y, n_z = self._grid_dimensions()
+        x, y, z = coords
+        in_grid = 0 <= x < n_x and 0 <= y < n_y and 0 <= z < n_z
+        return in_grid and z not in self._units_by_plane
+
+    def _has_row(self, units: List[_TableUnit], coords: Tuple[int, int, int]) -> bool:
+        """Whether a position has a row in the summed table of its plane or volume.
+
+        Asked once the passes have decided the rows, by the raw mobility
+        pass that reads the source on its own (D58).
+        """
+        x, y, z = coords
+        unit, grid = self._locate(units, int(x), int(y), int(z))
+        return unit is not None and unit.row_of(grid) >= 0
 
     def _iter_pass_spectra(self, passes: Any, phase: str) -> Generator[
         Tuple[Tuple[int, int, int], Optional[int], Any, Any, Any],
@@ -672,6 +733,9 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
         logger.info("Step 1/3: Pre-scan (counting entries per column)...")
         self._count_pass(state)
+        # The pre-scan adds plane tables in the order it meets the planes;
+        # the store lists them by plane.
+        units.sort(key=lambda unit: -1 if unit.plane is None else unit.plane)
 
         logger.info("Step 2/3: Allocating memory-mapped CSC arrays...")
         for unit in units:
@@ -825,6 +889,9 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         component, so one region is one in-plane footprint sampled on
         every plane, and splitting it per plane would answer a question
         the source never asked.
+
+        A region with no row has no mean, so it gets no entry (issue
+        #496): dividing by ``max(rows, 1)`` wrote it a vector of zeros.
         """
         region_total = state.region_total_intensity
         rows = state.region_row_count
@@ -840,9 +907,13 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 if region in rows:
                     rows[region] += int(count)
 
+        # The accumulators exist only for a map of two regions or more
+        # (D57), so a multi-region store keeps the key even when only one
+        # of its regions holds rows.
         state.avg_spectrum_per_region = {
-            str(region): total / max(rows.get(region, 0), 1)
+            str(region): total / rows[region]
             for region, total in region_total.items()
+            if rows.get(region, 0) > 0
         }
 
     def _count_pass(self, state: ConversionState) -> None:
@@ -880,7 +951,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 n_input_peaks += int(np.size(mzs))
                 mz_indices, values = self._process_spectrum(mzs, intensities)
                 nnz = int(mz_indices.size)
-                unit, grid = self._locate(units, x, y, z)
+                unit, grid = self._locate(units, x, y, z, create=nnz > 0)
 
                 if frame is not None and passes is not None:
                     # The row the sinks count under is the grid position,
@@ -1004,6 +1075,18 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 if mz_indices.size > 0 and unit is not None:
                     unit.check_against_pass_one(grid, coords, values)
                     row = unit.row_of(grid)
+                elif mz_indices.size > 0 and self._on_an_unmet_plane(units, coords):
+                    # Pass 1 gave this plane no table because nothing on it
+                    # survived; finding current there now is the same
+                    # disagreement check_against_pass_one refuses.
+                    raise ConversionRefused(
+                        _disagreement(
+                            f"{self.dataset_id}_z{z}",
+                            coords,
+                            0.0,
+                            float(np.sum(values)),
+                        )
+                    )
 
                 if frame is not None and passes is not None:
                     passes.scatter(frame, row if row >= 0 else None)
@@ -1085,7 +1168,12 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # re-decides nothing it already decided).
         sibling_ctx = self._sibling_context()
         self.siblings.plan(sibling_ctx, unit.key)
-        self.siblings.prepare_scans(sibling_ctx, _obs_frame(adata), z_value=unit.plane)
+        self.siblings.prepare_scans(
+            sibling_ctx,
+            _obs_frame(adata),
+            z_value=unit.plane,
+            has_row=lambda coords: self._has_row(state.units, coords),
+        )
 
         # Add MSI metadata to .uns
         self._add_metadata_to_uns(adata)

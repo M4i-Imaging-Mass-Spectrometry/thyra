@@ -746,7 +746,8 @@ states, the store comes out as the store of that file. See
   `bruker_maldi.regions`, each with a box of raster indices and a frame
   count. Then each pixel is given the region whose box holds it, when the
   boxes place every pixel once and the counts match. Otherwise the log says
-  why and the store has one region. `--region` is refused for mzPeak: the
+  why and every pixel is stored as region 1. An archive with one region
+  keeps its number and name. `--region` is refused for mzPeak: the
   whole archive is converted, and `obs["region_number"]` tells the regions
   apart.
 - **The mass range** of a Bruker archive is the run's acquisition range, as

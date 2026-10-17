@@ -36,7 +36,7 @@ from .mobility_heatmap import (
     map_indexed_points_to_axis,
     map_points_to_axis,
 )
-from .mobility_table import GridDiscovery, GridScatter, _report_discovery
+from .mobility_table import GridDiscovery, GridScatter, _report_discovery, loses_signal
 from .msms_table import MsmsAccumulator
 
 logger = logging.getLogger(__name__)
@@ -151,17 +151,22 @@ class SiblingPasses:
         ``row`` is the row the frame's pixel gets in the summed table, or
         ``None`` when it gets none (an empty spectrum, a coordinate off
         the grid): the row-bound sinks skip it, exactly as their own pass
-        skips a pixel that is not in ``obs``. The heatmap is a mean over
-        every position with points and takes the frame either way; a
-        frame on a position already seen adds its points but no pixel,
-        as the summed table sums it into that position's row (D38).
+        skips a pixel that is not in ``obs``. So does the heatmap, which
+        is the mean over the summed table's rows (D58): a frame that adds
+        nothing to a row adds nothing to it either. A frame on a position
+        already seen adds its points but no pixel, as the summed table
+        sums it into that position's row (D38).
         """
         if self.wants_mobility:
             mapped = self._mapped_points(frame)
             if mapped is not None:
-                if self.heatmap is not None:
+                if self.heatmap is not None and row is not None:
                     self.heatmap.add_mapped(frame.coords, *mapped)
-                if self.discovery is not None:
+                # A frame with no row is counted as skipped only when it
+                # carries signal, as on the separate pass (D58).
+                if self.discovery is not None and (
+                    row is not None or loses_signal(frame.coords, None, mapped[2])
+                ):
                     self.discovery.add_mapped_row(row, *mapped)
         if self.msms is not None:
             self.msms.count(row, frame.precursor_spectra())
