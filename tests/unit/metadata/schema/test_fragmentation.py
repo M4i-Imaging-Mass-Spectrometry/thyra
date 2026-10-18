@@ -290,8 +290,25 @@ class TestBuilder:
             {"isolation_window_target": float("nan")},
             {"isolation_window_target": 353.32, "isolation_window_lower_offset": -0.5},
             {"isolation_window_target": 353.32, "collision_energy": float("inf")},
+            {"isolation_window_target": 353.32, "collision_energy": float("nan")},
+            {
+                "isolation_window_target": 353.32,
+                "isolation_window_lower_offset": float("nan"),
+            },
+            {
+                "isolation_window_target": 353.32,
+                "isolation_window_upper_offset": float("inf"),
+            },
         ],
-        ids=["inf-target", "nan-target", "negative-offset", "inf-energy"],
+        ids=[
+            "inf-target",
+            "nan-target",
+            "negative-offset",
+            "inf-energy",
+            "nan-energy",
+            "nan-lower-offset",
+            "inf-upper-offset",
+        ],
     )
     def test_one_bad_window_costs_that_window_only(self, bad, thyra_logs):
         """Issue #498: it used to drop the block, or write ``Infinity``."""
@@ -339,7 +356,9 @@ class TestBuilder:
         )
 
         assert meta.ms_analysis.fragmentation is not None
-        assert "Infinity" not in meta.model_dump_json()
+        # ``model_dump_json`` writes an infinity as null, so it cannot show
+        # one; the stored block is packed by ``to_uns_dict`` (#503).
+        json.dumps(meta.to_uns_dict(), allow_nan=False)
 
     def test_it_lands_in_ms_analysis(self):
         meta = build_msi_metadata(

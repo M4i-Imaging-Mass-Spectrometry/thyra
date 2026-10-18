@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 from .core.base_converter import (
     BaseMSIConverter,
     PixelSizeSource,
+    is_usable_pitch,
     log_interrupt_after_save,
 )
 from .core.base_reader import BaseMSIReader
@@ -396,6 +397,17 @@ def _determine_pixel_size(
         raise ConversionRefused(
             "Pixel size not found in metadata. Pass it with --pixel-size "
             "(for example --pixel-size 25)."
+        )
+
+    # A pitch that is NaN, infinite or not above 0 is no pitch: it used to
+    # pass to the store, where JSON cannot hold it (#503). Refused like a
+    # missing one, so the user can state the right value.
+    if not all(is_usable_pitch(half) for half in essential_metadata.pixel_size):
+        raise ConversionRefused(
+            "The pixel size in the metadata is not a positive number "
+            f"({essential_metadata.pixel_size[0]!r} x "
+            f"{essential_metadata.pixel_size[1]!r} um). Pass it with "
+            "--pixel-size (for example --pixel-size 25)."
         )
 
     final_pixel_size = essential_metadata.pixel_size[0]  # Use X size

@@ -5137,3 +5137,72 @@ real archive holds one. No schema change.
 - "Reuse `summed_peak_mask`." It returns a keep mask, not the summed bins,
   so it cannot replace this step. The two share the tolerance
   (`SAME_PEAK_RELATIVE`) and now the rule for what counts.
+
+## D62. A NaN or an infinity from the vendor metadata is left out of the metadata block
+
+**Status:** Implemented (2026-10-17). Applies D55's rule, that a non-finite
+value decides nothing, to the `msi_metadata` block. D60 did the same for
+isolation windows. No schema version change.
+
+**Decision.** The block holds finite numbers only. JSON has no NaN or
+infinity, so the published JSON Schema never allowed them; the models now
+agree with it.
+
+- **The builder leaves such a value out.** The mobility range is kept with
+  both edges finite or not at all; its scan count likewise. A processing
+  parameter that is not finite is left out of its step. An isolation window
+  with one is left out whole, as D60 decided.
+- **A pixel size is refused, since the block requires one.** `convert_msi`
+  refuses a detected pitch that is not a finite number above 0, as it
+  refuses a missing one, and asks for `--pixel-size`. The converter refuses
+  such a `pixel_size_um` or detected y pitch. A converter built without a
+  pitch keeps its default when the source's is unusable, and says so; the
+  store records the pitch as `default`. `thyra metadata` leaves the pitch
+  out, as D23 does for a source with no raster.
+- **The Python API refuses a non-finite setting, as the CLI already does.**
+  That is `intensity_threshold` and every number in `resampling_config`.
+  No summed peak reaches a NaN or `+inf` threshold, so either one emptied
+  the store while the step recorded the threshold. `-inf` kept everything.
+- **The models refuse NaN and infinity** (`allow_inf_nan=False` on every
+  schema model), and `to_uns_dict` packs its JSON strings with
+  `allow_nan=False`.
+- **`thyra validate` reports a stored one as an error,** once per value, at
+  its location. The message says that converting the source again leaves the
+  field out. The exit status is 1.
+
+The order is the point. The uns assembler catches the models' error, so
+refusing at the models alone wrote the store with no `msi_metadata` block
+and one warning, while the conversion reported success. A converter test
+pins that the block is still written.
+
+**Why.** #494 refused these values where a JSON document is read or
+written. A conversion still stored them, because the models took them. A
+`gt=0` bound refused NaN but not `+inf`; an unbounded field took all three.
+`thyra metadata` and `thyra export-metaspace` then refused to write the
+store's own metadata as JSON.
+
+**What changes in a store.** Only stores whose vendor metadata or API
+settings held a NaN or an infinity in one of these fields. The field is now
+absent instead. A pitch like that now stops the conversion with a message,
+where it used to reach the store. The problem was found by a stress test;
+no real dataset is known to hold one. Every other store is unchanged.
+
+**Why no schema version change.** The published JSON Schema is the same
+file: pydantic writes nothing for `allow_inf_nan`, and a JSON document
+cannot hold NaN anyway. Every JSON document that validated still does. Only
+a Zarr store, whose attributes can hold a NaN float, could have one.
+
+**Why `thyra validate` errs rather than warns.** Such a block does not
+conform to the schema it names, and a strict JSON reader of it fails. A
+warning would pass it through a CI gate that exists to catch that. The
+remedy is the user's own: convert again.
+
+**Alternatives.**
+
+- "Refuse the conversion when a vendor value is not finite." One optional
+  field would then block a conversion whose spectra are fine. D60 took the
+  same view for isolation windows. The pitch is the exception, because the
+  block cannot be written without one.
+- "Store `null`." The block's convention is that a field the source does not
+  report is absent, not null.
+- "Coerce to a finite stand-in, such as 0." That invents a measurement.
