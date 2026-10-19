@@ -465,9 +465,14 @@ class UnsAssembler:
         schedule = self._fragmentation_schedule
         if schedule is None or not schedule.merges_precursors:
             return
+        from .msms_table import precursor_mz_text
+
         # Each precursor once: a mass isolated at two collision energies
-        # is two windows and one precursor (issue #383).
-        distinct = list(dict.fromkeys(f"{w.target:g}" for w in schedule.windows))
+        # is two windows and one precursor (issue #383). Spelled as the
+        # MS/MS labels spell it, so two masses never print as one.
+        distinct = list(
+            dict.fromkeys(precursor_mz_text(w.target) for w in schedule.windows)
+        )
         targets = ", ".join(distinct[:6])
         if len(distinct) > 6:
             targets += ", ..."

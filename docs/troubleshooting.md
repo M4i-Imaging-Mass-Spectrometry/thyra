@@ -110,6 +110,20 @@ When a conversion fails, Thyra renames the unfinished result, for example to
 command again straight away. The `.failed` folder is only useful for working
 out what went wrong: delete it when you no longer need it.
 
+### A timsTOF folder "cannot be written"
+
+Bruker's library writes small temporary files into the `.d` folder while it
+runs. Copy the `.d` to a folder you can write to, then convert the copy.
+If the message names `calibration.sqlite`, `--no-recalibrated` also works.
+
+??? advanced "Advanced: The -shm and -wal files"
+    The library opens databases in WAL mode in place, and makes a `-shm` and
+    a `-wal` file beside each while it runs. A clean finish removes them.
+    A run that is killed can leave them behind. They are harmless, and the
+    next clean conversion of the same `.d` removes them. Thyra checks the
+    folder before the library opens it, so a read-only source stops at once
+    with one line.
+
 ### "WinError 5: Access is denied" (Windows)
 
 Another program has the result open. Close every program that has loaded the
