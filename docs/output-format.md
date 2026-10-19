@@ -385,9 +385,9 @@ Windows), numpy arrays rather than lists:
 | `type_name`, `type_accession` | the quantity: `inverse reduced ion mobility` / `MS:1002815` (TIMS), or drift time / `MS:1002476` |
 | `unit_name`, `unit_accession` | e.g. `volt-second per square centimeter` / `MS:1002814` for 1/K0 |
 | `n_scans` | length of `values` (the TIMS ramp length on a Bruker source, the drift bin count on a Waters one) |
-| `values` | `float64[n_scans]`: the native axis when it is shared across pixels -- the 1/K0 of every TIMS scan (from the vendor calibration, decreasing with scan number) or of every feature of a continuous imzML export, or the drift time in ms of every Waters drift bin (ascending, from 0); absent when mobility is per pixel |
+| `values` | `float64[n_scans]`: the native axis when it is shared across pixels -- the 1/K0 of every TIMS scan of the first frame (from the vendor calibration, decreasing with scan number; when frames take TIMS calibrations of their own, each frame's points use that frame's 1/K0, and `calibration.n_frame_calibrations` is above 1; when which state Bruker's library applied is unknown, each frame's own 1/K0 is used too and the `calibration` block is absent) or of every feature of a continuous imzML export, or the drift time in ms of every Waters drift bin (ascending, from 0); absent when mobility is per pixel |
 | `acq_range` | `float64[2]`, `[lower, upper]`: the acquired range as declared, else the span of `values` |
-| `calibration` | `{model_type, coefficients}`: the vendor `TimsCalibration` row, provenance only |
+| `calibration` | `{model_type, coefficients, frame_id, stored_in, calibration_state_id, n_frame_calibrations}`: the vendor `TimsCalibration` row Bruker's library applied to frame `frame_id`, the frame `values` come from, provenance only. `stored_in` is `"calibration.sqlite"` (with the applied state's `calibration_state_id`) or `"analysis.tdf"`; `n_frame_calibrations` counts the rows the file's frames use between them. Absent when which state Bruker's library applied is unknown |
 | `source` | `"bruker_tdf"`, `"imzml"` or `"waters_raw"` |
 | `bin_width` | `float`, only where the source defines its own equal-width bins (Waters drift bins): the width of one, in the axis unit. Its presence is what gives the heatmap one channel per bin (D53) |
 | `resolved_table` | element key of the mobility-resolved sibling table, when one was written |
@@ -764,7 +764,9 @@ applies to every other table.
     The `var` index labels are named
     after the precursor's m/z for the same reason -- `p936.578_mz1732`,
     never `p14_mz1732` -- so `anndata.concat` cannot silently merge two
-    unrelated precursors. Two windows at one m/z (an isomer pair) are told
+    unrelated precursors. The stem writes the m/z exactly, as the shortest
+    decimal that reads back as `precursor_mz` (`p798.5401`, `p500`), so a
+    stem names one exact m/z and only isomers share one. Two windows at one m/z (an isomer pair) are told
     apart by their order in mobility: every column of the second ends in
     `_1`, the third in `_2`, the first has no suffix (D60). Measured on two real acquisitions in opposite
     polarities, 15 precursors against 13 with none in common: **zero**
@@ -1183,7 +1185,7 @@ Beside it, when the source format provides them:
 
 | Key | Contents |
 |-----|----------|
-| `format_specific` | Vendor metadata (imzML file mode and UUID; flexImaging areas and teaching points for rapiflex; `instrument_source_type` for Bruker tsf/tdf, Bruker's own code for what ionised the sample, recorded raw because its labels are not documented in the file; for Bruker tsf/tdf also `instrument_calibration`, the m/z calibration the run started with as the analysis database's `CalibrationInfo` states it, and `calibration`, when the acquisition has a `calibration.sqlite`: how many states it holds and which one the conversion applied -- with `--no-recalibrated` none, so those keys are empty and the newest state is under `latest_calibration_*`) |
+| `format_specific` | Vendor metadata (imzML file mode and UUID; flexImaging areas and teaching points for rapiflex; `instrument_source_type` for Bruker tsf/tdf, Bruker's own code for what ionised the sample, recorded raw because its labels are not documented in the file; for Bruker tsf/tdf also `instrument_calibration`, the m/z calibration the run started with as the analysis database's `CalibrationInfo` states it, and `calibration`, when the acquisition has a `calibration.sqlite`: how many states it holds and which one the conversion applied -- with `--no-recalibrated`, or when no state maps exactly the acquisition's frames, none, so those keys are empty; whenever the newest state is not the applied one, it is under `latest_calibration_*`) |
 | `acquisition_params` | Polarity, scan range, laser settings, timestamp and method name, in the vendor's spelling and unit |
 | `instrument_info` | Instrument model, serial, software version |
 | `raw_metadata` | Source metadata as read, for round-trip fidelity; for a Bruker acquisition with a `.mis` file, `mis_metadata` is that file as parsed |
