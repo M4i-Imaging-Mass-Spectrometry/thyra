@@ -9,6 +9,7 @@ store nobody checks.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -703,7 +704,9 @@ class TestLeftOutSpectra:
         np.testing.assert_array_equal(table.var["mz"].to_numpy(), [100.0, 101.0])
         np.testing.assert_array_equal(_dense(table).sum(axis=1), [3.0] * 6)
 
-    def test_a_nan_m_z_with_an_intensity_is_refused_on_the_raw_axis(self, tmp_path):
+    def test_a_nan_m_z_with_an_intensity_is_refused_on_the_raw_axis(
+        self, tmp_path, thyra_logs
+    ):
         """As its imzML twin is; before, the point was dropped as padding."""
         spectra = [
             Spectrum(1, 1, [100.0, 300.0, np.nan], [1.0, 3.0, 50.0]),
@@ -713,12 +716,16 @@ class TestLeftOutSpectra:
         imzml = _write_imzml(tmp_path / "nan.imzML", spectra)
 
         for source in (archive, imzml):
-            refused = convert_msi(
-                str(source),
-                str(tmp_path / f"{source.suffix[1:]}.zarr"),
-                format_type="spatialdata",
-                dataset_id=DATASET_ID,
-                pixel_size_um=PIXEL_SIZE_UM,
-                resampling_config=None,
-            )
+            with thyra_logs("thyra", logging.ERROR) as records:
+                refused = convert_msi(
+                    str(source),
+                    str(tmp_path / f"{source.suffix[1:]}.zarr"),
+                    format_type="spatialdata",
+                    dataset_id=DATASET_ID,
+                    pixel_size_um=PIXEL_SIZE_UM,
+                    resampling_config=None,
+                )
             assert refused is False, source.suffix
+            assert any(
+                "non-finite value(s)" in record.getMessage() for record in records
+            ), source.suffix

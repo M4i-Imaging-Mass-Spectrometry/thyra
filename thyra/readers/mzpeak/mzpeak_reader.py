@@ -977,17 +977,22 @@ class MzPeakArchive:
                 _point_field(table, "intensity"),
             )
 
-    def observed_range(self, wanted: NDArray[np.int64]) -> Tuple[float, float]:
-        """Lowest and highest m/z the member read holds for some spectra.
+    def observed_range(
+        self, for_low: NDArray[np.int64], for_high: NDArray[np.int64]
+    ) -> Tuple[float, float]:
+        """Lowest m/z of some spectra and highest of others, from their points.
 
-        For spectra whose metadata gives no observed bound. Padding is
-        passed over, and so is a point whose m/z is not finite.
+        For spectra whose metadata gives no observed bound, one pass for
+        both. Padding is passed over, and so is a point whose m/z is not
+        finite.
 
         Args:
-            wanted: ``spectrum_index`` of the spectra to look at.
+            for_low: ``spectrum_index`` of the spectra whose lowest m/z is
+                wanted.
+            for_high: Those whose highest m/z is wanted.
 
         Returns:
-            ``(low, high)``; ``(inf, -inf)`` when they hold no such point.
+            ``(low, high)``; ``inf`` or ``-inf`` where no such point is held.
         """
         index = self.spatial_index()
         batch = rows_per_batch(
@@ -996,9 +1001,13 @@ class MzPeakArchive:
         low, high = np.inf, -np.inf
         for indices, mzs, _ in self.iter_points(batch):
             mzs = np.asarray(mzs, dtype=np.float64)
-            mzs = mzs[np.isin(indices, wanted) & np.isfinite(mzs)]
-            if mzs.size:
-                low, high = min(low, float(mzs.min())), max(high, float(mzs.max()))
+            finite = np.isfinite(mzs)
+            lows = mzs[np.isin(indices, for_low) & finite]
+            highs = mzs[np.isin(indices, for_high) & finite]
+            if lows.size:
+                low = min(low, float(lows.min()))
+            if highs.size:
+                high = max(high, float(highs.max()))
         return low, high
 
     def chunk_encodings(self) -> List[str]:

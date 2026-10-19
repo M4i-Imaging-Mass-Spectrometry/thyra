@@ -21,13 +21,18 @@ def _essential(path):
 
 def _metadata_value_nulled(archive, tmp_path, column, row):
     """Copy an archive with one value of the spectrum metadata made null."""
+    return _metadata_value_set(archive, tmp_path, column, row, None)
+
+
+def _metadata_value_set(archive, tmp_path, column, row, value):
+    """Copy an archive with one value of the spectrum metadata replaced."""
     import io
     import zipfile
 
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    rewritten = tmp_path / f"null_{column}_{archive.name}"
+    rewritten = tmp_path / f"{value}_{column}_{archive.name}"
     with (
         zipfile.ZipFile(archive) as source,
         zipfile.ZipFile(rewritten, "w", compression=zipfile.ZIP_STORED) as target,
@@ -37,7 +42,7 @@ def _metadata_value_nulled(archive, tmp_path, column, row):
             if name == METADATA_MEMBER:
                 table = pq.read_table(io.BytesIO(payload))
                 values = table.column(column).to_pylist()
-                values[row] = None
+                values[row] = value
                 table = table.set_column(
                     table.schema.get_field_index(column),
                     column,
@@ -281,6 +286,21 @@ class TestEssentialShape:
         nulled = _metadata_value_nulled(archive, tmp_path, column, row=0)
 
         assert _essential(nulled).mass_range == (0.0, 950.0)
+
+    def test_the_stated_bound_of_a_half_stated_spectrum_is_kept(self, tmp_path):
+        """Only the null bound is taken from the points; the other stands."""
+        spectra = [
+            Spectrum(1, 1, [100.0, 150.0], [1.0, 2.0]),
+            Spectrum(2, 1, [120.0, 140.0], [3.0, 4.0]),
+        ]
+        archive = build_mzpeak(tmp_path / "half.mzpeak", spectra)
+        widened = _metadata_value_set(
+            archive, tmp_path, "highest_observed_mz", 0, 900.0
+        )
+
+        nulled = _metadata_value_nulled(widened, tmp_path, "lowest_observed_mz", 0)
+
+        assert _essential(nulled).mass_range == (100.0, 900.0)
 
     def test_a_null_bound_of_a_spectrum_left_out_reads_nothing(self, tmp_path):
         """Only a converted spectrum's bound is taken from its points."""

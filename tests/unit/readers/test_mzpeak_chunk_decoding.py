@@ -308,6 +308,16 @@ class TestNumpressLinear:
         with pytest.raises(ConversionRefused, match="counts disagree.*MS:1002312"):
             decode_numpress_linear(data, np.array([data.size]), np.array([3]), SOURCE)
 
+    @pytest.mark.parametrize(("length", "count"), [(4, 0), (10, 0), (14, 1)])
+    def test_a_header_cut_inside_a_value_is_refused(self, length, count):
+        """Stray bytes after the scale or the first value are not a value."""
+        data, _, _ = _numpress([[100.0, 101.0, 102.5, 103.0]])
+
+        with pytest.raises(ConversionRefused, match="ends inside a value"):
+            decode_numpress_linear(
+                data[:length], np.array([length]), np.array([count]), SOURCE
+            )
+
     def test_a_buffer_that_ends_inside_a_value_is_refused(self):
         """The last value's half bytes run past the end of the buffer."""
         data, lengths, counts = _numpress([[100.0, 101.0, 102.0, 5000.0]])
@@ -483,16 +493,24 @@ class TestPlain:
                 SOURCE,
             )
 
-    def test_a_null_start_is_refused(self):
-        """The row's first point would have no m/z."""
-        with pytest.raises(ConversionRefused, match="mz_chunk_start is null.*1000576"):
-            decode_plain(
-                np.array([np.nan]),
-                np.array([100.5, 101.0]),
-                np.array([2]),
-                np.array([3]),
-                SOURCE,
-            )
+    def test_a_null_start_is_a_first_point_with_no_m_z(self):
+        """A row that opens with a null pair: its first point is padding.
+
+        Values here are m/z, not differences, so a null start costs only
+        the point it belongs to.
+        """
+        chunk = _chunk(TestRows.SPECTRA[:1], encoding=PLAIN, chunk_points=50)
+        row = dict(
+            chunk.to_pylist()[0],
+            mz_chunk_start=None,
+            mz_chunk_values=[100.0, 101.0],
+            intensity=[None, 2.0, 3.0],
+        )
+
+        decoded = decode_chunks(pa.array([row], type=chunk.type), SOURCE)
+
+        np.testing.assert_array_equal(decoded.mz, [np.nan, 100.0, 101.0])
+        np.testing.assert_array_equal(decoded.intensity, [np.nan, 2.0, 3.0])
 
 
 class TestGrid:

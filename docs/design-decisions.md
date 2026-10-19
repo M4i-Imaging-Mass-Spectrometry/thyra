@@ -5236,11 +5236,13 @@ remedy is the user's own: convert again.
   it by D55's rule, as for imzML. A null m/z beside an intensity of 0 is
   still padding: MS-Numpress stores a true m/z of 0.0 as its null.
 
-Four malformed chunk rows are refused by name, while reading: an MS-Numpress
-row of 0, 1 or 2 intensities beside more stored values; a plain or delta row
-whose `mz_chunk_start` is null where its first m/z belongs; and, at open, a
-transform column such as `intensity_numpress_slof_bytes` that holds a value
-beside `intensity`.
+Three kinds of malformed chunk row are refused by name. While reading: an
+MS-Numpress row whose buffer holds another number of values than it has
+intensities, at any count, or ends inside its header; and a delta row whose
+`mz_chunk_start` is null where its first m/z belongs. At open: a transform
+column such as `intensity_numpress_slof_bytes` that holds a value beside
+`intensity`. A plain row's null start is only a first point with no m/z,
+and is read as any such point is.
 
 **Why.** The 4.3.3 stress test (#427) found each of these converting to a
 wrong store at exit 0.
@@ -5266,9 +5268,9 @@ pixel's MS1 spectrum was never measured. A pixel with only MSn spectra has
 no MS1 spectrum to spoil. Leaving it out lost the pixel, and then its
 region's frame count no longer matched.
 
-**What changes in a store.** Only archives of these shapes. Stores of
-archives with only MS1 spectra, or with MS1 and MSn on every pixel at level
-1, are unchanged. Chunked MS-Numpress archives change only where a chunk's
+**What changes in a store.** Only archives of the shapes in the table. The
+MSn rule changes nothing for archives with only MS1 spectra, or with MS1
+and MSn on every pixel at level 1. Chunked MS-Numpress archives change only where a chunk's
 last or first m/z decodes more than 1e-5 off, above m/z 42,950 or so. A
 NaN m/z with an intensity is now refused with `--no-resample` and dropped
 with a warning on a resampled axis.

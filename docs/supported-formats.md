@@ -676,7 +676,8 @@ These are refused rather than guessed at, before any spectrum is read:
 - **Chunks cut along another axis than m/z.**
 - **A chunk whose m/z and intensity counts differ.** This one is found while
   reading, and so is the next.
-- **A chunk with no `mz_chunk_start`** where its first m/z is kept there.
+- **A delta-encoded chunk with no `mz_chunk_start`** where its first m/z is
+  kept there.
 - **Non-imaging archives** are rejected. Positions are optional in mzPeak --
   the reference converter only writes them when it happens to see imaging
   input -- and an archive without them has no pixels for Thyra to place.

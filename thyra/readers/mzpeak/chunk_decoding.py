@@ -333,10 +333,12 @@ def _refuse_count(source: str, encoding: str, row: int, found: int, n: int) -> N
 def _refuse_null_start(
     source: str, encoding: str, starts: NDArray[np.float64], leads: NDArray[np.bool_]
 ) -> None:
-    """Raise for a row whose first m/z is ``mz_chunk_start`` and that is null.
+    """Raise for a delta row whose first m/z is ``mz_chunk_start`` and that is null.
 
-    Without it the row's first stored value would open the row, and under
-    delta encoding that value is a difference, not an m/z.
+    Without it the row's first stored value would open the row's run of
+    sums, and that value is a difference, not an m/z. A plain row needs no
+    such check: a null start is only a first point with no m/z, padding when
+    its intensity is null too.
     """
     missing = np.flatnonzero(leads & np.isnan(starts))
     if missing.size:
@@ -411,7 +413,6 @@ def decode_plain(
         _refuse_count(
             source, ENCODING_PLAIN, row, int(lengths[row]) + 1, int(counts[row])
         )
-    _refuse_null_start(source, ENCODING_PLAIN, starts, counts > 0)
     decoded = np.empty(int(counts.sum()), dtype=np.float64)
     first = _starts(counts)
     decoded[first] = starts
@@ -692,6 +693,15 @@ def decode_numpress_linear(
             f"{source} holds an MS-Numpress buffer of {int(lengths[row])} "
             f"bytes for {int(counts[row])} values (row {row} of a batch); "
             f"that is too short to hold them."
+        )
+    # A header is the scale, then up to two values of four bytes. A buffer
+    # shorter than the full header ends at one of those, or inside one.
+    partial = np.flatnonzero((lengths < 16) & ~np.isin(lengths, (0, 8, 12)))
+    if partial.size:
+        row = int(partial[0])
+        raise ConversionRefused(
+            f"{source} holds an MS-Numpress buffer of {int(lengths[row])} "
+            f"bytes, which ends inside a value (row {row} of a batch)."
         )
 
     begin = _starts(lengths)

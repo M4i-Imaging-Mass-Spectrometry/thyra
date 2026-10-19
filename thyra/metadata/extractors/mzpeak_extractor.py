@@ -190,11 +190,13 @@ class MzPeakMetadataExtractor(MetadataExtractor):
         )
         kept = np.isin(rows, with_points)
         rows, low, high = rows[kept], low[kept], high[kept]
-        unstated = ~(np.isfinite(low) & np.isfinite(high))
-        lowest = float(low[~unstated].min()) if (~unstated).any() else np.inf
-        highest = float(high[~unstated].max()) if (~unstated).any() else -np.inf
-        if unstated.any():
-            from_points = self.archive.observed_range(rows[unstated])
+        low_stated, high_stated = np.isfinite(low), np.isfinite(high)
+        lowest = float(low[low_stated].min()) if low_stated.any() else np.inf
+        highest = float(high[high_stated].max()) if high_stated.any() else -np.inf
+        if not (low_stated.all() and high_stated.all()):
+            from_points = self.archive.observed_range(
+                rows[~low_stated], rows[~high_stated]
+            )
             lowest = min(lowest, from_points[0])
             highest = max(highest, from_points[1])
         if not (np.isfinite(lowest) and np.isfinite(highest)):
