@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -261,3 +262,58 @@ class TestCurrentNamesAreStillRead:
         imzml = _variant(tmp_path, NEW_X, NEW_Y)
 
         assert _fallback(imzml) == pytest.approx((4.40625, 4.40625))
+
+
+def _through_a_group(imzml: Path) -> Path:
+    """Move the pixel-size terms into a group ``scanSettings`` references."""
+    text = imzml.read_text(encoding="utf-8")
+    terms = re.findall(r"<cvParam[^>]*IMS:100004[67][^>]*/>", text)
+    assert terms
+    for term in terms:
+        text = text.replace(term, "")
+    count = re.search(r'<referenceableParamGroupList count="(\d+)">', text)
+    assert count is not None
+    text = text.replace(
+        count.group(0),
+        f'<referenceableParamGroupList count="{int(count.group(1)) + 1}">'
+        f'<referenceableParamGroup id="geom">{"".join(terms)}'
+        "</referenceableParamGroup>",
+        1,
+    )
+    text = text.replace(
+        '<scanSettings id="scanSettings1">',
+        '<scanSettings id="scanSettings1"><referenceableParamGroupRef ref="geom"/>',
+        1,
+    )
+    imzml.write_text(text, encoding="utf-8")
+    return imzml
+
+
+class TestOldNameThroughAGroup:
+    """F21 -- the old name stated in a group took the value but not the name.
+
+    Directly in ``scanSettings`` the file gives no pixel size and the log
+    says why. Through a referenced group the preview and the metadata
+    document read the area as 10000 micrometres, because the raw name did
+    not come from the group.
+    """
+
+    def test_the_reader_takes_no_pixel_size_and_says_why(self, tmp_path, thyra_logs):
+        imzml = _through_a_group(_variant(tmp_path, OLD_AREA))
+
+        with thyra_logs(EXTRACTOR_LOGGER, logging.WARNING) as records:
+            assert _pixel_size(imzml) is None
+
+        logged = "\n".join(records.messages)
+        assert "area of a pixel" in logged
+        assert "--pixel-size" in logged
+
+    def test_the_preview_takes_no_pixel_size_and_says_why(self, tmp_path, thyra_logs):
+        imzml = _through_a_group(_variant(tmp_path, OLD_AREA))
+
+        with thyra_logs(EXTRACTOR_LOGGER, logging.WARNING) as records:
+            preview = preview_msi(imzml)
+
+        assert preview.readable, preview.error
+        assert preview.pixel_size_um is None
+        assert "area of a pixel" in "\n".join(records.messages)

@@ -15,7 +15,9 @@ the extractor compensates, which is what ``TestUnitNanometre`` now asserts.
 """
 
 import importlib.util
+import logging
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -364,28 +366,30 @@ class TestUnitNanometre:
         finally:
             reader.close()
 
-    def test_an_unrecognised_unit_is_refused(self, tmp_path):
-        """A unit outside mm/um/nm raises instead of guessing a factor.
+    def test_an_unrecognised_unit_is_not_read(self, tmp_path, thyra_logs):
+        """A unit outside mm/um/nm is not guessed at: no pixel size, and a warning.
 
         UO:0000015 is centimetre -- a real length unit deliberately not in the
-        table, so accepting it unconverted would be a silent x10000 error.
+        table, so accepting it unconverted would be a silent x10000 error. It
+        used to be refused, so the file could not be converted even with
+        ``--pixel-size``; now the size is left unread and the warning asks
+        for the flag, as on the mzPeak route (D63).
         """
         imzml = self._variant_with_unit(tmp_path, "UO:0000015", "centimeter")
         reader = ImzMLReader(imzml)
         try:
-            with pytest.raises(ConversionRefused, match="UO:0000015"):
-                reader.get_essential_metadata()
+            with thyra_logs(
+                "thyra.metadata.extractors.imzml_extractor", logging.WARNING
+            ) as records:
+                assert reader.get_essential_metadata().pixel_size is None
         finally:
             reader.close()
+        said = " ".join(r.getMessage() for r in records)
+        assert "UO:0000015" in said
+        assert "--pixel-size" in said
 
-    def test_the_xml_fallback_refuses_the_same_unit(self, tmp_path):
-        """The second call site refuses too, rather than degrading to None.
-
-        ``_extract_pixel_size_from_xml`` converts *outside* its ``try``, so a
-        refused unit propagates while a merely unparseable document still
-        returns None. Nothing asserted that, and the arrangement is one edit
-        away from being lost: move the two conversions inside the block and
-        the refusal becomes a warning and a missing pixel size.
+    def test_the_xml_fallback_leaves_the_same_unit_unread(self, tmp_path):
+        """The second call site leaves it unread too, rather than guessing.
 
         The parser is stubbed because it has to be. pyimzml 1.5.5's
         ``Metadata`` never assigns ``root`` -- verified, ``hasattr`` is False
@@ -403,8 +407,7 @@ class TestUnitNanometre:
         extractor.parser = SimpleNamespace(metadata=SimpleNamespace(root=root))
         extractor.imzml_path = imzml
 
-        with pytest.raises(ConversionRefused, match="UO:0000015"):
-            extractor._extract_pixel_size_from_xml()
+        assert extractor._extract_pixel_size_from_xml() is None
 
     def test_the_xml_fallback_still_converts_a_unit_it_knows(self, tmp_path):
         """The guard above must not be a method that refuses everything."""
@@ -443,6 +446,72 @@ class TestUnitNanometre:
             }
         finally:
             reader.close()
+
+
+class TestUnitNanometreThroughAGroup:
+    """F21 -- a pixel size stated in a group the ``scanSettings`` references.
+
+    The value came from the group but its raw name and unit did not, so the
+    preview and ``thyra metadata`` reported a nanometre value as micrometres.
+    The same terms sit directly in ``scanSettings`` in ``unit_nanometre``;
+    moved into a referenced group they must give the same answer on every
+    path.
+    """
+
+    def _grouped(self, tmp_path):
+        """``unit_nanometre`` with both pixel-size terms moved into a group."""
+        text = raw_bytes("unit_nanometre").decode("utf-8")
+        terms = re.findall(r"<cvParam[^>]*IMS:100004[67][^>]*/>\s*", text)
+        assert len(terms) == 2
+        for term in terms:
+            text = text.replace(term, "")
+        text = text.replace(
+            '<referenceableParamGroupList count="3">',
+            '<referenceableParamGroupList count="4">'
+            '<referenceableParamGroup id="geom">'
+            + "".join(terms)
+            + "</referenceableParamGroup>",
+            1,
+        )
+        text = text.replace(
+            '<scanSettings id="scanSettings1">',
+            '<scanSettings id="scanSettings1">'
+            '<referenceableParamGroupRef ref="geom"/>',
+            1,
+        )
+        imzml = tmp_path / "unit_nanometre_grouped.imzML"
+        imzml.write_text(text, encoding="utf-8")
+        shutil.copyfile(
+            fixture_path("unit_nanometre").with_suffix(".ibd"),
+            imzml.with_suffix(".ibd"),
+        )
+        return imzml
+
+    def test_the_preview_reports_micrometres(self, tmp_path):
+        imzml = self._grouped(tmp_path)
+
+        preview = preview_msi(imzml)
+
+        assert preview.readable, preview.error
+        assert preview.pixel_size_um == pytest.approx(4.40625)
+
+    def test_the_reader_reports_micrometres(self, tmp_path):
+        reader = ImzMLReader(self._grouped(tmp_path))
+        try:
+            assert reader.get_essential_metadata().pixel_size == pytest.approx(
+                (4.40625, 4.40625)
+            )
+        finally:
+            reader.close()
+
+    def test_the_metadata_document_reports_micrometres(self, tmp_path):
+        from thyra.metadata.document import read_metadata_document
+
+        document = read_metadata_document(self._grouped(tmp_path))
+
+        size = document["ms_analysis"]["pixel_size_um"]
+        assert size["x"] == pytest.approx(4.40625)
+        assert size["y"] == pytest.approx(4.40625)
 
 
 class TestTwoScanSettings:
