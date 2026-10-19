@@ -340,8 +340,8 @@ def _centimetre_imzml(tmp_path):
     """The ``unit_nanometre`` pair rewritten to declare centimetre.
 
     UO:0000015 is a real length unit deliberately absent from ``UM_PER_UNIT``,
-    so the extractor must refuse rather than accept the bare number and store
-    a pixel size ten thousand times too small. The ``.ibd`` is copied
+    so the extractor must leave it unread rather than accept the bare number
+    and store a pixel size ten thousand times too small. The ``.ibd`` is copied
     unchanged: only the declaration moves, so what is refused is the unit and
     not unreadable data.
     """
@@ -368,7 +368,8 @@ class TestARealRaiseSiteReachesTheUser:
 
     * ``imzml_reader.py`` refuses the ambiguous precision declaration carried
       by the ``two_precision_terms`` fixture;
-    * ``imzml_extractor.py`` refuses a pixel size declared in centimetre.
+    * ``convert.py`` refuses for want of a pixel size when the file declares
+      one in centimetre, which ``imzml_extractor.py`` leaves unread.
 
     Downgrade either to a plain ``ValueError`` and the assertion that fails is
     ``"Traceback" not in result.output``. That is the whole of what the type
@@ -401,12 +402,12 @@ class TestARealRaiseSiteReachesTheUser:
         assert "Traceback" not in result.output
 
     def test_an_unconvertible_pixel_size_unit_is_one_sentence(self, tmp_path, runner):
-        """The refusal promoted from a plain ``ValueError`` for issue #304.
+        """A centimetre pixel size is left unread, and the refusal asks for the flag.
 
-        The message was always written for whoever ran the conversion -- it
-        names the file, the unit it declared and the three units there are --
-        and it reached them under thirty lines of traceback because the type
-        said "surprise" while the sentence said "refusal".
+        Promoted from a plain ``ValueError`` for issue #304. The unit used to
+        be refused outright, so the file could not be converted even with
+        ``--pixel-size``; now the unit is named in a warning, the size is not
+        read, and the conversion refuses only for want of a pixel size.
         """
         source = _centimetre_imzml(tmp_path)
 
@@ -414,5 +415,18 @@ class TestARealRaiseSiteReachesTheUser:
 
         assert result.exit_code == 1, result.output
         assert "UO:0000015" in result.output
-        assert "Supported units" in result.output
+        assert "--pixel-size" in result.output
         assert "Traceback" not in result.output
+        assert not (tmp_path / "out.zarr").exists()
+
+    def test_an_unconvertible_pixel_size_unit_converts_with_the_flag(
+        self, tmp_path, runner
+    ):
+        """F56 -- ``--pixel-size 50`` is the way through, as for an mzPeak archive."""
+        source = _centimetre_imzml(tmp_path)
+        store = tmp_path / "out.zarr"
+
+        result = runner.invoke(main, [str(source), str(store), "--pixel-size", "50"])
+
+        assert result.exit_code == 0, result.output
+        assert store.exists()

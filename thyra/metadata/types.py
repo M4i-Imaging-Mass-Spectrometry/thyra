@@ -16,9 +16,10 @@ distinction for a range, and exists because an imzML that records no
 observed-m/z cvParams leaves one genuinely unread (issue #360).
 ``pixel_size`` is the in-plane
 raster pitch and says nothing about z, which is why ``z_spacing_um`` is
-separate and usually ``None``. ``coordinate_offsets`` records what
-rebasing the file's coordinates subtracted, so a store can say where its
-origin came from.
+separate and usually ``None``. ``coordinate_offsets`` records the
+source's own coordinate of index 0 on each axis, so a store can say where
+its origin came from (D30). That is what rebasing subtracted, except on z
+for a source that states no z, where it is 0.
 
 Two fields were removed rather than kept for symmetry:
 ``peak_counts_per_pixel`` built a CSR ``indptr`` that went with D10, and
@@ -66,8 +67,10 @@ class EssentialMetadata:
             any acquisition has -- callers must say "unknown" rather
             than print it.
         source_path: Absolute path to the source data.
-        coordinate_offsets: Raw coordinate offsets ``(x, y, z)`` used to
-            normalise coordinates to 0-based indexing.
+        coordinate_offsets: The source's own coordinate ``(x, y, z)`` of
+            index 0 on each axis (D30). On x and y it is what normalising
+            to 0-based indexing subtracted; on z too, except that a source
+            stating no z records 0.
         stage_origin_um: Where grid index ``(0, 0)`` sits on the stage, as
             ``(x_um, y_um)``, for a source that re-zeroes on a measured
             stage position rather than on raster indices (Waters, whose

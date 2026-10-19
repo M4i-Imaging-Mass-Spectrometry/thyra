@@ -266,6 +266,89 @@ class TestNonFiniteMobility:
         assert any(m.startswith("4 point(s)") for m in messages), messages
 
 
+def _write_shared_mobility_block(directory, name, term, dtype):
+    """Six continuous pixels plus one mobility block they all share (F184).
+
+    The block of four values sits right after the 16-byte UUID, declared
+    with ``term`` as its precision; every byte of the ``.ibd`` is declared.
+    """
+    import re
+
+    from pyimzml.ImzMLWriter import ImzMLWriter
+
+    def cv(ref, accession, label, value="", unit=""):
+        return (
+            f'<cvParam cvRef="{ref}" accession="{accession}" name="{label}" '
+            f'value="{value}"{unit}/>'
+        )
+
+    group = (
+        '<referenceableParamGroup id="mobilityArray">'
+        + cv(
+            "MS",
+            "MS:1003006",
+            "mean inverse reduced ion mobility array",
+            unit=' unitCvRef="MS" unitAccession="MS:1002814"',
+        )
+        + cv("IMS", "IMS:1000101", "external data", "true")
+        + term
+        + "</referenceableParamGroup>"
+    )
+    mz = np.array([150.0, 250.0, 350.0, 450.0])
+    mobility = np.array([0.70, 0.85, 1.05, 1.30])
+    path = directory / f"{name}.imzML"
+    with ImzMLWriter(str(path), mode="continuous") as writer:
+        for i in range(6):
+            writer.addSpectrum(mz, (i + 1) * 10 * mz, (i % 3 + 1, i // 3 + 1, 1))
+    block = mobility.astype(dtype).tobytes()
+    ibd = path.with_suffix(".ibd")
+    raw = ibd.read_bytes()
+    ibd.write_bytes(raw[:16] + block + raw[16:])
+    xml = re.sub(
+        r'(external offset" value=")(\d+)',
+        lambda m: m[1] + str(int(m[2]) + len(block)),
+        path.read_text(),
+    )
+    xml = xml.replace(
+        "</referenceableParamGroupList>", group + "</referenceableParamGroupList>"
+    )
+    array = (
+        '<binaryDataArray encodedLength="0">'
+        '<referenceableParamGroupRef ref="mobilityArray"/>'
+        + cv("IMS", "IMS:1000102", "external offset", 16)
+        + cv("IMS", "IMS:1000103", "external array length", 4)
+        + cv("IMS", "IMS:1000104", "external encoded length", len(block))
+        + "</binaryDataArray>"
+    )
+    path.write_text(
+        xml.replace("</binaryDataArrayList>", array + "</binaryDataArrayList>")
+    )
+    return path
+
+
+class TestAMobilityArrayOfAnotherPrecision:
+    """F184 -- a 16-bit float array was read as 64-bit, from the neighbouring bytes."""
+
+    @pytest.mark.parametrize(
+        "label, accession, dtype",
+        [
+            ("32-bit float", "MS:1000521", np.float32),
+            ("16-bit float", "MS:1000520", np.float16),
+        ],
+    )
+    def test_the_values_are_read_at_the_declared_width(
+        self, tmp_path, label, accession, dtype
+    ):
+        term = f'<cvParam cvRef="MS" accession="{accession}" name="{label}" value=""/>'
+        path = _write_shared_mobility_block(tmp_path, label[:6], term, dtype)
+
+        with ImzMLReader(path) as reader:
+            assert reader.has_ion_mobility is True
+            _, _, mobility, _ = next(reader.iter_mobility_spectra())
+
+        assert mobility == pytest.approx([0.70, 0.85, 1.05, 1.30], abs=1e-3)
+
+
 class TestPlainFilesAreUntouched:
     def test_two_array_file_reports_no_mobility(self):
         with ImzMLReader(PLAIN) as reader:
@@ -330,6 +413,55 @@ class TestDetection:
         )
         assert spec is not None and spec.compressed is True
         assert spec.dtype == np.dtype(np.float64)  # undeclared precision
+
+    def test_a_16_bit_float_array_is_read_as_16_bit(self):
+        """MS:1000520 was missing from the table, so the array read as 64-bit."""
+        spec = detect_mobility_array(
+            _metadata(
+                {
+                    "mobilityArray": [
+                        (
+                            "mean inverse reduced ion mobility array",
+                            "MS:1003006",
+                            None,
+                            None,
+                        ),
+                        ("16-bit float", "MS:1000520", None, None),
+                    ]
+                }
+            )
+        )
+        assert spec is not None
+        assert spec.dtype == np.float16
+        assert spec.dtype.itemsize == 2
+
+    def test_a_binary_type_thyra_cannot_decode_is_refused(self):
+        """MS:1001479 (null-terminated ASCII string) fell through to 64-bit."""
+        with pytest.raises(ConversionRefused, match="a precision Thyra cannot decode"):
+            detect_mobility_array(
+                _metadata(
+                    {
+                        "mobilityArray": [
+                            ("ion mobility array", "MS:1002893", None, None),
+                            ("null-terminated ASCII string", "MS:1001479", None, None),
+                        ]
+                    }
+                )
+            )
+
+    def test_two_precision_terms_are_refused(self):
+        with pytest.raises(ConversionRefused, match="exactly one is required"):
+            detect_mobility_array(
+                _metadata(
+                    {
+                        "mobilityArray": [
+                            ("ion mobility array", "MS:1002893", None, None),
+                            ("32-bit float", "MS:1000521", None, None),
+                            ("64-bit float", "MS:1000523", None, None),
+                        ]
+                    }
+                )
+            )
 
     def test_no_mobility_group(self):
         assert (

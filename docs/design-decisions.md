@@ -1219,7 +1219,8 @@ setting.
 
 ## D14. A 0-based imzML folds its base down; a cropped one does not move
 
-**Status:** Implemented (2026-09-09), issue #244.
+**Status:** Implemented (2026-09-09), issue #244. Amended by D65: the
+preview reads the declared pixel counts, and the base is logged once.
 
 **Decision.** x and y are rebased on `min(observed_minimum, 1)`. A file
 whose smallest coordinate is 0 is 0-based and is rebased on 0; a file
@@ -2674,7 +2675,8 @@ store's raw metadata.
 
 ## D30. A z the source does not state is recorded as 0
 
-**Status:** Implemented (2026-10-01), issue #425.
+**Status:** Implemented (2026-10-01), issue #425. Amended by D63: an
+imzML's z is judged on every spectrum, not read again from the first.
 
 **Decision.** `coordinate_offsets_px` gives the source's own coordinate of
 index 0 on each axis. On z that is the smallest z the source states, and 0
@@ -5206,6 +5208,144 @@ remedy is the user's own: convert again.
 - "Store `null`." The block's convention is that a field the source does not
   report is absent, not null.
 - "Coerce to a finite stand-in, such as 0." That invents a measurement.
+
+## D63. An imzML states z on every spectrum or on none
+
+**Status:** Implemented (2026-10-19), issue #521. Amends the imzML half of
+D30.
+
+**Decision.** Every spectrum's z is judged the way the parser reads it: a
+cvParam `IMS:1000052` with a value, on the scan itself. A term with no value
+counts as no z.
+
+- A file that states z on some spectra and not on others is refused, with
+  the mzPeak route's sentence: "A plane is stated for every spectrum or for
+  none."
+- A file whose scans take z from a parameter group is refused by name. The
+  parser would give those spectra its stand-in 1 and sum the planes.
+- Every spectrum states z: D14 applies as before. None does: D30 applies,
+  and the z offset is 0.
+
+The judgement costs no second pass. A hook on the parser's own pass over the
+spectra records one byte per spectrum, as the polarity hook of D55 does.
+D30's sentence about reading the first spectrum again is replaced.
+
+**Why.** Reading only the first spectrum went wrong four ways, all at exit
+0. The recorded offset depended on spectrum order. A term with no value
+counted as stated. The stand-in 1 formed a plane of its own: 11 rows on one
+plane, 1 on another. Two planes stated through groups were summed into one
+table. Meanwhile the archive of the same file was refused, or got another
+offset.
+
+**The same hook names what the parser cannot read.** A position held in a
+parameter group or in a second `<scan>`, a position that is not a whole
+number, and an array read through a group the parser did not pick each
+ended in a raw `TypeError`, `ValueError` or `AttributeError` traceback. Each
+is now one `ConversionRefused` naming the spectrum and the cause. A
+document that is not well-formed XML, or is empty, gets the same, naming the
+file. The position cases are refused rather than read, as the z case is.
+
+**The objection.** Convert such files with the unstated spectra on plane 0.
+It lost: that mixes planes from stated and unstated z, and the two routes
+would still differ. A refusal costs only hand-made files. Every public
+example and test fixture states z on all spectra or on none, and none
+through a group.
+
+**What changes in a store.** Files that mix stated and unstated z, or hold
+z in a group, stop converting; no store is written. A file whose z terms
+all lack a value records z offset 0 instead of 1. Every other store is
+unchanged.
+
+**Known limit.** The hook wraps a private pyimzml method, as D55's does.
+The z tests convert files through it, so a pyimzml release that renames the
+method fails there.
+
+## D64. imzML arrays: precision on the first spectrum, byte ranges on every spectrum
+
+**Status:** Implemented (2026-10-19), issue #521.
+
+**Decision.** Thyra refuses an imzML whose binary arrays overlap in the
+`.ibd`, on any spectrum. Two arrays of the same kind may point at exactly
+the same bytes, as a continuous file's shared m/z axis does. Thyra also refuses a file whose
+first spectrum has an array whose own precision term disagrees with its
+param group, whether or not the array states `IMS:1000104`. An ion mobility
+array declared as 16-bit float (`MS:1000520`) is read as 16-bit; a precision
+Thyra cannot decode is refused by name.
+
+**Why.** The parser reads each array at its group's precision and never
+looks at a term on the array itself. It also reads as many values as a
+spectrum states, wherever they end. A spectrum that stated four values and
+stored three read into the next array, and an invented m/z of 134,217,760
+joined the mass range at exit 0. A 32-bit array on spectrum 0 was stored as
+514 instead of 15. A 16-bit mobility array was read as 64-bit, from the
+neighbouring bytes.
+
+**Cost.** The overlap check needs only the offsets and lengths the parser
+already holds: 0.46 s on a 918,855-spectrum file whose parse takes about
+115 s. Checking every array's precision would need a second pass over the
+document (73.6 s on that file), and a per-array precision conflict has only
+been made by hand.
+
+**What changes in a store.** No store of a well-formed file changes. A file
+whose arrays overlap, or whose first spectrum has an array that contradicts
+its group, converted with invented or wrong values and is now refused. A
+16-bit mobility array now stores its own values.
+
+**Known limits.** A later array that states its own precision, and a later
+spectrum that states fewer values than it stores (a gap, not an overlap),
+still convert wrong at exit 0. A resampled m/z axis whose source range
+starts at 0, on a logarithmic or inverse law, still ends in a raw error in
+the axis planner; that belongs to the resampling fix, not this one.
+
+## D65. The imzML head is trusted only when its declarations fit together
+
+**Status:** Implemented (2026-10-19), issue #521. Amends D14.
+
+**Decision.** The preview and the metadata document describe an imzML from
+its head only when it declares at least one spectrum, both raster sides are
+at least 1, the count is no larger than the raster, and the first spectrum
+sits at x >= 1 and y >= 1. Any other file takes the full read, as a
+conversion does. A count equal to the raster is a full raster and is
+trusted.
+
+Three smaller reads of the head follow the same rule, that the preview
+says what a conversion would read:
+
+- **The pixel size is read where its value is.** A size stated through a
+  parameter group that the scan settings reference takes its name and unit
+  from that group too. The preview reported such an area, or a nanometre
+  value, as micrometres.
+- **The last array ends at its offset plus its count times its width.** A
+  wrong encoded length on a complete file made the preview call it
+  truncated, while the conversion read it.
+- **The observed m/z terms are matched as XML.** Attributes in any order,
+  either quote, space around `=`, and nothing inside a comment.
+
+A pixel size in a unit Thyra cannot convert is not read: the log names the
+unit and a conversion asks for `--pixel-size`, as on the mzPeak route. It
+used to be refused, so the file could not be converted even with the flag.
+
+**Why.** pyimzml's writer declares the largest coordinate, not the count,
+and the head read stops at the first spectrum. So a 0 that first appeared
+later went unseen: a 4 x 3 file listed from its last pixel previewed as 3 x
+2. A count larger than its raster, or a side below 1, describes no
+acquisition, and checking both costs nothing. Reading every position
+instead would give up the header-only speed (0.4 ms against 64 s on a 2.0
+GiB file).
+
+**What changes in a store.** None from the head rule: no conversion reads
+the head. A file with a pixel size in an unknown unit now converts when
+`--pixel-size` is given.
+
+**D14, amended.** D14 says only the mzPeak extractor reads `IMS:1000042` /
+`IMS:1000043`; the preview reads them too, under this rule. The rebasing
+line D14 describes is now logged once per file, naming each axis's base.
+
+**Known limit.** A wrong count that still fits its raster (too low, or a
+file cut short after the count was written), and a 0-based file whose
+spectra fit inside the declaration with its first spectrum away from 0,
+are still described from the head. Both touch only the preview and the
+metadata document, never a store.
 
 ## D70. An mzPeak archive leaves MSn out per pixel, and no chunk loses a point
 

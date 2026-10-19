@@ -109,13 +109,24 @@ from **0** exist too, and a fixed subtraction would put their first column at
 `x = -1`, so the base is measured: a file whose smallest coordinate is 0 is
 rebased on 0, and a file starting at 1 -- or at 5, because it is a crop of a
 larger slide -- keeps the base of 1 and does not move. z is separate and rebases on
-the smallest plane present, because z has no origin to preserve. Whatever was
-subtracted is recorded in `coordinate_systems.global.coordinate_offsets_px`,
-and the `"acquisition"` coordinate system puts it back (see
-[Coordinate Systems](coordinate-systems.md#the-acquisition-system)).
+the smallest plane present, because z has no origin to preserve.
+`coordinate_systems.global.coordinate_offsets_px` records the file's own
+coordinate of index 0 on each axis, and the `"acquisition"` coordinate system
+puts it back (see
+[Coordinate Systems](coordinate-systems.md#the-acquisition-system)). A file
+that states no z records 0 for z.
+
+**Planes.** An imzML states position z (`IMS:1000052`) on every spectrum or on
+none, as an mzPeak archive does. Thyra refuses a file that states it on some
+spectra only. It also refuses one that states z through a parameter group,
+because the parser does not read it there and would sum the planes. A z term
+without a value counts as no z.
 
 **Pixel size.** Read from `IMS:1000046` and `IMS:1000047`, and both have to be
-there. A value with no unit is read as micrometres. Until 2017 `IMS:1000046`
+there. They may sit in a parameter group the scan settings reference; the name
+and unit are then read from the group too. A value with no unit is read as
+micrometres. A unit other than millimetre, micrometre or nanometre is not
+read: the log names it, and the conversion asks for `--pixel-size`. Until 2017 `IMS:1000046`
 was named "pixel size" and gave the *area* of a pixel. Under that name it is
 not read: the log says why, and the conversion asks for `--pixel-size`. See
 [imzML Parser Notes](imzml-parser-notes.md#ims1000046-was-an-area-until-2017).
@@ -131,11 +142,14 @@ m/z array, so the first spectrum states the range and the read stops there
 (checked against the file's own first spectra, not taken on trust); a
 processed-mode file is read to the end. A writer that omits those terms, as IONTOF
 SurfaceLab does, leaves the range genuinely unknown and a preview reports it as
-`None` rather than guessing from one spectrum. Two files still take the old
-route, because their head cannot settle the raster: one that declares no
-`IMS:1000042` / `IMS:1000043`, and one numbered from 0, where that declaration
-is one short of the acquisition. A conversion is unaffected -- it reads every
-coordinate as before.
+`None` rather than guessing from one spectrum. The head is trusted only when
+its declarations fit together. It must declare at least one spectrum, a raster
+of at least 1 x 1 that holds them all, and a first spectrum at x and y of 1 or
+more. Any other file is read the full way, as a conversion reads it. Most
+0-based files show up here: their declared raster is one short per axis.
+Known limits: a wrong count that still fits the raster is reported as stated,
+and so is a 0-based file whose spectra fit its one-short raster. A conversion
+is unaffected -- it reads every coordinate as before.
 
 **Ion mobility.** imzML defines two binary arrays, but TIMSCONVERT and
 TIMSImaging add a third for mobility, declared through a param group bound to
