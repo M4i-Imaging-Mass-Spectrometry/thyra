@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from tests.fixtures.mzpeak_builder import Spectrum, build_mzpeak, grid_spectra
+from tests.fixtures.mzpeak_builder import (
+    METADATA_MEMBER,
+    Spectrum,
+    build_mzpeak,
+    grid_spectra,
+)
 from thyra.readers.mzpeak import MzPeakReader
 
 
@@ -12,6 +17,42 @@ def _essential(path):
     """Read essential metadata and close the archive."""
     with MzPeakReader(path) as reader:
         return reader.get_essential_metadata()
+
+
+def _metadata_value_nulled(archive, tmp_path, column, row):
+    """Copy an archive with one value of the spectrum metadata made null."""
+    return _metadata_value_set(archive, tmp_path, column, row, None)
+
+
+def _metadata_value_set(archive, tmp_path, column, row, value):
+    """Copy an archive with one value of the spectrum metadata replaced."""
+    import io
+    import zipfile
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    rewritten = tmp_path / f"{value}_{column}_{archive.name}"
+    with (
+        zipfile.ZipFile(archive) as source,
+        zipfile.ZipFile(rewritten, "w", compression=zipfile.ZIP_STORED) as target,
+    ):
+        for name in source.namelist():
+            payload = source.read(name)
+            if name == METADATA_MEMBER:
+                table = pq.read_table(io.BytesIO(payload))
+                values = table.column(column).to_pylist()
+                values[row] = value
+                table = table.set_column(
+                    table.schema.get_field_index(column),
+                    column,
+                    pa.array(values, type=table.schema.field(column).type),
+                )
+                sink = pa.BufferOutputStream()
+                pq.write_table(table, sink)
+                payload = sink.getvalue().to_pybytes()
+            target.writestr(name, payload)
+    return rewritten
 
 
 class TestPixelSize:
@@ -224,6 +265,54 @@ class TestEssentialShape:
         ]
         archive = build_mzpeak(tmp_path / "range.mzpeak", spectra)
         assert _essential(archive).mass_range == (100.0, 900.0)
+
+    @pytest.mark.parametrize("layout", ["point", "chunk"])
+    @pytest.mark.parametrize("column", ["lowest_observed_mz", "highest_observed_mz"])
+    def test_a_null_bound_is_taken_from_the_points(self, tmp_path, layout, column):
+        """mzpeak-convert 0.16 leaves the lowest m/z null when it is 0.0.
+
+        The range is then taken from that spectrum's own points, so the
+        default axis does not leave its low or high peaks out.
+        """
+        spectra = [
+            Spectrum(1, 1, [0.0, 5.0, 150.0, 950.0], [0.0, 7.0, 1.0, 1.0]),
+            Spectrum(2, 1, [50.0, 150.0, 260.0], [1.0, 1.0, 1.0]),
+            Spectrum(1, 2, [60.0, 160.0, 255.0], [2.0, 2.0, 2.0]),
+        ]
+        archive = build_mzpeak(
+            tmp_path / "bounds.mzpeak", spectra, layout=layout, chunk_points=2
+        )
+
+        nulled = _metadata_value_nulled(archive, tmp_path, column, row=0)
+
+        assert _essential(nulled).mass_range == (0.0, 950.0)
+
+    def test_the_stated_bound_of_a_half_stated_spectrum_is_kept(self, tmp_path):
+        """Only the null bound is taken from the points; the other stands."""
+        spectra = [
+            Spectrum(1, 1, [100.0, 150.0], [1.0, 2.0]),
+            Spectrum(2, 1, [120.0, 140.0], [3.0, 4.0]),
+        ]
+        archive = build_mzpeak(tmp_path / "half.mzpeak", spectra)
+        widened = _metadata_value_set(
+            archive, tmp_path, "highest_observed_mz", 0, 900.0
+        )
+
+        nulled = _metadata_value_nulled(widened, tmp_path, "lowest_observed_mz", 0)
+
+        assert _essential(nulled).mass_range == (100.0, 900.0)
+
+    def test_a_null_bound_of_a_spectrum_left_out_reads_nothing(self, tmp_path):
+        """Only a converted spectrum's bound is taken from its points."""
+        spectra = [
+            Spectrum(None, None, [10.0, 20.0], [1.0, 1.0]),
+            Spectrum(1, 1, [100.0, 150.0], [1.0, 2.0]),
+        ]
+        archive = build_mzpeak(tmp_path / "unplaced.mzpeak", spectra)
+
+        nulled = _metadata_value_nulled(archive, tmp_path, "lowest_observed_mz", 0)
+
+        assert _essential(nulled).mass_range == (100.0, 150.0)
 
     @pytest.mark.parametrize(
         "representation", ["profile spectrum", "centroid spectrum"]
