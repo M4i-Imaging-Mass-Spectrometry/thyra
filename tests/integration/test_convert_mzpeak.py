@@ -9,6 +9,7 @@ store nobody checks.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -21,8 +22,10 @@ from tests.fixtures.mzpeak_builder import (
     NUMPRESS_LINEAR,
     PLAIN,
     Spectrum,
+    bruker_region,
     build_mzpeak,
     grid_spectra,
+    numpress_linear_encode,
 )
 from thyra.convert import convert_msi
 
@@ -106,6 +109,19 @@ def _dense(table):
     """Densify X for comparison; the fixtures are deliberately tiny."""
     matrix = table.X
     return matrix.toarray() if hasattr(matrix, "toarray") else np.asarray(matrix)
+
+
+def _numpress_decoded(values, scale):
+    """The values as MS-Numpress at ``scale`` gives them back, ends untouched."""
+    from thyra.readers.mzpeak.chunk_decoding import decode_numpress_linear
+
+    buffer = numpress_linear_encode(list(values), fixed_point=scale)
+    return decode_numpress_linear(
+        np.frombuffer(buffer, dtype=np.uint8),
+        np.array([len(buffer)]),
+        np.array([len(values)]),
+        "fixture",
+    )
 
 
 #: What the store of a chunked archive and the store of its point twin may
@@ -247,17 +263,29 @@ class TestChunkedTwin:
         _assert_identical_stores(tmp_path / "chunked.zarr", tmp_path / "point.zarr")
         assert _table(tmp_path / "chunked.zarr").n_vars == 6
 
-    def test_no_peak_is_lost_at_the_edge_of_the_axis(self, tmp_path):
+    @pytest.mark.parametrize(
+        ("offset", "edge"),
+        [(0.1234567, "last"), (0.1234521, "first")],
+        ids=["last-decodes-high", "first-decodes-low"],
+    )
+    def test_no_peak_is_lost_at_the_edge_of_the_axis(self, tmp_path, offset, edge):
         """A lossy archive keeps the first and last peak of every spectrum.
 
         MS-Numpress gives an m/z back a little off. The resampled axis runs
         from the lowest to the highest m/z the archive declares, and those
         are exact, so a first peak decoded below the axis would be dropped
-        and its pixel would lose that intensity.
+        and its pixel would lose that intensity. One offset puts each
+        spectrum's last m/z above its end, the other its first below its
+        start, so a bound taken at one end only is caught.
         """
         spectra = grid_spectra(3, 2, n_points=6)
         for spectrum in spectra:
-            spectrum.mzs += 0.1234567
+            spectrum.mzs += offset
+        decoded = _numpress_decoded(spectra[0].mzs, 1e5)
+        if edge == "first":
+            assert decoded[0] < spectra[0].mzs[0]
+        else:
+            assert decoded[-1] > spectra[0].mzs[-1]
         twin = build_mzpeak(tmp_path / "point.mzpeak", spectra)
         archive = build_mzpeak(
             tmp_path / "chunked.mzpeak",
@@ -278,6 +306,41 @@ class TestChunkedTwin:
         np.testing.assert_array_equal(
             _dense(_table(tmp_path / "chunked.zarr")).sum(axis=1), expected
         )
+
+    def test_no_peak_is_lost_at_a_high_mass_end(self, tmp_path):
+        """Above m/z 21,475 a step of the MS-Numpress scale passes 1e-5.
+
+        The last m/z decodes 1.07e-5 above itself at m/z 51,234. Held to
+        1e-5, it kept that value, fell outside the declared range, and the
+        default axis dropped 700 of every pixel's 730 counts.
+        """
+        last = 51234.567891
+        scale = float(np.floor(0x7FFFFFFF / last))
+        high = (np.floor(last * scale) + 0.55) / scale
+        spectra = [
+            Spectrum(x, y, [4000.125, 31000.75, high], [10.0, 20.0, 700.0])
+            for y in (1, 2)
+            for x in (1, 2)
+        ]
+        assert _numpress_decoded([4000.125, 31000.75, high], scale)[-1] - high > 1e-5
+        twin = build_mzpeak(tmp_path / "point.mzpeak", spectra)
+        archive = build_mzpeak(
+            tmp_path / "chunked.mzpeak",
+            spectra,
+            layout="chunk",
+            chunk_encoding=NUMPRESS_LINEAR,
+            chunk_points=2,
+            numpress_fixed_point=scale,
+        )
+        resampling = {"method": "nearest_neighbor", "target_bins": 64}
+
+        _convert(twin, tmp_path / "point.zarr", resampling)
+        _convert(archive, tmp_path / "chunked.zarr", resampling)
+
+        for store in ("point.zarr", "chunked.zarr"):
+            np.testing.assert_array_equal(
+                _dense(_table(tmp_path / store)).sum(axis=1), [730.0] * 4
+            )
 
     def test_the_comparison_sees_a_changed_value(self, tmp_path):
         """The check above is only worth what it can catch."""
@@ -503,7 +566,8 @@ class TestConversion:
         success.
         """
         placed = grid_spectra(3, 2, n_points=6)
-        scan = Spectrum(None, None, placed[0].mzs, np.full(6, 999.0))
+        # m/z no pixel holds, so a scan that reached the axis would show.
+        scan = Spectrum(None, None, [50.0, 51.0], [999.0, 999.0])
         twin = build_mzpeak(tmp_path / "twin.mzpeak", placed)
         archive = build_mzpeak(
             tmp_path / "scan.mzpeak", placed[:4] + [scan] + placed[4:]
@@ -596,3 +660,72 @@ def test_converter_archive_reads_as_its_point_twin():
                 np.testing.assert_allclose(ours[2], theirs[2], rtol=0, atol=tolerance)
                 compared += 1
     assert compared > 0
+
+
+class TestLeftOutSpectra:
+    """What a store holds when some spectra of an archive are not converted."""
+
+    def test_ms2_pixels_of_their_own_keep_their_spectra_and_regions(self, tmp_path):
+        """MS1 on one row, MS2 on two others, each set in its own region."""
+        ms1 = [Spectrum(x, 1, [100.0, 200.0], [1.0, 2.0]) for x in (1, 2, 3)]
+        ms2 = [Spectrum(x, y, [50.0, 75.0], [5.0, 7.0]) for y in (3, 4) for x in (1, 2)]
+        regions = [
+            bruker_region(0, 3, [1, 3], [1, 1]),
+            bruker_region(1, 4, [1, 2], [3, 4]),
+        ]
+        archive = build_mzpeak(
+            tmp_path / "levels.mzpeak",
+            ms1 + ms2,
+            ms_levels=[1] * 3 + [2] * 4,
+            file_metadata={"bruker_maldi": {"regions": regions}},
+        )
+
+        _convert(archive, tmp_path / "levels.zarr")
+
+        table = _table(tmp_path / "levels.zarr")
+        assert table.n_obs == 7
+        assert sorted(set(table.obs["y"].tolist())) == [0, 2, 3]
+        assert sorted(set(table.obs["region_number"].tolist())) == [0, 1]
+
+    def test_ms2_beside_ms1_labelled_level_0_is_left_out(self, tmp_path):
+        """mzpeak-convert writes level 0 for an MS1 spectrum that states none."""
+        spectra = []
+        for y in (1, 2):
+            for x in (1, 2, 3):
+                spectra += [
+                    Spectrum(x, y, [100.0, 101.0], [1.0, 2.0]),
+                    Spectrum(x, y, [150.0], [1000.0]),
+                ]
+        archive = build_mzpeak(tmp_path / "zero.mzpeak", spectra, ms_levels=[0, 2] * 6)
+
+        _convert(archive, tmp_path / "zero.zarr")
+
+        table = _table(tmp_path / "zero.zarr")
+        np.testing.assert_array_equal(table.var["mz"].to_numpy(), [100.0, 101.0])
+        np.testing.assert_array_equal(_dense(table).sum(axis=1), [3.0] * 6)
+
+    def test_a_nan_m_z_with_an_intensity_is_refused_on_the_raw_axis(
+        self, tmp_path, thyra_logs
+    ):
+        """As its imzML twin is; before, the point was dropped as padding."""
+        spectra = [
+            Spectrum(1, 1, [100.0, 300.0, np.nan], [1.0, 3.0, 50.0]),
+            Spectrum(2, 1, [100.0, 200.0], [4.0, 5.0]),
+        ]
+        archive = build_mzpeak(tmp_path / "nan.mzpeak", spectra)
+        imzml = _write_imzml(tmp_path / "nan.imzML", spectra)
+
+        for source in (archive, imzml):
+            with thyra_logs("thyra", logging.ERROR) as records:
+                refused = convert_msi(
+                    str(source),
+                    str(tmp_path / f"{source.suffix[1:]}.zarr"),
+                    format_type="spatialdata",
+                    dataset_id=DATASET_ID,
+                    pixel_size_um=PIXEL_SIZE_UM,
+                    resampling_config=None,
+                )
+            assert refused is False, source.suffix
+            assert any(
+                "non-finite value(s)" in record.getMessage() for record in records
+            ), source.suffix

@@ -8,6 +8,7 @@ it -- see that module's docstring for why that separation matters.
 from __future__ import annotations
 
 import json
+import logging
 import warnings
 import zipfile
 
@@ -15,6 +16,7 @@ import numpy as np
 import pytest
 
 from tests.fixtures.mzpeak_builder import (
+    DATA_MEMBER,
     DELTA,
     GRID,
     METADATA_MEMBER,
@@ -25,6 +27,7 @@ from tests.fixtures.mzpeak_builder import (
     SCANS_MEMBER,
     SQUARE_ROOT_GRID,
     Spectrum,
+    bruker_region,
     build_mzpeak,
     grid_spectra,
 )
@@ -195,6 +198,28 @@ class TestIteration:
             ((1, 1, 0), 2),
             ((0, 1, 0), 3),
         ]
+
+
+def _member_rewritten(archive, tmp_path, member, rewrite, pq):
+    """Copy an archive with one Parquet member passed through ``rewrite``."""
+    import io
+
+    import pyarrow as pa
+
+    rewritten = tmp_path / f"rewritten_{archive.name}"
+    with (
+        zipfile.ZipFile(archive) as source,
+        zipfile.ZipFile(rewritten, "w", compression=zipfile.ZIP_STORED) as target,
+    ):
+        for name in source.namelist():
+            payload = source.read(name)
+            if name == member:
+                table = rewrite(pq.read_table(io.BytesIO(payload)))
+                sink = pa.BufferOutputStream()
+                pq.write_table(table, sink)
+                payload = sink.getvalue().to_pybytes()
+            target.writestr(name, payload)
+    return rewritten
 
 
 def _calibration_scan(n_points=8):
@@ -571,8 +596,12 @@ class TestRefusals:
         assert "MS:1002314 (MS-Numpress short logged float compression)" in message
         assert "slof.mzpeak" in message
 
-    def test_one_refused_row_among_many_is_enough(self, tmp_path):
-        """Every row is checked at the start, not the first batch alone."""
+    def test_one_refused_row_among_many_is_enough(self, tmp_path, monkeypatch):
+        """Every row is checked at the start, not the first batch alone.
+
+        The refused row is the last of nine row groups, and nothing is
+        decoded before the refusal.
+        """
         spectra = grid_spectra(3, 3, n_points=8)
         rows = 9 * 2
         archive = build_mzpeak(
@@ -580,11 +609,51 @@ class TestRefusals:
             spectra,
             layout="chunk",
             chunk_encoding=[DELTA] * (rows - 1) + ["MS:4000000"],
+            row_group_size=2,
         )
+
+        def no_decoding(*_args, **_kwargs):
+            raise AssertionError("a row was decoded before the refusal")
+
+        monkeypatch.setattr(mzpeak_reader, "decode_chunks", no_decoding)
+        monkeypatch.setattr(mzpeak_reader, "CHUNK_BATCH_ROWS", (2, 2))
 
         with pytest.raises(ConversionRefused, match="chunk encoding MS:4000000,"):
             with MzPeakReader(archive) as reader:
                 reader.get_essential_metadata()
+
+    def test_a_transform_beside_intensity_that_holds_a_value_is_refused(self, tmp_path):
+        """One row keeps its intensities under MS:1002314; refused at open."""
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        archive = build_mzpeak(
+            tmp_path / "ok.mzpeak",
+            grid_spectra(3, 1, n_points=4),
+            layout="chunk",
+            chunk_points=50,
+        )
+        column = "intensity_numpress_slof_bytes"
+
+        def rewrite(table):
+            rows = table.column("chunk").to_pylist()
+            for row in rows:
+                held = row["spectrum_index"] == 1
+                row[column] = [0, 1, 2] if held else None
+                row["intensity"] = None if held else row["intensity"]
+            kind = table.schema.field("chunk").type
+            typed = pa.struct([*kind, pa.field(column, pa.large_list(pa.uint8()))])
+            return pa.table({"chunk": pa.array(rows, type=typed)})
+
+        rewritten = _member_rewritten(archive, tmp_path, DATA_MEMBER, rewrite, pq)
+
+        with pytest.raises(ConversionRefused) as refusal:
+            with MzPeakReader(rewritten) as reader:
+                reader.get_essential_metadata()
+
+        message = str(refusal.value)
+        assert "MS:1002314" in message
+        assert column in message
 
     def test_grid_model_that_is_not_decoded_is_refused_by_name(self, tmp_path):
         """A model that is not decoded is named, and the archive is left."""
@@ -1306,3 +1375,248 @@ class TestChunkedLayout:
         _, kept_mzs, kept = emitted[0]
         np.testing.assert_array_equal(kept_mzs, [300.0] * 5)
         assert float(kept.sum()) == 300.0
+
+
+def _listing_only(archive, tmp_path, keep):
+    """Copy an archive whose metadata and scans list the first ``keep`` spectra.
+
+    The signal member keeps the rows of every spectrum, so the rest have
+    data rows that no metadata row lists.
+    """
+    import pyarrow.parquet as pq
+
+    first = _member_rewritten(
+        archive, tmp_path, METADATA_MEMBER, lambda t: t.slice(0, keep), pq
+    )
+    listed = tmp_path / "listed"
+    listed.mkdir(exist_ok=True)
+    return _member_rewritten(
+        first, listed, SCANS_MEMBER, lambda t: t.slice(0, keep), pq
+    )
+
+
+class TestLeftOutSpectraStayOffTheAxis:
+    """A spectrum that is not converted adds nothing to the axis or range."""
+
+    @pytest.mark.parametrize("layout", ["point", "chunk"])
+    def test_data_rows_no_metadata_lists(self, tmp_path, layout):
+        """Every listed spectrum is kept; the unlisted one is still left out."""
+        spectra = [
+            Spectrum(1, 1, [100.0, 101.0, 102.0], [1.0, 2.0, 3.0]),
+            Spectrum(2, 1, [100.0, 101.0, 103.0], [4.0, 5.0, 6.0]),
+            Spectrum(3, 1, [777.0, 778.0, 779.0], [9.0, 9.0, 9.0]),
+        ]
+        archive = build_mzpeak(
+            tmp_path / "unlisted.mzpeak", spectra, layout=layout, chunk_points=2
+        )
+
+        reading = _read(_listing_only(archive, tmp_path, 2))
+
+        np.testing.assert_array_equal(reading["axis"], [100.0, 101.0, 102.0, 103.0])
+        assert reading["mass_range"] == (100.0, 103.0)
+        assert [s[1] for s in reading["spectra"]] == [0, 1]
+
+    def test_a_scan_on_no_pixel_with_masses_of_its_own(self, tmp_path):
+        """Its m/z are ones no pixel has, so a leak would show."""
+        placed = grid_spectra(3, 2, n_points=6)
+        scan = Spectrum(None, None, [50.0, 51.0], [999.0, 999.0])
+        archive = build_mzpeak(
+            tmp_path / "scan.mzpeak", placed[:4] + [scan] + placed[4:]
+        )
+
+        reading = _read(archive)
+
+        np.testing.assert_array_equal(reading["axis"], placed[0].mzs)
+        assert reading["mass_range"] == (100.0, 102.5)
+
+    def test_a_spectrum_held_only_in_the_member_not_read(self, tmp_path):
+        """A pixel's peak list at m/z 60 does not widen a profile range."""
+        profile = [500.0, 500.5, 501.0, 502.0, 505.0]
+        spectra = [
+            Spectrum(1, 1, profile, [1, 2, 3, 2, 1]),
+            Spectrum(2, 1, profile, [2, 3, 4, 3, 2]),
+            Spectrum(1, 2, profile, [3, 4, 5, 4, 3]),
+            Spectrum(2, 2, [], []),
+        ]
+        peaks = [None, None, None, Spectrum(2, 2, [60.0, 61.0], [7.0, 8.0])]
+        archive = build_mzpeak(
+            tmp_path / "both.mzpeak", spectra, signal="both", centroids=peaks
+        )
+
+        reading = _read(archive)
+
+        assert reading["mass_range"] == (500.0, 505.0)
+        np.testing.assert_array_equal(reading["axis"], profile)
+
+
+class TestNonFiniteMz:
+    """A NaN m/z that carries an intensity is not padding."""
+
+    @pytest.mark.parametrize("layout", ["point", "chunk"])
+    def test_its_intensity_is_passed_on(self, tmp_path, layout):
+        """The converter drops or refuses it, as it does for imzML (D55)."""
+        spectra = [
+            Spectrum(1, 1, [100.0, 300.0, np.nan], [1.0, 3.0, 50.0]),
+            Spectrum(2, 1, [100.0, 200.0], [4.0, 5.0]),
+        ]
+        archive = build_mzpeak(
+            tmp_path / "nan.mzpeak", spectra, layout=layout, chunk_points=50
+        )
+
+        with MzPeakReader(archive) as reader:
+            emitted = list(reader.iter_spectra())
+            axis = reader.get_common_mass_axis()
+            dropped = reader._dropped_points
+
+        _, mzs, intensities = emitted[0]
+        assert np.isnan(mzs).sum() == 1
+        assert float(intensities.sum()) == 54.0
+        assert dropped == 0
+        # Kept on the raw axis, where the converter refuses it.
+        assert np.isnan(axis).sum() == 1
+
+    def test_a_null_m_z_with_no_intensity_is_still_padding(self, tmp_path):
+        """MS-Numpress stores a null m/z as 0.0; beside a zero it is dropped."""
+        spectra = [Spectrum(1, 1, [0.0, 5.0, 150.0], [0.0, 7.0, 1.0])]
+        archive = build_mzpeak(
+            tmp_path / "zero.mzpeak",
+            spectra,
+            layout="chunk",
+            chunk_encoding=NUMPRESS_LINEAR,
+            chunk_points=50,
+        )
+
+        with MzPeakReader(archive) as reader:
+            ((_, mzs, intensities),) = list(reader.iter_spectra())
+            axis = reader.get_common_mass_axis()
+
+        np.testing.assert_array_equal(mzs, [5.0, 150.0])
+        np.testing.assert_array_equal(intensities, [7.0, 1.0])
+        np.testing.assert_array_equal(axis, [5.0, 150.0])
+
+
+class TestMsLevelsPerPixel:
+    """An MSn spectrum is left out only on a pixel that holds MS1 too."""
+
+    def test_ms2_on_pixels_of_their_own_are_kept(self, tmp_path, thyra_logs):
+        """MS1 on one row, MS2 on two others: every spectrum is stored."""
+        ms1 = [Spectrum(x, 1, [100.0, 200.0], [1.0, 2.0]) for x in (1, 2, 3)]
+        ms2 = [Spectrum(x, y, [50.0, 75.0], [5.0, 7.0]) for y in (3, 4) for x in (1, 2)]
+        archive = build_mzpeak(
+            tmp_path / "split.mzpeak", ms1 + ms2, ms_levels=[1] * 3 + [2] * 4
+        )
+
+        with thyra_logs("thyra.readers.mzpeak", logging.WARNING) as records:
+            reading = _read(archive)
+
+        assert reading["n_spectra"] == 7
+        assert {coords[1] for coords, _, _, _ in reading["spectra"]} == {0, 2, 3}
+        assert reading["mass_range"] == (50.0, 200.0)
+        assert not any("MSn spectra" in r.getMessage() for r in records)
+
+    @pytest.mark.parametrize(
+        "first_level", [1, 0, None], ids=["level-1", "level-0", "level-null"]
+    )
+    def test_an_ms1_spectrum_of_any_stated_kind_keeps_ms2_out(
+        self, tmp_path, first_level, thyra_logs
+    ):
+        """Level 0 or no level beside level 2 reads as MS1."""
+        spectra = []
+        for y in (1, 2):
+            for x in (1, 2, 3):
+                spectra += [
+                    Spectrum(x, y, [100.0, 101.0], [1.0, 2.0]),
+                    Spectrum(x, y, [150.0], [1000.0]),
+                ]
+        archive = build_mzpeak(
+            tmp_path / "pairs.mzpeak", spectra, ms_levels=[first_level, 2] * 6
+        )
+
+        with thyra_logs("thyra.readers.mzpeak", logging.WARNING) as records:
+            reading = _read(archive)
+
+        assert reading["n_spectra"] == 6
+        np.testing.assert_array_equal(reading["axis"], [100.0, 101.0])
+        assert reading["mass_range"] == (100.0, 101.0)
+        for _, _, mzs, intensities in reading["spectra"]:
+            np.testing.assert_array_equal(mzs, [100.0, 101.0])
+            assert float(intensities.sum()) == 3.0
+        assert any("level 2: 6" in r.getMessage() for r in records)
+
+    def test_only_the_shared_pixels_lose_their_ms2(self, tmp_path):
+        """MS1 and MS2 on one pixel, MS2 alone on the next."""
+        spectra = [
+            Spectrum(1, 1, [100.0], [1.0]),
+            Spectrum(1, 1, [150.0], [1000.0]),
+            Spectrum(2, 1, [160.0], [10.0]),
+        ]
+        archive = build_mzpeak(tmp_path / "mixed.mzpeak", spectra, ms_levels=[1, 2, 2])
+
+        reading = _read(archive)
+
+        assert [s[1] for s in reading["spectra"]] == [0, 2]
+        np.testing.assert_array_equal(reading["axis"], [100.0, 160.0])
+
+
+def _two_pixels_with_ms1_and_ms2():
+    """Two pixels, each with an MS1 and an MS2 spectrum."""
+    spectra = []
+    for x in (1, 2):
+        spectra += [Spectrum(x, 1, [100.0], [1.0]), Spectrum(x, 1, [150.0], [9.0])]
+    return spectra
+
+
+class TestRegionsBesideMsLevels:
+    """A region's listed frames are matched before or after MSn is left out."""
+
+    def test_regions_of_ms1_and_of_ms2_pixels(self, tmp_path):
+        """The MS2 pixels keep their spectra, so their region still adds up."""
+        ms1 = [Spectrum(x, 1, [100.0, 200.0], [1.0, 2.0]) for x in (1, 2, 3)]
+        ms2 = [Spectrum(x, y, [50.0, 75.0], [5.0, 7.0]) for y in (3, 4) for x in (1, 2)]
+        regions = [
+            bruker_region(0, 3, [1, 3], [1, 1]),
+            bruker_region(1, 4, [1, 2], [3, 4]),
+        ]
+        archive = build_mzpeak(
+            tmp_path / "regions.mzpeak",
+            ms1 + ms2,
+            ms_levels=[1] * 3 + [2] * 4,
+            file_metadata={"bruker_maldi": {"regions": regions}},
+        )
+
+        with MzPeakReader(archive) as reader:
+            region_map = reader.get_region_map()
+
+        assert region_map is not None
+        assert sorted(set(region_map.values())) == [0, 1]
+
+    @pytest.mark.parametrize("frames", [2, 4], ids=["after", "before"])
+    def test_frames_that_count_the_ms2_spectra_too(self, tmp_path, frames):
+        """Two pixels with MS1 and MS2 each: 2 or 4 frames both match."""
+        archive = build_mzpeak(
+            tmp_path / "frames.mzpeak",
+            _two_pixels_with_ms1_and_ms2(),
+            ms_levels=[1, 2, 1, 2],
+            file_metadata={
+                "bruker_maldi": {"regions": [bruker_region(3, frames, [1, 2], [1, 1])]}
+            },
+        )
+
+        with MzPeakReader(archive) as reader:
+            region_map = reader.get_region_map()
+
+        assert region_map == {(0, 0): 3, (1, 0): 3}
+
+    def test_frames_that_match_neither_count(self, tmp_path):
+        """Three frames listed for two pixels of four spectra."""
+        archive = build_mzpeak(
+            tmp_path / "frames.mzpeak",
+            _two_pixels_with_ms1_and_ms2(),
+            ms_levels=[1, 2, 1, 2],
+            file_metadata={
+                "bruker_maldi": {"regions": [bruker_region(3, 3, [1, 2], [1, 1])]}
+            },
+        )
+
+        with MzPeakReader(archive) as reader:
+            assert reader.get_region_map() is None
