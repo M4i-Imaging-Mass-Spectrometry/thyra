@@ -59,6 +59,45 @@ def _instrument_calibration(stated: Dict[str, Any]) -> Dict[str, Any]:
     return info
 
 
+def analysis_database(data_path: Path) -> Optional[Tuple[str, Path]]:
+    """Which analysis database a timsTOF ``.d`` is read from, and its type.
+
+    The one place that decides TSF or TDF; the reader and this extractor
+    both take the answer from here, so a store cannot record one format
+    while its spectra were read from the other (issue #518).
+    ``analysis.tsf`` wins when both are present, unless it is empty and
+    ``analysis.tdf`` is not: a 0-byte database is what a stray sqlite
+    probe leaves behind, never an acquisition, and real TSF folders carry
+    an empty ``analysis.tdf`` for that reason.
+
+    Args:
+        data_path: The ``.d`` directory.
+
+    Returns:
+        ``("tsf", path)`` or ``("tdf", path)``; ``None`` when neither
+        database is present.
+    """
+    found = [
+        (file_type, path)
+        for file_type, path in (
+            ("tsf", data_path / "analysis.tsf"),
+            ("tdf", data_path / "analysis.tdf"),
+        )
+        if path.exists()
+    ]
+    if not found:
+        return None
+
+    def empty(path: Path) -> bool:
+        try:
+            return path.stat().st_size == 0
+        except OSError:
+            return False
+
+    not_empty = [entry for entry in found if not empty(entry[1])]
+    return (not_empty or found)[0]
+
+
 class BrukerMetadataExtractor(MetadataExtractor):
     """Bruker-specific metadata extractor with optimized single-query extraction."""
 
@@ -101,7 +140,7 @@ class BrukerMetadataExtractor(MetadataExtractor):
                 so the reader says.
             file_type: ``"tsf"`` or ``"tdf"``, as the reader decided it.
                 ``None`` asks the same rule the reader uses
-                (:func:`~thyra.readers.bruker.timstof.timstof_reader.analysis_database`),
+                (:func:`analysis_database`),
                 so the two can never disagree about a folder that holds
                 both databases (issue #518).
         """
@@ -945,10 +984,8 @@ class BrukerMetadataExtractor(MetadataExtractor):
     def _is_tdf_format(self) -> bool:
         """Whether the reader reads ``analysis.tdf`` (TDF) rather than ``analysis.tsf``."""
         if self._file_type is None:
-            # Deferred: the reader module imports this one.
-            from ...readers.bruker.timstof.timstof_reader import analysis_database
-
-            self._file_type = analysis_database(self.data_path)[0]
+            found = analysis_database(self.data_path)
+            self._file_type = "tsf" if found is None else found[0]
         return self._file_type == "tdf"
 
     def _is_maldi_dataset(self) -> bool:

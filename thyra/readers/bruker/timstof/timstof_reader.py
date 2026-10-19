@@ -11,9 +11,21 @@ import numbers
 import os
 import re
 import sqlite3
+import uuid
 from contextlib import closing
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union, cast
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Generator,
+    Iterable,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import numpy as np
 from numpy.typing import NDArray
@@ -49,7 +61,10 @@ from ....core.region_map import build_region_map
 from ....core.registry import register_reader
 from ....errors import ConversionRefused
 from ....metadata.constants import SpectrumType
-from ....metadata.extractors.bruker_extractor import BrukerMetadataExtractor
+from ....metadata.extractors.bruker_extractor import (
+    BrukerMetadataExtractor,
+    analysis_database,
+)
 from ....utils.bruker_exceptions import DataError, FileFormatError, SDKError
 from ..base_bruker_reader import BrukerBaseMSIReader
 from ..folder_structure import BrukerFolderStructure, BrukerFormat
@@ -357,37 +372,49 @@ _APPLIED_STATE_KEYS = (
 )
 
 
-def analysis_database(data_path: Path) -> Tuple[str, Path]:
-    """Which analysis database a timsTOF ``.d`` is read from, and its type.
+#: The first 16 bytes of every sqlite database file.
+_SQLITE_MAGIC = b"SQLite format 3\x00"
 
-    The one place that decides TSF or TDF; the reader and its metadata
-    extractor both take the answer from here, so the store cannot record
-    one format while the spectra were read from the other (issue #518).
-    ``analysis.tsf`` wins when both are present, unless it is empty and
-    ``analysis.tdf`` is not: a 0-byte database is what a stray sqlite
-    probe leaves behind, never an acquisition.
 
-    Args:
-        data_path: The ``.d`` directory.
+def is_wal_database(path: Path) -> bool:
+    """Whether a sqlite file is in WAL mode, read from its header bytes alone.
 
-    Returns:
-        ``("tsf", path)`` or ``("tdf", path)``.
-
-    Raises:
-        FileFormatError: When neither database is present.
+    Bytes 18 and 19 of the 100-byte header are the file format's write
+    and read versions: 2 in WAL mode, 1 in rollback mode. Read with a
+    plain ``open``, so nothing is written beside the file, which even a
+    read-only sqlite connection to a WAL database does. A file that is
+    shorter than the header, is not sqlite, or cannot be read is not WAL.
     """
-    found = [
-        (file_type, path)
-        for file_type, path in (
-            ("tsf", data_path / "analysis.tsf"),
-            ("tdf", data_path / "analysis.tdf"),
-        )
-        if path.is_file()
-    ]
-    if not found:
-        raise FileFormatError(f"No analysis.tsf or analysis.tdf found in {data_path}")
-    not_empty = [entry for entry in found if entry[1].stat().st_size > 0]
-    return (not_empty or found)[0]
+    try:
+        with open(path, "rb") as handle:
+            header = handle.read(100)
+    except OSError:
+        return False
+    if len(header) < 100 or not header.startswith(_SQLITE_MAGIC):
+        return False
+    return header[18] == 2 or header[19] == 2
+
+
+def folder_is_writable(folder: Path) -> bool:
+    """Whether a file can be created in ``folder``: an empty folder is made and removed.
+
+    Asked of the folder itself rather than of its permission bits
+    (``os.access``), which a network share or a Windows access list can
+    answer wrongly. One ``mkdir`` under a random name, not
+    ``tempfile.mkdtemp``: on Windows that retries a permission error for
+    as long as ``os.access`` calls the folder writable, which in a folder
+    denied by an access list is forever.
+    """
+    probe = folder / f".thyra-write-check-{uuid.uuid4().hex}"
+    try:
+        probe.mkdir()
+    except OSError:
+        return False
+    try:
+        probe.rmdir()
+    except OSError:
+        logger.debug("Could not remove the write check folder %s", probe)
+    return True
 
 
 def _get_frame_count(db_path: Path) -> int:
@@ -762,6 +789,8 @@ class BrukerReader(BrukerBaseMSIReader):
             # acquisition with no raster is not going to be converted
             # whatever any of that finds.
             self._refuse_an_acquisition_with_no_raster()
+            # Ahead of the library opening the .d (issue #518).
+            self._refuse_a_folder_the_library_cannot_write()
 
         # Read calibration metadata
         self._calibration_metadata = self._read_calibration_metadata()
@@ -802,6 +831,12 @@ class BrukerReader(BrukerBaseMSIReader):
         self._frame_count: Optional[int] = None
         self._coordinate_offsets: Optional[Tuple[int, int, int]] = None
         self._mobility_axis: Optional[MobilityAxis] = None
+        # frame id -> (state id, TimsCalibration Id), and whether the frames
+        # take more than one row; both read on first use.
+        self._tims_calibration_map: Optional[Dict[int, Tuple[Optional[int], int]]] = (
+            None
+        )
+        self._per_frame_mobility: Optional[bool] = None
         self._fragmentation: Optional[FragmentationSchedule] = None
         self._fragmentation_read: bool = False
         #: Scan ranges of schedule rows the screen left out (#498); any
@@ -879,7 +914,12 @@ class BrukerReader(BrukerBaseMSIReader):
 
     def _detect_file_type(self) -> None:
         """Detect whether this is TSF or TDF data (:func:`analysis_database`)."""
-        self.file_type, self.db_path = analysis_database(self.data_path)
+        found = analysis_database(self.data_path)
+        if found is None:
+            raise FileFormatError(
+                f"No analysis.tsf or analysis.tdf found in {self.data_path}"
+            )
+        self.file_type, self.db_path = found
         logger.debug(f"Detected file type: {self.file_type.upper()}")
 
     def _read_calibration_metadata(self) -> Optional[Dict]:
@@ -1048,15 +1088,19 @@ class BrukerReader(BrukerBaseMSIReader):
         and ``TimsCalibrationMapping`` to match; a TSF one only the first,
         as a TSF's ``TimsCalibrationMapping`` is empty.
 
-        When the acquisition's frames cannot be read, the newest state is
-        taken, as before; the library's own answer is checked once it is
-        open (:meth:`_confirm_applied_calibration`).
+        When this cannot be checked (the acquisition's frames or a
+        mapping table cannot be read), the newest state is taken, as
+        before; the library's own answer is checked once it is open
+        (:meth:`_confirm_applied_calibration`).
         """
         frame_ids = self._acquisition_frame_ids()
         if frame_ids is None:
             return states[-1]
         for state in reversed(states):
-            if self._state_maps_frames(cursor, int(state[0]), frame_ids):
+            maps = self._state_maps_frames(cursor, int(state[0]), frame_ids)
+            if maps is None:
+                return states[-1]
+            if maps:
                 return state
         return None
 
@@ -1071,8 +1115,11 @@ class BrukerReader(BrukerBaseMSIReader):
 
     def _state_maps_frames(
         self, cursor: sqlite3.Cursor, state_id: int, frame_ids: set
-    ) -> bool:
-        """Whether a state's frame mappings name exactly ``frame_ids``."""
+    ) -> Optional[bool]:
+        """Whether a state's frame mappings name exactly ``frame_ids``.
+
+        ``None`` when a mapping table cannot be read, so it cannot be told.
+        """
         queries = [
             "SELECT FrameId FROM FrameMzCalibrationMapping WHERE CalibrationState = ?"
         ]
@@ -1084,7 +1131,7 @@ class BrukerReader(BrukerBaseMSIReader):
             try:
                 mapped = {int(row[0]) for row in cursor.execute(query, (state_id,))}
             except (sqlite3.Error, TypeError, ValueError):
-                return False
+                return None
             if mapped != frame_ids:
                 return False
         return True
@@ -1277,6 +1324,48 @@ class BrukerReader(BrukerBaseMSIReader):
         except Exception as e:
             logger.error(f"Failed to initialize database: {e}")
             raise DataError(f"Failed to open database: {e}") from e
+
+    def _refuse_a_folder_the_library_cannot_write(self) -> None:
+        """Refuse a ``.d`` that Bruker's library must write into and cannot.
+
+        The library opens a database that is in WAL mode read-write, in
+        place, and creates ``-shm`` and ``-wal`` files beside it for as
+        long as it is open. Real ``calibration.sqlite`` files are in WAL
+        mode, and so are some ``analysis.tsf``. In a folder the library
+        cannot write, a run ended in a traceback, or converted with the
+        recalibrated state silently not applied while the store named it.
+
+        So before the library is loaded, the header of each database it
+        will open is read: the analysis database always, and
+        ``calibration.sqlite`` when the recalibrated state is asked for.
+        When one is in WAL mode and the ``.d`` folder cannot be written,
+        the conversion stops here, in one line, before any spectrum is
+        read. A writable folder, or databases in rollback mode, are not
+        checked further. ``metadata_only`` readers open no library and
+        never get here.
+
+        Raises:
+            ConversionRefused: Naming the database, when it is in WAL mode
+                and the folder cannot be written.
+        """
+        databases = [self.db_path]
+        calibration = self.data_path / "calibration.sqlite"
+        if self.use_recalibrated_state and calibration.exists():
+            databases.append(calibration)
+        in_wal = [database for database in databases if is_wal_database(database)]
+        if not in_wal or folder_is_writable(self.data_path):
+            return
+        hint = (
+            ", or convert without the recalibrated state "
+            "(--no-recalibrated, use_recalibrated_state=False)"
+            if [database.name for database in in_wal] == ["calibration.sqlite"]
+            else ""
+        )
+        raise ConversionRefused(
+            f"{in_wal[0].name} in {self.data_path} is in WAL mode, so "
+            "Bruker's library must create -shm and -wal files beside it, and "
+            f"that folder cannot be written. Copy the .d to a writable folder{hint}."
+        )
 
     def _refuse_an_acquisition_with_no_raster(self) -> None:
         """Refuse to convert a ``.d`` whose frames were never placed.
@@ -2088,22 +2177,52 @@ class BrukerReader(BrukerBaseMSIReader):
         return (lower, upper)
 
     def _tims_calibration(self) -> Optional[Dict[str, Any]]:
-        """The ``TimsCalibration`` row as ``{model_type, coefficients}``.
+        """The ``TimsCalibration`` row the library applies to the axis frame.
 
         Provenance only: nothing in Thyra evaluates the model, the SDK
-        does. Coefficients keep their column order (``C0``, ``C1``, ...);
-        a NULL becomes NaN so positions are preserved.
+        does. The row is the one the library applies to the frame the
+        axis values come from (``frame_id``, the first frame): the applied
+        ``calibration.sqlite`` state's row for that frame, or the analysis
+        database's when no state is applied (``stored_in`` says which,
+        ``calibration_state_id`` names the state). It used to be the
+        analysis database's first row whatever was applied, so stores with
+        different axes recorded the same coefficients (issue #518).
+        ``n_frame_calibrations`` counts the rows the frames use between
+        them; above 1, each frame's points take that frame's own 1/K0
+        (:meth:`_mobility_calibrated_per_frame`). Coefficients keep their
+        column order (``C0``, ``C1``, ...); a NULL becomes NaN so
+        positions are preserved.
         """
+        frame_id = self._mobility_ramp()[1]
+        mapping = self._frame_tims_calibrations()
+        state_id, row_id = mapping.get(frame_id, (None, None))
         try:
-            conn = self._database()
-            cursor = conn.execute("SELECT * FROM TimsCalibration ORDER BY Id")
-            row = cursor.fetchone()
-        except sqlite3.OperationalError as e:
-            logger.debug(f"No TimsCalibration table: {e}")
+            if state_id is not None:
+                with closing(
+                    open_read_only(self.data_path / "calibration.sqlite")
+                ) as conn:
+                    cursor = conn.execute(
+                        "SELECT * FROM TimsCalibration "
+                        "WHERE CalibrationState = ? AND Id = ?",
+                        (state_id, row_id),
+                    )
+                    row = cursor.fetchone()
+                    columns = [d[0] for d in cursor.description]
+            else:
+                conn = self._database()
+                if row_id is None:
+                    cursor = conn.execute("SELECT * FROM TimsCalibration ORDER BY Id")
+                else:
+                    cursor = conn.execute(
+                        "SELECT * FROM TimsCalibration WHERE Id = ?", (row_id,)
+                    )
+                row = cursor.fetchone()
+                columns = [d[0] for d in cursor.description]
+        except sqlite3.Error as e:
+            logger.debug(f"No TimsCalibration row: {e}")
             return None
         if row is None:
             return None
-        columns = [description[0] for description in cursor.description]
         by_name = dict(zip(columns, row))
         coefficients = [
             float("nan") if by_name[name] is None else float(by_name[name])
@@ -2113,7 +2232,116 @@ class BrukerReader(BrukerBaseMSIReader):
         calibration: Dict[str, Any] = {"coefficients": coefficients}
         if by_name.get("ModelType") is not None:
             calibration["model_type"] = int(by_name["ModelType"])
+        calibration["frame_id"] = int(frame_id)
+        if state_id is not None:
+            calibration["stored_in"] = "calibration.sqlite"
+            calibration["calibration_state_id"] = int(state_id)
+        else:
+            calibration["stored_in"] = "analysis.tdf"
+        if mapping:
+            calibration["n_frame_calibrations"] = len(set(mapping.values()))
         return calibration
+
+    def _frame_tims_calibrations(self) -> Dict[int, Tuple[Optional[int], int]]:
+        """``frame id -> (state id, TimsCalibration Id)`` the library applies.
+
+        From the applied ``calibration.sqlite`` state's
+        ``TimsCalibrationMapping`` when a state is applied, the state id
+        then set; from ``Frames.TimsCalibration`` of the analysis database
+        otherwise, the state id ``None``. Empty when neither can be read.
+        Read once.
+        """
+        cached: Optional[Dict[int, Tuple[Optional[int], int]]] = getattr(
+            self, "_tims_calibration_map", None
+        )
+        if cached is not None:
+            return cached
+        mapping: Dict[int, Tuple[Optional[int], int]] = {}
+        state_id = (self._calibration_metadata or {}).get("calibration_id")
+        try:
+            if state_id is not None:
+                with closing(
+                    open_read_only(self.data_path / "calibration.sqlite")
+                ) as conn:
+                    rows = conn.execute(
+                        "SELECT FrameId, TimsCalibrationId FROM "
+                        "TimsCalibrationMapping WHERE CalibrationState = ?",
+                        (int(state_id),),
+                    ).fetchall()
+                mapping = {int(f): (int(state_id), int(t)) for f, t in rows}
+            else:
+                rows = (
+                    self._database()
+                    .execute("SELECT Id, TimsCalibration FROM Frames")
+                    .fetchall()
+                )
+                mapping = {int(f): (None, int(t)) for f, t in rows if t is not None}
+        except (sqlite3.Error, TypeError, ValueError) as e:
+            logger.debug(f"Could not read which TIMS calibration each frame takes: {e}")
+            mapping = {}
+        self._tims_calibration_map = mapping
+        return mapping
+
+    def _mobility_calibrated_per_frame(self) -> bool:
+        """Whether the frames take more than one TIMS calibration row.
+
+        Then each frame's scans are turned into 1/K0 by the library for
+        that frame, as its m/z already are, rather than through the axis
+        of the first frame. Real acquisitions do this: the
+        ``calibration.sqlite`` state of a MALDI timsTOF run maps its frames
+        to hundreds of rows, and on one 713-frame run a frame's 1/K0 sat
+        up to 9e-4 (about three scans) from the first frame's. With one
+        row, every frame's 1/K0 equals the axis, which is then used as is.
+        """
+        flag: Optional[bool] = getattr(self, "_per_frame_mobility", None)
+        if flag is None:
+            mapping = self._frame_tims_calibrations()
+            flag = len(set(mapping.values())) > 1
+            self._per_frame_mobility = flag
+        return flag
+
+    def _frame_mobility_values(
+        self, frame_id: int, values: NDArray[np.float64], n_axis: int
+    ) -> NDArray[np.float64]:
+        """The 1/K0 of each scan of ``frame_id``: its own when frames differ.
+
+        ``values`` (the axis) when every frame takes the same calibration
+        row; otherwise the library's conversion for this frame, over the
+        same ``n_axis`` scans.
+        """
+        if not self._mobility_calibrated_per_frame():
+            return values
+        sdk, handle = self._library("Converting scans to 1/K0")
+        return sdk.scannum_to_oneoverk0(
+            handle, int(frame_id), np.arange(n_axis, dtype=np.float64)
+        )
+
+    def get_mobility_value_range(self) -> Optional[Tuple[float, float]]:
+        """The 1/K0 the points can take, over every frame's own calibration.
+
+        The axis values when the frames share one TIMS calibration row.
+        When they do not, a frame's ramp sits a few scans off the first
+        frame's, so the range is widened to the first and last scan of
+        every frame read (1/K0 is monotonic in the scan number), and the
+        heatmap and the grid bin no frame's points past their edge.
+        """
+        span = super().get_mobility_value_range()
+        if span is None or not self._mobility_calibrated_per_frame():
+            return span
+        sdk = getattr(self, "sdk", None)
+        if sdk is None or not self.handle:
+            return span
+        n_axis = self._mobility_values()[1]
+        ends = np.array([0.0, float(n_axis - 1)], dtype=np.float64)
+        frame_ids: Iterable[int] = self._frame_tims_calibrations().keys()
+        if self._region_frame_ids is not None:
+            frame_ids = self._region_frame_ids & set(frame_ids)
+        lower, upper = span
+        for frame_id in frame_ids:
+            edges = sdk.scannum_to_oneoverk0(self.handle, int(frame_id), ends)
+            lower = min(lower, float(np.min(edges)))
+            upper = max(upper, float(np.max(edges)))
+        return lower, upper
 
     # ------------------------------------------------------------------
     # Fragmentation
@@ -2470,7 +2698,11 @@ class BrukerReader(BrukerBaseMSIReader):
                 n_axis,
             )
         inverse = frame.inverse
-        mobility = np.take(values, scans, mode="clip")
+        mobility = np.take(
+            self._frame_mobility_values(frame.frame_id, values, n_axis),
+            scans,
+            mode="clip",
+        )
         intensities = frame.intensities.astype(np.float64)
         kept = self._kept_indices(frame)
         if kept is not None:
