@@ -142,8 +142,12 @@ def _window_mobility(reader: BaseMSIReader) -> Callable[[Any], float]:
 
     The 1/K0 at the middle of the window's scan range: a window spans a
     slice of the ramp rather than a point, and a scheduled method reports
-    no apex, so the midpoint is the honest representative. ``NaN`` when
-    the source has no per-scan mobility axis to look it up in.
+    no apex, so the midpoint is the honest representative. Read off the
+    mobility axis, which is the first frame's: when frames take TIMS
+    calibrations of their own, the window's 1/K0 moves a little from
+    frame to frame (a few scans' width at most on real runs), and the
+    first frame's value stands for all of them. ``NaN`` when the source
+    has no per-scan mobility axis to look it up in.
     """
     values: Optional[NDArray[np.float64]] = None
     try:

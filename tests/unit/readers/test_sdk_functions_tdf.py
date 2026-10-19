@@ -257,3 +257,38 @@ class TestPointerTypes:
         assert POINTER(c_double) is not POINTER(c_float)
         sdk = make_sdk(FakeDll({}))
         assert sdk._bound_conversions["tims_index_to_mz"] is True
+
+
+class TestTheRecalibrationOption:
+    """``use_recalibrated`` must reach the library's open call (issue #518)."""
+
+    @pytest.mark.parametrize("option, flag", [(True, 1), (False, 0)])
+    def test_tims_open_is_given_the_option(self, option, flag):
+        dll = FakeDll({})
+        sdk = make_sdk(dll)
+
+        sdk.open_file("/data/run.d", option)
+
+        dll.tims_open.assert_called_once_with(b"/data/run.d", flag)
+
+    @pytest.mark.parametrize("option, flag", [(True, 1), (False, 0)])
+    def test_tsf_open_is_given_the_option(self, option, flag):
+        dll = MagicMock()
+        dll.tsf_open.return_value = 7
+        sdk = SDKFunctions(FakeDllManager(dll), "tsf")
+
+        sdk.open_file("/data/run.d", option)
+
+        dll.tsf_open.assert_called_once_with(b"/data/run.d", flag)
+
+    def test_the_library_says_whether_it_applied_a_state(self):
+        dll = FakeDll({})
+        dll.tims_has_recalibrated_state = MagicMock(return_value=1)
+        sdk = make_sdk(dll)
+
+        assert sdk.has_recalibrated_state(42) is True
+        dll.tims_has_recalibrated_state.return_value = 0
+        assert sdk.has_recalibrated_state(42) is False
+
+    def test_a_library_without_the_call_cannot_say(self):
+        assert make_sdk(FakeDll({})).has_recalibrated_state(42) is None

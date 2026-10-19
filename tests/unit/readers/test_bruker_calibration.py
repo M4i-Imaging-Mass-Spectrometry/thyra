@@ -4,6 +4,7 @@ Unit tests for Bruker calibration metadata reading functionality.
 
 import sqlite3
 import tempfile
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -481,6 +482,173 @@ class TestTheAppliedCalibration:
         assert reader.get_applied_mz_calibration() is None
 
 
+def _with_frames_and_mappings(data_path: Path, frames, mapped) -> Path:
+    """Give ``data_path`` an analysis.tdf with ``frames`` and map each state.
+
+    ``mapped`` is ``{state id: frame ids}``, written to both mapping tables
+    the library compares with the acquisition's frames.
+    """
+    with closing(sqlite3.connect(data_path / "analysis.tdf")) as conn:
+        conn.execute("CREATE TABLE Frames (Id INTEGER PRIMARY KEY)")
+        conn.executemany("INSERT INTO Frames VALUES (?)", [(f,) for f in frames])
+        conn.commit()
+    with closing(sqlite3.connect(data_path / "calibration.sqlite")) as conn:
+        for table in ("FrameMzCalibrationMapping", "TimsCalibrationMapping"):
+            conn.execute(
+                f"CREATE TABLE {table} (CalibrationState INTEGER, FrameId INTEGER)"
+            )
+            conn.executemany(
+                f"INSERT INTO {table} VALUES (?, ?)",
+                [(state, f) for state, ids in mapped.items() for f in ids],
+            )
+        conn.commit()
+    return data_path
+
+
+def _mapped_reader(data_path: Path, use_recalibrated_state: bool = True):
+    reader = BrukerReader.__new__(BrukerReader)
+    reader.data_path = data_path
+    reader.db_path = data_path / "analysis.tdf"
+    reader.use_recalibrated_state = use_recalibrated_state
+    reader.file_type = "tdf"
+    reader._metadata_only = False
+    reader._calibration_metadata = reader._read_calibration_metadata()
+    return reader
+
+
+class TestTheStateMustMapTheAcquisition:
+    """Bruker's library skips a state whose frames are not the acquisition's (#518).
+
+    Measured on copies of ``synthetic_tims.d``: one frame too few or one
+    too many, and the library applies the state before it, or none.
+    """
+
+    def test_a_newest_state_that_maps_every_frame_is_applied(self, tmp_path):
+        data_path = _with_frames_and_mappings(
+            _d_with_states(tmp_path), [1, 2, 3], {1: [1, 2, 3], 2: [1, 2, 3]}
+        )
+        assert _mapped_reader(data_path)._calibration_metadata["calibration_id"] == 2
+
+    def test_a_newest_state_one_frame_short_gives_way_to_the_one_before(self, tmp_path):
+        data_path = _with_frames_and_mappings(
+            _d_with_states(tmp_path), [1, 2, 3], {1: [1, 2, 3], 2: [1, 2]}
+        )
+        reader = _mapped_reader(data_path)
+        metadata = reader._calibration_metadata
+
+        assert metadata["calibration_id"] == 1
+        assert metadata["calibration_source"] == "timsTOF"
+        assert metadata["latest_calibration_id"] == 2
+        assert reader.get_applied_mz_calibration()["calibration_state_id"] == 1
+
+    def test_a_state_mapping_a_frame_the_acquisition_lacks_is_skipped(self, tmp_path):
+        data_path = _with_frames_and_mappings(
+            _d_with_states(tmp_path), [1, 2, 3], {1: [1, 2, 3], 2: [1, 2, 3, 4]}
+        )
+        assert _mapped_reader(data_path)._calibration_metadata["calibration_id"] == 1
+
+    def test_no_state_that_maps_gives_the_analysis_database(self, tmp_path):
+        data_path = _with_frames_and_mappings(
+            _d_with_states(tmp_path), [1, 2, 3], {1: [1], 2: [2]}
+        )
+        reader = _mapped_reader(data_path)
+        metadata = reader._calibration_metadata
+
+        assert all(metadata[key] is None for key in APPLIED_STATE_KEYS)
+        assert metadata["latest_calibration_id"] == 2
+        assert metadata["recalibrated"] is True
+        assert reader.get_applied_mz_calibration() == {
+            "use_recalibrated_state": True,
+            "calibration": "analysis.tdf",
+        }
+
+    def test_without_mapping_tables_the_newest_is_taken_as_before(self, tmp_path):
+        """Cannot be checked, so today's answer stands."""
+        data_path = _d_with_states(tmp_path)
+        with closing(sqlite3.connect(data_path / "analysis.tdf")) as conn:
+            conn.execute("CREATE TABLE Frames (Id INTEGER PRIMARY KEY)")
+            conn.execute("INSERT INTO Frames VALUES (1)")
+            conn.commit()
+        assert _mapped_reader(data_path)._calibration_metadata["calibration_id"] == 2
+
+
+class TestTheCalibrationRecordSurvives:
+    def test_a_missing_calibration_info_table_costs_only_the_version(self, tmp_path):
+        data_path = _d_with_states(tmp_path)
+        with closing(sqlite3.connect(data_path / "calibration.sqlite")) as conn:
+            conn.execute("DROP TABLE CalibrationInfo")
+            conn.commit()
+
+        reader = _reader(data_path, True)
+        metadata = reader._calibration_metadata
+
+        assert metadata["calibration_id"] == 2
+        assert metadata["calibration_source"] == "SCiLS Lab 2027a"
+        assert metadata["calibration_software_version"] is None
+        assert metadata["num_calibration_versions"] == 2
+        assert metadata["recalibrated"] is True
+        assert reader.get_applied_mz_calibration()["calibration_state_id"] == 2
+
+    def test_a_file_with_no_state_names_the_analysis_database(self, tmp_path):
+        data_path = _d_with_states(tmp_path, states=[])
+
+        reader = _reader(data_path, True)
+
+        assert reader._calibration_metadata is None
+        assert reader.get_applied_mz_calibration() == {
+            "use_recalibrated_state": True,
+            "calibration": "analysis.tdf",
+        }
+
+
+class TestTheLibrarysOwnAnswer:
+    """The state read from the file is checked against the open library."""
+
+    def _confirmed(self, tmp_path, answer, use_recalibrated_state=True):
+        reader = _reader(_d_with_states(tmp_path), use_recalibrated_state)
+        reader.sdk = MagicMock()
+        reader.sdk.has_recalibrated_state.return_value = answer
+        reader.handle = 42
+        reader._confirm_applied_calibration()
+        return reader
+
+    def test_agreement_changes_nothing(self, tmp_path):
+        reader = self._confirmed(tmp_path, True)
+        assert reader._calibration_metadata["calibration_id"] == 2
+
+    def test_a_library_that_applied_none_unnames_the_state(self, tmp_path):
+        reader = self._confirmed(tmp_path, False)
+        metadata = reader._calibration_metadata
+
+        assert all(metadata[key] is None for key in APPLIED_STATE_KEYS)
+        assert metadata["latest_calibration_id"] == 2
+        assert reader.get_applied_mz_calibration() == {
+            "use_recalibrated_state": True,
+            "calibration": "analysis.tdf",
+        }
+
+    def test_a_state_the_read_did_not_find_leaves_which_unsaid(self, tmp_path):
+        data_path = _with_frames_and_mappings(
+            _d_with_states(tmp_path), [1, 2, 3], {1: [1], 2: [2]}
+        )
+        reader = _mapped_reader(data_path)
+        reader.sdk = MagicMock()
+        reader.sdk.has_recalibrated_state.return_value = True
+        reader.handle = 42
+
+        reader._confirm_applied_calibration()
+
+        assert reader.get_applied_mz_calibration() == {"use_recalibrated_state": True}
+
+    def test_a_library_that_cannot_say_changes_nothing(self, tmp_path):
+        reader = self._confirmed(tmp_path, None)
+        assert reader._calibration_metadata["calibration_id"] == 2
+
+    def test_with_the_option_off_the_library_is_not_asked(self, tmp_path):
+        reader = self._confirmed(tmp_path, True, use_recalibrated_state=False)
+        reader.sdk.has_recalibrated_state.assert_not_called()
+
+
 class TestDefaultCalibrationBehavior:
     """Test default calibration state behavior."""
 
@@ -512,6 +680,8 @@ class TestDefaultCalibrationBehavior:
             # The database is a no-op here, so there is no connection for
             # the no-raster check to ask about a MaldiFrameInfo table.
             patch.object(BrukerReader, "_refuse_an_acquisition_with_no_raster"),
+            # Nor a database header for the writable-folder check to read.
+            patch.object(BrukerReader, "_refuse_a_folder_the_library_cannot_write"),
             patch.object(BrukerReader, "_detect_regions", return_value=[]),
             patch.object(BrukerReader, "_select_region", return_value=(None, None)),
             patch.object(BrukerReader, "_parse_mis_alignment", return_value={}),

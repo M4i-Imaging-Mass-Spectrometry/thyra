@@ -142,6 +142,16 @@ class TestTdfWiring:
             reader.dll_manager, "tdf", tdf_spectrum="scan_sum"
         )
 
+    @pytest.mark.parametrize("option", [True, False])
+    def test_the_recalibration_option_reaches_the_sdk(self, option):
+        """Issue #518: no test failed when the option stopped reaching it."""
+        reader, sdk, _ = _make_reader("tdf", use_recalibrated_state=option)
+        sdk.open_file.assert_called_once_with(str(reader.data_path), option)
+
+    def test_the_recalibration_option_defaults_to_on(self):
+        reader, sdk, _ = _make_reader("tdf")
+        sdk.open_file.assert_called_once_with(str(reader.data_path), True)
+
     def test_default_mode_is_the_scan_sum(self):
         # Design decision D1: the instrument's own record is the default,
         # the vendor centroid the opt-in.

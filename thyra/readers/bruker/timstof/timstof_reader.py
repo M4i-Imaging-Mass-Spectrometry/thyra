@@ -316,9 +316,10 @@ def _optional_int(value: Any) -> Optional[int]:
 def read_calibration_states(data_path: Path) -> List[Dict[str, Any]]:
     """Every calibration state of a Bruker ``.d``, oldest first.
 
-    The state with the highest ``Id`` is the one Bruker's library applies
-    when opened with ``use_recalibrated_state`` (the default), so
-    ``states[-1]`` is what such a conversion uses; opened without it, the
+    Opened with ``use_recalibrated_state`` (the default), Bruker's
+    library applies the newest state that maps exactly the acquisition's
+    frames, which is ``states[-1]`` unless that state maps other frames
+    (see :meth:`BrukerReader._applied_state`); opened without it, the
     library applies none of them. ``len(states) - 1`` is how many times
     the acquisition has been recalibrated since.
 
@@ -1106,11 +1107,14 @@ class BrukerReader(BrukerBaseMSIReader):
 
     def _acquisition_frame_ids(self) -> Optional[set]:
         """Every ``Frames.Id`` of the analysis database, or ``None`` if unreadable."""
+        db_path = getattr(self, "db_path", None)
+        if db_path is None:
+            return None
         try:
-            with closing(open_read_only(self.db_path)) as conn:
+            with closing(open_read_only(db_path)) as conn:
                 return {int(row[0]) for row in conn.execute("SELECT Id FROM Frames")}
-        except (sqlite3.Error, TypeError, ValueError) as e:
-            logger.debug(f"Could not read the frame ids of {self.db_path}: {e}")
+        except (sqlite3.Error, OSError, TypeError, ValueError) as e:
+            logger.debug(f"Could not read the frame ids of {db_path}: {e}")
             return None
 
     def _state_maps_frames(
@@ -2098,8 +2102,11 @@ class BrukerReader(BrukerBaseMSIReader):
     # Ion mobility (TDF only)
     #
     # A TDF frame's scans are its mobility dimension: scan number maps
-    # onto 1/K0 through the file's TimsCalibration, identically for every
-    # frame, with 1/K0 decreasing as the scan number grows. Mobility is a
+    # onto 1/K0 through the TimsCalibration row the library applies to
+    # that frame, with 1/K0 decreasing as the scan number grows. Frames
+    # can take different rows (a calibration.sqlite state maps each frame
+    # to its own), and then each frame's scans are converted for that
+    # frame (issue #518). Mobility is a
     # coordinate on a feature, never on a pixel -- nothing here touches
     # coordinates, and iter_spectra keeps yielding the summed spectrum.
     # ------------------------------------------------------------------
@@ -2112,13 +2119,17 @@ class BrukerReader(BrukerBaseMSIReader):
     def get_mobility_axis(self) -> Optional[MobilityAxis]:
         """The per-scan 1/K0 axis of a TDF file, or ``None`` for TSF.
 
-        ``values[s]`` is the 1/K0 of scan ``s`` from the SDK's own
-        calibration (never a linear model: the mapping is non-linear by
-        up to 0.3%), for the longest ramp in the file. The declared
-        acquisition range and the ``TimsCalibration`` row travel with it
-        for provenance. Read once and cached; the calibration is one row
-        per file. Without the SDK (``metadata_only``) the axis is
-        described but carries no values.
+        ``values[s]`` is the 1/K0 of scan ``s`` of the first frame, from
+        the SDK's own calibration (never a linear model: the mapping is
+        non-linear by up to 0.3%), for the longest ramp in the file. When
+        every frame takes the same ``TimsCalibration`` row, these are the
+        values of every frame; when frames take rows of their own, each
+        frame's points are converted for that frame instead
+        (:meth:`_mobility_calibrated_per_frame`). The declared acquisition
+        range and the row applied to the first frame travel with it for
+        provenance (:meth:`_tims_calibration`). Read once and cached.
+        Without the SDK (``metadata_only``) the axis is described but
+        carries no values.
         """
         if self.file_type != "tdf":
             return None
@@ -2620,8 +2631,9 @@ class BrukerReader(BrukerBaseMSIReader):
         One ``tims_read_scans_v2`` over the full ramp per frame (the frame
         id passed as-is), ``tims_index_to_mz`` on the frame's unique
         digitizer indices only, and the scan number of each pair turned
-        into 1/K0 through :meth:`get_mobility_axis` -- so the mobility
-        value of a point is exactly ``values[scan]``. Points come out
+        into 1/K0 as the library gives it for that frame: ``values[scan]``
+        of :meth:`get_mobility_axis` when the frames share one calibration
+        row, the frame's own conversion when they do not. Points come out
         ordered by scan, then by index; the three arrays are parallel.
         Same frames, same order and same coordinates as
         :meth:`iter_spectra`, which keeps yielding the summed spectrum.
@@ -2679,7 +2691,9 @@ class BrukerReader(BrukerBaseMSIReader):
         The one derivation behind :meth:`iter_mobility_spectra`, the
         frame record's ``mobility_points`` and its indexed view:
         ``tims_index_to_mz`` on the frame's unique indices only, the scan
-        number of each pair turned into ``values[scan]``. The m/z of the
+        number of each pair turned into the frame's 1/K0
+        (:meth:`_frame_mobility_values`, which is ``values`` itself when
+        the frames share one calibration row). The m/z of the
         points is left as ``unique_mz[inverse]`` rather than expanded,
         because a consumer that maps m/z onto an axis can map the unique
         values once and gather -- a TDF frame carries about three fifths
