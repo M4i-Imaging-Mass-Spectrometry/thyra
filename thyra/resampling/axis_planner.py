@@ -693,6 +693,57 @@ def _refuse_unusable_range(
         )
 
 
+def _refuse_non_positive_floor(
+    config: ResamplingConfig,
+    min_mz: float,
+    axis_type: Any,
+    tof_a: Optional[float] = None,
+) -> None:
+    """Refuse a lower end at or below m/z 0 for an axis laid in 1/m or log m.
+
+    A ``reflector_tof``, ``orbitrap`` or ``fticr`` axis lays its bins in
+    ``log m``, ``m^-1/2`` or ``1/m``, so its bin count divides by the
+    lower end or takes its logarithm; so does a ``tof`` axis whose law has
+    no linear term (``A = 0``), which is the reflector law. A centroid
+    source with a peak at m/z 0 ended the default conversion in a
+    ``ZeroDivisionError`` or ``OverflowError`` traceback and wrote no store
+    (issue #516). The ``linear_tof`` law, and a ``tof`` law with
+    ``A > 0``, lay a range from 0 but take a square root below it, so only
+    a negative lower end is refused there. A ``constant`` axis lays any
+    range and is left alone.
+
+    Args:
+        config: The caller's resampling request.
+        min_mz: The resolved lower end of the range.
+        axis_type: The resolved axis type.
+        tof_a: The ``A`` of the width law, for a ``tof`` axis.
+
+    Raises:
+        ConversionRefused: If ``min_mz`` is below 0 on any axis but
+            ``constant``, or at 0 on an axis laid in 1/m or log m.
+    """
+    name = axis_name(axis_type)
+    if name == "constant":
+        return
+    needs_positive = name in _NEEDS_POSITIVE_FLOOR or (
+        name == "tof" and tof_a is not None and tof_a <= 0.0
+    )
+    if min_mz > 0.0 or (min_mz == 0.0 and not needs_positive):
+        return
+    bound = "above 0" if needs_positive else "at or above 0"
+    raise ConversionRefused(
+        f"The resampling mass range starts at {min_mz:g} m/z, but a {name} "
+        f"mass axis needs a lower end {bound}. "
+        + _range_origin(config)
+        + " Set --resample-min-mz above 0, pass --mass-axis-type constant, "
+        "or convert with --no-resample."
+    )
+
+
+#: Axis laws whose bin count divides by the lower end of the range.
+_NEEDS_POSITIVE_FLOOR = frozenset({"reflector_tof", "orbitrap", "fticr"})
+
+
 def _empty_source_range_remedy(
     config: ResamplingConfig, min_mz: float, max_mz: float
 ) -> str:
@@ -1227,6 +1278,10 @@ class AxisPlanner:
         self._regate_tic_preserving(tree, axis_type)
 
         self._settle_width_law(tree, axis_type)
+        tof_a = None
+        if axis_name(axis_type) == "tof":
+            tof_a = tof_plan(config, detected_tof_law=self._detected_tof_law)[0]
+        _refuse_non_positive_floor(config, min_mz, axis_type, tof_a)
         target_bins = self._target_bins(min_mz, max_mz, axis_type)
 
         # A one-point axis has no bin width, and the log line that
