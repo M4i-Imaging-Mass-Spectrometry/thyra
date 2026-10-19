@@ -2363,22 +2363,39 @@ class BrukerReader(BrukerBaseMSIReader):
         return span
 
     def _per_frame_value_range(self, span: Tuple[float, float]) -> Tuple[float, float]:
-        """``span`` widened to the first and last scan of every frame read."""
+        """``span`` widened to the first and last scan of every frame converted.
+
+        The frames are the ones the conversion reads: the selected region's,
+        else those ``MaldiFrameInfo`` places, else every frame. A frame the
+        library cannot calibrate is left out of the range, as the frame
+        iterators leave it out of the tables, rather than stopping the run.
+        """
         sdk = getattr(self, "sdk", None)
         if sdk is None or not self.handle:
             return span
         rows = self._database().execute("SELECT Id, NumScans FROM Frames").fetchall()
-        wanted = self._region_frame_ids
+        wanted: Optional[set] = self._region_frame_ids
+        if wanted is None:
+            placed = self._get_maldi_frame_ids()
+            wanted = None if placed is None else set(placed)
         lower, upper = span
+        tally = DropTally(logger, "frames whose 1/K0 range could not be read")
+        n_seen = 0
         for frame_id, num_scans in rows:
             if num_scans is None or int(num_scans) < 1:
                 continue
             if wanted is not None and int(frame_id) not in wanted:
                 continue
+            n_seen += 1
             ends = np.array([0.0, float(int(num_scans) - 1)], dtype=np.float64)
-            edges = sdk.scannum_to_oneoverk0(self.handle, int(frame_id), ends)
+            try:
+                edges = sdk.scannum_to_oneoverk0(self.handle, int(frame_id), ends)
+            except SDKError as e:
+                tally.drop(f"frame {frame_id}", e)
+                continue
             lower = min(lower, float(np.min(edges)))
             upper = max(upper, float(np.max(edges)))
+        tally.summarise(n_seen)
         return lower, upper
 
     # ------------------------------------------------------------------

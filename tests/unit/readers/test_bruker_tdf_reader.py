@@ -188,6 +188,9 @@ def _mobility_db(reader, n_scans=2382, first_frame=1, k0=("1.000000", "1.290000"
                 ("OneOverK0AcqRangeLower", k0[0]),
                 ("OneOverK0AcqRangeUpper", k0[1]),
             ]
+        elif "SELECT Id, TimsCalibration FROM Frames" in sql:
+            # One TIMS calibration row for every frame, as on most files.
+            cursor.fetchall.return_value = [(first_frame, 1), (first_frame + 1, 1)]
         elif "TimsCalibration" in sql:
             cursor.fetchone.return_value = (1, 2, 1.0, 2381.0, None, 3.5)
             cursor.description = [
@@ -279,7 +282,9 @@ class TestMobilityIteration:
         reader._num_scans_cache = {frame_id: 2382 for frame_id, _ in frames}
         reader._num_peaks_cache = {frame_id: 500 for frame_id, _ in frames}
         reader._mobility_axis = _axis(2382)
-        # Every frame takes one TIMS calibration row, so the axis is theirs.
+        # The mocked calibration.sqlite cannot be read, which would convert
+        # every frame for itself; these readers stand for a file whose
+        # frames all take one TIMS calibration row, so the axis is theirs.
         reader._per_frame_mobility = False
         sdk.index_to_mz.side_effect = lambda h, f, idx: 100.0 + 0.001 * np.asarray(idx)
 
