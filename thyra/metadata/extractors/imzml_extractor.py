@@ -9,8 +9,11 @@ from numpy.typing import NDArray
 from pyimzml.ImzMLParser import ImzMLParser
 
 from ...core.base_extractor import MetadataExtractor
-from ...errors import ConversionRefused
-from ...utils.imzml_coordinate_base import coordinate_bases, recorded_offsets
+from ...utils.imzml_coordinate_base import (
+    Z_STATES_ATTRIBUTE,
+    coordinate_bases,
+    recorded_offsets,
+)
 from ...utils.pyimzml_direct import read_spectrum_mzs_only
 from ..constants import (
     MIXED_POLARITY,
@@ -374,18 +377,31 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             n_spectra=n_spectra,
             total_peaks=total_peaks,
             source_path=str(self.imzml_path),
-            # What normalising the file's coordinates subtracted, so the
+            # The file's own coordinate of index 0 on each axis, so the
             # store can say where its origin came from: the converter
             # writes it to coordinate_systems.global.coordinate_offsets_px.
             # (1, 1, 1) for an ordinary 1-based file, (0, 0, ...) for a
             # 0-based one -- see _coordinate_bases() (issue #244). z is 0
-            # when the file states none (D30).
+            # when the file states none (D30), judged over every spectrum
+            # from what the parser hook recorded (D63).
             coordinate_offsets=recorded_offsets(
-                self._coordinate_bases(coords), coords[:, 2], self.imzml_path
+                self._coordinate_bases(coords),
+                coords[:, 2],
+                self.imzml_path,
+                z_states=self._z_states(),
             ),
             spectrum_type=spectrum_type,
             spectrum_type_guessed=self._spectrum_type_guessed,
         )
+
+    def _z_states(self) -> Optional[bytearray]:
+        """Each spectrum's z as the parser hook recorded it, or ``None``.
+
+        ``None`` for a parser built without the hook; the offsets then
+        fall back to :func:`~thyra.utils.imzml_coordinate_base.states_z`.
+        """
+        states = getattr(self.parser, "__dict__", {}).get(Z_STATES_ATTRIBUTE)
+        return states if isinstance(states, bytearray) else None
 
     def _extract_comprehensive_impl(self) -> ComprehensiveMetadata:
         """Extract comprehensive metadata with full XML parsing."""
@@ -431,9 +447,10 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         counts ``n``. Left that way deliberately when #244 rebased
         everything else -- nothing places a pixel from this field, and
         normalising it would move the stored metadata of every imzML that
-        converts correctly today for no gain. What was subtracted to reach
-        the store's indices is reported separately, and exactly, as
-        ``EssentialMetadata.coordinate_offsets``.
+        converts correctly today for no gain. The file's coordinate of index
+        0 on each axis is reported separately, as
+        ``EssentialMetadata.coordinate_offsets``: on x and y that is what was
+        subtracted, and on z too unless the file states no z (D30).
         """
         if len(coords) == 0:
             return (0.0, 0.0, 0.0, 0.0)
@@ -676,13 +693,13 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         """The ``(x, y, z)`` values in this file that map onto index 0.
 
         The same rebasing :meth:`ImzMLReader._coordinate_bases` does, and
-        it has to agree with it: this base is what the store records as
-        ``coordinate_systems.global.coordinate_offsets_px``, while the
-        reader's base is what the emitted pixel coordinates were actually
-        measured from. A base the reader does not share leaves the store
-        declaring an origin its own coordinates were never rebased on, and
-        the whole image is offset against the source file by the
-        difference. Both call
+        it has to agree with it: the store records this base as
+        ``coordinate_systems.global.coordinate_offsets_px`` (on z only when
+        the file states z, D30), while the reader's base is what the
+        emitted pixel coordinates were actually measured from. A base the
+        reader does not share leaves the store declaring an origin its own
+        coordinates were never rebased on, and the whole image is offset
+        against the source file by the difference. Both call
         :func:`thyra.utils.imzml_coordinate_base.coordinate_bases`, which
         holds the rule and the reasoning -- a 0 folds down on x and y, z
         takes the smallest value present.
@@ -727,10 +744,18 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         name the value is an area, so it is not read, see
         :meth:`_is_old_pixel_size`.
         """
-        if hasattr(self.parser, "imzmldict") and self.parser.imzmldict:
-            # Check for pixel size parameters in the parsed dictionary
-            x_size = self.parser.imzmldict.get("pixel size x")
-            y_size = self.parser.imzmldict.get("pixel size y")
+        imzmldict = getattr(self.parser, "imzmldict", None)
+        if isinstance(imzmldict, dict):
+            # Check for pixel size parameters in the parsed dictionary.
+            # pyimzml fills it from inside <scanSettingsList> only, so a
+            # size stated through a group the block references is taken
+            # from the block's terms, where its name and unit are too.
+            x_size = imzmldict.get("pixel size x")
+            if x_size is None:
+                x_size = self._scan_settings_value(ImzMLAccessions.PIXEL_SIZE_X)
+            y_size = imzmldict.get("pixel size y")
+            if y_size is None:
+                y_size = self._scan_settings_value(ImzMLAccessions.PIXEL_SIZE_Y)
 
             if x_size is not None and self._is_old_pixel_size(
                 self._pixel_size_raw_name(), x_size
@@ -744,16 +769,52 @@ class ImzMLMetadataExtractor(MetadataExtractor):
                     return None  # Defer to comprehensive extraction
 
                 units = self._pixel_size_unit_accessions()
-                return (
-                    self._pixel_size_to_um(
-                        x_size, units.get(ImzMLAccessions.PIXEL_SIZE_X)
-                    ),
-                    self._pixel_size_to_um(
-                        y_size, units.get(ImzMLAccessions.PIXEL_SIZE_Y)
-                    ),
+                x_um = self._pixel_size_to_um(
+                    x_size, units.get(ImzMLAccessions.PIXEL_SIZE_X)
                 )
+                y_um = self._pixel_size_to_um(
+                    y_size, units.get(ImzMLAccessions.PIXEL_SIZE_Y)
+                )
+                if x_um is None or y_um is None:
+                    return None
+                return (x_um, y_um)
 
         return None  # Defer to comprehensive extraction
+
+    def _scan_settings_value(self, accession: str) -> Any:
+        """The parsed value of the first scan-settings term ``accession``."""
+        for param in self._scan_settings_cv_params():
+            if param[1] == accession:
+                return param[2]
+        return None
+
+    def _scan_settings_cv_params(self) -> List[Any]:
+        """Every cvParam the scan settings state, own terms before referenced.
+
+        pyimzml's ``cv_params`` holds a block's own terms only, while the
+        values it reports (``param_by_accession``) also come from the
+        parameter groups the block references. A pixel size stated through
+        such a group had its value read from the group and its name and unit
+        looked for on the block, where they are not: an area or a
+        nanometre value was reported as micrometres. This lists the terms
+        in the order pyimzml resolves values: blocks in document order, each
+        block's own terms first, then its groups, the last-listed group
+        first.
+        """
+        metadata = getattr(self.parser, "metadata", None)
+        scan_settings = getattr(metadata, "scan_settings", None)
+        if not isinstance(scan_settings, dict):
+            return []
+        groups = getattr(metadata, "referenceable_param_groups", None)
+        groups = groups if isinstance(groups, dict) else {}
+        params: List[Any] = []
+        for block in scan_settings.values():
+            params.extend(getattr(block, "cv_params", []))
+            for ref in reversed(getattr(block, "param_group_refs", []) or []):
+                group = groups.get(ref)
+                if group is not None:
+                    params.extend(getattr(group, "cv_params", []))
+        return params
 
     def _pixel_size_unit_accessions(self) -> Dict[str, Optional[str]]:
         """The declared ``unitAccession`` of each pixel-size cvParam.
@@ -765,19 +826,13 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         when a file carries more than one ``<scanSettings>`` block.
         """
         units: Dict[str, Optional[str]] = {}
-        metadata = getattr(self.parser, "metadata", None)
-        scan_settings = getattr(metadata, "scan_settings", None)
-        if not isinstance(scan_settings, dict):
-            return units
-
         wanted = (ImzMLAccessions.PIXEL_SIZE_X, ImzMLAccessions.PIXEL_SIZE_Y)
-        for group in scan_settings.values():
-            for param in getattr(group, "cv_params", []):
-                # (name, accession, value, raw_name, raw_value, unit_name,
-                #  unit_accession)
-                accession, unit_accession = param[1], param[6]
-                if accession in wanted and accession not in units:
-                    units[accession] = unit_accession
+        for param in self._scan_settings_cv_params():
+            # (name, accession, value, raw_name, raw_value, unit_name,
+            #  unit_accession)
+            accession, unit_accession = param[1], param[6]
+            if accession in wanted and accession not in units:
+                units[accession] = unit_accession
         return units
 
     def _pixel_size_raw_name(self) -> Optional[str]:
@@ -787,16 +842,10 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         ``name`` always reads "pixel size (x)". ``raw_name`` is what the
         document says. First declaration wins, as for the unit.
         """
-        metadata = getattr(self.parser, "metadata", None)
-        scan_settings = getattr(metadata, "scan_settings", None)
-        if not isinstance(scan_settings, dict):
-            return None
-
-        for group in scan_settings.values():
-            for param in getattr(group, "cv_params", []):
-                if param[1] == ImzMLAccessions.PIXEL_SIZE_X:
-                    raw_name = param[3]
-                    return raw_name if isinstance(raw_name, str) else None
+        for param in self._scan_settings_cv_params():
+            if param[1] == ImzMLAccessions.PIXEL_SIZE_X:
+                raw_name = param[3]
+                return raw_name if isinstance(raw_name, str) else None
         return None
 
     def _is_old_pixel_size(self, name: object, value: object) -> bool:
@@ -818,33 +867,40 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         )
         return True
 
-    def _pixel_size_to_um(self, value: float, unit_accession: Optional[str]) -> float:
-        """Convert a declared pixel size to micrometres, or refuse.
+    def _pixel_size_to_um(
+        self, value: float, unit_accession: Optional[str]
+    ) -> Optional[float]:
+        """Convert a declared pixel size to micrometres, or leave it unread.
 
         No declared unit keeps the historical reading: the bare number is
         micrometres. Real vendor files (the IONTOF class among them) write
         ``IMS:1000046`` with no ``unitAccession`` at all, so refusing here
         would reject files that were being read correctly.
 
-        Raises:
-            ConversionRefused: If the file declares a unit outside
-                ``UM_PER_UNIT``. Guessing a factor for, say, centimetre
-                would be the same silent scale error this method exists to
-                close. The message names the file, the unit it declared and
-                the three units there are, so it is addressed to whoever ran
-                the conversion -- which is what makes it a refusal and not a
-                plain ``ValueError`` whose traceback would bury it.
+        A unit outside ``UM_PER_UNIT`` is not guessed at -- a factor for,
+        say, centimetre would be the same silent scale error this method
+        exists to close -- and the pixel size is left unread, with a warning
+        that names the unit. A conversion then asks for ``--pixel-size``,
+        and converts at the size given, as the mzPeak route does. It used to
+        refuse here, so the file could not be converted even with the flag.
+
+        Returns:
+            The size in micrometres, or ``None`` for a unit Thyra cannot
+            convert.
         """
         if unit_accession is None:
             return value
         factor = UM_PER_UNIT.get(unit_accession)
         if factor is None:
-            raise ConversionRefused(
-                f"{self.imzml_path} declares its pixel size in unit "
-                f"{unit_accession!r}, which Thyra cannot convert to "
-                f"micrometres. Supported units: UO:0000016 (millimeter), "
-                f"UO:0000017 (micrometer), UO:0000018 (nanometer)."
+            logger.warning(
+                "%s declares its pixel size in unit %r, which Thyra cannot "
+                "convert to micrometres (supported: UO:0000016 millimeter, "
+                "UO:0000017 micrometer, UO:0000018 nanometer). The pixel size "
+                "is not read. Pass --pixel-size.",
+                Path(self.imzml_path).name,
+                unit_accession,
             )
+            return None
         return value * factor
 
     def _extract_imzml_specific(self) -> Dict[str, Any]:
@@ -1406,6 +1462,8 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         if x_size is not None and y_size is not None:
             x_um = self._pixel_size_to_um(x_size, x_unit)
             y_um = self._pixel_size_to_um(y_size, y_unit)
+            if x_um is None or y_um is None:
+                return None
             logger.info(f"Detected pixel size from XML: x={x_um}μm, y={y_um}μm")
             return (x_um, y_um)
 
