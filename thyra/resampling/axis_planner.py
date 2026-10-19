@@ -707,8 +707,10 @@ def _refuse_non_positive_floor(
     no linear term (``A = 0``), which is the reflector law. A centroid
     source with a peak at m/z 0 ended the default conversion in a
     ``ZeroDivisionError`` or ``OverflowError`` traceback and wrote no store
-    (issue #516). The ``constant`` and ``linear_tof`` laws, and a ``tof``
-    law with ``A > 0``, lay a range from 0 and are left alone.
+    (issue #516). The ``linear_tof`` law, and a ``tof`` law with
+    ``A > 0``, lay a range from 0 but take a square root below it, so only
+    a negative lower end is refused there. A ``constant`` axis lays any
+    range and is left alone.
 
     Args:
         config: The caller's resampling request.
@@ -717,17 +719,21 @@ def _refuse_non_positive_floor(
         tof_a: The ``A`` of the width law, for a ``tof`` axis.
 
     Raises:
-        ConversionRefused: If ``min_mz`` is not above 0 on such an axis.
+        ConversionRefused: If ``min_mz`` is below 0 on any axis but
+            ``constant``, or at 0 on an axis laid in 1/m or log m.
     """
     name = axis_name(axis_type)
+    if name == "constant":
+        return
     needs_positive = name in _NEEDS_POSITIVE_FLOOR or (
         name == "tof" and tof_a is not None and tof_a <= 0.0
     )
-    if not needs_positive or min_mz > 0.0:
+    if min_mz > 0.0 or (min_mz == 0.0 and not needs_positive):
         return
+    bound = "above 0" if needs_positive else "at or above 0"
     raise ConversionRefused(
         f"The resampling mass range starts at {min_mz:g} m/z, but a {name} "
-        "mass axis needs a lower end above 0. "
+        f"mass axis needs a lower end {bound}. "
         + _range_origin(config)
         + " Set --resample-min-mz above 0, pass --mass-axis-type constant, "
         "or convert with --no-resample."

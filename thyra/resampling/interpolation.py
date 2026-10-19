@@ -508,8 +508,8 @@ def _nearest_bins(
     indices, values = nn_accumulate(
         nn_map_to_bins(axis, mzs[inside]), intensities[inside]
     )
-    if not float(np.sum(values)) > 0.0:
-        # No current to keep, as the rescale would have found.
+    if not preserved_tic(mzs, intensities, lo, hi) > 0.0:
+        # No current to keep: the rescale would have blanked it too.
         return _empty()
     return indices, values
 

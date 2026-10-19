@@ -5240,9 +5240,10 @@ clause of D50.
   `orbitrap` or `fticr` axis, and on a `tof` axis whose law has `A = 0`,**
   in one line that names where the bound came from. Their bin counts divide
   by the lower end or take its logarithm, and a centroid source with a peak
-  at m/z 0 ended the default conversion in a `ZeroDivisionError`. `constant`
-  and `linear_tof` axes, and a `tof` law with `A > 0`, lay a range from 0,
-  and still do.
+  at m/z 0 ended the default conversion in a `ZeroDivisionError`.
+  `linear_tof` axes, and a `tof` law with `A > 0`, lay a range from 0, and
+  still do; below 0 they take a square root, so a negative lower end is
+  refused there too. A `constant` axis lays any range.
 - **Messages.** A store emptied by `--intensity-threshold` is refused as
   "every peak was below --intensity-threshold", not "the reader yielded no
   spectra at all". The "dropping N empty pixel rows" line counts positions
