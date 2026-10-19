@@ -2426,7 +2426,7 @@ is in one number read two ways, and that is what the test covers.
 
 ## D28. The chunked mzPeak layout is decoded into the same spectra
 
-**Status:** Implemented (2026-09-29).
+**Status:** Implemented (2026-09-29). Amended by D70.
 
 **Decision.** The mzPeak reader reads the chunked layout. It decodes the
 chunks into the stream of spectra the point layout gives, so nothing after
@@ -2600,7 +2600,7 @@ measured is 0.005 ppm, and the store says which encoding it came from.
 
 **Status:** Implemented (2026-09-30), issue #422. Amended by D69
 (2026-10-19): an embedded image with no alignment sits only in a
-coordinate system of its own.
+coordinate system of its own. Amended by D70.
 
 **Decision.** Where an archive states the same fact as the file it was made
 from, Thyra reads it the way it reads that file. Five facts:
@@ -5598,6 +5598,94 @@ tag.
 - "Store every image as encoded, and warn." Alignment-safe, but sideways
   photos stay sideways.
 - "Refuse a name clash." One stray file name would block the conversion.
+
+## D70. An mzPeak archive leaves MSn out per pixel, and no chunk loses a point
+
+**Status:** Implemented (2026-10-19), issue #522. Amends D28 and D29.
+
+**Decision.** Five rules for the mzPeak reader.
+
+- **MSn spectra are left out per pixel.** A spectrum of level 2 and up is
+  left out where a spectrum of a lower level sits on the same pixel. Level 0
+  and a null level count as MS1 there. An MSn spectrum on a pixel of its own
+  is kept. The log counts what was left out and what was kept. D29 decided
+  for the whole archive: one MS1 spectrum anywhere left every MSn spectrum
+  out, and only level 1 counted.
+- **A region's frame count may count those MSn spectra.** A listed region
+  matches when its frames equal the spectra in its box after MSn is left
+  out, or before.
+- **A spectrum that is not converted shapes neither the axis nor the range.**
+  The raw axis is built from the spectra kept, always. Before, data rows
+  of a spectrum the metadata does not list reached it. The observed mass
+  range counts a spectrum only when it has points in the member that is
+  read; a count column with no value at all counts every spectrum. A kept
+  spectrum whose lowest or highest m/z is null has it taken from its points.
+- **An MS-Numpress chunk's ends are matched within its own scale.** An end is
+  replaced by its bound when it lies within one over the chunk's scale, and
+  never less than 1e-5. Other encodings keep 1e-5.
+- **Padding is a point with no m/z and no intensity, or a zero one.** A NaN
+  m/z beside an intensity is passed on, and the converter drops or refuses
+  it by D55's rule, as for imzML. A null m/z beside an intensity of 0 is
+  still padding: MS-Numpress stores a true m/z of 0.0 as its null.
+
+Three kinds of malformed chunk row are refused by name. While reading: an
+MS-Numpress row whose buffer holds another number of values than it has
+intensities, at any count, or ends inside its header; and a delta row whose
+`mz_chunk_start` is null where its first m/z belongs. At open: a transform
+column such as `intensity_numpress_slof_bytes` that holds a value beside
+`intensity`. A plain row's null start is only a first point with no m/z,
+and is read as any such point is.
+
+**Why.** The 4.3.3 stress test (#427) found each of these converting to a
+wrong store at exit 0.
+
+| Finding | Before | After |
+|---|---|---|
+| MS1 on 3 pixels, MS2 on 4 others, two regions | 3 of 7 spectra, one region | 7 spectra, regions 0 and 1 |
+| MS1 at level 0 beside MS2 on every pixel | MS2 summed in: rows of 1003 | rows of 3 |
+| chunked MS-Numpress, last m/z 51,234.57 | 30 of 730 counts per pixel | 730, as its point twin |
+| data rows for a spectrum not listed | empty `var` columns, `--no-resample` | the kept spectra's m/z only |
+| peaks-only spectrum in a profile archive | 89,000 bins over 60 to 505 | 1,000 bins over 500 to 505 |
+| null `lowest_observed_mz`, first m/z 0.0 | low peaks dropped by the default axis | row sums as the imzML |
+| NaN m/z with intensity 50 | dropped as padding, at exit 0 | refused on `--no-resample`, as imzML |
+
+An MS-Numpress value is stored as the whole number nearest to it times the
+scale, so it decodes within half of one over the scale. `mzpeak-convert`
+picks the scale that fits the chunk's largest m/z into 31 bits. Above m/z
+42,950 that half step can pass 1e-5, and the end kept its decoded value. It
+then fell outside the declared range, and the default axis dropped it.
+
+The per-pixel rule keeps D29's reason: an MS2 spectrum summed into its
+pixel's MS1 spectrum was never measured. A pixel with only MSn spectra has
+no MS1 spectrum to spoil. Leaving it out lost the pixel, and then its
+region's frame count no longer matched.
+
+**What changes in a store.** Only archives of the shapes in the table. The
+MSn rule changes nothing for archives with only MS1 spectra, or with MS1
+and MSn on every pixel at level 1. Chunked MS-Numpress archives change only where a chunk's
+last or first m/z decodes more than 1e-5 off, above m/z 42,950 or so. A
+NaN m/z with an intensity is now refused with `--no-resample` and dropped
+with a warning on a resampled axis.
+
+**Alternatives.**
+
+- "Keep the archive-wide rule, and count level 0 as MS1." That still drops
+  every MSn-only pixel, which is the defect.
+- "Allow every chunk 1e-4." A bound that far off may not be the value of
+  that point. One step of the chunk's own scale is the error the encoding
+  can make, and no more.
+- "Count only the regions' spectra before the filter." No Bruker archive
+  with MS1 and MSn on one pixel was at hand to say which count
+  `mzpeak-convert` writes, so either is accepted.
+
+**Known limits.**
+
+- The imzML reader reads no MS level yet. An imzML with an MS2 spectrum on
+  an MS1 pixel still sums it in, while its archive leaves it out. Reading
+  `MS:1000511` there needs the parser setup and a group-stated level, and
+  is left to its own change.
+- A null observed bound costs one pass over the signal member when the
+  essential metadata is read. Only archives with such a bound pay it.
 
 ## D72. A Cyclic IMS run is read on its own drift axis, and a declared full scan is MS1
 

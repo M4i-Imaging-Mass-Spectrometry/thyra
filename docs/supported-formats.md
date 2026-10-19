@@ -676,7 +676,9 @@ eight public examples), 0.14.0, 0.16.0 and 0.17.2 have been converted. From
 Its Waters lane was not tried.
 
 The first and last m/z of each chunk are exact in every encoding. The chunk
-states them as plain numbers, and Thyra takes them from there.
+states them as plain numbers, and Thyra takes them from there. An
+MS-Numpress value is stored in steps of one over the chunk's scale. That step
+grows with m/z, so each chunk's ends are matched within their own step.
 
 The store names the encodings it was read from, in
 `format_specific.chunk_encodings`.
@@ -711,7 +713,7 @@ rows.
 When both hold rows, the two are never added together, and the log says that
 the centroid member was left unread. A spectrum stored only in the centroid
 member of such an archive is not converted: its pixel is left out of the
-store, as an unacquired pixel is.
+store, as an unacquired pixel is. It adds nothing to the mass range either.
 
 Point counts come from the column that belongs to the member:
 `number_of_data_points` for `data_arrays`, `number_of_peaks` for `peaks`.
@@ -723,10 +725,13 @@ These are refused rather than guessed at, before any spectrum is read:
 - **A chunk encoding that is not in the table above.** The message gives the
   CV term. The same holds for a grid model other than the three named there.
 - **Intensities stored under a transform**: MS-Numpress short logged float
-  (`MS:1002314`) or positive integer (`MS:1002313`).
+  (`MS:1002314`) or positive integer (`MS:1002313`). A transform column
+  beside `intensity` is refused too, when any row fills it.
 - **Chunks cut along another axis than m/z.**
 - **A chunk whose m/z and intensity counts differ.** This one is found while
-  reading.
+  reading, and so is the next.
+- **A delta-encoded chunk with no `mz_chunk_start`** where its first m/z is
+  kept there.
 - **Non-imaging archives** are rejected. Positions are optional in mzPeak --
   the reference converter only writes them when it happens to see imaging
   input -- and an archive without them has no pixels for Thyra to place.
@@ -757,7 +762,11 @@ Two behaviours worth knowing:
   only add mass-axis channels that can never hold a value. Thyra omits them and
   logs how many it dropped. Recorded point counts include the padding, so peak
   totals are corrected against it. The chunked layout marks padding the same
-  way. MS-Numpress has no null, so there a stored m/z of 0 is padding.
+  way. MS-Numpress has no null, so there a stored m/z of 0 is padding when
+  its intensity is missing or 0.
+- **A missing m/z with an intensity is not padding.** It is handled as in
+  imzML: dropped with a warning on a resampled axis, refused with
+  `--no-resample`.
 
 **Pixel size.** Until 2017 `IMS:1000046` was named "pixel size" and gave the
 *area* of a pixel. Files of that form are still published, and the reference
@@ -803,23 +812,26 @@ states, the store comes out as the store of that file. See
   and that name is read. An older archive only lists its regions under
   `bruker_maldi.regions`, each with a box of raster indices and a frame
   count. Then each pixel is given the region whose box holds it, when the
-  boxes place every pixel once and the counts match. Otherwise the log says
+  boxes place every pixel once and the counts match. A count may include
+  the MSn spectra left out on its pixels, or not. Otherwise the log says
   why and every pixel is stored as region 1. An archive with one region
   keeps its number and name. `--region` is refused for mzPeak: the
   whole archive is converted, and `obs["region_number"]` tells the regions
   apart.
 - **The mass range** of a Bruker archive is the run's acquisition range, as
-  for the `.d`. Any other archive uses the range of its spectra.
+  for the `.d`. Any other archive uses the range of its spectra. A spectrum
+  that states no lowest or highest m/z has it taken from its points.
 - **TDF intensities.** A TDF archive holds the raw counts of the run. Bruker's
   library, which reads the `.d`, gives each count times 100 over the frame's
   accumulation time in ms. Thyra applies the same rule, so both routes give
   the same values. See
   [design decision D33](design-decisions.md#d33-an-mzpeak-archive-of-a-bruker-run-converts-to-the-store-of-its-d).
-- **MSn spectra are left out** when MS1 spectra sit on the pixels too, and
-  the log counts them. Summed into the MS1 pixels, they would give spectra
-  the instrument never measured. A spectrum with no stated level is kept. A
-  spectrum that is left out, for this reason or for having no position, adds
-  nothing to the mass axis or the mass range either.
+- **MSn spectra are left out** on pixels that hold an MS1 spectrum too, and
+  the log counts them. Summed into the MS1 spectrum, they would give a
+  spectrum the instrument never measured. Beside MSn, a spectrum of level 0
+  or with no stated level counts as MS1. An MSn spectrum on a pixel of its
+  own is kept. A spectrum that is left out adds nothing to the mass axis or
+  the mass range. Nor does one that the metadata does not list.
 - **Several spectra on one pixel** are summed into one row. The log says how
   many spectra sit on how many pixels.
 - **Ion mobility is not read.** When scans carry a mobility value or the

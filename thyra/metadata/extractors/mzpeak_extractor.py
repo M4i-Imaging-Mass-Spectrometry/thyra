@@ -168,27 +168,43 @@ class MzPeakMetadataExtractor(MetadataExtractor):
         9-row read on a 36k-point file and stays a one-row-per-spectrum read
         at any scale.
 
-        A spectrum that is not converted (on no pixel, or an MSn spectrum
-        beside MS1) does not widen the range.
+        Only spectra that are converted and have points in the member that
+        is read widen the range. One on no pixel, an MSn spectrum beside
+        MS1, or one held only in the member that is not read, adds nothing.
+        A converted spectrum whose bound is null or not finite has that
+        bound taken from its own points, which costs a pass over the
+        member and is done only then.
         """
         table = self.archive.parquet("spectrum", "metadata").read(
             columns=["index", "lowest_observed_mz", "highest_observed_mz"]
         )
         low = np.asarray(table.column("lowest_observed_mz").to_numpy(), dtype=float)
         high = np.asarray(table.column("highest_observed_mz").to_numpy(), dtype=float)
+        rows = np.asarray(table.column("index").to_numpy(), dtype=np.int64)
         index = self.archive.spatial_index()
-        if not index.complete:
-            rows = np.asarray(table.column("index").to_numpy(), dtype=np.int64)
-            kept = np.isin(rows, index.spectrum_indices)
-            low, high = low[kept], high[kept]
-        low = low[np.isfinite(low)]
-        high = high[np.isfinite(high)]
-        if low.size == 0 or high.size == 0:
+        counted = index.point_counts > 0
+        # A count column with no value at all states nothing; the spectra
+        # are read whatever it says, so none is left out for it.
+        with_points = (
+            index.spectrum_indices[counted] if counted.any() else index.spectrum_indices
+        )
+        kept = np.isin(rows, with_points)
+        rows, low, high = rows[kept], low[kept], high[kept]
+        low_stated, high_stated = np.isfinite(low), np.isfinite(high)
+        lowest = float(low[low_stated].min()) if low_stated.any() else np.inf
+        highest = float(high[high_stated].max()) if high_stated.any() else -np.inf
+        if not (low_stated.all() and high_stated.all()):
+            from_points = self.archive.observed_range(
+                rows[~low_stated], rows[~high_stated]
+            )
+            lowest = min(lowest, from_points[0])
+            highest = max(highest, from_points[1])
+        if not (np.isfinite(lowest) and np.isfinite(highest)):
             raise ValueError(
                 f"{self.data_path} declares no observed m/z range in its "
                 f"spectrum metadata."
             )
-        return (float(low.min()), float(high.max()))
+        return (lowest, highest)
 
     def _scan_settings_parameters(self) -> List[dict]:
         """Flatten every parameter of every scan-settings block."""
