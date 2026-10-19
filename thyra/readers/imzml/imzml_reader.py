@@ -840,7 +840,7 @@ class ImzMLReader(BaseMSIReader):
         other = levels[left_out]
         logger.warning(
             "%s places %d MSn spectra (%s) on pixels that hold an MS1 "
-            "spectrum too (level 1, or none stated). They are left out: "
+            "spectrum too (level 1, 0 or none stated). They are left out: "
             "summed into those pixels, they would give spectra the "
             "instrument never measured. %d MSn spectra on pixels of their "
             "own are kept.",
@@ -2055,14 +2055,23 @@ class ImzMLReader(BaseMSIReader):
         offsets, lengths, encoded = collect_array_offsets(
             self.imzml_path, self._mobility.group_id, n_spectra
         )
-        missing = int(np.count_nonzero(offsets < 0))
+        # Judged on the spectra that are converted: an MSn spectrum left out
+        # beside MS1 (D72) is never read, so its mobility array is not asked.
+        left_out = imzml_left_out(parser)
+        converted = (
+            np.ones(n_spectra, dtype=bool)
+            if left_out is None or left_out.size != n_spectra
+            else ~left_out
+        )
+        missing = int(np.count_nonzero((offsets < 0) & converted))
         if missing:
             raise ConversionRefused(
-                f"{missing} of {n_spectra} spectra reference no ion mobility array "
-                f"although the file declares one ({self._mobility.group_id})"
+                f"{missing} of {int(converted.sum())} spectra reference no ion "
+                f"mobility array although the file declares one "
+                f"({self._mobility.group_id})"
             )
         mz_lengths = np.fromiter(parser.mzLengths, dtype=np.int64, count=n_spectra)
-        mismatch = np.flatnonzero(lengths != mz_lengths)
+        mismatch = np.flatnonzero((lengths != mz_lengths) & converted)
         if mismatch.size:
             first = int(mismatch[0])
             raise ConversionRefused(

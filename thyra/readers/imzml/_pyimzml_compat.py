@@ -159,7 +159,7 @@ def ensure_spectrum_check() -> None:
     - Each spectrum's MS level is recorded as one byte on the parser
       (``MS_LEVELS_ATTRIBUTE``), read on the spectrum or in a group it
       references, 0 where neither states one. The reader leaves MSn
-      spectra out per pixel from these bytes (D70).
+      spectra out per pixel from these bytes (D70, D72).
     - A spectrum pyimzml fails on raises :class:`ConversionRefused` that
       names the spectrum and the cause, instead of the ``TypeError``,
       ``ValueError`` or ``AttributeError`` it raised from deep inside its
@@ -243,7 +243,8 @@ def _spectrum_level(
     one listed that states a level. pyimzml's per-spectrum values never
     look into a group, and the pyimzml writer and ``mzpeak-convert`` both
     state the level in one, so the groups are read here. A value that is
-    not a whole number counts as none.
+    not a whole number, or is below 0, counts as none; a level above 255 is
+    stored as 255, which is MSn all the same.
     """
     refs: List[str] = []
     for node in elem:

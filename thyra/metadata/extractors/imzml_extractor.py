@@ -2,7 +2,7 @@
 import gc
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -398,7 +398,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             spectrum_type_guessed=self._spectrum_type_guessed,
         )
 
-    def _kept_indices(self) -> List[int]:
+    def _kept_indices(self) -> Sequence[int]:
         """The list positions of the spectra that are converted.
 
         Every spectrum but the MSn spectra the per-pixel rule leaves out
@@ -406,7 +406,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         """
         left_out = imzml_left_out(self.parser)
         if left_out is None:
-            return list(range(len(self.parser.coordinates)))
+            return range(len(self.parser.coordinates))
         return [int(i) for i in np.flatnonzero(~left_out)]
 
     def _z_states(self) -> Optional[bytearray]:
@@ -554,7 +554,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
 
     def _get_mass_range_continuous(
         self,
-        kept: List[int],
+        kept: Sequence[int],
     ) -> Tuple[Tuple[float, float], int]:
         """Get mass range for continuous mode - read only first spectrum.
 
@@ -606,7 +606,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
 
     def _get_mass_range_processed(
         self,
-        kept: List[int],
+        kept: Sequence[int],
     ) -> Tuple[Tuple[float, float], int]:
         """Get mass range for processed mode - scan all spectra.
 
@@ -644,7 +644,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
 
     def _scan_all_spectra(
         self,
-        kept: List[int],
+        kept: Sequence[int],
     ) -> Tuple[float, float, int]:
         """Scan the converted spectra to find mass range and count peaks.
 
