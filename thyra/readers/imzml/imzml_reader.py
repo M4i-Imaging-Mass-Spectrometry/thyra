@@ -37,13 +37,24 @@ from ...metadata.constants import (
     normalize_spectrum_type,
 )
 from ...metadata.extractors.imzml_extractor import ImzMLMetadataExtractor
-from ...utils.imzml_coordinate_base import coordinate_bases
+from ...utils.imzml_coordinate_base import (
+    Z_GROUP_ATTRIBUTE,
+    Z_STATES_ATTRIBUTE,
+    coordinate_bases,
+    z_is_stated,
+)
 from ...utils.pyimzml_direct import read_spectrum_mzs_only
-from ._pyimzml_compat import ensure_lenient_cv_param_values, ensure_spectrum_term_fix
+from ._pyimzml_compat import (
+    ensure_lenient_cv_param_values,
+    ensure_spectrum_check,
+    ensure_spectrum_term_fix,
+)
 from .mobility_array import (
+    BINARY_TYPE_ACCESSIONS,
     MobilityArraySpec,
     collect_array_offsets,
     detect_mobility_array,
+    dtype_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -216,10 +227,36 @@ def _cv_param_int(elem: Any, accession: str) -> Optional[int]:
         return None
 
 
+class _FirstArray(NamedTuple):
+    """What spectrum 0 states on one of its binary arrays."""
+
+    array_length: Optional[int]
+    encoded_length: Optional[int]
+    precision_names: Tuple[str, ...]
+    """The binary data type terms on the array itself, by the name pyimzml
+    would give them; empty when the array leaves precision to its group."""
+
+
+def _array_precision_names(node: Any) -> Tuple[str, ...]:
+    """The binary data type terms stated on one ``<binaryDataArray>``."""
+    from pyimzml.ontology.ontology import lookup_and_convert_cv_param
+
+    names = []
+    for param in node.findall(f"{_MZML_NS}cvParam"):
+        accession = param.get("accession")
+        if accession not in BINARY_TYPE_ACCESSIONS:
+            continue
+        _accession, name, _value, _unit = lookup_and_convert_cv_param(
+            accession, param.get("name"), param.get("value"), param.get("unitAccession")
+        )
+        names.append(str(name))
+    return tuple(names)
+
+
 def _first_spectrum_array_lengths(
     imzml_path: Path,
-) -> Dict[Any, Tuple[Optional[int], Optional[int]]]:
-    """Read spectrum 0's declared array and encoded lengths, per param group.
+) -> Dict[Any, _FirstArray]:
+    """Read spectrum 0's declared lengths and precision terms, per param group.
 
     ``ImzMLParser`` prunes every ``<spectrum>`` out of the tree as it streams
     and keeps only ``IMS:1000102`` and ``IMS:1000103``, so ``IMS:1000104`` --
@@ -228,13 +265,18 @@ def _first_spectrum_array_lengths(
     first spectrum costs the header plus one spectrum element however large the
     file is.
 
+    The array's own precision term is read in the same pass. pyimzml
+    decodes every array at its param group's precision and never looks at
+    a term on the array itself, so an array that states another width was
+    read wrong without a word.
+
     Args:
         imzml_path: Path to the imzML file.
 
     Returns:
-        A mapping of ``referenceableParamGroupRef`` to
-        ``(array_length, encoded_length)``, either of which is None when the
-        file does not declare it. Empty if the file declares no spectra.
+        A mapping of ``referenceableParamGroupRef`` to what spectrum 0
+        states on that array; either length is None when the file does not
+        declare it. Empty if the file declares no spectra.
     """
     # Same document, same stdlib parser pyimzml itself used a moment ago; see
     # the note on the import.
@@ -242,16 +284,17 @@ def _first_spectrum_array_lengths(
     for _event, elem in events:
         if elem.tag != _MZML_NS + "spectrum":
             continue
-        arrays: Dict[Any, Tuple[Optional[int], Optional[int]]] = {}
+        arrays: Dict[Any, _FirstArray] = {}
         for node in elem.findall(
             f"{_MZML_NS}binaryDataArrayList/{_MZML_NS}binaryDataArray"
         ):
             ref_node = node.find(f"{_MZML_NS}referenceableParamGroupRef")
             if ref_node is None:
                 continue
-            arrays[ref_node.attrib.get("ref")] = (
+            arrays[ref_node.attrib.get("ref")] = _FirstArray(
                 _cv_param_int(node, _ARRAY_LENGTH_ACCESSION),
                 _cv_param_int(node, _ENCODED_LENGTH_ACCESSION),
+                _array_precision_names(node),
             )
         return arrays
     return {}
@@ -314,6 +357,62 @@ def _spectrum_list_head(imzml_path: Path) -> Optional[_SpectrumListHead]:
     # No <spectrumList> at all. Still no spectra, and still worth naming: the
     # alternative is the same IndexError from the same empty coordinate list.
     return _SpectrumListHead(declared, False)
+
+
+#: Bytes per value of each binary data type, by the name pyimzml gives it.
+_ITEMSIZE_OF_PRECISION = {
+    "16-bit float": 2,
+    "32-bit float": 4,
+    "64-bit float": 8,
+    "32-bit integer": 4,
+    "64-bit integer": 8,
+}
+
+
+def _group_itemsize(header: Any, group_id: str) -> Optional[int]:
+    """Bytes per value of the arrays that reference ``group_id``, if stated.
+
+    Read off the document head, for the preview's end-of-array check; one
+    precision term in the group, or None.
+    """
+    groups = getattr(header.metadata, "referenceable_param_groups", None)
+    group = groups.get(group_id) if isinstance(groups, dict) else None
+    if group is None:
+        return None
+    if _ZLIB_ACCESSION in group or _ZLIB_NAME in group:
+        # Stored compressed: the bytes it takes are its encoded length,
+        # not its count times its width.
+        return None
+    sizes = [
+        size
+        for name, size in _ITEMSIZE_OF_PRECISION.items()
+        if name in group.param_by_name
+    ]
+    return sizes[0] if len(sizes) == 1 else None
+
+
+def _unparseable(imzml_path: Path, error: Exception) -> str:
+    """One line on why the imzML parser could not read a document.
+
+    pyimzml raises whatever its XML parser or its own arithmetic raised,
+    from deep inside its constructor; this names the file and the cause.
+
+    Args:
+        imzml_path: The ``.imzML`` file.
+        error: What the parser raised.
+
+    Returns:
+        The refusal's message.
+    """
+    if isinstance(error, ElementTree.ParseError):
+        return (
+            f"{imzml_path.name} is not well-formed XML ({error}). The file may "
+            f"be cut short, or it is not an imzML document."
+        )
+    return (
+        f"{imzml_path.name} could not be read as imzML: the imzML parser "
+        f"failed with {type(error).__name__}: {error}"
+    )
 
 
 def _as_float64(values: NDArray[Any]) -> NDArray[np.float64]:
@@ -629,22 +728,36 @@ class ImzMLReader(BaseMSIReader):
             # _pyimzml_compat.
             ensure_lenient_cv_param_values()
             ensure_spectrum_term_fix()
-            self.parser = ImzMLParser(
-                filename=str(imzml_path),
-                parse_lib="ElementTree",
-                ibd_file=self.ibd_file,
-                # Read off each spectrum during the one pass the parser
-                # makes anyway, so polarity stated per spectrum is seen
-                # (D35); pyimzml's own polarity looks at the first only.
-                # The parser reads a mislabelled "positive scan" there as
-                # pyimzml reads it in a group (D55).
-                include_spectra_metadata=list(POLARITY_OF_ACCESSION),
-            )
+            # Records each spectrum's z, and names a spectrum the parser
+            # cannot read instead of raising from inside it (D63).
+            ensure_spectrum_check()
+            # The document is opened here and handed over, not named: a
+            # refusal raised inside the parse would otherwise leave the
+            # file iterparse opened held by the traceback, and on Windows
+            # its folder could not be removed.
+            with open(imzml_path, "rb") as xml_handle:
+                self.parser = ImzMLParser(
+                    filename=xml_handle,
+                    parse_lib="ElementTree",
+                    ibd_file=self.ibd_file,
+                    # Read off each spectrum during the one pass the parser
+                    # makes anyway, so polarity stated per spectrum is seen
+                    # (D35); pyimzml's own polarity looks at the first only.
+                    # The parser reads a mislabelled "positive scan" there as
+                    # pyimzml reads it in a group (D55).
+                    include_spectra_metadata=list(POLARITY_OF_ACCESSION),
+                )
+            self.parser.filename = str(imzml_path)
+        except (ConversionRefused, MemoryError, RecursionError):
+            # A refusal says why already; running out of memory or stack
+            # is not a fact about the file, so it is not memoised as one.
+            if self.ibd_file:
+                self.ibd_file.close()
+            raise
         except Exception as e:
             if self.ibd_file:
                 self.ibd_file.close()
-            logger.error(f"Failed to initialize ImzML parser: {e}")
-            raise
+            raise ConversionRefused(_unparseable(imzml_path, e)) from e
 
         if self.parser.metadata is None:
             raise ConversionRefused("Failed to parse metadata from imzML file.")
@@ -759,6 +872,15 @@ class ImzMLReader(BaseMSIReader):
         4. A negative offset or length, or a spectrum whose m/z and intensity
            arrays declare different numbers of values.
         5. A spectrum whose array ends past the end of the ``.ibd``.
+        6. Arrays whose byte ranges overlap, on any spectrum. Two arrays may
+           share exactly the same bytes, as a continuous file's m/z axis
+           does (D64).
+        7. Position z stated on some spectra and not on others, or taken
+           from a parameter group (D63).
+
+        Spectrum 0's check in 3 also covers a precision term stated on an
+        array itself: one that disagrees with its param group is refused,
+        whether or not the array states ``IMS:1000104``.
 
         Warned about but allowed:
 
@@ -796,7 +918,9 @@ class ImzMLReader(BaseMSIReader):
         arrays = _offset_arrays(parser)
         self._validate_offset_arrays(arrays)
         self._validate_ibd_extent(parser, arrays)
+        self._validate_array_overlap(parser, arrays)
         self._check_ibd_uuid(parser)
+        self._validate_z_statement(parser)
 
         # Does every spectrum point at one shared m/z block? True for a
         # well-formed continuous file, and the licence for the fast read in
@@ -928,11 +1052,13 @@ class ImzMLReader(BaseMSIReader):
             )
             return
 
+        self._validate_own_precision(parser, arrays)
+
         for label, group_id, precision in _binary_array_specs(parser):
             declared = arrays.get(group_id)
             if declared is None:
                 continue
-            array_length, encoded_length = declared
+            array_length, encoded_length, _names = declared
             if array_length is None or encoded_length is None:
                 continue
             itemsize = _itemsize(parser, label, precision)
@@ -947,6 +1073,57 @@ class ImzMLReader(BaseMSIReader):
                     f"{expected:,} bytes, so the array decodes at the wrong "
                     f"width or the wrong length."
                 )
+
+    def _validate_own_precision(
+        self, parser: ImzMLParser, arrays: Dict[Any, _FirstArray]
+    ) -> None:
+        """Refuse an array on spectrum 0 whose own precision term disagrees.
+
+        pyimzml takes each array's precision from its param group and reads
+        no term on the array itself. An array that states another width was
+        decoded at the group's: a 32-bit array stored as 514 instead of 15.
+        Checked on spectrum 0 only, like the encoded length; a later array
+        that states its own precision is a known limit (D64).
+
+        Args:
+            parser: An initialized ImzML parser.
+            arrays: What spectrum 0 states on each array, by group id.
+
+        Raises:
+            ConversionRefused: If an array's own precision term names a
+                width other than its param group's.
+        """
+        groups = _parsed_metadata(parser).referenceable_param_groups
+        expected: List[Tuple[str, Any, Optional[str]]] = []
+        for label, group_id, _precision in _binary_array_specs(parser):
+            group = groups.get(group_id)
+            names = [
+                n for n in parser.precisionDict if group and n in group.param_by_name
+            ]
+            expected.append((label, group_id, names[0] if names else None))
+        if self._mobility is not None:
+            expected.append(
+                (
+                    "ion mobility",
+                    self._mobility.group_id,
+                    dtype_name(self._mobility.dtype),
+                )
+            )
+
+        for label, group_id, group_name in expected:
+            declared = arrays.get(group_id)
+            if declared is None or not declared.precision_names:
+                continue
+            own = sorted(set(declared.precision_names))
+            if own == [group_name]:
+                continue
+            raise ConversionRefused(
+                f"imzML spectrum 0's {label} array states its own precision, "
+                f"{' and '.join(own)}, but its param group {group_id!r} is "
+                f"read as {group_name}. The parser reads every {label} array at "
+                f"the group's width, so this one would decode to wrong values. "
+                f"State one precision, in the group."
+            )
 
     def _validate_offset_arrays(self, arrays: _OffsetArrays) -> None:
         """Check the offset and length arrays for internally impossible values.
@@ -1067,6 +1244,119 @@ class ImzMLReader(BaseMSIReader):
                 "document order matches byte order and silently rewrites every "
                 "offset after a sign flip when it does not."
             )
+
+    def _validate_array_overlap(
+        self, parser: ImzMLParser, arrays: _OffsetArrays
+    ) -> None:
+        """Refuse arrays whose byte ranges in the .ibd overlap, on any spectrum.
+
+        A spectrum that states more values than it stores reads into the
+        next array: its last m/z values are the next array's bytes, and an
+        invented m/z of 134,217,760 joined the mass range at exit 0. The
+        extent check above catches this only for the last array in the
+        file. Every spectrum's m/z, intensity and ion mobility arrays are
+        checked here from the offsets and lengths already in memory (0.46 s
+        for 918,855 spectra).
+
+        Two arrays of the same kind may point at exactly the same bytes: a
+        continuous file's spectra share one m/z block, and an export may
+        share one mobility block. Any other overlap is refused, including an
+        m/z and an intensity array on the same bytes.
+        A spectrum that states fewer values than it stores leaves a gap, not
+        an overlap, and is a known limit (D64).
+
+        Args:
+            parser: An initialized ImzML parser.
+            arrays: The parser's offsets and lengths, as int64.
+
+        Raises:
+            ConversionRefused: If any two arrays overlap without being the
+                same range.
+        """
+        n = int(arrays.mz_offsets.size)
+        if n == 0:
+            return
+        blocks: List[Tuple[str, NDArray[np.int64], NDArray[np.int64]]] = [
+            (
+                "m/z",
+                arrays.mz_offsets,
+                arrays.mz_lengths * _itemsize(parser, "m/z", parser.mzPrecision),
+            ),
+            (
+                "intensity",
+                arrays.int_offsets,
+                arrays.int_lengths
+                * _itemsize(parser, "intensity", parser.intensityPrecision),
+            ),
+        ]
+        if self._mobility is not None:
+            mob_offsets, mob_lengths, _ = self._ensure_mobility_offsets()
+            blocks.append(
+                (
+                    "ion mobility",
+                    mob_offsets,
+                    mob_lengths * self._mobility.dtype.itemsize,
+                )
+            )
+
+        starts = np.concatenate([offsets for _l, offsets, _b in blocks])
+        ends = starts + np.concatenate([nbytes for _l, _o, nbytes in blocks])
+        kinds = np.repeat(np.arange(len(blocks)), n)
+        spectra = np.tile(np.arange(n), len(blocks))
+
+        present = ends > starts
+        starts, ends = starts[present], ends[present]
+        kinds, spectra = kinds[present], spectra[present]
+
+        order = np.lexsort((kinds, ends, starts))
+        starts, ends = starts[order], ends[order]
+        kinds, spectra = kinds[order], spectra[order]
+        shared = np.zeros(starts.size, dtype=bool)
+        shared[1:] = (
+            (starts[1:] == starts[:-1])
+            & (ends[1:] == ends[:-1])
+            & (kinds[1:] == kinds[:-1])
+        )
+        keep = ~shared
+        starts, ends = starts[keep], ends[keep]
+        kinds, spectra = kinds[keep], spectra[keep]
+        if starts.size < 2:
+            return
+
+        reach = np.maximum.accumulate(ends)
+        clash = np.flatnonzero(starts[1:] < reach[:-1])
+        if clash.size == 0:
+            return
+        later = int(clash[0]) + 1
+        earlier = int(np.argmax(ends[:later]))
+        raise ConversionRefused(
+            f"imzML spectrum {int(spectra[earlier])} declares its "
+            f"{blocks[int(kinds[earlier])][0]} array from byte "
+            f"{int(starts[earlier]):,} to byte {int(ends[earlier]):,}, which "
+            f"runs into the {blocks[int(kinds[later])][0]} array of spectrum "
+            f"{int(spectra[later])} at byte {int(starts[later]):,} "
+            f"({clash.size:,} overlaps in all). The parser would read the "
+            f"next array's bytes as values. Each array needs bytes of its own, "
+            f"or exactly the same bytes as another, as a shared m/z axis has."
+        )
+
+    def _validate_z_statement(self, parser: ImzMLParser) -> None:
+        """Refuse a file that states z on some spectra only, or in a group.
+
+        The parser hook recorded each spectrum's z as pyimzml read it; see
+        :func:`thyra.utils.imzml_coordinate_base.z_is_stated` for the rule.
+
+        Args:
+            parser: An initialized ImzML parser.
+
+        Raises:
+            ConversionRefused: If the file mixes stated and unstated z, or
+                takes z from a parameter group.
+        """
+        states = parser.__dict__.get(Z_STATES_ATTRIBUTE)
+        if states is None or self.imzml_path is None:
+            return
+        z_is_stated(states, self.imzml_path, parser.__dict__.get(Z_GROUP_ATTRIBUTE))
 
     def _check_ibd_uuid(self, parser: ImzMLParser) -> None:
         """Say so when the ``.ibd`` header does not carry the declared UUID.
@@ -1236,8 +1526,15 @@ class ImzMLReader(BaseMSIReader):
                 f"Corresponding .ibd file not found for {imzml_path}"
             )
 
+        try:
+            header = read_header(imzml_path)
+        except (ElementTree.ParseError, ValueError) as e:
+            raise ConversionRefused(_unparseable(imzml_path, e)) from e
+
         ibd_size = ibd_path.stat().st_size
-        extent = declared_binary_extent(imzml_path)
+        extent = declared_binary_extent(
+            imzml_path, itemsize_of=lambda group: _group_itemsize(header, group)
+        )
         if extent is not None and extent.end_byte > ibd_size:
             spectrum = (
                 f"spectrum {extent.spectrum_index}"
@@ -1253,7 +1550,6 @@ class ImzMLReader(BaseMSIReader):
                 f"from the output."
             )
 
-        header = read_header(imzml_path)
         shortfall = head_shortfall(header)
         if shortfall is not None:
             logger.info(
@@ -1426,7 +1722,9 @@ class ImzMLReader(BaseMSIReader):
         if self._coordinate_bases_value is None:
             if self.parser is None:
                 raise RuntimeError("Parser is not initialized")
-            self._coordinate_bases_value = coordinate_bases(self.parser.coordinates)
+            self._coordinate_bases_value = coordinate_bases(
+                self.parser.coordinates, log=True
+            )
         return self._coordinate_bases_value
 
     def _get_spectrum_coordinates(

@@ -51,7 +51,18 @@ import logging
 import re
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, NamedTuple, Optional, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    FrozenSet,
+    Iterator,
+    List,
+    NamedTuple,
+    Optional,
+    Tuple,
+    Union,
+)
 from xml.etree import ElementTree as ET  # nosec B405
 
 from ...metadata.constants import polarity_accession
@@ -94,14 +105,33 @@ POSITION_Y = "IMS:1000051"
 
 
 EXTERNAL_OFFSET = "IMS:1000102"
+EXTERNAL_ARRAY_LENGTH = "IMS:1000103"
 EXTERNAL_ENCODED_LENGTH = "IMS:1000104"
 
-_LOWEST = re.compile(
+# The byte scans below match elements the way an XML parser reads them:
+# attributes in any order, either quote, space around "=", and nothing
+# inside a comment. They used to match one attribute order and one quote,
+# so another valid spelling gave no range, and a commented-out term
+# changed it.
+_CV_PARAM = re.compile(rb"<(?:[\w.-]+:)?cvParam\b[^>]*>")
+# Found by the accession first, a literal the regex engine can skip to;
+# a pattern that starts at "<" tries every tag, and was 7x slower.
+_OBSERVED_MZ_ACCESSION = re.compile(rb"MS:100052[78]")
+_CV_PARAM_TAG = re.compile(rb"<(?:[\w.-]+:)?cvParam\b")
+# The spelling every writer met uses: accession before value, double
+# quotes, no space around "=". Matched in C, it reads a 2.0 GiB document
+# in about 5 s, against 13 s for the element-by-element read; it is used
+# for a chunk only when it accounts for every occurrence of the two
+# accessions there and the chunk holds no comment.
+_CANONICAL_LOWEST = re.compile(
     rb'accession="' + LOWEST_OBSERVED_MZ.encode() + rb'"[^>]*?value="([^"]*)"'
 )
-_HIGHEST = re.compile(
+_CANONICAL_HIGHEST = re.compile(
     rb'accession="' + HIGHEST_OBSERVED_MZ.encode() + rb'"[^>]*?value="([^"]*)"'
 )
+_ATTRIBUTE = re.compile(rb"""([\w.:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')""")
+_COMMENT = re.compile(rb"<!--.*?-->", re.DOTALL)
+_COMMENT_OR_OPEN = re.compile(rb"<!--(?:.*?-->|.*\Z)", re.DOTALL)
 
 # Big enough that the read is sequential, small enough that the file is
 # never held in memory.
@@ -314,7 +344,9 @@ def scan_observed_mz_range(
     The scan is a byte scan rather than an XML parse: it is the m/z
     terms that are wanted, not the document structure, and the cost is
     then the file's size rather than its element count -- 53 ms for
-    29 MB, 3.9 s for 2.0 GiB.
+    29 MB, 3.9 s for 2.0 GiB.  It reads a term the way an XML parser
+    does -- attributes in any order, either quote, space around ``=`` --
+    and skips comments (D63).
 
     ``shared_axis`` says the file declares continuous mode
     (``IMS:1000030``): by the specification every spectrum then shares one
@@ -343,15 +375,22 @@ def scan_observed_mz_range(
         carry = b""
         while True:
             chunk = handle.read(_SCAN_CHUNK_BYTES)
+            buffer = carry + chunk
+            # A comment still open at the end of the buffer is carried
+            # whole, so its terms are never read; the rest is read with
+            # every closed comment taken out.
+            if b"<!--" in buffer:
+                cut = _open_comment_start(buffer) if chunk else len(buffer)
+                visible = _COMMENT.sub(b"", buffer[:cut])
+            else:
+                cut, visible = len(buffer), buffer
+            lowest, highest = _chunk_terms(visible, last=not chunk)
+            for raw in lowest:
+                seen.note_lowest(_as_float(raw), _stated_step(raw))
+            for raw in highest:
+                seen.note_highest(_as_float(raw), _stated_step(raw))
             if not chunk:
                 break
-            buffer = carry + chunk
-            for match in _LOWEST.finditer(buffer):
-                raw = match.group(1)
-                seen.note_lowest(_as_float(raw), _stated_step(raw))
-            for match in _HIGHEST.finditer(buffer):
-                raw = match.group(1)
-                seen.note_highest(_as_float(raw), _stated_step(raw))
             if shared_axis and seen.uniform and seen.complete:
                 logger.debug(
                     "%s declares a shared m/z axis and its first spectra agree on "
@@ -361,7 +400,7 @@ def scan_observed_mz_range(
                     seen.highest,
                 )
                 break
-            carry = buffer[-_SCAN_OVERLAP_BYTES:]
+            carry = visible[-_SCAN_OVERLAP_BYTES:] + buffer[cut:]
 
     if seen.lowest is None or seen.highest is None:
         logger.info(
@@ -377,6 +416,77 @@ def scan_observed_mz_range(
             seen.highest + seen.highest_step,
         )
     return (seen.lowest, seen.highest)
+
+
+def _attributes(element: bytes) -> Dict[bytes, bytes]:
+    """The attributes of one start tag, by name."""
+    return {
+        name: double if double is not None else single
+        for name, double, single in (
+            (m.group(1), m.group(2), m.group(3)) for m in _ATTRIBUTE.finditer(element)
+        )
+    }
+
+
+def _observed_mz_terms(text: bytes) -> Iterator[Tuple[str, bytes]]:
+    """``(accession, raw value)`` of each observed-m/z cvParam in ``text``."""
+    wanted = {LOWEST_OBSERVED_MZ.encode(), HIGHEST_OBSERVED_MZ.encode()}
+    last_start = -1
+    for hit in _OBSERVED_MZ_ACCESSION.finditer(text):
+        start = text.rfind(b"<", 0, hit.start())
+        if start <= last_start or text.find(b">", start, hit.start()) >= 0:
+            # Already read, or the accession sits in text between tags.
+            continue
+        end = text.find(b">", hit.end())
+        if end < 0 or not _CV_PARAM_TAG.match(text, start):
+            continue
+        last_start = start
+        attributes = _attributes(text[start : end + 1])
+        accession = attributes.get(b"accession")
+        value = attributes.get(b"value")
+        if accession in wanted and value is not None:
+            yield accession.decode("ascii"), value
+
+
+def _chunk_terms(text: bytes, last: bool) -> Tuple[List[bytes], List[bytes]]:
+    """The raw lowest and highest observed m/z values of one comment-free chunk.
+
+    Up to the chunk's last ``>`` only, unless it is the last chunk: an
+    element cut at the end is read whole from the overlap carried into the
+    next chunk.
+    """
+    limit = len(text) if last else text.rfind(b">") + 1
+    lowest = _CANONICAL_LOWEST.findall(text, 0, limit)
+    highest = _CANONICAL_HIGHEST.findall(text, 0, limit)
+    # One pass for both accessions: they share this prefix. Another term
+    # with it (MS:100052x) only sends the chunk down the slower exact read.
+    stated = text.count(b"MS:100052", 0, limit)
+    if len(lowest) + len(highest) == stated:
+        return lowest, highest
+    lowest, highest = [], []
+    for accession, raw in _observed_mz_terms(text[:limit]):
+        (lowest if accession == LOWEST_OBSERVED_MZ else highest).append(raw)
+    return lowest, highest
+
+
+def _open_comment_start(buffer: bytes) -> int:
+    """Where a comment still open at the end of ``buffer`` starts, else its end."""
+    for match in _COMMENT_OR_OPEN.finditer(buffer):
+        if not match.group(0).endswith(b"-->"):
+            return match.start()
+    return len(buffer)
+
+
+def _cv_param_values(text: bytes) -> Dict[str, bytes]:
+    """The raw value of each cvParam in ``text``, first one per accession."""
+    values: Dict[str, bytes] = {}
+    for match in _CV_PARAM.finditer(text):
+        attributes = _attributes(match.group(0))
+        accession = attributes.get(b"accession")
+        value = attributes.get(b"value")
+        if accession is not None and value is not None:
+            values.setdefault(accession.decode("ascii", "replace"), value)
+    return values
 
 
 def _stated_step(raw: bytes) -> float:
@@ -446,13 +556,8 @@ class _ObservedExtremes:
 
 
 _ARRAY_BLOCK = re.compile(rb"<binaryDataArray\b.*?</binaryDataArray>", re.DOTALL)
-_EXTERNAL_OFFSET = re.compile(
-    rb'accession="' + EXTERNAL_OFFSET.encode() + rb'"[^>]*?value="([0-9]+)"'
-)
-_EXTERNAL_ENCODED_LENGTH = re.compile(
-    rb'accession="' + EXTERNAL_ENCODED_LENGTH.encode() + rb'"[^>]*?value="([0-9]+)"'
-)
-_SPECTRUM_INDEX = re.compile(rb"<spectrum\b[^>]*?index=\"([0-9]+)\"")
+_GROUP_REF = re.compile(rb"<(?:[\w.-]+:)?referenceableParamGroupRef\b[^>]*>")
+_SPECTRUM_TAG = re.compile(rb"<(?:[\w.-]+:)?spectrum\b[^>]*>")
 
 # A spectrum's record is on the order of a kilobyte; this holds the last
 # several of them whatever the acquisition's size.
@@ -466,7 +571,10 @@ class DeclaredExtent(NamedTuple):
     spectrum_index: Optional[int]
 
 
-def declared_binary_extent(path: Union[str, Path]) -> Optional[DeclaredExtent]:
+def declared_binary_extent(
+    path: Union[str, Path],
+    itemsize_of: Optional[Callable[[str], Optional[int]]] = None,
+) -> Optional[DeclaredExtent]:
     """The end byte of the last array the document declares, from its tail.
 
     A preview that reads only the head cannot check the ``.ibd`` the way
@@ -484,28 +592,68 @@ def declared_binary_extent(path: Union[str, Path]) -> Optional[DeclaredExtent]:
     not monotonic), so this can miss a bad file.  It cannot report a good
     one, because it only fires when the XML claims bytes the ``.ibd`` does
     not have.
+
+    The array ends at its offset plus its value count times the width of
+    its param group's precision: what the parser reads, so the preview
+    agrees with a conversion. It used to end at the declared encoded
+    length, and a wrong ``IMS:1000104`` on a complete file made the preview
+    call it truncated while the conversion read it (D63). The encoded length
+    is used only when the count or the width is not known.
+
+    Args:
+        path: The ``.imzML`` file.
+        itemsize_of: The bytes per value of the arrays that reference a
+            given param group id, or ``None`` when that is not known.
     """
     path = Path(path)
     size = path.stat().st_size
     with path.open("rb") as handle:
         handle.seek(max(0, size - _TAIL_BYTES))
-        tail = handle.read()
+        tail = _COMMENT.sub(b"", handle.read())
 
     blocks = _ARRAY_BLOCK.findall(tail)
     if not blocks:
         return None
     last = blocks[-1]
 
-    offset = _EXTERNAL_OFFSET.search(last)
-    length = _EXTERNAL_ENCODED_LENGTH.search(last)
-    if offset is None or length is None:
+    params = _cv_param_values(last)
+    offset = _as_int(params.get(EXTERNAL_OFFSET))
+    if offset is None:
         return None
-
-    indices = _SPECTRUM_INDEX.findall(tail)
-    return DeclaredExtent(
-        end_byte=int(offset.group(1)) + int(length.group(1)),
-        spectrum_index=int(indices[-1]) if indices else None,
+    count = _as_int(params.get(EXTERNAL_ARRAY_LENGTH))
+    ref = _GROUP_REF.search(last)
+    group = _attributes(ref.group(0)).get(b"ref") if ref is not None else None
+    itemsize = (
+        itemsize_of(group.decode("utf-8", "replace"))
+        if itemsize_of is not None and group is not None
+        else None
     )
+    if count is not None and itemsize is not None:
+        end = offset + count * itemsize
+    else:
+        encoded = _as_int(params.get(EXTERNAL_ENCODED_LENGTH))
+        if encoded is None:
+            return None
+        end = offset + encoded
+
+    indices = [
+        _as_int(_attributes(tag).get(b"index")) for tag in _SPECTRUM_TAG.findall(tail)
+    ]
+    return DeclaredExtent(
+        end_byte=end,
+        spectrum_index=indices[-1] if indices else None,
+    )
+
+
+def _as_int(raw: Optional[bytes]) -> Optional[int]:
+    """A cvParam value as a non-negative int, or ``None``."""
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value >= 0 else None
 
 
 def _as_float(raw: bytes) -> Optional[float]:
