@@ -15,6 +15,7 @@ import pytest
 from pyimzml.ImzMLWriter import ImzMLWriter
 
 from tests.fixtures.imzml_levels import level_term, write_imzml_with_levels
+from thyra.errors import ConversionRefused
 from thyra.readers.imzml.imzml_reader import ImzMLReader
 
 
@@ -205,26 +206,35 @@ def test_a_continuous_axis_comes_from_the_first_kept_spectrum(tmp_path):
     assert reading["essential"].total_peaks == 4
 
 
-def _mobility_file_with_a_left_out_msn_spectrum(tmp_path, drop_its_array=False):
+def _mobility_file_with_a_left_out_msn_spectrum(
+    tmp_path, drop_its_array=False, shorten_its_array=False, leave_it_in=False
+):
     """The processed mobility fixture, its fourth spectrum moved onto the
-    second's pixel and stated MS2; optionally without its mobility array."""
+    second's pixel and stated MS2; optionally without its mobility array, or
+    with one shorter than its m/z array. ``leave_it_in`` keeps the spectrum
+    where it was and states no level, so it is converted."""
     fixtures = Path(__file__).resolve().parents[2] / "data" / "fixtures"
     path = tmp_path / "mobility.imzML"
     shutil.copyfile(fixtures / "mobility_processed.ibd", path.with_suffix(".ibd"))
     text = (fixtures / "mobility_processed.imzML").read_text()
     head, fourth = text.split('<spectrum id="Scan=4"')
-    fourth = fourth.replace(
-        '<referenceableParamGroupRef ref="spectrum1" />',
-        '<referenceableParamGroupRef ref="spectrum1" />' + level_term(2),
-        1,
-    ).replace('name="position y" value="2"', 'name="position y" value="1"', 1)
+    if not leave_it_in:
+        fourth = fourth.replace(
+            '<referenceableParamGroupRef ref="spectrum1" />',
+            '<referenceableParamGroupRef ref="spectrum1" />' + level_term(2),
+            1,
+        ).replace('name="position y" value="2"', 'name="position y" value="1"', 1)
+    mobility = fourth.index(
+        '<binaryDataArray encodedLength="0"><referenceableParamGroupRef '
+        'ref="mobilityArray" />'
+    )
+    if shorten_its_array:
+        length = 'name="external array length" value="4"'
+        at = fourth.index(length, mobility)
+        fourth = fourth[:at] + length.replace('"4"', '"3"') + fourth[at + len(length) :]
     if drop_its_array:
-        start = fourth.index(
-            '<binaryDataArray encodedLength="0"><referenceableParamGroupRef '
-            'ref="mobilityArray" />'
-        )
-        end = fourth.index("</binaryDataArray>", start) + len("</binaryDataArray>")
-        fourth = fourth[:start] + fourth[end:]
+        end = fourth.index("</binaryDataArray>", mobility) + len("</binaryDataArray>")
+        fourth = fourth[:mobility] + fourth[end:]
         fourth = fourth.replace(
             '<binaryDataArrayList count="3">', '<binaryDataArrayList count="2">', 1
         )
@@ -240,6 +250,38 @@ def test_a_left_out_msn_spectrum_needs_no_mobility_array(tmp_path):
         items = list(reader.iter_mobility_spectra())
 
     assert [coords for coords, _, _, _ in items] == [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+
+
+def test_a_left_out_msn_spectrum_may_hold_a_mobility_array_of_another_length(
+    tmp_path,
+):
+    """Its arrays are not checked for being parallel, as it is never read."""
+    path = _mobility_file_with_a_left_out_msn_spectrum(tmp_path, shorten_its_array=True)
+
+    with ImzMLReader(path) as reader:
+        items = list(reader.iter_mobility_spectra())
+
+    assert len(items) == 3
+
+
+@pytest.mark.parametrize(
+    "change, refusal",
+    [
+        ({"drop_its_array": True}, "1 of 4 spectra reference no ion mobility array"),
+        ({"shorten_its_array": True}, "Spectrum 3 declares 3 ion mobility values"),
+    ],
+    ids=["missing", "shorter"],
+)
+def test_a_converted_spectrum_s_mobility_array_is_still_checked(
+    tmp_path, change, refusal
+):
+    """The same file with that spectrum converted is refused, as before."""
+    path = _mobility_file_with_a_left_out_msn_spectrum(
+        tmp_path, leave_it_in=True, **change
+    )
+
+    with pytest.raises(ConversionRefused, match=refusal):
+        ImzMLReader(path).n_spectra
 
 
 def test_mobility_spectra_and_range_leave_the_msn_spectrum_out(tmp_path, monkeypatch):

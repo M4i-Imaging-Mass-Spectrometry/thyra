@@ -5452,12 +5452,14 @@ function for the rule.
 - **The level is read on the spectrum, then in its groups.** A spectrum's
   own `MS:1000511` comes first. Otherwise the groups it references are read,
   the last one listed that states a level, as pyimzml resolves them. A value
-  that is not a whole number, or is below 0, counts as none.
+  that is not a whole number, or is below 0, counts as none. A level above
+  255 is kept as 255, and the log names it so; it is MSn all the same.
 - **A spectrum left out is not read.** It adds nothing to `X`, the raw mass
   axis, the mass range, `n_spectra` or the peak count. Nor does it add
   anything to the mobility point clouds or the mobility range, and it is
-  not asked for a mobility array or for one as long as its m/z array. A continuous file takes its shared axis from
-  the first spectrum that is kept.
+  not asked for a mobility array or for one as long as its m/z array. A
+  continuous file takes its shared axis from the first spectrum that is
+  kept.
 - **A spectrum keeps its place in the list.** `obs["acquisition_order"]`
   still counts every `<spectrum>`, so the spectra after one left out do not
   move (D26).
@@ -5498,7 +5500,7 @@ about 3 s to the 46 s parse of the 918,855-spectrum file.
 
 - The metadata-only route and a mass axis plan read the imzML header, not
   the spectra, when the header is enough. Their spectrum count and observed
-  range then still include MSn spectra that a conversion leaves out. A plan's axis can then reach past
-  the converted spectra; no point is lost.
+  range then still include MSn spectra that a conversion leaves out. A
+  plan's axis can then reach past the converted spectra; no point is lost.
 - `format_specific.spectrum_count` stays the number of spectra the file
   holds, as on the metadata-only route.
