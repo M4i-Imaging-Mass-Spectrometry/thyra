@@ -776,13 +776,16 @@ states, the store comes out as the store of that file. See
   then placed on that image, as for the `.d`. Any other affine stretches the
   image over the whole acquisition, which is not a registration: the affine
   is kept in the raw metadata only. Such an image is scaled onto the
-  alignment image when it is a smaller copy of it, and otherwise not placed.
+  alignment image when it is a smaller copy of it. Otherwise it is not
+  placed: it sits in a coordinate system of its own, not in `"global"`, as
+  does every image of an archive with no `teach_points` affine.
   An image is named after
   its member, `<dataset_id>_optical_image_0000` for `images/image_0000.svs`,
   and the store records that member as its source. The media type the
   archive declares picks the decoder, so a slide scanner's TIFF named `.svs`
-  is read as a TIFF. A format other than TIFF, JPEG, PNG and BMP is left out
-  with a warning.
+  is read as a TIFF; a file that starts like a TIFF is read as one anyway.
+  A format other than TIFF, JPEG, PNG and BMP, or a member that cannot be
+  copied out of the archive, is left out with a warning naming the member.
 
 ---
 

@@ -2597,7 +2597,9 @@ measured is 0.005 ppm, and the store says which encoding it came from.
 
 ## D29. An mzPeak archive converts to the store of its source
 
-**Status:** Implemented (2026-09-30), issue #422.
+**Status:** Implemented (2026-09-30), issue #422. Amended by D69
+(2026-10-19): an embedded image with no alignment sits only in a
+coordinate system of its own.
 
 **Decision.** Where an archive states the same fact as the file it was made
 from, Thyra reads it the way it reads that file. Five facts:
@@ -2831,7 +2833,8 @@ that.
 
 **Status:** Implemented (2026-10-06), issue #429. Extends D29, and replaces
 its "embedded images are carried into the store, unaligned" for an image
-fitted to the teaching points. Amended by D61 (2026-10-16).
+fitted to the teaching points. Amended by D61 (2026-10-16) and D69
+(2026-10-19).
 
 **Decision.** `mzpeak-convert` 0.17 states five more facts of a Bruker run.
 Thyra reads each the way it reads the `.d`.
@@ -3851,7 +3854,8 @@ long as `mz`.
 
 ## D48. A store in micrometres places its raster where the source did
 
-**Status:** Implemented (2026-10-14).
+**Status:** Implemented (2026-10-14). Amended by D69 (2026-10-19): an
+optical image with no alignment is not in `"global"` at all.
 
 **Decision.** A store whose `"global"` is in micrometres gets one more
 coordinate system, `"acquisition"`. Every TIC image, pixel polygon element
@@ -4863,6 +4867,8 @@ the same six spectra on z 1 and 2.
 
 **Status:** Implemented (2026-10-16), issue #497. Amends
 [D31](#d31-fleximaging-spots-are-placed-on-their-lattice-not-on-the-drawn-area).
+D69 extends its overview-photo rule to every optical image with no
+alignment.
 
 **Decision.** D31 asks which raster node sits on the `.mis` reference
 point: the one that puts every measured spot inside its Area, then the one
@@ -5206,3 +5212,92 @@ remedy is the user's own: convert again.
 - "Store `null`." The block's convention is that a field the source does not
   report is absent, not null.
 - "Coerce to a finite stand-in, such as 0." That invents a measurement.
+
+## D69. An optical image is stored as its file shows it, and placed only where the store aligns it
+
+**Status:** Implemented (2026-10-19), issue #524. Generalises D59's rule for
+the overview photo, and amends D29, D33 and D48 where they place an
+unaligned image.
+
+**Decision.** Four rules for every optical image a conversion stores.
+
+- **Placement.** An image is in `"global"` and the dataset's coordinate
+  system only when the store holds an alignment for it: the image the
+  `.mis` (or an archive's teach points) names, once the TIC-to-image affine
+  is built, and a resampled copy of it, scaled onto it. Every other image
+  gets one coordinate system named after its element, with `Identity` and
+  nothing else. That covers a photo beside a `.d` with no `.mis`, a `.mis`
+  image whose alignment failed, every archive image with no teach-points
+  affine, and the copies of an alignment image that could not be aligned.
+  `alignment_element` still names the image the `.mis` designates.
+- **Orientation.** An image whose file carries an orientation tag (EXIF and
+  TIFF tag 274) other than 1 is stored upright: turned, and mirrored where
+  the tag says so. A quarter turn swaps height and width. The alignment
+  image and its resampled copies are the exception: they stay as encoded,
+  and the conversion warns. `optical_images.elements.<name>.orientation`
+  records `tag` and `applied` on each element whose file carries a tag
+  from 2 to 8.
+- **Decoding.** A file that starts like a TIFF is read by tifffile,
+  whatever its suffix or declared media type. A TIFF's colour model is
+  applied: a palette becomes RGB, inverted grey is turned back, CMYK and
+  uncompressed YCbCr become RGB. A colour model Thyra cannot turn into grey
+  or RGB is skipped with a warning. A TIFF whose channels span several pages
+  (an OME-TIFF) is stored with all of them; a z stack or time series keeps
+  its first plane, with a warning. A PNG with 16 bits a colour sample is
+  decoded at full depth by imagecodecs, with its own channel count.
+- **Names.** The part of an element name after `<dataset_id>_optical_`
+  keeps only lower-case ASCII letters, digits, `_` and `.`, has no dot at
+  either end, and is at most 30 characters. A second file whose name
+  cleans to a taken one gets `_1`, `_2` and so on, inside the 30. A second
+  file with the same stem (one picture saved as `.tif` and `.jpg`) still
+  replaces the first, with a warning.
+
+Three related fixes from the same issue. An archive image that cannot be
+copied out (a damaged member, a name the disk refuses) is skipped with a
+warning naming the member. A PNG whose header declares more pixel data
+than its file can hold, or any whole-page decode larger than the free
+memory, is skipped before the store declares it. Skip warnings name the
+archive member, not a temporary copy.
+
+**Why.** Identity to `"global"` drew an unaligned photo at 1 micrometre per
+photo pixel over the MSI data: the public desi_colad_centroid archive's
+1,920 x 1,200 px photo covered 1.92 x 1.2 mm of a 13.2 x 13.6 mm image. That
+placement is a guess about the frame, the kind D29 declined for an archive's
+own affine. The decoder ignored orientation on the TIFF route, and Pillow
+applied it to a TIFF on some compressions only, so a camera photo was stored
+sideways and the same bytes gave two stores under two suffixes. Palette
+TIFFs were stored as indices, 16-bit colour PNGs as their high bytes, and
+an OME-TIFF as its first channel, all at exit 0. Names could collide (one
+image replaced another), end in a dot (Windows drops it, so the root attrs
+named a missing element), or hold a character spatialdata refuses, which
+failed the whole conversion.
+
+**Why the alignment image is not turned.** Nobody knows whether a `.mis`
+states its teaching points against the encoded or the upright pixels, and
+no tagged FlexImaging file exists to check. Turning the pixels alone could
+break the alignment; keeping them as encoded cannot.
+
+**What changes in a store.** Only stores with optical images. An unaligned
+image leaves `"global"`, the dataset system and `"acquisition"`; its pixels
+do not move. A tagged non-alignment image is stored upright. A palette,
+inverted-grey, CMYK or YCbCr TIFF, a multi-page OME-TIFF and a 16-bit colour
+PNG change pixels, dtype or channel count. An element whose name held a
+character outside the new set, ended in a dot, or clashed with another
+changes name, in `optical_images` and `reference_element` too. Aligned grey
+and RGB single-page images, the TIC, the pixel polygons and the
+`coordinate_systems` attr do not change, and `convention_version` stays 1. No image in the test data, in
+tims_msms_pos_brain1 or in the public mzPeak archives carries an orientation
+tag.
+
+**Alternatives.**
+
+- "Keep the Identity to `global` and document it." No store change, but
+  viewers keep drawing a misplaced overlay.
+- "Stretch an unaligned image over the MSI extent." A rough overlay that
+  looks right, and the frame guess D29 declined.
+- "Turn the alignment image too, and its teaching points with it." Right if
+  the points refer to the encoded pixels, wrong if they already refer to the
+  upright ones.
+- "Store every image as encoded, and warn." Alignment-safe, but sideways
+  photos stay sideways.
+- "Refuse a name clash." One stray file name would block the conversion.

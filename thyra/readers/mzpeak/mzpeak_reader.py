@@ -2194,7 +2194,9 @@ class MzPeakReader(BaseMSIReader):
         folder of this reader's own, which :meth:`close` removes. The copy
         takes the suffix of the media type the archive declares, so a slide
         scanner's TIFF is read as the TIFF it is. A member in a format the
-        loader does not read is skipped with a warning.
+        loader does not read, or one that cannot be copied out (a damaged
+        member, a name the disk refuses), is skipped with a warning naming
+        it; the rest are still copied.
 
         An image whose affine is marked ``teach_points`` is the alignment
         image, and the pixels are placed on it (:meth:`get_image_alignment`).
@@ -2203,7 +2205,9 @@ class MzPeakReader(BaseMSIReader):
         placed by its affine, which is kept, with the rest of the
         ``imaging`` block, in the store's raw metadata. The converter scales
         it onto the alignment image only when it is a resampled copy of
-        that image, and otherwise leaves it out of ``"global"`` (D59).
+        that image, and otherwise leaves it out of ``"global"`` (D59), as it
+        does every image of an archive with no ``teach_points`` affine
+        (D69).
         """
         if self._image_paths is None:
             self._image_paths = self._extract_images()
@@ -2261,8 +2265,31 @@ class MzPeakReader(BaseMSIReader):
         suffix = Path(name).suffix.lower()
         return suffix if suffix in OPTICAL_IMAGE_SUFFIXES else None
 
+    @staticmethod
+    def _copy_stem(name: str) -> str:
+        """A member's stem made safe as a file name on any disk.
+
+        Characters outside ASCII letters, digits, ``_``, ``-`` and ``.``
+        become ``_`` (``?`` or ``:`` cannot be in a Windows file name),
+        dots and spaces at the ends are dropped, a stem Windows reserves
+        (``CON``, ``NUL``, ``COM1`` ...) gets a trailing ``_``, and the
+        length is capped so the copy's path stays short.
+        """
+        stem = "".join(
+            c if c.isascii() and (c.isalnum() or c in "_-.") else "_"
+            for c in Path(name).stem.strip(". ")
+        )[:100].rstrip(".")
+        reserved = {"CON", "PRN", "AUX", "NUL"} | {
+            f"{port}{n}" for port in ("COM", "LPT") for n in range(1, 10)
+        }
+        if stem.split(".")[0].upper() in reserved:
+            stem += "_"
+        return stem or "image"
+
     def _extract_images(self) -> List[Path]:
         """Copy every readable image member out of the archive."""
+        import zlib  # noqa: WPS433 - only for the copy guard below
+
         members = self._image_members()
         if not members:
             return []
@@ -2283,18 +2310,44 @@ class MzPeakReader(BaseMSIReader):
             if self._image_dir is None:
                 self._image_dir = Path(tempfile.mkdtemp(prefix="thyra-mzpeak-images-"))
             # The base name only: a member name is a path inside the ZIP
-            # and must not choose where on this disk the copy goes. Unique
-            # whatever the case, because the store names the element after
-            # it, lowercased.
-            stem = candidate = Path(name).stem
+            # and must not choose where on this disk the copy goes. Safe
+            # for any disk, and unique whatever the case: the copies share
+            # one folder, and a case-insensitive disk would merge them.
+            stem = candidate = self._copy_stem(name)
             number = 1
             while candidate.lower() in taken:
                 candidate = f"{stem}_{number}"
                 number += 1
             taken.add(candidate.lower())
             target = self._image_dir / f"{candidate}{suffix}"
-            with self.archive.open_member(name) as source, target.open("wb") as sink:
-                shutil.copyfileobj(source, sink)
+            try:
+                with (
+                    self.archive.open_member(name) as source,
+                    target.open("wb") as sink,
+                ):
+                    shutil.copyfileobj(source, sink)
+            except (
+                OSError,
+                EOFError,
+                zipfile.BadZipFile,
+                zlib.error,
+                RuntimeError,
+                NotImplementedError,
+            ) as error:
+                # A damaged member (a CRC that does not match, a deflate
+                # stream that breaks off), an encrypted one or one in a
+                # compression zipfile cannot read loses this image, not the
+                # conversion.
+                target.unlink(missing_ok=True)
+                logger.warning(
+                    "%s embeds the image %s, which cannot be copied out "
+                    "(%s: %s); it is not carried over.",
+                    self.data_path.name,
+                    name,
+                    type(error).__name__,
+                    error,
+                )
+                continue
             paths.append(target)
             self._image_labels[target] = OpticalImageLabel(candidate, name)
         if paths:
@@ -2307,7 +2360,8 @@ class MzPeakReader(BaseMSIReader):
                     f"the pixels are placed on {registered[0]} by its "
                     f"teach_points affine."
                     if registered is not None
-                    else "they are carried over without an alignment to the pixels."
+                    else "they are carried over without an alignment to the "
+                    "pixels, each in a coordinate system of its own."
                 ),
             )
         return paths

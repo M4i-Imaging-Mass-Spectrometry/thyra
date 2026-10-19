@@ -33,7 +33,7 @@ A converted dataset contains the following elements:
 | **Table** | `{dataset_id}_z{z}` | AnnData with intensity matrix (pixels x m/z), coordinates in `.obs`, m/z axis in `.var` |
 | **TIC Image** | `{dataset_id}_z{z}_tic` | 2D total ion current image, shape `(1, y, x)` |
 | **Pixel Shapes** | `{dataset_id}_z{z}_pixels` | GeoDataFrame with pixel box geometries |
-| **Optical Images** | `{dataset_id}_optical_{name}` | Microscopy images (when available) |
+| **Optical Images** | `{dataset_id}_optical_{name}` | Microscopy images (when available). `{name}` holds only lower-case letters, digits, `_` and `.`, at most 30 of them. |
 
 !!! note "3D mode"
     When converted with `--handle-3d`, the `_z{z}` suffix is dropped and all
@@ -55,7 +55,8 @@ A converted dataset contains the following elements:
 !!! info "Coordinate systems"
     Every element above carries a transform to the ``"global"``
     coordinate system (and the same transform to a second one named after
-    the dataset id). In a micrometer store, elements also carry
+    the dataset id). The exception is an optical image the store has no
+    alignment for: it sits only in a coordinate system named after itself. In a micrometer store, elements also carry
     ``"acquisition"``: ``"global"`` moved to where the source put its
     raster, so two stores of one slide line up. Thyra writes a self-describing
     ``coordinate_systems`` metadata attr at the zarr top level so
@@ -86,8 +87,16 @@ plt.show()
 
 ## Optical Images
 
-Bruker acquisitions can carry microscopy images. With `--include-optical`, the
-default, they are stored alongside the MSI data.
+Bruker acquisitions and mzPeak archives can carry microscopy images. With
+`--include-optical`, the default, they are stored alongside the MSI data.
+
+Each image is stored as its file shows it. A file's orientation tag is
+applied, so a camera photo is stored upright. A palette or CMYK TIFF is
+stored as RGB, a 16-bit PNG keeps all 16 bits, and an OME-TIFF keeps every
+channel. The alignment image, and any resampled copy of it, is the
+exception to the orientation rule: it is stored as encoded, because the
+teaching points may refer to those pixels. See
+[D69](design-decisions.md#d69-an-optical-image-is-stored-as-its-file-shows-it-and-placed-only-where-the-store-aligns-it).
 
 ```python
 optical_keys = [k for k in sdata.images if "optical" in k]
@@ -135,12 +144,20 @@ print(f"Offset: ({matrix[0,2]:.0f}, {matrix[1,2]:.0f})")
     Without enough teaching points, each region is stretched over its Area
     (see [D31](design-decisions.md#d31-fleximaging-spots-are-placed-on-their-lattice-not-on-the-drawn-area)).
 
+    An optical image with no alignment in the store is not placed: a photo
+    beside a `.d` with no `.mis`, an image whose alignment failed, an
+    archive image without a teach-points affine. It sits in a coordinate
+    system named after its element, with an Identity transform, and not in
+    `"global"`. Choose that coordinate system in a viewer to see it.
+
 ### Which image is which: `attrs["optical_images"]`
 
 An element name is derived, not the filename -- `sample_0000.tif` and
-`sample_0000.jpg` both become `{dataset_id}_optical_highres` -- and the
-alignment image is otherwise only implied, by its transform, and only when
-the alignment was applied. The store says both outright:
+`sample_0000.jpg` both become `{dataset_id}_optical_highres`, and
+`Slide (1).png` becomes `{dataset_id}_optical_slide__1_`. Two different
+files that would get one name are kept apart by `_1`, `_2`. The alignment
+image is otherwise only implied, by its transform, and only when the
+alignment was applied. The store says both outright:
 
 ```python
 optical = sdata.attrs.get("optical_images")
@@ -152,8 +169,8 @@ if optical:
 
 | Field | Meaning |
 |-------|---------|
-| `elements` | One entry per optical element in the store, keyed by element name. `source_file` is the name of the file it was read from (no directory: the acquiring machine's path does not travel with the store). An element cropped to one region also has `crop`: the crop's `origin` and `size` and the whole scan's `full_size`, in image pixels. |
-| `alignment_element` | The element the `.mis` `<ImageFile>` designates -- the one the teaching points are stated in, so the one the other images are scaled into. An image that is not a resampled copy of it is not placed: it sits in a coordinate system of its own, not in `"global"`. `None` when the source designates none, or when the designated file is not in this store. |
+| `elements` | One entry per optical element in the store, keyed by element name. `source_file` is the name of the file it was read from (no directory: the acquiring machine's path does not travel with the store), or the archive member it was copied out of. An element cropped to one region also has `crop`: the crop's `origin` and `size` and the whole scan's `full_size`, in image pixels. An element whose file carries an orientation tag from 2 to 8 also has `orientation`: the `tag`, and `applied`, whether the pixels were turned upright by it. |
+| `alignment_element` | The element the `.mis` `<ImageFile>` designates -- the one the teaching points are stated in, so the one the other images are scaled into. An image that is not a resampled copy of it is not placed: it sits in a coordinate system of its own, not in `"global"`. When the alignment could not be built, this element is not placed either, but is still named here. `None` when the source designates none, or when the designated file is not in this store. |
 
 The whole section is **absent** when the conversion put no optical image in
 the store, and an image whose pixels could not be read is taken back out of
