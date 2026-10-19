@@ -416,6 +416,81 @@ class TestIsomerPrecursors:
         assert table.var.index.is_unique
 
 
+class TestTheStemIsTheExactMz:
+    """A label stem names one exact precursor m/z (issue #518).
+
+    Six significant digits wrote 798.5401 and 798.5404 alike, so the two
+    were ranked as isomers and one label could name a different precursor
+    in two stores.
+    """
+
+    CLOSE = (
+        IsolationWindow(798.5401, scan_begin=150, scan_end=200),
+        IsolationWindow(798.5404, scan_begin=20, scan_end=60),
+    )
+    SPECTRA = [
+        ((0, 0, 0), 0, [300.0], [10.0]),
+        ((0, 0, 0), 1, [300.0], [20.0]),
+    ]
+
+    def _table(self, windows=CLOSE, spectra=SPECTRA):
+        schedule = FragmentationSchedule(ms_level=2, windows=windows)
+        return _build(_reader(schedule=schedule, spectra=spectra, ramp=RAMP))
+
+    def test_close_precursors_get_a_stem_each_and_no_rank(self):
+        assert list(self._table().var.index) == ["p798.5401_mz2", "p798.5404_mz2"]
+
+    def test_a_label_names_the_same_precursor_in_a_store_without_its_neighbour(self):
+        alone = self._table(
+            windows=(
+                IsolationWindow(400.0, scan_begin=150, scan_end=200),
+                IsolationWindow(798.5404, scan_begin=20, scan_end=60),
+            )
+        ).var
+        both = self._table().var
+        shared = both.index.intersection(alone.index)
+
+        assert list(shared) == ["p798.5404_mz2"]
+        assert both.loc[shared, "precursor_mz"].tolist() == [798.5404]
+        assert alone.loc[shared, "precursor_mz"].tolist() == [798.5404]
+
+    def test_a_target_above_1000_keeps_its_third_decimal(self):
+        table = self._table(
+            windows=(
+                IsolationWindow(936.578, scan_begin=150, scan_end=200),
+                IsolationWindow(1179.731, scan_begin=20, scan_end=60),
+            ),
+        )
+
+        assert list(table.var.index) == ["p936.578_mz2", "p1179.731_mz2"]
+
+    @pytest.mark.parametrize(
+        "mz, text",
+        [(500.0, "500"), (936.578, "936.578"), (798.5401, "798.5401"), (0.1, "0.1")],
+    )
+    def test_the_text_reads_back_as_the_number(self, mz, text):
+        from thyra.converters.spatialdata.msms_table import precursor_mz_text
+
+        assert precursor_mz_text(mz) == text
+        assert float(precursor_mz_text(mz)) == mz
+
+    def test_every_stem_built_here_reads_back_as_its_precursor_mz(self):
+        tables = [
+            _build(),
+            self._table(),
+            _build(
+                _reader(
+                    schedule=TestIsomerPrecursors.SCHEDULE,
+                    spectra=TestIsomerPrecursors.SPECTRA,
+                    ramp=RAMP,
+                )
+            ),
+        ]
+        for table in tables:
+            for label, mz in zip(table.var.index, table.var["precursor_mz"]):
+                assert float(label.split("_mz")[0][1:]) == mz
+
+
 class TestAlignmentAcrossScheduleShapes:
     """Two samples whose schedules differ in length must still align.
 
