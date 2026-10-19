@@ -5687,6 +5687,109 @@ with a warning on a resampled axis.
 - A null observed bound costs one pass over the signal member when the
   essential metadata is read. Only archives with such a bound pay it.
 
+## D71. TIC-preserving resampling keeps the current measured inside the window
+
+**Status:** Implemented (2026-10-19), issue #516. Extends D13 and D22,
+supersedes the "share is measured by area" clause of D36 and the tied-m/z
+clause of D50.
+
+**Decision.** Seven rules, and two messages.
+
+- **A cropped spectrum keeps the sum of its samples inside the range.** When
+  the declared range cuts a spectrum, the preserved total is the sum of its
+  samples inside the range, bounds included: the samples `nearest_neighbor`
+  keeps. The area share is used only when the range holds no sample at all,
+  a window narrower than the spacing of two samples.
+- **Samples outside the range are counted and reported once,** as D22 says
+  both strategies do. A window that holds no peak is refused as "every peak
+  fell outside the target mass range", not as an all-zero source.
+- **Samples at one m/z are added up first,** sorted by value so the sum is
+  the same float in any order. This is what `nearest_neighbor` does, and
+  what a timsTOF `.d` folder does per TOF index.
+- **When interpolation leaves no bin,** each sample inside the range goes
+  to its nearest bin, as `nearest_neighbor` places it. That happens when
+  every sample falls between two axis points, or when the gap tolerance
+  vetoes every bin. When the range holds no sample, nothing is placed.
+- **A spectrum whose largest value is above 2^900 is resampled scaled down**
+  by a power of two, then scaled back. Every other spectrum is resampled
+  bit for bit as before. Inside a scaled spectrum, a value more than about
+  2^1020 below its largest loses precision or reads as zero.
+- **The table's `average_spectrum` divides before it sums in a column whose
+  sum overflows.** Every other column is summed and then divided, as before.
+- **A range starting at or below m/z 0 is refused on a `reflector_tof`,
+  `orbitrap` or `fticr` axis, and on a `tof` axis whose law has `A = 0`,**
+  in one line that names where the bound came from. Their bin counts divide
+  by the lower end or take its logarithm, and a centroid source with a peak
+  at m/z 0 ended the default conversion in a `ZeroDivisionError`.
+  `linear_tof` axes, and a `tof` law with `A > 0`, lay a range from 0, and
+  still do; below 0 they take a square root, so a negative lower end is
+  refused there too. A `constant` axis lays any range.
+- **Messages.** A store emptied by `--intensity-threshold` is refused as
+  "every peak was below --intensity-threshold", not "the reader yielded no
+  spectra at all". The "dropping N empty pixel rows" line counts positions
+  the reader gave no spectrum for apart from measured spectra left empty;
+  only the first can lie outside the acquisition polygon.
+
+**Why.** The area rule bridged gaps left by `--intensity-threshold`, or by a
+profile file that stores only its peaks, with straight lines. The stored
+total then followed the spacing of the samples, not the ions. On public
+files the in-window current came out 0.26 to 4.9 times what was measured
+inside the window, and 126 times on a constructed one, at exit 0;
+`--resample-gap-tolerance` changed nothing. A sum is in the same unit as the
+total it is a share of, matches `nearest_neighbor` and `docs/resampling.md`,
+and the fallback keeps the window between two samples the area rule was
+chosen for.
+
+Tied m/z made a store depend on the order of the points. Interpolation read
+one of the tied points and rebinning another, so two scan orders of the same
+points differed in half the bins, by up to 41 over the full range, and a
+narrow window stored 706.7, 660.1 or 631.9 for one input. A pixel whose
+samples all fell between two axis points, under a gap tolerance, was dropped
+and logged as outside the acquisition polygon. Values near the float64
+maximum overflowed the rescale and dropped three of four rows, and made the
+average spectrum infinite on every route although every stored value was
+finite.
+
+**What changes in a store.**
+
+- `X`, the TIC image and the average spectrum of every `tic_preserving`
+  store whose spectra reach past the declared range. That includes the
+  default Waters MRT and rapifleX profile routes with a narrowed window.
+  Each pixel now holds the current measured inside the range, the total
+  `nearest_neighbor` stores.
+- `tic_preserving` stores of sources that list one m/z more than once, such
+  as an imzML with one point per mobility scan. A spectrum whose only
+  repeat is a tie no longer counts as a bin to rebin (D50).
+- `tic_preserving` pixels that were dropped because interpolation left
+  nothing now get a row.
+- Stores with values near the float64 maximum keep every row and get a
+  finite average spectrum.
+- A source with a peak at m/z 0 on a `reflector_tof`, `orbitrap` or `fticr`
+  axis, or a `tof` axis with `A = 0`, is refused where it crashed.
+
+A `tic_preserving` store whose spectra lie inside the range and hold no
+repeated m/z does not move, and neither does any `nearest_neighbor` or
+`--no-resample` store with finite column sums.
+
+**Known limits.** A window that holds no sample still takes the area share,
+which bridges a gap unless a gap tolerance is set. The per-region average
+spectrum is still summed before it is divided, so it can overflow on such
+values. On the plan route, the refusal of an m/z 0 bound names the
+`--resample-min-mz` flags rather than the plan.
+
+**Alternatives.**
+
+- "Keep the area rule but stop it bridging gaps", integrating only across
+  spacings within the gap tolerance. The result would depend on a setting
+  users rarely set, and the default Waters route would stay wrong.
+- "Keep the rule and warn when a cropped run meets gapped spectra." No value
+  would change, and stores would stay wrong by up to 126 times at exit 0.
+- "Divide every spectrum by its largest value before summing." That moves
+  the last bits of every `tic_preserving` store; a power of two moves none.
+- "Start a source-derived axis at the smallest positive m/z." The planner
+  sees only the source's declared range, so this needs every reader to
+  report the smallest positive m/z; the refusal names the way through.
+
 ## D72. A Cyclic IMS run is read on its own drift axis, and a declared full scan is MS1
 
 **Status:** Implemented (2026-10-19). Amends D7 and D53.

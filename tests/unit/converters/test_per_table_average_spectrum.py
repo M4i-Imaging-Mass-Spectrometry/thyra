@@ -28,11 +28,14 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
+import scipy.sparse as sp
 import spatialdata
 
 from tests.fixtures.mock_msi_generator import MockMSIConfig, MockMSIReader
 from thyra.converters.spatialdata.streaming_converter import (
     StreamingSpatialDataConverter,
+    _column_means,
 )
 
 N_X, N_Y = 3, 2
@@ -247,3 +250,29 @@ class TestThePerRegionMeans:
                 np.asarray(per_region[region]),
                 np.asarray(tables["m_z1"].uns["average_spectrum_per_region"][region]),
             )
+
+
+class TestColumnMeansStayFinite:
+    """A mean of finite values is finite, however large they are (#516)."""
+
+    @pytest.mark.filterwarnings("ignore:overflow encountered:RuntimeWarning")
+    @pytest.mark.parametrize("wrap", [np.asarray, sp.csc_matrix, sp.csr_matrix])
+    def test_a_column_whose_sum_overflows_still_has_a_mean(self, wrap):
+        matrix = wrap(np.array([[1e306], [1e308], [1e308], [4.0]]))
+
+        means = _column_means(matrix, 4)
+
+        assert np.isfinite(means).all()
+        assert means[0] == pytest.approx(5.025e307, rel=1e-12)
+
+    @pytest.mark.parametrize("wrap", [np.asarray, sp.csc_matrix])
+    def test_an_ordinary_matrix_is_sum_then_divide_bit_for_bit(self, wrap):
+        rng = np.random.default_rng(3)
+        dense = rng.random((7, 5)) * 1e4
+        dense[dense < 3e3] = 0.0
+
+        matrix = wrap(dense)
+
+        means = _column_means(matrix, 7)
+
+        np.testing.assert_array_equal(means, np.asarray(matrix.sum(axis=0)).ravel() / 7)
