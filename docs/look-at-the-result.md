@@ -68,6 +68,9 @@ napari-spatialdata plugin, it opens Thyra results.
 napari shows the TIC image, the optical image and the pixel outlines well.
 For an image of one m/z value, use Python, as below.
 
+An optical image that Thyra could not line up with the data is not under
+**global**. Click the coordinate system named after it to see it.
+
 ## Open it in Python
 
 A few lines of Python give you the TIC image, or an image of any m/z value.

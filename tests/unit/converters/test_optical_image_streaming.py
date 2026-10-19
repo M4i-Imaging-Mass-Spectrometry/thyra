@@ -35,6 +35,7 @@ from typing import List
 import numpy as np
 import pytest
 import xarray as xr
+from PIL import Image as PILImage
 
 pytest.importorskip("spatialdata")
 tifffile = pytest.importorskip("tifffile")
@@ -688,22 +689,50 @@ def test_unreadable_pixels_drop_the_image_not_the_conversion(
     assert (output_path / "zarr.json").exists()
 
 
-def test_same_name_keeps_the_last_file(tmp_path: Path, thyra_logs):
-    """Two TIFFs mapping to one element name: last wins, like the dict always did."""
+def test_same_name_from_different_stems_keeps_both_files(tmp_path: Path, thyra_logs):
+    """a_0000 and b_0000 both clean to "highres": the second is numbered."""
     rng = np.random.default_rng(5)
     first = tmp_path / "a_0000.tif"
     second = tmp_path / "b_0000.tif"
-    tifffile.imwrite(str(first), rng.integers(0, 256, size=(20, 24, 3), dtype=np.uint8))
-    last = rng.integers(0, 256, size=(18, 22, 3), dtype=np.uint8)
-    tifffile.imwrite(str(second), last)
+    one = rng.integers(0, 256, size=(20, 24, 3), dtype=np.uint8)
+    two = rng.integers(0, 256, size=(18, 22, 3), dtype=np.uint8)
+    tifffile.imwrite(str(first), one)
+    tifffile.imwrite(str(second), two)
     output_path = tmp_path / "out.zarr"
     with thyra_logs("thyra.converters", logging.WARNING) as records:
         converter, success = _convert(_mock_reader(first, second), output_path)
     assert success is True
     assert converter.optical.pending == {}
-    assert any("is replaced by b_0000.tif" in r.message for r in records)
+    assert not any("is replaced by" in r.message for r in records)
     _, levels, _ = _read_element(output_path, "ds_optical_highres")
-    np.testing.assert_array_equal(levels["s0"][1], np.moveaxis(last, -1, 0))
+    np.testing.assert_array_equal(levels["s0"][1], np.moveaxis(one, -1, 0))
+    _, levels, _ = _read_element(output_path, "ds_optical_highres_1")
+    np.testing.assert_array_equal(levels["s0"][1], np.moveaxis(two, -1, 0))
+
+
+def test_same_stem_keeps_the_last_file(tmp_path: Path, thyra_logs):
+    """The same picture saved as .tif and .jpg: last wins, with a warning."""
+    rng = np.random.default_rng(5)
+    first = tmp_path / "sample_0000.tif"
+    second = tmp_path / "sample_0000.jpg"
+    tifffile.imwrite(str(first), rng.integers(0, 256, size=(20, 24, 3), dtype=np.uint8))
+    PILImage.fromarray(rng.integers(0, 256, size=(18, 22, 3), dtype=np.uint8)).save(
+        second, quality=95
+    )
+    output_path = tmp_path / "out.zarr"
+    with thyra_logs("thyra.converters", logging.WARNING) as records:
+        converter, success = _convert(_mock_reader(first, second), output_path)
+    assert success is True
+    assert converter.optical.pending == {}
+    assert any(
+        "is replaced by sample_0000.jpg" in r.message
+        and "maps to the same name" in r.message
+        for r in records
+    )
+    group = zarr.open_group(str(output_path), mode="r", use_consolidated=False)
+    assert [n for n in group["images"] if "optical" in n] == ["ds_optical_highres"]
+    _, levels, _ = _read_element(output_path, "ds_optical_highres")
+    assert levels["s0"][1].shape == (3, 18, 22)
 
 
 # ---- what the store says about its optical images ----------------------

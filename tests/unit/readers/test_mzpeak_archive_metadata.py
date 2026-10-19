@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 import zipfile
 
 import numpy as np
@@ -755,8 +756,8 @@ class TestIonMobility:
         assert not any("mobility" in r.getMessage() for r in records)
 
 
-def _with_images(archive, members):
-    """Add image members to an archive, listed in its index as images."""
+def _with_images(archive, members, entity_type="image"):
+    """Add members to an archive, listed in its index as ``entity_type``."""
     with zipfile.ZipFile(archive) as source:
         contents = {name: source.read(name) for name in source.namelist()}
     index = json.loads(contents[INDEX_MEMBER])
@@ -765,7 +766,7 @@ def _with_images(archive, members):
         index["files"].append(
             {
                 "name": name,
-                "entity_type": "image",
+                "entity_type": entity_type,
                 "data_kind": "proprietary",
                 "column_mapping": [],
                 "parameters": [],
@@ -776,6 +777,26 @@ def _with_images(archive, members):
         for name, payload in contents.items():
             target.writestr(name, payload)
     return archive
+
+
+def _corrupted(archive, payload):
+    """Flip one byte of a stored member's data, so its CRC no longer matches."""
+    data = bytearray(archive.read_bytes())
+    start = bytes(data).index(payload)
+    data[start + len(payload) // 2] ^= 0xFF
+    archive.write_bytes(bytes(data))
+    return archive
+
+
+def _png_bytes(height=4, width=5):
+    """A small, valid PNG."""
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.fromarray(np.zeros((height, width, 3), np.uint8)).save(buffer, "PNG")
+    return buffer.getvalue()
 
 
 def _described(members):
@@ -899,9 +920,16 @@ class TestEmbeddedImages:
             OpticalImageLabel("image_0001", "images/image_0001.png"),
         ]
 
-    def test_names_that_differ_only_in_case_stay_apart(self, tmp_path):
-        """The store lowercases an element name, so two must not meet there."""
+    @pytest.mark.parametrize("upper_first", [True, False])
+    def test_names_that_differ_only_in_case_stay_apart(self, tmp_path, upper_first):
+        """The store lowercases an element name, so two must not meet there.
+
+        Both orders: the first name taken is looked up by the second, and
+        either side being case-sensitive lets one order through.
+        """
         members = {"images/Scan.png": b"upper", "images/scan.png": b"lower"}
+        if not upper_first:
+            members = dict(reversed(list(members.items())))
         archive = _with_images(
             build_mzpeak(tmp_path / "case.mzpeak", grid_spectra(2, 2)), members
         )
@@ -912,7 +940,8 @@ class TestEmbeddedImages:
             contents = [path.read_bytes() for path in paths]
 
         assert len({name.lower() for name in names}) == 2
-        assert contents == [b"upper", b"lower"]
+        assert len({path.name.lower() for path in paths}) == 2
+        assert contents == list(members.values())
 
     def test_images_of_one_name_in_two_folders_are_both_kept(self, tmp_path):
         """A folder inside the archive is dropped, so names can meet."""
@@ -952,6 +981,250 @@ class TestEmbeddedImages:
         with MzPeakReader(archive) as reader:
             assert reader.get_optical_image_paths() == []
             assert reader._image_dir is None
+
+    def test_a_member_cannot_choose_where_its_copy_goes(self, tmp_path):
+        """F80: a name with ``..`` or folders is a name inside the archive."""
+        # A name of its own, so a copy left in the shared temporary folder by
+        # another run cannot pass or fail this one.
+        stray = f"escape_probe_{uuid.uuid4().hex}"
+        members = {
+            f"../{stray}.png": b"up",
+            "deep/sub/x.png": b"down",
+            "/abs/rooted.png": b"root",
+        }
+        archive = _with_images(
+            build_mzpeak(tmp_path / "escape.mzpeak", grid_spectra(2, 2)), members
+        )
+
+        with MzPeakReader(archive) as reader:
+            paths = reader.get_optical_image_paths()
+            image_dir = reader._image_dir
+            assert len(paths) == 3
+            assert all(path.parent == image_dir for path in paths)
+            assert sorted(path.name for path in image_dir.iterdir()) == sorted(
+                [f"{stray}.png", "rooted.png", "x.png"]
+            )
+            assert not (image_dir.parent / f"{stray}.png").exists()
+        assert not (tmp_path / f"{stray}.png").exists()
+
+    def test_the_declared_media_type_wins_over_a_wrong_suffix(self, tmp_path):
+        """F94: a PNG named ``.jpg``, a TIFF named ``.dat`` declared in mixed case."""
+        members = {
+            "images/photo.jpg": b"\x89PNG\r\n\x1a\n",
+            "images/scan.dat": b"II*\x00",
+        }
+        archive = _with_images(
+            build_mzpeak(
+                tmp_path / "wrong_suffix.mzpeak",
+                grid_spectra(2, 2),
+                file_metadata=_described(
+                    {"images/photo.jpg": "image/png", "images/scan.dat": " Image/TIFF "}
+                ),
+            ),
+            members,
+        )
+
+        with MzPeakReader(archive) as reader:
+            names = [path.name for path in reader.get_optical_image_paths()]
+
+        assert names == ["photo.png", "scan.tif"]
+
+    def test_a_member_that_is_not_an_image_entity_is_not_copied(self, tmp_path):
+        """F204: an ``annotation`` member is not an image, whatever its suffix."""
+        archive = _with_images(
+            build_mzpeak(tmp_path / "annotation.mzpeak", grid_spectra(2, 2)),
+            {"images/overlay.png": _png_bytes()},
+            entity_type="annotation",
+        )
+
+        with MzPeakReader(archive) as reader:
+            assert reader.get_optical_image_paths() == []
+            assert reader._image_dir is None
+
+    def test_a_long_mixed_case_member_makes_a_short_lowercase_element(self, tmp_path):
+        """F204: 41 characters, upper and lower case, a 30-character element name."""
+        from thyra.converters.spatialdata.optical_image import OpticalImages
+
+        stem = "Scan" + "A" * 37
+        assert len(stem) == 41
+        archive = _with_images(
+            build_mzpeak(tmp_path / "long.mzpeak", grid_spectra(2, 2)),
+            {f"images/{stem}.png": _png_bytes()},
+        )
+
+        with MzPeakReader(archive) as reader:
+            optical = OpticalImages(
+                reader,
+                lambda: tmp_path / "long.zarr",
+                "ds",
+                pixel_size_xy=lambda: (10.0, 10.0),
+                include=True,
+                apply_alignment=True,
+            )
+            optical.compute_alignment()
+            optical.add_images({})
+
+        (name,) = optical.pending
+        suffix = name.removeprefix("ds_optical_")
+        assert suffix == stem.lower()[:30]
+        assert len(suffix) <= 30 and suffix == suffix.lower()
+        assert optical.sources == {name: f"images/{stem}.png"}
+
+    def test_a_member_with_a_bad_crc_loses_only_its_image(self, tmp_path, thyra_logs):
+        """F41: the damaged member is named in a warning; the rest are copied."""
+        bad = b"CORRUPT-PAYLOAD-0123456789"
+        archive = _corrupted(
+            _with_images(
+                build_mzpeak(tmp_path / "crc.mzpeak", grid_spectra(2, 2)),
+                {"images/bad.png": bad, "images/good.png": b"good bytes"},
+            ),
+            bad,
+        )
+
+        with thyra_logs("thyra.readers.mzpeak", logging.WARNING) as records:
+            with MzPeakReader(archive) as reader:
+                paths = reader.get_optical_image_paths()
+                names = sorted(path.name for path in reader._image_dir.iterdir())
+                content = [path.read_bytes() for path in paths]
+
+        assert [path.name for path in paths] == ["good.png"]
+        assert content == [b"good bytes"]
+        assert names == ["good.png"]  # no half-written copy is left behind
+        messages = [r.getMessage() for r in records if r.levelno == logging.WARNING]
+        assert any(
+            "images/bad.png" in m and "BadZipFile" in m for m in messages
+        ), messages
+
+    def test_a_broken_deflated_member_loses_only_its_image(self, tmp_path, thyra_logs):
+        """F41: a deflate stream that breaks off raises zlib.error, not BadZipFile."""
+        archive = _with_images(
+            build_mzpeak(tmp_path / "deflate.mzpeak", grid_spectra(2, 2)),
+            {"images/good.png": b"good bytes"},
+        )
+        member = "images/bad.png"
+        with zipfile.ZipFile(archive) as source:
+            contents = {name: source.read(name) for name in source.namelist()}
+        index = json.loads(contents[INDEX_MEMBER])
+        index["files"].append(
+            {"name": member, "entity_type": "image", "data_kind": "proprietary"}
+        )
+        contents[INDEX_MEMBER] = json.dumps(index).encode()
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as target:
+            for name, payload in contents.items():
+                target.writestr(name, payload)
+            target.writestr(member, bytes(range(256)) * 64, zipfile.ZIP_DEFLATED)
+        with zipfile.ZipFile(archive) as source:
+            info = source.getinfo(member)
+        data = bytearray(archive.read_bytes())
+        header = info.header_offset
+        name_length = int.from_bytes(data[header + 26 : header + 28], "little")
+        extra_length = int.from_bytes(data[header + 28 : header + 30], "little")
+        start = header + 30 + name_length + extra_length
+        for offset in range(2, info.compress_size - 2):
+            data[start + offset] ^= 0xA5
+        archive.write_bytes(bytes(data))
+
+        with thyra_logs("thyra.readers.mzpeak", logging.WARNING) as records:
+            with MzPeakReader(archive) as reader:
+                paths = reader.get_optical_image_paths()
+
+        assert [path.name for path in paths] == ["good.png"]
+        messages = [r.getMessage() for r in records if r.levelno == logging.WARNING]
+        assert any(member in m and "cannot be copied" in m for m in messages), messages
+
+    def test_a_member_that_cannot_be_opened_loses_only_its_image(
+        self, tmp_path, thyra_logs, monkeypatch
+    ):
+        """F41: an OSError from the archive is a skipped image, not a failure."""
+        from thyra.readers.mzpeak.mzpeak_reader import MzPeakArchive
+
+        archive = _with_images(
+            build_mzpeak(tmp_path / "oserror.mzpeak", grid_spectra(2, 2)),
+            {"images/locked.png": b"locked", "images/open.png": b"open"},
+        )
+        real = MzPeakArchive.open_member
+
+        def refuse(self, name):
+            if name == "images/locked.png":
+                raise OSError("device not ready")
+            return real(self, name)
+
+        monkeypatch.setattr(MzPeakArchive, "open_member", refuse)
+
+        with thyra_logs("thyra.readers.mzpeak", logging.WARNING) as records:
+            with MzPeakReader(archive) as reader:
+                names = [path.name for path in reader.get_optical_image_paths()]
+
+        assert names == ["open.png"]
+        assert any(
+            "images/locked.png" in r.getMessage() and "OSError" in r.getMessage()
+            for r in records
+        )
+
+    def test_a_member_name_a_disk_refuses_is_copied_under_a_safe_name(self, tmp_path):
+        """F41: ``?`` and ``:`` are not file-name characters on every platform."""
+        members = {"images/what?.png": b"question", "images/a:b.png": b"colon"}
+        archive = _with_images(
+            build_mzpeak(tmp_path / "unsafe.mzpeak", grid_spectra(2, 2)), members
+        )
+
+        with MzPeakReader(archive) as reader:
+            paths = reader.get_optical_image_paths()
+            contents = [path.read_bytes() for path in paths]
+            labels = [reader.get_optical_image_label(path) for path in paths]
+
+        assert [path.name for path in paths] == ["what_.png", "a_b.png"]
+        assert contents == [b"question", b"colon"]
+        assert [label.source_file for label in labels] == list(members)
+
+    @pytest.mark.parametrize(
+        "member, stem",
+        [
+            ("images/CON.png", "CON_"),
+            ("images/nul.png", "nul_"),
+            ("images/Com1.png", "Com1_"),
+            ("images/con.tar.png", "con.tar_"),
+            ("images/.hidden .png", "hidden"),
+            ("images/" + "d" * 99 + ".x.png", "d" * 99),
+            ("images/....png", "image"),
+            ("images/caf\u00e9.png", "caf_"),
+            ("images/" + "n" * 150 + ".png", "n" * 100),
+            ("images/COM10.png", "COM10"),
+        ],
+    )
+    def test_the_copy_stem_is_safe_on_any_disk(self, member, stem):
+        assert MzPeakReader._copy_stem(member) == stem
+
+    def test_a_warning_for_an_undecodable_image_names_the_member(
+        self, tmp_path, thyra_logs
+    ):
+        """F165: the member, never the temporary folder the copy sits in."""
+        from thyra.converters.spatialdata.optical_image import OpticalImages
+
+        member = "images/overview.jpeg"
+        archive = _with_images(
+            build_mzpeak(tmp_path / "broken.mzpeak", grid_spectra(2, 2)),
+            {member: b"this is not a jpeg"},
+        )
+
+        with MzPeakReader(archive) as reader:
+            optical = OpticalImages(
+                reader,
+                lambda: tmp_path / "broken.zarr",
+                "ds",
+                pixel_size_xy=lambda: (10.0, 10.0),
+                include=True,
+                apply_alignment=True,
+            )
+            optical.compute_alignment()
+            with thyra_logs("thyra.converters", logging.WARNING) as records:
+                optical.add_images({})
+            image_dir = str(reader._image_dir)
+
+        messages = [r.getMessage() for r in records]
+        assert optical.pending == {}
+        assert any(member in m for m in messages), messages
+        assert not any(image_dir in m or "thyra-mzpeak-images-" in m for m in messages)
 
 
 # ----------------------------------------------------------------------
