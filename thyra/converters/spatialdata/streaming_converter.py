@@ -973,6 +973,34 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             if rows.get(region, 0) > 0
         }
 
+    def _note_emptied(
+        self,
+        units: List[_TableUnit],
+        unit: Optional[_TableUnit],
+        grid: int,
+        coords: Tuple[int, int, int],
+        emptied_early: Dict[int, List[int]],
+    ) -> None:
+        """Pass 1: record a measured spectrum that was left empty.
+
+        On a plane with no table yet, the position waits in
+        ``emptied_early`` until :meth:`_mark_emptied_early`: the table may
+        come later, and its log counts the position as measured.
+        """
+        if unit is not None:
+            unit.measured[grid] = True
+        elif self._on_an_unmet_plane(units, coords):
+            x, y, z = coords
+            n_x = self._grid_dimensions()[0]
+            emptied_early.setdefault(z, []).append(y * n_x + x)
+
+    def _mark_emptied_early(self, emptied_early: Dict[int, List[int]]) -> None:
+        """After pass 1: mark the positions :meth:`_note_emptied` held back."""
+        for plane, grids in emptied_early.items():
+            met = self._units_by_plane.get(plane)
+            if met is not None:
+                met.measured[grids] = True
+
     def _count_pass(self, state: ConversionState) -> None:
         """Pass 1: count entries per column, TIC, occupancy, region totals.
 
@@ -1013,11 +1041,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 nnz = int(mz_indices.size)
                 unit, grid = self._locate(units, x, y, z, create=nnz > 0)
                 if nnz == 0:
-                    if unit is not None:
-                        unit.measured[grid] = True
-                    elif self._on_an_unmet_plane(units, coords):
-                        n_x = self._grid_dimensions()[0]
-                        emptied_early.setdefault(z, []).append(y * n_x + x)
+                    self._note_emptied(units, unit, grid, coords, emptied_early)
 
                 if frame is not None and passes is not None:
                     # The row the sinks count under is the grid position,
@@ -1058,10 +1082,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 pixel_count += 1
                 pbar.update(1)
 
-        for plane, grids in emptied_early.items():
-            met = self._units_by_plane.get(plane)
-            if met is not None:
-                met.measured[grids] = True
+        self._mark_emptied_early(emptied_early)
 
         total_nnz = sum(unit.assembly.n_nonzeros for unit in units)
         if total_nnz == 0:
