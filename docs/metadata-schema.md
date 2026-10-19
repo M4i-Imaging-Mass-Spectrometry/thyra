@@ -201,7 +201,9 @@ mzPeak's, so an archive and a store describe a precursor the same way; see
 [Output Format](output-format.md#fragmentation-msms) for the array block
 beside it and for what `merges_precursors` means for the stored spectrum.
 Waters `.raw` fills it too, from the precursor m/z MassLynx reports per scan:
-a file whose converted functions carry one reports it here, and a file that
+a file whose converted functions carry one reports it here, unless the
+function's `MSMSMode` is `MS` or `SIM` (a Cyclic IMS reports one on every
+full scan, and nothing was fragmented), and a file that
 also holds MS1 functions converts those alone, reports MS1, and lists the
 MS/MS functions it left out under `excluded_functions` in the Waters-specific
 block. The MS level MassLynx reports is not used on its own, because on a

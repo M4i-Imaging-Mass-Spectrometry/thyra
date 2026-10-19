@@ -385,7 +385,7 @@ Windows), numpy arrays rather than lists:
 | `type_name`, `type_accession` | the quantity: `inverse reduced ion mobility` / `MS:1002815` (TIMS), or drift time / `MS:1002476` |
 | `unit_name`, `unit_accession` | e.g. `volt-second per square centimeter` / `MS:1002814` for 1/K0 |
 | `n_scans` | length of `values` (the TIMS ramp length on a Bruker source, the drift bin count on a Waters one) |
-| `values` | `float64[n_scans]`: the native axis when it is shared across pixels -- the 1/K0 of every TIMS scan (from the vendor calibration, decreasing with scan number) or of every feature of a continuous imzML export, or the drift time in ms of every Waters drift bin (ascending, from 0); absent when mobility is per pixel |
+| `values` | `float64[n_scans]`: the native axis when it is shared across pixels -- the 1/K0 of every TIMS scan (from the vendor calibration, decreasing with scan number) or of every feature of a continuous imzML export, or the drift time in ms of every Waters drift bin (ascending: from 0 on a Synapt, from the IMS cycle start delay on a Cyclic IMS); absent when mobility is per pixel |
 | `acq_range` | `float64[2]`, `[lower, upper]`: the acquired range as declared, else the span of `values` |
 | `calibration` | `{model_type, coefficients}`: the vendor `TimsCalibration` row, provenance only |
 | `source` | `"bruker_tdf"`, `"imzml"` or `"waters_raw"` |

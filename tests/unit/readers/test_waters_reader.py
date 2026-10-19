@@ -1098,7 +1098,18 @@ class TestScanInfoStructLayout:
 
 #: What a Synapt G2-Si or XS run declares in _extern.inf, and what an older
 #: Synapt G1 run does not.
-ADC_EXTERN = "Instrument Configuration:\nAcquisition Algorithm\t\t\t\tADC Mode\n"
+ADC_EXTERN = (
+    "Instrument Configuration:\n"
+    "Acquisition Device\t\t\t\tWatersADC\n"
+    "Acquisition Algorithm\t\t\t\tADC Mode\n"
+    "ADC Pushes Per IMS Increment\t\t\t1\n"
+    # A Synapt function section: none of the Cyclic timing fields, so the
+    # library's axis is stored as it comes (D72).
+    "Function Parameters - Function 1 - MALDI MOBILITY TOF MS FUNCTION\n"
+    "ADC Pusher Frequency (\xb5s)\t\t\t66.0\n"
+    "Function Parameters - Function 2 - MALDI MOBILITY TOF MS FUNCTION\n"
+    "ADC Pusher Frequency (\xb5s)\t\t\t66.0\n"
+)
 
 #: Drift times of a three-bin run, ms, as getMobility reports them.
 DRIFT_MS = np.array([0.0, 0.05425, 0.1085])
@@ -1131,12 +1142,15 @@ def _open_drift_reader(
     cdt=True,
     use_centroid=True,
     intensity_threshold=None,
+    header=None,
 ):
     """A reader over a fake run whose ``drift_functions`` carry drift bins."""
     n_funcs = len(types)
     _declare_function_files(raw_dir, n_funcs)
     if extern is not None:
         (raw_dir / "_extern.inf").write_text(extern, encoding="latin-1")
+    if header is not None:
+        (raw_dir / "_header.txt").write_text(header, encoding="latin-1")
     if cdt:
         for f in drift_functions:
             (raw_dir / f"_func{f + 1:03d}.cdt").write_bytes(b"\x00" * 16)
@@ -1494,4 +1508,330 @@ class TestWatersReaderDriftTime:
 
         assert reader._ms_functions == [0]
         assert {c.args[1] for c in mock_ml.read_spectrum.call_args_list} == {0}
+        reader.close()
+
+
+# ----------------------------------------------------------------------
+# SELECT SERIES Cyclic IMS (D72)
+# ----------------------------------------------------------------------
+
+#: What a Cyclic IMS run writes in _header.txt.
+CYCLIC_HEADER = "$$ Version: 04.20\n$$ Instrument: Cyclic-IMS\n#GBA001\n"
+
+
+def _cyclic_extern(sections):
+    """A Cyclic run's _extern.inf: the digitiser, then one section per function.
+
+    ``sections`` is a list of ``{field: value}``, one per function in order.
+    No ``Acquisition Algorithm`` line, as on every real Cyclic run.
+    """
+    lines = ["Instrument Configuration:", "Acquisition Device\tWatersADC", ""]
+    for number, fields in enumerate(sections, start=1):
+        lines.append(f"Function Parameters - Function {number} - TOF HDMS FUNCTION")
+        lines.extend(
+            f"{key}                    \t{value}" for key, value in fields.items()
+        )
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+#: Real Cyclic bin timing: bins start 4682 pushes into the IMS cycle and
+#: each spans three pushes.
+CYCLIC_TIMING = {
+    "IMS Cycle Start Delay (ms)": "4682",
+    "Pushes Per IMS Increment": "3",
+    "MSMSMode": "MS",
+    "CCS Calibration": "No",
+}
+
+
+class TestWatersReaderCyclicIms:
+    """A Cyclic IMS image: read, on its own drift axis, as MS1."""
+
+    def _reader(self, mock_ml_cls, mock_build_grid, raw_dir, **kwargs):
+        options = {
+            "grid": _drift_grid({0: 1}),
+            "types": {0: FunctionType.IMS_MS},
+            "drift_functions": {0},
+            "extern": _cyclic_extern([CYCLIC_TIMING]),
+            "header": CYCLIC_HEADER,
+        }
+        options.update(kwargs)
+        return _open_drift_reader(mock_ml_cls, mock_build_grid, raw_dir, **options)
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_a_cyclic_run_converts_without_adc_mode(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        reader, mock_ml = self._reader(mock_ml_cls, mock_build_grid, mock_waters_data)
+
+        assert len(list(reader.iter_spectra())) == 3
+        assert reader.has_ion_mobility is True
+        assert reader._excluded_functions == {}
+        mock_ml.read_drift_bin.assert_not_called()
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_without_the_cyclic_label_it_is_still_refused(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        # The same _extern.inf under a G1-style header: never read.
+        reader, mock_ml = self._reader(
+            mock_ml_cls,
+            mock_build_grid,
+            mock_waters_data,
+            header="$$ Instrument: UAA232\n",
+        )
+
+        with pytest.raises(ConversionRefused, match="ADC Mode"):
+            list(reader.iter_spectra())
+        mock_ml.read_spectrum.assert_not_called()
+        mock_ml.get_drift_times.assert_not_called()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_the_axis_starts_at_the_declared_delay(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        reader, _ = self._reader(mock_ml_cls, mock_build_grid, mock_waters_data)
+        period = 0.05425  # the library's step in DRIFT_MS
+
+        axis = reader.get_mobility_axis()
+
+        expected = (4682 + 3 * np.arange(DRIFT_MS.size)) * period
+        np.testing.assert_allclose(axis.values, expected, rtol=1e-12)
+        assert axis.values[0] == pytest.approx(4682 * period)
+        assert axis.bin_width == pytest.approx(3 * period)
+        report = reader.mobility_report()
+        assert report["range"] == pytest.approx([expected[0], expected[-1]])
+        assert report["start_delay_pushes"] == 4682
+        assert report["pushes_per_bin"] == 3
+        # The drift-time cloud carries the same values.
+        _, _, mobility, _ = next(iter(reader.iter_mobility_spectra()))
+        np.testing.assert_allclose(np.unique(mobility), expected, rtol=1e-12)
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_one_push_and_no_delay_is_the_library_axis(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        timing = {"IMS Cycle Start Delay (ms)": "0", "Pushes Per IMS Increment": "1"}
+        reader, _ = self._reader(
+            mock_ml_cls,
+            mock_build_grid,
+            mock_waters_data,
+            extern=_cyclic_extern([timing]),
+        )
+
+        np.testing.assert_allclose(reader.get_mobility_axis().values, DRIFT_MS)
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_functions_with_different_timings_record_no_mobility(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data, thyra_logs
+    ):
+        other = {**CYCLIC_TIMING, "Pushes Per IMS Increment": "2"}
+        with thyra_logs("thyra.readers.waters.waters_reader", logging.WARNING) as logs:
+            reader, _ = self._reader(
+                mock_ml_cls,
+                mock_build_grid,
+                mock_waters_data,
+                grid=_drift_grid({0: 1, 1: 1}, chunked=True),
+                types={0: FunctionType.IMS_MS, 1: FunctionType.IMS_MS},
+                drift_functions={0, 1},
+                extern=_cyclic_extern([CYCLIC_TIMING, other]),
+            )
+            assert reader.has_ion_mobility is False
+
+        assert any("different drift bin timings" in m for m in logs.messages)
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_a_timing_in_ms_records_no_mobility(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data, thyra_logs
+    ):
+        # Were the delay ever written in the unit its label claims, it is no
+        # count of pushes; nothing is placed rather than a guessed axis.
+        timing = {**CYCLIC_TIMING, "IMS Cycle Start Delay (ms)": "309.002"}
+        with thyra_logs("thyra.readers.waters.waters_reader", logging.WARNING) as logs:
+            reader, _ = self._reader(
+                mock_ml_cls,
+                mock_build_grid,
+                mock_waters_data,
+                extern=_cyclic_extern([timing]),
+            )
+            assert reader.get_mobility_axis() is None
+
+        assert any("do not place its drift bins" in m for m in logs.messages)
+        assert len(list(reader.iter_spectra())) == 3
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_uneven_library_steps_cannot_be_placed(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        reader, mock_ml = self._reader(mock_ml_cls, mock_build_grid, mock_waters_data)
+        mock_ml.get_drift_times.side_effect = lambda _h, n: np.array([0.0, 0.05, 0.2])
+
+        assert reader.get_mobility_axis() is None
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_a_full_scan_reporting_a_precursor_is_ms1(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        # A Cyclic full scan reports its fixed quadrupole mass, 500.0, as
+        # the precursor of every scan, at MS level 1.
+        grid = _drift_grid({0: 1})
+        for key, info in list(grid.scan_map.items()):
+            grid.scan_map[key] = ScanInfoData(
+                **{**info.__dict__, "precursor_mz": 500.0}
+            )
+        reader, _ = self._reader(
+            mock_ml_cls, mock_build_grid, mock_waters_data, grid=grid
+        )
+
+        schedule = reader.get_fragmentation()
+
+        assert schedule.ms_level == 1 and not schedule.is_msms
+        assert schedule.windows == ()
+        assert schedule.dissociation_accession is None
+        assert reader.function_settings() == {
+            "0": {"msms_mode": "MS", "ccs_calibration": "No"}
+        }
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_a_sim_run_is_ms1_and_keeps_its_set_mass(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        grid = _drift_grid({0: 1})
+        for key, info in list(grid.scan_map.items()):
+            grid.scan_map[key] = ScanInfoData(
+                **{**info.__dict__, "precursor_mz": 524.4}
+            )
+        reader, _ = self._reader(
+            mock_ml_cls,
+            mock_build_grid,
+            mock_waters_data,
+            grid=grid,
+            extern=_cyclic_extern([{**CYCLIC_TIMING, "MSMSMode": "SIM"}]),
+        )
+
+        schedule = reader.get_fragmentation()
+
+        assert schedule.ms_level == 1 and not schedule.is_msms
+        settings = reader.function_settings()["0"]
+        assert settings["msms_mode"] == "SIM"
+        assert settings["sim_set_mass_mz"] == pytest.approx(524.4)
+        block = reader._create_metadata_extractor()._extract_waters_specific()
+        assert block["function_settings"]["0"]["msms_mode"] == "SIM"
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_the_store_says_what_the_run_was(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        (mock_waters_data / "run.xml").write_text(
+            '<?xml version="1.0"?><MsMethod><Settings>'
+            '<Table Name="CyclicSequence" Filename="LPC 20 passes" '
+            'IMSCycleTime="348.58"><Row>'
+            '<Setting Name="CyclicFunction" Value="1"/>'
+            '<Setting Name="Time" Value="298.98"/>'
+            "</Row></Table></Settings></MsMethod>",
+            encoding="utf-8",
+        )
+        reader, _ = self._reader(mock_ml_cls, mock_build_grid, mock_waters_data)
+        extractor = reader._create_metadata_extractor()
+
+        block = extractor._extract_waters_specific()
+
+        assert block["instrument"] == "SELECT SERIES Cyclic IMS"
+        assert block["cyclic_sequence"]["sequence_name"] == "LPC 20 passes"
+        assert block["cyclic_sequence"]["ims_cycle_time_ms"] == pytest.approx(348.58)
+        assert block["cyclic_sequence"]["steps"] == [
+            {"function": 1, "time_ms": pytest.approx(298.98)}
+        ]
+        assert block["ion_mobility"]["pushes_per_bin"] == 3
+        info = extractor._extract_instrument_info()
+        assert info["instrument_model"] == "SELECT SERIES Cyclic IMS"
+        reader.close()
+
+
+class TestWatersReaderMsmsMode:
+    """``MSMSMode`` decides fragmentation where a function declares it (D72)."""
+
+    @staticmethod
+    def _extern(mode):
+        return (
+            "Function Parameters - Function 1 - TOF MS FUNCTION\n"
+            f"MSMSMode                                     \t{mode}\n"
+        )
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    @pytest.mark.parametrize("mode", ["MS", "SIM", "ms"])
+    def test_a_mode_that_fragments_nothing_is_ms1(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data, mode
+    ):
+        (mock_waters_data / "_extern.inf").write_text(
+            self._extern(mode), encoding="latin-1"
+        )
+        grid = _two_function_grid({0: 1}, {0: 500.0})
+        reader, _ = _open_reader(
+            mock_ml_cls, mock_build_grid, mock_waters_data, grid, 1
+        )
+
+        assert reader.get_fragmentation().ms_level == 1
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_a_fragmenting_mode_keeps_its_precursor(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        (mock_waters_data / "_extern.inf").write_text(
+            self._extern("MSMS"), encoding="latin-1"
+        )
+        grid = _two_function_grid({0: 2}, {0: 760.585})
+        reader, _ = _open_reader(
+            mock_ml_cls, mock_build_grid, mock_waters_data, grid, 1
+        )
+
+        schedule = reader.get_fragmentation()
+
+        assert schedule.ms_level == 2
+        assert schedule.windows[0].target == pytest.approx(760.585)
+        assert reader.function_settings() == {"0": {"msms_mode": "MSMS"}}
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_an_excluded_full_scan_reports_no_precursor(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        # Function 1 declares MS and reports 500.0; it is listed without one.
+        (mock_waters_data / "_extern.inf").write_text(
+            self._extern("MS")
+            + "Function Parameters - Function 2 - TOF MS FUNCTION\n"
+            + "MSMSMode\tMS\n",
+            encoding="latin-1",
+        )
+        grid = _two_function_grid({0: 1, 1: 2}, {1: 500.0})
+        reader, _ = _open_reader(
+            mock_ml_cls, mock_build_grid, mock_waters_data, grid, 2
+        )
+
+        list(reader.iter_spectra())
+
+        assert reader._excluded_functions[1]["precursor_mz"] is None
         reader.close()
