@@ -163,15 +163,16 @@ class ImzMLHeaderExtractor(ImzMLMetadataExtractor):
 def head_shortfall(parser: ImzMLHeaderParser) -> Optional[str]:
     """Why the head cannot describe this file, or ``None`` if it can.
 
-    The gate on the metadata-only path, and the single place the three
-    reasons live -- so the line logged when a file falls back to the full
-    parse says which one it was, rather than naming whichever was checked
-    first.
+    The gate on the metadata-only path, and the single place the reasons
+    live -- so the line logged when a file falls back to the full parse
+    says which one it was, rather than naming whichever was checked first.
+    The head answers only when its declarations fit together (D63); any
+    other file is read the full way, as a conversion reads it.
 
-    - **It declares no spectra.**  ``<spectrumList count="0">``, or no
-      count at all.  The coordinate path refuses such a file by name
-      ("No coordinates found"), and it should keep refusing it rather
-      than be described as an empty raster.
+    - **It declares no spectra.**  ``<spectrumList count="0">``, a
+      negative count, or no count at all.  The coordinate path refuses a
+      file that really has none by name ("No coordinates found"), and it
+      should keep refusing it rather than be described as an empty raster.
 
     - **It is numbered from 0**, which makes the raster declaration
       ambiguous.  ``max count of pixels x`` is defined as a count, but
@@ -184,12 +185,27 @@ def head_shortfall(parser: ImzMLHeaderParser) -> Optional[str]:
       goes the same route, where it will fail honestly if it really has
       no coordinates.
 
-    - **It declares no raster.**  The spec puts ``IMS:1000042`` /
-      ``IMS:1000043`` in ``<scanSettings>`` and every writer met so far
-      fills them in, but nothing enforces it.
+    - **It declares no raster**, or a side below 1.  The spec puts
+      ``IMS:1000042`` / ``IMS:1000043`` in ``<scanSettings>`` and every
+      writer met so far fills them in, but nothing enforces it, and a side
+      of 0 or less describes no acquisition.
+
+    - **It declares more spectra than its raster holds.**  No acquisition
+      fits that, and it is also how a 0-based file shows itself when its
+      first spectrum is not at 0: pyimzml's writer declares the largest
+      coordinate, one short per axis, so a 4 x 3 raster numbered from 0 and
+      listed from its last pixel declares 3 x 2 for 12 spectra.  A count
+      equal to the raster is the normal full raster and is trusted.
+
+    Known limit: a wrong count that still fits its raster, and a 0-based
+    file whose spectra fit inside its one-short declaration with the first
+    spectrum away from 0, are still described from the head.  Both touch
+    only the preview and the metadata document, never a store.
     """
-    if not parser.n_spectra:
-        return "its spectrum list declares no spectra"
+    if parser.n_spectra is None:
+        return "its spectrum list declares no count"
+    if parser.n_spectra < 1:
+        return f"its spectrum list declares {parser.n_spectra} spectra"
 
     position = parser.first_position
     if position is None or position[0] < 1 or position[1] < 1:
@@ -198,8 +214,17 @@ def head_shortfall(parser: ImzMLHeaderParser) -> Optional[str]:
             f"could be a count or a largest index"
         )
 
-    if declared_raster(parser) is None:
+    raster = declared_raster(parser)
+    if raster is None:
         return "it declares no raster geometry (IMS:1000042/IMS:1000043)"
+    n_x, n_y = raster
+    if n_x < 1 or n_y < 1:
+        return f"it declares a raster of {n_x} x {n_y}"
+    if parser.n_spectra > n_x * n_y:
+        return (
+            f"it declares {parser.n_spectra:,} spectra for a raster of "
+            f"{n_x} x {n_y}, which holds {n_x * n_y:,}"
+        )
 
     return None
 
