@@ -56,7 +56,8 @@ A converted dataset contains the following elements:
     Every element above carries a transform to the ``"global"``
     coordinate system (and the same transform to a second one named after
     the dataset id). The exception is an optical image the store has no
-    alignment for: it sits only in a coordinate system named after itself. In a micrometer store, elements also carry
+    alignment for: it sits only in a coordinate system named after itself.
+    In a micrometer store, elements also carry
     ``"acquisition"``: ``"global"`` moved to where the source put its
     raster, so two stores of one slide line up. Thyra writes a self-describing
     ``coordinate_systems`` metadata attr at the zarr top level so
