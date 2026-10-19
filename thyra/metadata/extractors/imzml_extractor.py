@@ -366,7 +366,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         mass_range, total_peaks = self._get_mass_range_complete()
         pixel_size = self._extract_pixel_size_fast()
         # The spectra that are converted: MSn spectra left out beside MS1
-        # are not counted (D72). Every pixel keeps one, so the dimensions,
+        # are not counted (D73). Every pixel keeps one, so the dimensions,
         # bounds and offsets here are those of every spectrum.
         n_spectra = len(self._kept_indices())
 
@@ -402,7 +402,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         """The list positions of the spectra that are converted.
 
         Every spectrum but the MSn spectra the per-pixel rule leaves out
-        (D72), as the reader reads them.
+        (D73), as the reader reads them.
         """
         left_out = imzml_left_out(self.parser)
         if left_out is None:
@@ -529,7 +529,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
                 silently described wrongly.
         """
         try:
-            # Only the spectra that are converted shape the range (D72).
+            # Only the spectra that are converted shape the range (D73).
             kept = self._kept_indices()
 
             # Check if continuous mode - all spectra share the same m/z axis
@@ -612,7 +612,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
 
         In processed mode, each spectrum can have different m/z values,
         so we must scan all spectra to find the complete mass range. An
-        MSn spectrum left out beside MS1 (D72) is not scanned.
+        MSn spectrum left out beside MS1 (D73) is not scanned.
 
         Args:
             kept: List positions of the spectra that are converted.

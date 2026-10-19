@@ -179,10 +179,22 @@ around in the underlying library.
 ## Bruker timsTOF
 
 `.d` directories containing `analysis.tsf` (TOF only) or `analysis.tdf` (TIMS
-engaged). Reading goes through Bruker's `timsdata` library, which is bundled
+engaged). When both are there, the one that holds data is read, `analysis.tsf`
+if both do: a 0-byte database is what a stray probe leaves behind. Reading
+goes through Bruker's `timsdata` library, which is bundled
 for Windows and Linux. This is the richest source Thyra handles: it carries
 optical microscopy images, FlexImaging `.mis` teaching points for MSI-to-optical
 registration, and per-pixel region annotations for multi-region slides.
+
+Bruker's library opens a database in WAL mode (every real
+`calibration.sqlite`, some `analysis.tsf`) read-write in place, and puts
+`-shm` and `-wal` files beside it inside the `.d` for as long as it runs. A
+clean finish removes them; a killed run can leave them, harmlessly, until the
+next clean conversion. So a conversion needs to be able to write to the `.d`
+folder: when such a database is in WAL mode and the folder cannot be written,
+Thyra refuses before the library opens it, in one line naming the database.
+Copy the `.d` somewhere writable, or, when only `calibration.sqlite` is named,
+pass `--no-recalibrated`. `thyra metadata` opens no library and writes nothing.
 
 Not every `.d` is an image. The tables that give a frame a raster position,
 `MaldiFrameInfo` and `MaldiFrameLaserInfo`, are absent from a run that imaged
@@ -219,7 +231,7 @@ mobility spectrum from one that never had a mobility dimension.
 
 The mobility dimension itself is not thrown away. The summed table carries
 `uns["mobility_axis"]` -- the 1/K0 of every scan from the vendor calibration,
-the declared range and the `TimsCalibration` row -- and `uns["mobility_heatmap"]`,
+the declared range and the `TimsCalibration` row the library applied -- and `uns["mobility_heatmap"]`,
 the dataset's mean mass-mobility frame (about 4,000 m/z bins by 256 mobility
 channels) accumulated from the raw scan read of every frame. The heatmap is
 where to look to see whether mobility separates anything; it is fed from the
@@ -808,13 +820,16 @@ states, the store comes out as the store of that file. See
   then placed on that image, as for the `.d`. Any other affine stretches the
   image over the whole acquisition, which is not a registration: the affine
   is kept in the raw metadata only. Such an image is scaled onto the
-  alignment image when it is a smaller copy of it, and otherwise not placed.
+  alignment image when it is a smaller copy of it. Otherwise it is not
+  placed: it sits in a coordinate system of its own, not in `"global"`, as
+  does every image of an archive with no `teach_points` affine.
   An image is named after
   its member, `<dataset_id>_optical_image_0000` for `images/image_0000.svs`,
   and the store records that member as its source. The media type the
   archive declares picks the decoder, so a slide scanner's TIFF named `.svs`
-  is read as a TIFF. A format other than TIFF, JPEG, PNG and BMP is left out
-  with a warning.
+  is read as a TIFF; a file that starts like a TIFF is read as one anyway.
+  A format other than TIFF, JPEG, PNG and BMP, or a member that cannot be
+  copied out of the archive, is left out with a warning naming the member.
 
 ---
 

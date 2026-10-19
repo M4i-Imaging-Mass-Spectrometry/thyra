@@ -49,7 +49,15 @@ changes: the decoded page still goes straight into the store's level-0 array
 instead of through ``Image2DModel.parse`` (no dask copy), and every pyramid
 level is still reduced from the level below on disk, which is where the
 whole-page route spent most of its memory. :func:`probe_optical_source`
-picks between the two by suffix, on the same list discovery filters on.
+picks between the two by the file's first bytes: a TIFF is read by
+tifffile whatever it is named.
+
+**What is stored is what the file shows** (D69). A TIFF's colour model is
+applied (palette, inverted grey, CMYK and YCbCr become grey or RGB), a TIFF
+whose channels span pages is read as one image, a 16-bit colour PNG keeps
+its 16 bits, and an orientation tag is applied by
+:class:`OrientedOpticalSource`, band by band. The alignment image and its
+resampled copies are the exception to the last rule: they stay as encoded.
 
 The pixel values are those ``xarray``'s ``coarsen`` produces: same
 ``boundary="trim", side="right"`` rule (an odd-sized axis drops its FIRST
@@ -61,7 +69,10 @@ skipped with a warning before anything was written; now the header is read
 up front and the pixels only after the store exists, so
 :meth:`OpticalImages.stream_pending_pixels` keeps that
 contract by dropping the declared element from the store and warning. A
-store never keeps an image whose pixels were not written.
+store never keeps an image whose pixels were not written. A PNG whose
+header declares more pixel data than the file can hold, and a whole-page
+decode larger than the free memory, are refused at the header, before the
+store declares anything.
 
 **The alignment image is cropped to the section it aligns.** A FlexImaging
 ``.mis`` names one whole-slide scan and every ``.d`` cut from that slide
@@ -92,7 +103,7 @@ import math
 import os
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -110,7 +121,9 @@ from typing import (
 )
 
 import dask.array as da
+import imagecodecs
 import numpy as np
+import psutil
 import tifffile
 import xarray as xr
 import zarr
@@ -158,9 +171,47 @@ REDUCE_WORKERS = 4
 #: a single sample, or one plane per sample.
 PAGE_LAYOUTS = ("YXS", "YX", "SYX")
 
-#: Suffixes :func:`probe_optical_source` routes to :class:`OpticalTiffSource`.
-#: Everything else goes to :class:`OpticalRasterSource`.
+#: Suffixes :func:`probe_optical_source` routes to :class:`OpticalTiffSource`
+#: even when the file does not start like a TIFF, so tifffile names what is
+#: wrong with it. Everything else goes by its first bytes: see
+#: :data:`TIFF_SIGNATURES`.
 TIFF_SUFFIXES = (".tif", ".tiff")
+
+#: The first four bytes of a TIFF and a BigTIFF, in either byte order. A file
+#: that starts with one is read by tifffile whatever its suffix, so the same
+#: bytes give the same store under ``.tif``, ``.png`` or an archive's declared
+#: media type. Pillow would read such a file too, but turns it by its
+#: orientation tag on some compressions and not on others.
+TIFF_SIGNATURES = (b"II*\x00", b"MM\x00*", b"II+\x00", b"MM\x00+")
+
+#: The EXIF and TIFF tag that says how the stored pixels are turned.
+ORIENTATION_TAG = 274
+
+#: Orientation tag values that read the stored rows bottom to top, and those
+#: that swap rows and columns. See :func:`orient`.
+_ROWS_REVERSED = (3, 4, 6, 7)
+_TRANSPOSED = (5, 6, 7, 8)
+
+#: Leading axes of a TIFF series that are channels of one picture: tifffile's
+#: channel and sample axes, and its codes for a run of pages it has no other
+#: name for. Any other leading axis (a z stack, a time series) keeps its first
+#: plane only, with a warning.
+_CHANNEL_AXES = "CSQI"
+
+#: The most a deflate stream can expand: 258 bytes from a 2-bit code. A PNG
+#: whose header declares more decoded bytes than this times its file size
+#: cannot hold them, and is refused before anything is allocated.
+DEFLATE_MAX_RATIO = 1032
+
+#: Samples per pixel of each PNG colour type (grey, RGB, palette, grey with
+#: alpha, RGB with alpha).
+_PNG_SAMPLES = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+
+#: Pillow's raw modes for PNGs with 16 bits a sample that Pillow can only
+#: narrow to 8 bits, each with the channel count the file holds. These are
+#: decoded by imagecodecs at full depth instead. A 16-bit grey PNG has a
+#: 16-bit Pillow mode and stays with Pillow.
+_PNG_WIDE_RAWMODES = {"RGB;16B": 3, "RGBA;16B": 4, "LA;16B": 2}
 
 #: Pillow modes :class:`OpticalRasterSource` reads as they are, each mapped
 #: to the ``(channels, dtype)`` the decoded array has. Anything not listed
@@ -283,6 +334,35 @@ def band_rows(
     return rows
 
 
+def orient(cyx: np.ndarray, tag: int) -> np.ndarray:
+    """Turn a ``(c, y, x)`` array upright as its orientation tag says.
+
+    ``tag`` is the EXIF/TIFF orientation (tag 274): 1 is upright, 2 to 4
+    mirror or turn by a half turn, 5 to 8 swap rows and columns. The result
+    equals Pillow's ``ImageOps.exif_transpose`` of the same pixels. The
+    operations are separable, so a row band of the stored image comes out
+    as the matching row or column band of the upright one; see
+    :class:`OrientedOpticalSource`.
+    """
+    if tag == 2:
+        turned = cyx[:, :, ::-1]
+    elif tag == 3:
+        turned = cyx[:, ::-1, ::-1]
+    elif tag == 4:
+        turned = cyx[:, ::-1, :]
+    elif tag == 5:
+        turned = cyx.transpose(0, 2, 1)
+    elif tag == 6:
+        turned = np.rot90(cyx, -1, axes=(1, 2))
+    elif tag == 7:
+        turned = cyx[:, ::-1, ::-1].transpose(0, 2, 1)
+    elif tag == 8:
+        turned = np.rot90(cyx, 1, axes=(1, 2))
+    else:
+        return cyx
+    return np.ascontiguousarray(turned)
+
+
 def _write_unit(array: zarr.Array) -> Tuple[int, ...]:
     """The block one write of ``array`` should cover: its shard, else its chunk.
 
@@ -333,14 +413,240 @@ def _multiscale_dataset_paths(attrs: Mapping[str, Any]) -> Optional[List[str]]:
     return paths
 
 
+def _tag_numbers(value: Any, count: int) -> Optional[Tuple[float, ...]]:
+    """``count`` numbers from a TIFF tag value, rationals divided out.
+
+    tifffile returns a RATIONAL array as numerator, denominator pairs; this
+    takes either that or the plain numbers. ``None`` when the value has
+    neither length or holds a zero denominator.
+    """
+    numbers = tuple(float(n) for n in np.ravel(np.asarray(value, dtype=np.float64)))
+    if len(numbers) == count:
+        return numbers
+    if len(numbers) == 2 * count and all(numbers[1::2]):
+        return tuple(n / d for n, d in zip(numbers[0::2], numbers[1::2]))
+    return None
+
+
+def _rows_at_a_time(rows: int, row_values: int) -> int:
+    """Rows whose float64 working copy stays near 64 MB, at least one."""
+    return max(1, (64 * 1024 * 1024) // max(1, 8 * row_values))
+
+
+@dataclass(frozen=True)
+class TiffColour:
+    """How a TIFF page's decoded samples become the colour that is stored.
+
+    tifffile decodes samples as the file stores them and leaves the colour
+    model (the photometric tag) to the caller. ``model`` is what this does
+    with them: ``"as_is"`` for grey and RGB, and for JPEG-compressed YCbCr,
+    which tifffile already decodes to RGB; ``"palette"`` looks each index up
+    in the colour map, giving RGB; ``"miniswhite"`` inverts grey, so 0 is
+    black as everywhere else in the store; ``"cmyk"`` turns ink into RGB the
+    way Pillow does; ``"ycbcr"`` turns uncompressed luma and chroma into RGB
+    with the file's own coefficients. Extra samples (alpha) after the colour
+    samples are kept as they are.
+    """
+
+    model: str = "as_is"
+    colormap: Optional[np.ndarray] = field(default=None, compare=False)
+    white: int = 0
+    colour_samples: int = 0
+    ycbcr: Tuple[float, ...] = ()
+
+    @classmethod
+    def of(cls, page: Any, name: str) -> "TiffColour":
+        """Read the colour model of a TIFF page.
+
+        Raises:
+            ValueError: for a colour model this cannot turn into grey or
+                RGB (CIELab, a transparency mask, multi-ink separations,
+                subsampled uncompressed YCbCr, inverted signed or floating
+                samples). The image is then skipped with a warning, like
+                any other image Thyra cannot read.
+        """
+        photometric = tifffile.PHOTOMETRIC(int(page.photometric))
+        if photometric in (tifffile.PHOTOMETRIC.MINISBLACK, tifffile.PHOTOMETRIC.RGB):
+            return cls()
+        readers = {
+            tifffile.PHOTOMETRIC.PALETTE: cls._palette,
+            tifffile.PHOTOMETRIC.MINISWHITE: cls._inverted_grey,
+            tifffile.PHOTOMETRIC.SEPARATED: cls._separated,
+            tifffile.PHOTOMETRIC.YCBCR: cls._luma_chroma,
+        }
+        read = readers.get(photometric)
+        if read is None:
+            raise ValueError(
+                f"{name}: colour model {photometric.name} is not read; "
+                "only grey, RGB, palette, CMYK and YCbCr are"
+            )
+        return read(page, name)
+
+    @staticmethod
+    def _layout(page: Any) -> Tuple[int, int, np.dtype, int]:
+        """``(samples, colour samples, dtype, bits)`` of a TIFF page."""
+        samples = int(page.samplesperpixel)
+        colour = samples - len(page.extrasamples or ())
+        return samples, colour, np.dtype(page.dtype), int(page.bitspersample)
+
+    @classmethod
+    def _palette(cls, page: Any, name: str) -> "TiffColour":
+        samples, _, dtype, _ = cls._layout(page)
+        colormap = page.colormap
+        if colormap is None or samples != 1 or dtype.kind != "u":
+            raise ValueError(f"{name}: palette image without a usable colour map")
+        return cls(model="palette", colormap=cls._narrow_colormap(colormap))
+
+    @classmethod
+    def _inverted_grey(cls, page: Any, name: str) -> "TiffColour":
+        _, colour, dtype, bits = cls._layout(page)
+        if dtype.kind == "b":
+            return cls(model="miniswhite", white=1, colour_samples=colour)
+        if dtype.kind != "u":
+            raise ValueError(f"{name}: inverted grey with {dtype} samples")
+        return cls(model="miniswhite", white=2**bits - 1, colour_samples=colour)
+
+    @classmethod
+    def _separated(cls, page: Any, name: str) -> "TiffColour":
+        _, colour, dtype, bits = cls._layout(page)
+        inkset = page.tags.valueof(332, 1)
+        if inkset != 1 or colour != 4 or dtype.kind != "u":
+            raise ValueError(
+                f"{name}: separated colour with {colour} inks (inkset {inkset}); "
+                "only CMYK is read"
+            )
+        return cls(model="cmyk", white=2**bits - 1, colour_samples=4)
+
+    @classmethod
+    def _luma_chroma(cls, page: Any, name: str) -> "TiffColour":
+        if int(page.compression) in (6, 7):
+            # OJPEG and JPEG: tifffile's decoder already returns RGB.
+            return cls()
+        _, colour, dtype, bits = cls._layout(page)
+        # TIFF 6.0's default for an absent YCbCrSubSampling is (2, 2).
+        if page.subsampling is None or tuple(page.subsampling) != (1, 1):
+            raise ValueError(f"{name}: subsampled uncompressed YCbCr is not read")
+        if colour != 3 or dtype.kind != "u":
+            raise ValueError(f"{name}: YCbCr with {colour} {dtype} samples")
+        white = float(2**bits - 1)
+        half = float(2 ** (bits - 1))
+        luma = _tag_numbers(page.tags.valueof(529), 3) or (0.299, 0.587, 0.114)
+        reference = _tag_numbers(page.tags.valueof(532), 6) or (
+            0.0,
+            white,
+            half,
+            white,
+            half,
+            white,
+        )
+        return cls(
+            model="ycbcr", white=int(white), colour_samples=3, ycbcr=luma + reference
+        )
+
+    @staticmethod
+    def _narrow_colormap(colormap: Any) -> np.ndarray:
+        """The colour map as 8-bit when it holds 8-bit colours, else 16-bit.
+
+        TIFF stores colour-map entries as 16-bit numbers. Writers fill them
+        from 8-bit colours as ``v * 257`` or ``v * 256``, and some write the
+        8-bit value itself; each of those is stored as 8-bit. A map that
+        uses the full 16 bits keeps them.
+        """
+        table = np.asarray(colormap).astype(np.uint16)
+        if int(table.max(initial=0)) < 256:
+            return table.astype(np.uint8)
+        low, high = table & 0xFF, table >> 8
+        if not low.any() or np.array_equal(low, high):
+            return high.astype(np.uint8)
+        return table
+
+    def channels(self, samples: int) -> int:
+        """Stored channels for a page with ``samples`` samples per pixel."""
+        if self.model == "palette":
+            return 3
+        if self.model == "cmyk":
+            return samples - 1
+        return samples
+
+    def dtype(self, decoded: np.dtype) -> np.dtype:
+        """Stored dtype for samples decoded as ``decoded``."""
+        if self.model == "palette" and self.colormap is not None:
+            return self.colormap.dtype
+        return decoded
+
+    def apply(self, cyx: np.ndarray) -> np.ndarray:
+        """Decoded ``(c, y, x)`` samples to the stored colour."""
+        if self.model == "palette" and self.colormap is not None:
+            return np.take(self.colormap, cyx[0], axis=1, mode="clip")
+        if self.model == "miniswhite":
+            out = np.array(cyx, copy=True)
+            colour = out[: self.colour_samples]
+            if out.dtype.kind == "b":
+                np.logical_not(colour, out=colour)
+            else:
+                np.subtract(self.white, colour, out=colour, casting="unsafe")
+            return out
+        if self.model in ("cmyk", "ycbcr"):
+            n_out = 3 + cyx.shape[0] - self.colour_samples
+            out = np.empty((n_out,) + cyx.shape[1:], dtype=cyx.dtype)
+            out[3:] = cyx[self.colour_samples :]
+            step = _rows_at_a_time(cyx.shape[1], cyx.shape[0] * cyx.shape[2])
+            convert = self._cmyk if self.model == "cmyk" else self._ycbcr
+            for start in range(0, cyx.shape[1], step):
+                rows = slice(start, start + step)
+                out[:3, rows] = convert(cyx[:, rows].astype(np.float64))
+            return out
+        return cyx
+
+    def _cmyk(self, ink: np.ndarray) -> np.ndarray:
+        """Pillow's CMYK to RGB: each colour is ``(W - ink) * (W - K) / W``."""
+        white = float(self.white)
+        rgb = (white - ink[:3]) * (white - ink[3]) / white
+        return np.floor(rgb + 0.5)
+
+    def _ycbcr(self, samples: np.ndarray) -> np.ndarray:
+        """TIFF 6.0 YCbCr to RGB, from the file's coefficients and reference."""
+        red, green, blue = self.ycbcr[:3]
+        ref = self.ycbcr[3:]
+        white = float(self.white)
+        coding = float(2 ** (int(round(math.log2(self.white + 1))) - 1) - 1)
+        luma = (samples[0] - ref[0]) * white / (ref[1] - ref[0])
+        cb = (samples[1] - ref[2]) * coding / (ref[3] - ref[2])
+        cr = (samples[2] - ref[4]) * coding / (ref[5] - ref[4])
+        r = cr * (2 - 2 * red) + luma
+        b = cb * (2 - 2 * blue) + luma
+        g = (luma - blue * b - red * r) / green
+        return np.clip(np.floor(np.stack([r, g, b]) + 0.5), 0, white)
+
+
+def _tiff_orientation(page: Any) -> Optional[int]:
+    """The page's orientation tag, or ``None`` when it carries none."""
+    tag = page.tags.get(ORIENTATION_TAG)
+    if tag is None:
+        return None
+    try:
+        return int(np.ravel(tag.value)[0])
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
 @dataclass(frozen=True)
 class OpticalTiffSource:
-    """What the first page of an optical TIFF looks like, without decoding it.
+    """What an optical TIFF looks like, without decoding it.
 
     ``shape`` is always ``(c, y, x)``. ``page_axes`` is one of
-    :data:`PAGE_LAYOUTS` and says how a decoded array maps onto that;
-    ``strip_rows`` is the height of the page's strips or tiles, the smallest
-    row range the decoder can produce on its own.
+    :data:`PAGE_LAYOUTS`, or ``"series"`` for an image whose channels are
+    spread over several pages (an OME-TIFF), and says how a decoded array
+    maps onto that; ``strip_rows`` is the height of the page's strips or
+    tiles, the smallest row range the decoder can produce on its own.
+    ``colour`` turns the decoded samples into the stored colour.
+    ``orientation`` is the first page's orientation tag; this source yields
+    the pixels as stored, and :class:`OrientedOpticalSource` turns them.
+
+    For a series, ``series_index`` holds ``None`` for each leading axis that
+    is kept as channels and ``0`` for each that keeps its first plane only;
+    ``dropped_planes`` counts the pages left out that way, along
+    ``dropped_axes``, so the caller can say so.
     """
 
     path: Path
@@ -348,26 +654,46 @@ class OpticalTiffSource:
     dtype: np.dtype
     page_axes: str
     strip_rows: int
+    colour: TiffColour = field(default_factory=TiffColour)
+    orientation: Optional[int] = None
+    series_index: Tuple[Optional[int], ...] = ()
+    series_samples_last: bool = False
+    dropped_planes: int = 0
+    dropped_axes: str = ""
 
     @classmethod
     def probe(cls, path: Union[str, Path]) -> "OpticalTiffSource":
-        """Read the page header.
+        """Read the page header, and the first series when it spans pages.
 
         Raises:
-            ValueError: for a page layout other than :data:`PAGE_LAYOUTS`
-                or a sample format tifffile cannot map to a dtype -- the
-                cases the whole-page decode used to reject, at the same
-                point, before anything is written.
+            ValueError: for a page layout other than :data:`PAGE_LAYOUTS`,
+                a sample format tifffile cannot map to a dtype or a colour
+                model :class:`TiffColour` cannot read -- the cases the
+                whole-page decode used to reject, at the same point, before
+                anything is written.
         """
         path = Path(path)
         with tifffile.TiffFile(path) as tif:
-            page = tif.pages[0]
+            page: Any = tif.pages[0]
             page_shape = tuple(int(n) for n in page.shape)
             dtype = page.dtype
             axes = str(page.axes)
             chunks = tuple(int(n) for n in page.chunks)
-        if dtype is None:
-            raise ValueError(f"{path.name}: sample format not supported by tifffile")
+            if dtype is None:
+                raise ValueError(
+                    f"{path.name}: sample format not supported by tifffile"
+                )
+            colour = TiffColour.of(page, path.name)
+            orientation = _tiff_orientation(page)
+            series = tif.series[0] if tif.series else None
+            pages = len(series.pages) if series is not None else 1
+            spread = series is not None and pages > 1
+            series_axes = str(series.axes) if spread and series is not None else ""
+            series_shape = (
+                tuple(int(n) for n in series.shape)
+                if spread and series is not None
+                else ()
+            )
         if axes == "YX":
             shape: Shape = (1, page_shape[0], page_shape[1])
             strip_rows = chunks[0]
@@ -382,12 +708,59 @@ class OpticalTiffSource:
             raise ValueError(
                 f"{path.name}: unsupported TIFF page layout {axes} {page_shape}"
             )
-        return cls(
+        source = cls(
             path=path,
-            shape=shape,
-            dtype=np.dtype(dtype),
+            shape=(colour.channels(shape[0]), shape[1], shape[2]),
+            dtype=colour.dtype(np.dtype(dtype)),
             page_axes=axes,
             strip_rows=max(1, min(strip_rows, shape[1])),
+            colour=colour,
+            orientation=orientation,
+        )
+        if spread:
+            return source._with_series(series_axes, series_shape, pages)
+        return source
+
+    def _with_series(
+        self, axes: str, shape: Tuple[int, ...], pages: int
+    ) -> "OpticalTiffSource":
+        """This source over the whole first series, when its pages are channels.
+
+        Each page must be one plane of the same picture: grey or RGB, laid
+        out ``YX`` or ``YXS``. The leading axes in :data:`_CHANNEL_AXES`
+        become channels, page after page; any other leading axis keeps its
+        first plane. When only one plane is kept, or the pages cannot be
+        stacked, the first page is read on its own and the rest of the
+        series' ``pages`` are counted as left out.
+        """
+        dims = [int(n) for n in shape]
+        position = axes.find("YX")
+        trailing = axes[position:] if position >= 0 else ""
+        spatial = dims[position : position + 2] if position >= 0 else []
+        if (
+            self.colour.model != "as_is"
+            or self.page_axes not in ("YX", "YXS")
+            or trailing not in ("YX", "YXS")
+            or tuple(spatial) != tuple(self.shape[1:])
+        ):
+            return replace(self, dropped_planes=pages - 1, dropped_axes=axes)
+        leading = axes[:position]
+        sizes = dims[:position]
+        index = tuple(None if a in _CHANNEL_AXES else 0 for a in leading)
+        kept = int(np.prod([n for a, n in zip(leading, sizes) if a in _CHANNEL_AXES]))
+        dropped = int(np.prod(sizes)) - kept
+        dropped_axes = "".join(a for a in leading if a not in _CHANNEL_AXES)
+        if kept <= 1:
+            return replace(self, dropped_planes=dropped, dropped_axes=dropped_axes)
+        samples = dims[-1] if trailing == "YXS" else 1
+        return replace(
+            self,
+            shape=(kept * samples, spatial[0], spatial[1]),
+            page_axes="series",
+            series_index=index,
+            series_samples_last=trailing == "YXS",
+            dropped_planes=dropped,
+            dropped_axes=dropped_axes,
         )
 
     @property
@@ -403,6 +776,7 @@ class OpticalTiffSource:
         Row ranges are decoded through tifffile's zarr adapter, so only the
         strips of a band are ever decoded. When ``rows`` covers the page the
         page is decoded once, whole, with tifffile's own parallel decoder.
+        A series is always read through the adapter, over all its pages.
 
         ``window`` is ``(y_start, y_stop, x_start, x_stop)`` in this page's
         pixels: only those rows are decoded, only those columns are kept,
@@ -412,27 +786,51 @@ class OpticalTiffSource:
         """
         n_rows = self.shape[1]
         with tifffile.TiffFile(self.path) as tif:
-            page = tif.pages[0]
-            if window is None and rows >= n_rows:
-                yield 0, self._to_cyx(page.asarray())
-                return
+            if self.page_axes == "series":
+                store = tif.series[0].aszarr(level=0)
+            else:
+                page: Any = tif.pages[0]
+                if window is None and rows >= n_rows:
+                    yield 0, self.colour.apply(self._to_cyx(page.asarray()))
+                    return
+                store = page.aszarr()
             y_start, y_stop, x_start, x_stop = window or (0, n_rows, 0, self.shape[2])
-            source = zarr.open_array(store=page.aszarr(), mode="r")
+            source = zarr.open_array(store=store, mode="r")
             for start in range(y_start, y_stop, rows):
                 stop = min(start + rows, y_stop)
                 # zarr types reads as array-or-scalar; a slice of a
                 # numpy-buffered array is an ndarray, so asarray copies nothing.
-                if self.page_axes == "SYX":
+                if self.page_axes == "series":
+                    decoded = np.asarray(
+                        source[self._series_selection(start, stop, x_start, x_stop)]
+                    )
+                elif self.page_axes == "SYX":
                     decoded = np.asarray(source[:, start:stop, x_start:x_stop])
                 else:
                     decoded = np.asarray(source[start:stop, x_start:x_stop])
-                yield start, self._to_cyx(decoded)
+                yield start, self.colour.apply(self._to_cyx(decoded))
+
+    def _series_selection(
+        self, start: int, stop: int, x_start: int, x_stop: int
+    ) -> Tuple[Union[int, slice], ...]:
+        """The zarr selection of a row band across the kept planes."""
+        leading: Tuple[Union[int, slice], ...] = tuple(
+            slice(None) if i is None else i for i in self.series_index
+        )
+        selection = leading + (slice(start, stop), slice(x_start, x_stop))
+        if self.series_samples_last:
+            selection += (slice(None),)
+        return selection
 
     def _to_cyx(self, decoded: np.ndarray) -> np.ndarray:
         if self.page_axes == "YX":
             return decoded[np.newaxis, :, :]
         if self.page_axes == "YXS":
             return np.moveaxis(decoded, -1, 0)
+        if self.page_axes == "series":
+            if self.series_samples_last:
+                decoded = np.moveaxis(decoded, -1, -3)
+            return decoded.reshape((-1,) + decoded.shape[-2:])
         return decoded
 
 
@@ -459,6 +857,51 @@ def _unlimited_pixels() -> Iterator[None]:
         PILImage.MAX_IMAGE_PIXELS = previous
 
 
+def _png_decoded_bytes(path: Path) -> Optional[int]:
+    """Bytes the IDAT stream of a PNG inflates to, read from its header.
+
+    Each row is one filter byte plus its packed samples. ``None`` when the
+    file does not start with a PNG signature and an IHDR chunk.
+    """
+    with path.open("rb") as handle:
+        head = handle.read(33)
+    if len(head) < 33 or head[:8] != b"\x89PNG\r\n\x1a\n" or head[12:16] != b"IHDR":
+        return None
+    width = int.from_bytes(head[16:20], "big")
+    height = int.from_bytes(head[20:24], "big")
+    depth, colour_type = head[24], head[25]
+    bits = depth * _PNG_SAMPLES.get(colour_type, 4)
+    return height * (1 + (width * bits + 7) // 8)
+
+
+def _check_decodable(path: Path, decoded_bytes: int, copies: int) -> None:
+    """Refuse an image its own file, or this machine, cannot decode.
+
+    A PNG that declares more decoded bytes than :data:`DEFLATE_MAX_RATIO`
+    times its file size is damaged or forged: no deflate stream expands
+    that far. Any whole-page decode that needs more memory than is free is
+    refused too, before the store declares the image, rather than failing
+    part-way with an empty reason after minutes of swapping.
+
+    Raises:
+        ValueError: naming the declared size and what it does not fit.
+    """
+    inflated = _png_decoded_bytes(path)
+    size = path.stat().st_size
+    if inflated is not None and inflated > DEFLATE_MAX_RATIO * size:
+        raise ValueError(
+            f"{path.name}: its header declares {inflated / 1e9:.2f} GB of "
+            f"pixel data, more than its {size} bytes can hold"
+        )
+    needed = decoded_bytes * copies
+    available = int(psutil.virtual_memory().available)
+    if needed > available:
+        raise ValueError(
+            f"{path.name}: decoding it needs about {needed / 1e9:.1f} GB of "
+            f"memory and {available / 1e9:.1f} GB is free"
+        )
+
+
 @dataclass(frozen=True)
 class OpticalRasterSource:
     """An optical image in a format that is not TIFF: JPEG, PNG or BMP.
@@ -476,6 +919,10 @@ class OpticalRasterSource:
     when the file's own mode is one :data:`_PILLOW_MODES` reads directly.
     It is decided from the header at :meth:`probe` time so the declared
     channel count and dtype are the ones the pixels will actually have.
+    ``wide_png`` marks a PNG with 16 bits a colour sample, which Pillow can
+    only narrow to 8 bits; imagecodecs decodes it at full depth instead.
+    ``orientation`` is the EXIF orientation tag, read but not applied here:
+    see :class:`OrientedOpticalSource`.
     """
 
     path: Path
@@ -484,6 +931,8 @@ class OpticalRasterSource:
     mode: str
     convert_to: Optional[str]
     strip_rows: int
+    wide_png: bool = False
+    orientation: Optional[int] = None
 
     @classmethod
     def probe(cls, path: Union[str, Path]) -> "OpticalRasterSource":
@@ -497,6 +946,8 @@ class OpticalRasterSource:
                 (``UnidentifiedImageError`` is one), or is truncated before
                 the header ends -- the same point, and the same per-image
                 skip, as :meth:`OpticalTiffSource.probe`.
+            ValueError: if the declared size cannot be decoded; see
+                :func:`_check_decodable`.
         """
         path = Path(path)
         with _unlimited_pixels(), PILImage.open(path) as page:
@@ -506,14 +957,21 @@ class OpticalRasterSource:
             # including the palette-with-transparency case that plain
             # ``"A" in mode`` misses.
             transparent = bool(getattr(page, "has_transparency_data", False))
-        spec = _PILLOW_MODES.get(mode)
-        convert_to: Optional[str] = None
-        if spec is None:
-            convert_to = "RGBA" if transparent else "RGB"
-            spec = _PILLOW_MODES[convert_to]
-        channels, dtype = spec
+            rawmode = cls._png_rawmode(page)
+            orientation = cls._exif_orientation(page)
         if width < 1 or height < 1:
             raise ValueError(f"{path.name}: image is {width}x{height}")
+        convert_to: Optional[str] = None
+        if rawmode in _PNG_WIDE_RAWMODES:
+            channels, dtype = _PNG_WIDE_RAWMODES[rawmode], "uint16"
+        else:
+            spec = _PILLOW_MODES.get(mode)
+            if spec is None:
+                convert_to = "RGBA" if transparent else "RGB"
+                spec = _PILLOW_MODES[convert_to]
+            channels, dtype = spec
+        decoded = channels * height * width * np.dtype(dtype).itemsize
+        _check_decodable(path, decoded, 3 if convert_to else 2)
         return cls(
             path=path,
             shape=(channels, height, width),
@@ -521,7 +979,38 @@ class OpticalRasterSource:
             mode=mode,
             convert_to=convert_to,
             strip_rows=height,
+            wide_png=rawmode in _PNG_WIDE_RAWMODES,
+            orientation=int(orientation) if isinstance(orientation, int) else None,
         )
+
+    @staticmethod
+    def _exif_orientation(page: Any) -> Any:
+        """The EXIF orientation from the header alone, or ``None``.
+
+        Read from the EXIF block the header parse already holds (a JPEG's
+        APP1, a PNG's eXIf chunk), not through ``getexif()``: on a PNG that
+        decodes the whole image to look for a chunk after the pixels.
+        """
+        raw = page.info.get("exif")
+        if not isinstance(raw, (bytes, bytearray)) or not raw:
+            return None
+        exif = PILImage.Exif()
+        try:
+            exif.load(bytes(raw))
+        except Exception:  # a damaged EXIF block only loses the tag
+            return None
+        return exif.get(ORIENTATION_TAG)
+
+    @staticmethod
+    def _png_rawmode(page: Any) -> Optional[str]:
+        """The raw mode Pillow decodes a PNG's samples from, else ``None``."""
+        if getattr(page, "format", None) != "PNG" or not page.tile:
+            return None
+        # (codec, extents, offset, args): a plain tuple before Pillow 11,
+        # a named one since, so it is read by position.
+        args = page.tile[0][3]
+        rawmode = args[0] if isinstance(args, tuple) and args else args
+        return rawmode if isinstance(rawmode, str) else None
 
     @property
     def row_bytes(self) -> int:
@@ -541,9 +1030,14 @@ class OpticalRasterSource:
         ``first_row`` at the window's top.
         """
         del rows
-        with _unlimited_pixels(), PILImage.open(self.path) as page:
-            frame = page if self.convert_to is None else page.convert(self.convert_to)
-            decoded = np.asarray(frame)
+        if self.wide_png:
+            decoded = np.asarray(imagecodecs.png_decode(self.path.read_bytes()))
+        else:
+            with _unlimited_pixels(), PILImage.open(self.path) as page:
+                frame = (
+                    page if self.convert_to is None else page.convert(self.convert_to)
+                )
+                decoded = np.asarray(frame)
         cyx = self._to_cyx(decoded)
         if window is None:
             yield 0, cyx
@@ -707,9 +1201,85 @@ class CroppedOpticalSource:
             yield start - self.crop.y0, band
 
 
-#: What :class:`StreamedOpticalImage` streams from: a whole source, or a
-#: window of one.
-AnyOpticalSource = Union[OpticalSource, CroppedOpticalSource]
+@dataclass(frozen=True)
+class OrientedOpticalSource:
+    """A whole optical source, turned upright as its orientation tag says.
+
+    ``shape`` is the upright one: a quarter turn (tags 5 to 8) swaps height
+    and width. The inner source still decodes stored row bands, and each
+    band is turned with :func:`orient` on its own, which gives the matching
+    band of the upright image: rows for tags 2 to 4, columns for 5 to 8,
+    counted from the far edge when the tag reads the stored rows bottom to
+    top. :meth:`blocks` says where each one goes, so memory stays bounded
+    by one band as before.
+    """
+
+    inner: OpticalSource
+    tag: int
+
+    @property
+    def path(self) -> Path:
+        """The file the inner source reads."""
+        return self.inner.path
+
+    @property
+    def shape(self) -> Shape:
+        """``(c, y, x)`` of the upright image."""
+        c, y, x = self.inner.shape
+        return (c, x, y) if self.tag in _TRANSPOSED else (c, y, x)
+
+    @property
+    def dtype(self) -> np.dtype:
+        """The inner source's dtype."""
+        return self.inner.dtype
+
+    @property
+    def strip_rows(self) -> int:
+        """The inner source's strip height: the decode unit is unchanged."""
+        return self.inner.strip_rows
+
+    @property
+    def row_bytes(self) -> int:
+        """Decoded bytes of one stored row: a band is still stored rows."""
+        return self.inner.row_bytes
+
+    def blocks(self, rows: int) -> Iterator[Tuple[int, int, np.ndarray]]:
+        """Yield ``(first_row, first_column, block)`` of the upright image."""
+        stored_rows = self.inner.shape[1]
+        for start, band in self.inner.bands(rows):
+            stop = start + band.shape[1]
+            first = stored_rows - stop if self.tag in _ROWS_REVERSED else start
+            block = orient(band, self.tag)
+            del band
+            if self.tag in _TRANSPOSED:
+                yield 0, first, block
+            else:
+                yield first, 0, block
+
+
+#: What :class:`StreamedOpticalImage` streams from: a whole source, a
+#: window of one, or one turned upright.
+AnyOpticalSource = Union[OpticalSource, CroppedOpticalSource, OrientedOpticalSource]
+
+
+def _source_blocks(
+    source: AnyOpticalSource, rows: int
+) -> Iterator[Tuple[int, int, np.ndarray]]:
+    """``(first_row, first_column, block)`` of any source, in its own frame."""
+    if isinstance(source, OrientedOpticalSource):
+        yield from source.blocks(rows)
+        return
+    for start, band in source.bands(rows):
+        yield start, 0, band
+
+
+def _starts_like_tiff(path: Path) -> bool:
+    """Whether the file's first bytes are a TIFF or BigTIFF signature."""
+    try:
+        with path.open("rb") as handle:
+            return handle.read(4) in TIFF_SIGNATURES
+    except OSError:
+        return False
 
 
 def probe_optical_source(path: Union[str, Path]) -> OpticalSource:
@@ -717,16 +1287,18 @@ def probe_optical_source(path: Union[str, Path]) -> OpticalSource:
 
     TIFF goes to :class:`OpticalTiffSource`, which decodes row bands; every
     other format goes to :class:`OpticalRasterSource`, which decodes the
-    page whole. The split is by suffix, from the same list discovery filters
-    on (``BrukerFolderStructure.OPTICAL_IMAGE_SUFFIXES``), so the two agree
-    on what a ``.jpg`` is.
+    page whole. A TIFF is told by its first bytes, not its suffix, so the
+    same file gives the same store whatever it is named (an archive member
+    copied out under its declared media type, a scan saved as ``.png``). A
+    file with a TIFF suffix goes to tifffile even when it does not start
+    like one, so the warning says what tifffile found wrong with it.
 
     Raises:
         Whatever the chosen probe raises for a file it cannot read. Callers
         skip that image with a warning; see the failure policy above.
     """
     path = Path(path)
-    if path.suffix.lower() in TIFF_SUFFIXES:
+    if _starts_like_tiff(path) or path.suffix.lower() in TIFF_SUFFIXES:
         return OpticalTiffSource.probe(path)
     return OpticalRasterSource.probe(path)
 
@@ -760,6 +1332,9 @@ class StreamedOpticalImage:
     chunks: Tuple[int, ...]
     scale_factors: Sequence[int]
     transformations: Dict[str, Any]
+    #: What a warning calls the image: the file, or the archive member a
+    #: reader copied it out of. None names the file the source reads.
+    source_file: Optional[str] = None
 
     def __post_init__(self) -> None:
         if len(self.chunks) != 3:
@@ -862,7 +1437,13 @@ class StreamedOpticalImage:
         return arrays
 
     def _stream_level0(self, target: zarr.Array) -> None:
-        chunk_rows = _write_unit(target)[1]
+        # Stored row bands fill target columns once the image is turned a
+        # quarter, so the bands then tile the column unit instead.
+        turned = (
+            isinstance(self.source, OrientedOpticalSource)
+            and self.source.tag in _TRANSPOSED
+        )
+        chunk_rows = _write_unit(target)[2 if turned else 1]
         # The budget is looked up here, not bound as a default, so a test
         # (or a caller) can narrow it.
         rows = band_rows(
@@ -871,16 +1452,23 @@ class StreamedOpticalImage:
             self.source.strip_rows,
             budget=BAND_BUDGET_BYTES,
         )
-        n_bands = -(-self.source.shape[1] // rows)
+        stored = (
+            self.source.inner
+            if isinstance(self.source, OrientedOpticalSource)
+            else self.source
+        )
+        n_bands = -(-stored.shape[1] // rows)
         logger.debug(
             f"  level 0 of '{self.name}': {n_bands} band(s) of {rows} rows "
             f"({rows * self.source.row_bytes / 1e6:.0f} MB decoded each)"
         )
-        for start, band in self.source.bands(rows):
-            target[:, start : start + band.shape[1], :] = band
+        for y0, x0, block in _source_blocks(self.source, rows):
+            # A band of stored rows is a row band of the target, or a
+            # column band when the image is turned a quarter.
+            target[:, y0 : y0 + block.shape[1], x0 : x0 + block.shape[2]] = block
             # The next band is decoded before this name is rebound; drop
             # it now so only one band is ever alive.
-            del band
+            del block
 
     def _reduce_level(
         self, source: zarr.Array, target: zarr.Array, factor: int
@@ -980,9 +1568,47 @@ def _calc_optical_scale_factors(
     return factors
 
 
-def _clean_stem(stem: str) -> str:
-    """A file stem made fit for an element name: lowercase, at most 30 long."""
-    return stem.lower().replace(" ", "_").replace("-", "_")[:30]
+#: Characters an optical element name keeps after ``<dataset_id>_optical_``,
+#: and how many of them.
+_NAME_CHARACTERS = frozenset("0123456789abcdefghijklmnopqrstuvwxyz_.")
+NAME_BUDGET = 30
+
+
+def _clean_stem(stem: str, budget: int = NAME_BUDGET) -> str:
+    """A file stem made fit for an element name.
+
+    Lower case; every character other than an ASCII letter, a digit, ``_``
+    or ``.`` becomes ``_``, so the name is one spatialdata accepts and one
+    every file system can hold. Dots at either end are stripped before and
+    after the cut to ``budget`` characters: Windows drops a trailing dot
+    from a folder name, which left the root attrs naming an element that
+    was not there. A stem with nothing left is called ``image``.
+    """
+    cleaned = "".join(c if c in _NAME_CHARACTERS else "_" for c in stem.lower())
+    return cleaned.strip(".")[:budget].strip(".") or "image"
+
+
+def _numbered(suffix: str, number: int, budget: int = NAME_BUDGET) -> str:
+    """``suffix`` with ``_<number>`` appended, inside the same budget."""
+    tail = f"_{number}"
+    return suffix[: max(0, budget - len(tail))].rstrip(".") + tail
+
+
+def _reason(
+    error: BaseException, path: Optional[Path] = None, display: str = ""
+) -> str:
+    """An exception as a warning gives it: its text, else its type.
+
+    With ``path``, every spelling of it in the text (decoders quote the
+    file they opened, some with doubled backslashes) becomes ``display``:
+    for an image a reader copied out of an archive, the warning names the
+    member, not a temporary copy.
+    """
+    text = str(error).strip() or type(error).__name__
+    if path is not None and display:
+        for spelling in (repr(str(path))[1:-1], str(path)):
+            text = text.replace(spelling, display)
+    return text
 
 
 class OpticalImages:
@@ -1091,6 +1717,14 @@ class OpticalImages:
         # still have to be streamed into the store once it is written. See
         # :class:`StreamedOpticalImage` and :meth:`stream_pending_pixels`.
         self._pending: Dict[str, StreamedOpticalImage] = {}
+        # Which file stem holds each element name, so a second file that
+        # cleans to a taken name gets a numbered one instead of replacing
+        # the first; see :meth:`_unique_name`. Lower-cased keys, because
+        # spatialdata refuses names that differ only in case.
+        self._name_owners: Dict[str, str] = {}
+        # The orientation tag of each element whose file carries one other
+        # than 1, and whether the pixels were turned by it.
+        self._orientations: Dict[str, Dict[str, Any]] = {}
 
     @property
     def alignment(self) -> Optional[AreaAlignmentResult]:
@@ -1438,7 +2072,11 @@ class OpticalImages:
             try:
                 self._load_single_image(image_path, images)
             except Exception as e:
-                logger.warning(f"Failed to load optical image {image_path.name}: {e}")
+                shown = self._display_name(image_path)
+                logger.warning(
+                    f"Failed to load optical image {shown}: "
+                    f"{_reason(e, image_path, shown)}"
+                )
 
     def _adopt_reader_primary_optical(self) -> None:
         """Take the .mis alignment image from the reader if nothing else set it.
@@ -1496,12 +2134,11 @@ class OpticalImages:
             y_size: Height of the non-primary image
 
         Returns:
-            Scale transform, Identity if no primary dimensions available,
-            or ``None`` when the image is not a resampled copy of the
-            primary and so cannot be placed by a Scale.
+            Scale transform, or ``None`` when there is no alignment image
+            to scale onto or the image is not a resampled copy of it.
         """
         if self._primary_dims is None:
-            return Identity()
+            return None
 
         primary_w, primary_h = self._primary_dims
         scale_x = primary_w / x_size
@@ -1570,12 +2207,8 @@ class OpticalImages:
 
         Only an image carried into the MSI's micrometres has a place in the
         source's frame. An optical-pixel store has no acquisition system at
-        all (D31), and an image with no alignment sits at Identity in
-        ``"global"``, which says nothing about where it is relative to the
-        raster, so translating it by the raster's origin would say
-        something false. That includes a second image loaded in micrometre
-        mode when the alignment image itself could not be read: there is no
-        primary grid to scale it into, so it too is at Identity.
+        all (D31). An image with no alignment never comes here: it keeps a
+        coordinate system of its own and nothing else (D69).
         """
         origin = (
             self._acquisition_origin()
@@ -1589,20 +2222,27 @@ class OpticalImages:
     ) -> None:
         """Load a single optical image and add it to data structures.
 
-        The primary image (identified by .mis <ImageFile>) gets an Identity
-        transform. A resampled copy of it gets a Scale transform mapping its
-        pixel coordinates to the primary image's coordinate space. Any other
-        image keeps a coordinate system of its own, named after it, and is
-        not in ``"global"`` (D59).
+        An image is placed in ``"global"`` and the dataset's system only
+        when the store holds an alignment for it: the primary image (the
+        one the .mis <ImageFile> or the archive's teach points name) once
+        the TIC-to-image affine exists, with an Identity transform (or its
+        crop's translation, or the inverse affine into micrometres), and a
+        resampled copy of it, with a Scale into the primary's pixel grid.
+        Every other image keeps one coordinate system of its own, named
+        after its element, with Identity and nothing else (D59, D69).
+
+        The primary image and its resampled copies are stored as encoded,
+        because the teaching points may refer to the encoded pixels; every
+        other image is turned upright by its orientation tag (D69).
 
         Args:
             image_path: Path to the optical image (TIFF, JPEG, PNG or BMP)
             images: The store's images, to add the placeholder to
         """
-        # Generate a clean name for the image layer
         label = self._reader_label(image_path)
-        image_name = self._element_name(image_path, label)
         source_file = label.source_file if label is not None else image_path.name
+        owner = (label.name if label is not None else image_path.stem).lower()
+        image_name = self._unique_name(self._element_suffix(image_path, label), owner)
 
         logger.info(f"Loading optical image: {source_file} as '{image_name}'")
 
@@ -1616,74 +2256,20 @@ class OpticalImages:
         # per-image guard in add_images turns that into the same
         # "skip with a warning" the whole-page decode used to give.
         probed = probe_optical_source(image_path)
-        source: AnyOpticalSource = probed
-        n_channels, y_size, x_size = source.shape
+        if isinstance(probed, OpticalTiffSource) and probed.dropped_planes:
+            logger.warning(
+                f"  {source_file}: only the first plane along "
+                f"{probed.dropped_axes or 'its pages'} is kept; "
+                f"{probed.dropped_planes} page(s) are left out"
+            )
 
-        # Determine transform.  Two cases:
-        #
-        # 1. apply_optical_alignment=True (default): "global" is
-        #    optical-image pixel space.  Primary image is Identity;
-        #    a resampled copy of it Scales to match primary dims.
-        #
-        # 2. apply_optical_alignment=False (e.g. Ousia wizard):
-        #    "global" is MSI micrometer space.  Map the primary
-        #    image's pixel coordinates into MSI um using the inverse
-        #    of the tic-to-image affine, then scale by pixel_size_um.
-        #    This way the optical image lands alongside the MSI in
-        #    the same um frame and downstream registration steps
-        #    map both together.
-        um_mode = not self._apply_alignment and self._tic_to_image is not None
         is_primary = self._is_primary_optical(image_path)
-        crop: Optional[OpticalCrop] = None
-        placed = True
-        if is_primary:
-            # The FULL dimensions, crop or not: the other images scale into
-            # the whole scan's pixel grid, which is the frame everything on
-            # the MSI side is stated in.
-            self._primary_dims = (x_size, y_size)
-            if um_mode:
-                transform = self._to_um_transform()
-                logger.info(
-                    f"  Primary image -> um via inverse alignment: {x_size}x{y_size}"
-                )
-            else:
-                transform = Identity()
-                logger.info(f"  Primary alignment image: {x_size}x{y_size}")
-            crop = self._crop_for_alignment_image(x_size, y_size)
-            if crop is not None:
-                # The crop's pixel (u, v) is the scan's (x0 + u, y0 + v):
-                # that translation goes FIRST, and then whatever carried the
-                # whole scan into the store's frame carries the crop. So
-                # the raster-to-image affine, the pixel polygons and the
-                # coordinate_systems attr keep describing the scan's grid.
-                shift = Translation([crop.x0, crop.y0], axes=("x", "y"))
-                transform = (
-                    shift
-                    if isinstance(transform, Identity)
-                    else SequenceTransform([shift, transform])
-                )
-                source = CroppedOpticalSource(probed, crop)
-                n_channels, y_size, x_size = source.shape
-                self._crop = crop
-                logger.info(
-                    f"  Cropped to region {crop.region_id} ('{crop.region_name}'): "
-                    f"{crop.width}x{crop.height} at ({crop.x0}, {crop.y0}) of "
-                    f"{crop.full_width}x{crop.full_height}"
-                )
-        elif self._primary_dims is not None:
-            # Non-primary: first scale to match primary, then if
-            # we're in um-mode, chain through the same um affine. An image
-            # a Scale cannot place stays out of both frames (D59).
-            base = self._scale_transform(x_size, y_size)
-            if base is None:
-                placed = False
-                transform = Identity()
-            elif um_mode:
-                transform = SequenceTransform([base, self._to_um_transform()])
-            else:
-                transform = base
-        else:
-            transform = Identity()
+        um_mode = not self._apply_alignment and self._tic_to_image is not None
+        transform, placed, keep_encoded, placed_source = self._place(probed, is_primary)
+        source = self._oriented(
+            probed, placed_source, source_file, image_name, keep_encoded
+        )
+        n_channels, y_size, x_size = source.shape
 
         # Multi-scale pyramid + chunked layout.
         #
@@ -1708,9 +2294,7 @@ class OpticalImages:
         # An unplaced image gets a coordinate system of its own, named after
         # it: in "global" any transform would claim a placement.
         transformations = (
-            self._transformations(
-                transform, um_mode and (is_primary or self._primary_dims is not None)
-            )
+            self._transformations(transform, um_mode)
             if placed
             else {image_name: Identity()}
         )
@@ -1720,27 +2304,37 @@ class OpticalImages:
             chunks=image_chunks(2),  # (1, 4096, 4096); sharding seam, see _chunking
             scale_factors=scale_factors,
             transformations=transformations,
+            source_file=source_file,
         )
-        # Keyed by element name, as the images dict is: a second file that
-        # maps to the same name replaces the first, the way the dict
-        # assignment always did, only now with a warning.
+        # Keyed by element name, as the images dict is: a second file with
+        # the same stem (the same picture saved as .tif and .jpg) replaces
+        # the first, the way the dict assignment always did, with a
+        # warning. A different stem never lands here; see _unique_name.
         earlier = self._pending.get(image_name)
         if earlier is not None:
             logger.warning(
-                f"Optical image '{image_name}' from {earlier.source.path.name} "
-                f"is replaced by {image_path.name}, which maps to the same name"
+                f"Optical image '{image_name}' from "
+                f"{earlier.source_file or earlier.source.path.name} "
+                f"is replaced by {source_file}, which maps to the same name"
             )
+            self._orientations.pop(image_name, None)
         images[image_name] = streamed.placeholder()
         self._pending[image_name] = streamed
+        self._name_owners[image_name.lower()] = owner
+        if probed.orientation not in (None, 1) and 1 <= int(probed.orientation) <= 8:
+            self._orientations[image_name] = {
+                "tag": int(probed.orientation),
+                "applied": not keep_encoded,
+            }
         # Which file this element came from, and whether it is the one the
         # alignment is stated against. Neither is recoverable from the
         # store otherwise: the element name drops the extension and
-        # rewrites the stem (_0000 -> highres, and a stem over 30
-        # characters is truncated), and the alignment image is only
-        # distinguishable by its transform, and only when the alignment
-        # was applied. Recorded here, written by the root attrs. For an
-        # image a reader copied out of a container, the member it came
-        # from, not the copy.
+        # rewrites the stem (_0000 -> highres, and a stem is cleaned, cut
+        # at 30 characters and numbered on a clash), and the alignment
+        # image is only distinguishable by its transform, and only when
+        # the alignment was applied. Recorded here, written by the root
+        # attrs. For an image a reader copied out of a container, the
+        # member it came from, not the copy.
         self._sources[image_name] = source_file
         if is_primary:
             self._alignment_element = image_name
@@ -1755,6 +2349,164 @@ class OpticalImages:
             f"({n_channels} channel{'s' if n_channels > 1 else ''}){pyramid_desc}"
             "; pixels stream in once the store is written"
         )
+
+    def _place(
+        self, probed: OpticalSource, is_primary: bool
+    ) -> Tuple[Any, bool, bool, AnyOpticalSource]:
+        """Where an image goes: ``(transform, placed, keep_encoded, source)``.
+
+        Two cases, both only with an alignment:
+
+        1. apply_optical_alignment=True (default): "global" is optical-image
+           pixel space. The primary image is Identity; a resampled copy of
+           it Scales to match the primary's dimensions.
+        2. apply_optical_alignment=False (e.g. Ousia wizard): "global" is
+           MSI micrometer space. The primary image's pixel coordinates map
+           into MSI um through the inverse of the tic-to-image affine, then
+           the pixel size, so the optical image lands alongside the MSI in
+           the same um frame and downstream registration steps map both
+           together.
+
+        Without the affine (no .mis, an alignment that failed, an archive
+        image with no teach points) "global" says nothing about where the
+        image is, so it is not placed there at all (D69). ``keep_encoded``
+        is true for the primary image and its resampled copies, which are
+        not turned by their orientation tag. ``source`` is the crop of the
+        primary image when the conversion covers one region.
+        """
+        aligned = self._tic_to_image is not None
+        if is_primary:
+            transform, source = self._place_primary(probed)
+            placed, keep_encoded = aligned, True
+        else:
+            base = self._scale_transform(probed.shape[2], probed.shape[1])
+            transform, source = self._place_copy(base), probed
+            placed, keep_encoded = aligned and base is not None, base is not None
+        if not aligned:
+            logger.info(
+                "  No alignment for this image in the store: it is kept in a "
+                "coordinate system of its own, not in 'global'"
+            )
+        elif not placed and self._primary_dims is None:
+            logger.info(
+                "  The alignment image is not in the store, so nothing places "
+                "this one: it is kept in a coordinate system of its own"
+            )
+        return transform, placed, keep_encoded, source
+
+    def _place_primary(self, probed: OpticalSource) -> Tuple[Any, AnyOpticalSource]:
+        """The primary image's transform, and its crop when it has one."""
+        _, y_size, x_size = probed.shape
+        # The FULL dimensions, crop or not: the other images scale into the
+        # whole scan's pixel grid, which is the frame everything on the MSI
+        # side is stated in.
+        self._primary_dims = (x_size, y_size)
+        transform: Any = Identity()
+        if not self._apply_alignment and self._tic_to_image is not None:
+            transform = self._to_um_transform()
+            logger.info(
+                f"  Primary image -> um via inverse alignment: {x_size}x{y_size}"
+            )
+        else:
+            logger.info(f"  Primary alignment image: {x_size}x{y_size}")
+        crop = self._crop_for_alignment_image(x_size, y_size)
+        if crop is None:
+            return transform, probed
+        # The crop's pixel (u, v) is the scan's (x0 + u, y0 + v): that
+        # translation goes FIRST, and then whatever carried the whole scan
+        # into the store's frame carries the crop. So the raster-to-image
+        # affine, the pixel polygons and the coordinate_systems attr keep
+        # describing the scan's grid.
+        shift = Translation([crop.x0, crop.y0], axes=("x", "y"))
+        transform = (
+            shift
+            if isinstance(transform, Identity)
+            else SequenceTransform([shift, transform])
+        )
+        self._crop = crop
+        logger.info(
+            f"  Cropped to region {crop.region_id} ('{crop.region_name}'): "
+            f"{crop.width}x{crop.height} at ({crop.x0}, {crop.y0}) of "
+            f"{crop.full_width}x{crop.full_height}"
+        )
+        return transform, CroppedOpticalSource(probed, crop)
+
+    def _place_copy(self, base: Optional[Any]) -> Any:
+        """A non-primary image's transform from its Scale onto the primary.
+
+        First the Scale to match the primary, then, in micrometre mode, the
+        same um affine. An image a Scale cannot place (``base`` is
+        ``None``) stays out of both frames (D59); the stored dimensions
+        decide, before any turn.
+        """
+        if base is None:
+            return Identity()
+        if not self._apply_alignment and self._tic_to_image is not None:
+            return SequenceTransform([base, self._to_um_transform()])
+        return base
+
+    @staticmethod
+    def _oriented(
+        probed: OpticalSource,
+        source: AnyOpticalSource,
+        source_file: str,
+        image_name: str,
+        keep_encoded: bool,
+    ) -> AnyOpticalSource:
+        """``source`` turned upright by its orientation tag, where that is right.
+
+        The alignment image and its resampled copies stay as encoded, with
+        a warning, because the teaching points may be stated against the
+        encoded pixels and no tagged FlexImaging file exists to check. A
+        tag outside 1 to 8 is not applied either.
+        """
+        tag = probed.orientation
+        if tag in (None, 1):
+            return source
+        if not 1 <= int(tag) <= 8:
+            logger.warning(
+                f"  {source_file}: orientation tag {tag} is not one of 1 to 8; "
+                "the image is stored as encoded"
+            )
+            return source
+        if keep_encoded:
+            logger.warning(
+                f"  {source_file} carries orientation tag {tag} but is the "
+                "alignment image or a resampled copy of it, so it is stored as "
+                f"encoded in '{image_name}': the teaching points may refer to "
+                "the encoded pixels"
+            )
+            return source
+        logger.info(f"  Turned upright by its orientation tag {tag}")
+        return OrientedOpticalSource(probed, int(tag))
+
+    def _unique_name(self, suffix: str, owner: str) -> str:
+        """The element name for ``suffix``, numbered when another file holds it.
+
+        A name already held by a file with the same stem is returned as it
+        is, and that file is replaced (the same picture exported twice).
+        A name held by a file with another stem -- two stems that differ
+        only past the 30-character cut, or by characters the cleaning
+        turns into ``_`` -- gets ``_1``, ``_2`` and so on, inside the same
+        budget. Names are compared ignoring case, as spatialdata does.
+        """
+        number = 0
+        candidate = suffix
+        while True:
+            name = f"{self.dataset_id}_optical_{candidate}"
+            holder = self._name_owners.get(name.lower())
+            if holder is None or holder == owner:
+                return name
+            number += 1
+            candidate = _numbered(suffix, number)
+
+    def _display_name(self, image_path: Path) -> str:
+        """What a warning calls an image: the archive member, else the file."""
+        try:
+            label = self._reader_label(image_path)
+        except Exception:  # a reader's naming must not hide the real failure
+            label = None
+        return label.source_file if label is not None else image_path.name
 
     def stream_pending_pixels(self) -> int:
         """Fill every optical image declared so far with its pixels.
@@ -1781,8 +2533,10 @@ class OpticalImages:
             try:
                 image.stream_pixels(store)
             except Exception as e:  # mirrors the per-image guard in add_images
+                shown = image.source_file or image.source.path.name
                 logger.warning(
-                    f"Failed to load optical image {image.source.path.name}: {e}; "
+                    f"Failed to load optical image {shown}: "
+                    f"{_reason(e, image.source.path, shown)}; "
                     f"dropping '{image.name}' from the store"
                 )
                 image.discard(store)
@@ -1807,6 +2561,7 @@ class OpticalImages:
             name: Element name of the image whose pixels could not be read.
         """
         self._sources.pop(name, None)
+        self._orientations.pop(name, None)
         was_alignment = self._alignment_element == name
         if was_alignment:
             self._alignment_element = None
@@ -1858,25 +2613,28 @@ class OpticalImages:
             return None
         return resolve(image_path)
 
-    def _element_name(
+    def _element_suffix(
         self, image_path: Path, label: Optional[OpticalImageLabel] = None
     ) -> str:
-        """Generate a clean name for an optical image layer.
+        """The part of an optical element's name after ``<dataset_id>_optical_``.
 
-        The suffix is dropped, so the same acquisition exported as a .tif or
-        a .jpg lands under the same element name. The ``_0000`` / ``_0001``
-        rule is for files named by the acquisition software; an image a
-        reader copied out of a container is named by the reader's label.
+        The file suffix is dropped, so the same acquisition exported as a
+        .tif or a .jpg lands under the same element name. The ``_0000`` /
+        ``_0001`` rule is for files named by the acquisition software; an
+        image a reader copied out of a container is named by the reader's
+        label. Anything else is the file stem, cleaned by
+        :func:`_clean_stem`. :meth:`_unique_name` numbers it when another
+        file already holds the name.
 
         Args:
             image_path: Path to the optical image
             label: The reader's name for the image, if it gave one.
 
         Returns:
-            Clean name for the image layer (e.g., 'optical_0000', 'optical_deriv')
+            The suffix (e.g. 'highres', 'derived', 'slide_1_')
         """
         if label is not None:
-            return f"{self.dataset_id}_optical_{_clean_stem(label.name)}"
+            return _clean_stem(label.name)
 
         stem = image_path.stem.lower()
 
@@ -1890,7 +2648,7 @@ class OpticalImages:
         else:
             suffix = _clean_stem(stem)
 
-        return f"{self.dataset_id}_optical_{suffix}"
+        return suffix
 
     def root_attr(self) -> Optional[Dict[str, Any]]:
         """What each optical element in this store came from, and which aligns.
@@ -1898,10 +2656,11 @@ class OpticalImages:
         Two facts the store could not state before:
 
         * **Which file.** The element name is derived, not the filename:
-          :meth:`_element_name` drops the extension, maps
+          :meth:`_element_suffix` drops the extension, maps
           ``_0000``/``_0001``/``deriv`` onto ``highres``/``derived``/
-          ``overview`` and truncates anything else at 30 characters, so
-          ``sample_0000.tif`` and ``sample_0000.jpg`` both land under
+          ``overview`` and cleans anything else (see :func:`_clean_stem`)
+          and cuts it at 30 characters, so ``sample_0000.tif`` and
+          ``sample_0000.jpg`` both land under
           ``<dataset_id>_optical_highres`` and neither name survives.
         * **Which one the alignment is stated against.** The .mis names it
           in ``<ImageFile>``; the store only ever implied it, through the
@@ -1922,10 +2681,15 @@ class OpticalImages:
           be located -- or a "show the whole slide" built -- without
           re-reading the ``.d``. Absent on an element that is the whole
           file.
+        * **How it was turned.** ``orientation`` records the file's
+          orientation tag, where it is one other than 1, and whether the
+          pixels were turned upright by it (``applied``). The alignment
+          image and its resampled copies are stored as encoded (D69).
 
         Returns:
             ``{"alignment_element": str | None, "elements": {name:
-            {"source_file": str, "crop"?: {...}}}}``, or ``None`` when the
+            {"source_file": str, "crop"?: {...}, "orientation"?: {"tag":
+            int, "applied": bool}}}}``, or ``None`` when the
             conversion put no optical image in the store -- the section is
             omitted rather than written empty, as every other optional
             section here is.
@@ -1938,6 +2702,9 @@ class OpticalImages:
         }
         if self._crop is not None and self._alignment_element in elements:
             elements[self._alignment_element]["crop"] = self._crop.to_attr()
+        for name, orientation in self._orientations.items():
+            if name in elements:
+                elements[name]["orientation"] = dict(orientation)
         return {
             "alignment_element": self._alignment_element,
             "elements": elements,

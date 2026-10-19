@@ -159,7 +159,7 @@ def ensure_spectrum_check() -> None:
     - Each spectrum's MS level is recorded as one byte on the parser
       (``MS_LEVELS_ATTRIBUTE``), read on the spectrum or in a group it
       references, 0 where neither states one. The reader leaves MSn
-      spectra out per pixel from these bytes (D70, D72).
+      spectra out per pixel from these bytes (D70, D73).
     - A spectrum pyimzml fails on raises :class:`ConversionRefused` that
       names the spectrum and the cause, instead of the ``TypeError``,
       ``ValueError`` or ``AttributeError`` it raised from deep inside its

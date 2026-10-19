@@ -142,6 +142,16 @@ class TestTdfWiring:
             reader.dll_manager, "tdf", tdf_spectrum="scan_sum"
         )
 
+    @pytest.mark.parametrize("option", [True, False])
+    def test_the_recalibration_option_reaches_the_sdk(self, option):
+        """Issue #518: no test failed when the option stopped reaching it."""
+        reader, sdk, _ = _make_reader("tdf", use_recalibrated_state=option)
+        sdk.open_file.assert_called_once_with(str(reader.data_path), option)
+
+    def test_the_recalibration_option_defaults_to_on(self):
+        reader, sdk, _ = _make_reader("tdf")
+        sdk.open_file.assert_called_once_with(str(reader.data_path), True)
+
     def test_default_mode_is_the_scan_sum(self):
         # Design decision D1: the instrument's own record is the default,
         # the vendor centroid the opt-in.
@@ -178,6 +188,9 @@ def _mobility_db(reader, n_scans=2382, first_frame=1, k0=("1.000000", "1.290000"
                 ("OneOverK0AcqRangeLower", k0[0]),
                 ("OneOverK0AcqRangeUpper", k0[1]),
             ]
+        elif "SELECT Id, TimsCalibration FROM Frames" in sql:
+            # One TIMS calibration row for every frame, as on most files.
+            cursor.fetchall.return_value = [(first_frame, 1), (first_frame + 1, 1)]
         elif "TimsCalibration" in sql:
             cursor.fetchone.return_value = (1, 2, 1.0, 2381.0, None, 3.5)
             cursor.description = [
@@ -196,6 +209,9 @@ def _mobility_db(reader, n_scans=2382, first_frame=1, k0=("1.000000", "1.290000"
 
     reader.conn = MagicMock()
     reader.conn.execute.side_effect = execute
+    # The mocked calibration.sqlite cannot be read; this reader stands for
+    # one whose applied calibration is known (the analysis database's).
+    reader._applied_calibration_known = True
 
 
 def _axis(n_scans: int) -> MobilityAxis:
@@ -266,6 +282,10 @@ class TestMobilityIteration:
         reader._num_scans_cache = {frame_id: 2382 for frame_id, _ in frames}
         reader._num_peaks_cache = {frame_id: 500 for frame_id, _ in frames}
         reader._mobility_axis = _axis(2382)
+        # The mocked calibration.sqlite cannot be read, which would convert
+        # every frame for itself; these readers stand for a file whose
+        # frames all take one TIMS calibration row, so the axis is theirs.
+        reader._per_frame_mobility = False
         sdk.index_to_mz.side_effect = lambda h, f, idx: 100.0 + 0.001 * np.asarray(idx)
 
     def test_yields_the_raw_cloud_with_the_frame_id_as_is(self):

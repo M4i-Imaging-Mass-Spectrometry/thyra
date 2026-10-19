@@ -23,7 +23,9 @@ from __future__ import annotations
 import json
 import logging
 import struct
+import zlib
 from pathlib import Path
+from typing import List
 
 import numpy as np
 import pytest
@@ -31,15 +33,21 @@ import pytest
 pytest.importorskip("spatialdata")
 zarr = pytest.importorskip("zarr")
 PILImage = pytest.importorskip("PIL.Image")
+tifffile = pytest.importorskip("tifffile")
 
+from PIL import ImageOps  # noqa: E402
 from spatialdata import SpatialData  # noqa: E402
 from spatialdata.models import Image2DModel  # noqa: E402
 from spatialdata.transformations import Scale  # noqa: E402
 
+from thyra.converters.spatialdata import optical_image  # noqa: E402
 from thyra.converters.spatialdata.optical_image import (  # noqa: E402
+    OpticalImages,
     OpticalRasterSource,
     OpticalTiffSource,
+    OrientedOpticalSource,
     StreamedOpticalImage,
+    orient,
     probe_optical_source,
 )
 
@@ -448,3 +456,504 @@ def test_a_declined_alignment_puts_the_photo_on_the_tic(tmp_path: Path):
         position = [row["spatial_x"], row["spatial_y"]]
         np.testing.assert_allclose(spot[:2], position, atol=1e-9)
         np.testing.assert_allclose(cell[:2], position, atol=1e-9)
+
+
+# ---- orientation, colour, series, 16-bit PNG and size (D69) -------------
+
+
+class _PhotoReader:
+    """A reader that holds photos and states nothing about them."""
+
+    def __init__(self, paths: List[Path]) -> None:
+        self._paths = list(paths)
+
+    def get_optical_image_paths(self) -> List[Path]:
+        return list(self._paths)
+
+    def get_primary_optical_image_path(self):
+        return None
+
+
+def _declare(tmp_path: Path, *paths: Path) -> OpticalImages:
+    """An ``OpticalImages`` over ``paths`` with every image declared."""
+    optical = OpticalImages(
+        _PhotoReader(list(paths)),
+        lambda: tmp_path / "photos.zarr",
+        "ds",
+        pixel_size_xy=lambda: (10.0, 10.0),
+        include=True,
+        apply_alignment=True,
+    )
+    optical.compute_alignment()
+    optical.add_images({})
+    return optical
+
+
+def _stored(tmp_path: Path, *paths: Path):
+    """Declare, write and stream ``paths``: the state, the store, what was declared."""
+    optical = _declare(tmp_path, *paths)
+    declared = dict(optical.pending)  # streaming empties the pending images
+    images = {name: image.placeholder() for name, image in declared.items()}
+    SpatialData(images=images).write(tmp_path / "photos.zarr")
+    optical.stream_pending_pixels()
+    return optical, tmp_path / "photos.zarr", declared
+
+
+def _level0(store: Path, name: str) -> np.ndarray:
+    return _read_element(store, name)[1]["s0"]
+
+
+def _cyx_of(image) -> np.ndarray:
+    array = np.asarray(image)
+    return array[np.newaxis] if array.ndim == 2 else np.moveaxis(array, -1, 0)
+
+
+def _upright(raw: np.ndarray, tag: int) -> np.ndarray:
+    """Pillow's own upright version of ``raw`` carrying orientation ``tag``."""
+    image = PILImage.fromarray(raw)
+    image.getexif()[274] = tag
+    return _cyx_of(ImageOps.exif_transpose(image))
+
+
+def _tagged_jpeg(path: Path, raw: np.ndarray, tag: int) -> Path:
+    exif = PILImage.Exif()
+    exif[274] = tag
+    PILImage.fromarray(raw).save(path, quality=95, exif=exif.tobytes())
+    return path
+
+
+def _tagged_tiff(path: Path, raw: np.ndarray, tag: int) -> Path:
+    tifffile.imwrite(str(path), raw, extratags=[(274, 3, 1, tag, True)])
+    return path
+
+
+def _photo(tmp_path: Path, kind: str, raw: np.ndarray, tag: int) -> Path:
+    if kind == "jpeg":
+        return _tagged_jpeg(tmp_path / "photo.jpg", raw, tag)
+    path = _tagged_tiff(tmp_path / "photo.tif", raw, tag)
+    if kind == "tiff_named_png":
+        return path.rename(tmp_path / "photo.png")
+    return path
+
+
+@pytest.mark.parametrize("kind", ["jpeg", "tiff", "tiff_named_png"])
+@pytest.mark.parametrize("tag", range(1, 9))
+def test_a_photo_is_stored_upright_by_its_orientation_tag(
+    tmp_path: Path, kind: str, tag: int
+):
+    raw = _rgb(6, 10, seed=tag)
+    path = _photo(tmp_path, kind, raw, tag)
+    if kind == "jpeg":
+        # The decoded JPEG is the reference: lossy, but the same pixels.
+        expected = _cyx_of(ImageOps.exif_transpose(PILImage.open(path)))
+    else:
+        expected = _upright(raw, tag)
+
+    assert probe_optical_source(path).orientation == tag
+    optical, store, declared = _stored(tmp_path, path)
+
+    (name,) = declared
+    streamed = declared[name].source
+    # The declared shape is the upright one: a quarter turn swaps the sides.
+    assert streamed.shape == expected.shape
+    np.testing.assert_array_equal(_level0(store, name), expected)
+    recorded = optical.root_attr()["elements"][name].get("orientation")
+    if tag == 1:
+        assert recorded is None
+        assert not isinstance(streamed, OrientedOpticalSource)
+    else:
+        assert recorded == {"tag": tag, "applied": True}
+        assert isinstance(streamed, OrientedOpticalSource)
+
+
+def test_a_tiff_is_read_by_its_bytes_not_its_suffix(tmp_path: Path):
+    named_tif = _tagged_tiff(tmp_path / "a.tif", _rgb(6, 10), 1)
+    named_png = tmp_path / "a.png"
+    named_png.write_bytes(named_tif.read_bytes())
+    named_dat = tmp_path / "a.dat"
+    named_dat.write_bytes(named_tif.read_bytes())
+
+    for path in (named_tif, named_png, named_dat):
+        assert isinstance(probe_optical_source(path), OpticalTiffSource)
+
+
+@pytest.mark.parametrize("tag", range(1, 9))
+def test_orient_equals_pillows_exif_transpose(tag: int):
+    raw = _rgb(5, 9, seed=20 + tag)
+
+    np.testing.assert_array_equal(
+        orient(np.moveaxis(raw, -1, 0), tag), _upright(raw, tag)
+    )
+    # A grey page, which Pillow turns with the same rule.
+    grey = raw[:, :, 0]
+    np.testing.assert_array_equal(orient(grey[np.newaxis], tag), _upright(grey, tag))
+
+
+def test_a_tag_outside_one_to_eight_is_left_as_encoded(tmp_path: Path, thyra_logs):
+    raw = _rgb(6, 10)
+    path = _tagged_tiff(tmp_path / "photo.tif", raw, 12)
+
+    with thyra_logs("thyra.converters", logging.WARNING) as records:
+        optical, store, declared = _stored(tmp_path, path)
+
+    (name,) = declared
+    np.testing.assert_array_equal(_level0(store, name), np.moveaxis(raw, -1, 0))
+    assert any("orientation tag 12" in r.getMessage() for r in records)
+    assert "orientation" not in optical.root_attr()["elements"][name]
+
+
+@pytest.mark.parametrize("tag", [3, 6])
+def test_a_tagged_tiff_streams_its_bands_into_place(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tag: int
+):
+    """Row bands of the stored image land as column or reversed row bands."""
+    raw = _rgb(40, 24, seed=tag)
+    path = tmp_path / "tagged.tif"
+    tifffile.imwrite(str(path), raw, rowsperstrip=4, extratags=[(274, 3, 1, tag, True)])
+    source = probe_optical_source(path)
+    assert source.orientation == tag
+    # One strip (4 rows of 72 bytes) a band: ten bands for 40 rows.
+    monkeypatch.setattr(optical_image, "BAND_BUDGET_BYTES", 4 * 24 * 3)
+    blocks: List[tuple] = []
+    original = optical_image._source_blocks
+
+    def spy(source, rows):
+        for block in original(source, rows):
+            blocks.append(block[:2])
+            yield block
+
+    monkeypatch.setattr(optical_image, "_source_blocks", spy)
+    streamed = StreamedOpticalImage(
+        source=OrientedOpticalSource(source, tag),
+        name="optical",
+        chunks=CHUNKS,
+        scale_factors=[],
+        transformations=dict(TRANSFORMATIONS),
+    )
+    store = tmp_path / "tagged.zarr"
+    SpatialData(images={"optical": streamed.placeholder()}).write(store)
+    streamed.stream_pixels(store)
+
+    assert len(blocks) > 3
+    expected = np.rot90(raw, -1) if tag == 6 else raw[::-1, ::-1]
+    np.testing.assert_array_equal(
+        _level0(store, "optical"), np.moveaxis(expected, -1, 0)
+    )
+
+
+def test_the_alignment_image_stays_as_encoded_with_a_warning(
+    tmp_path: Path, thyra_logs
+):
+    """The teaching points may refer to the encoded pixels: nothing is turned."""
+    from thyra.convert import convert_msi
+
+    folder = _rapiflex_acquisition(tmp_path / "acquisition", "sample_0000.jpg")
+    path = _tagged_jpeg(folder / "sample_0000.jpg", _rgb(seed=8), 6)
+    output_path = tmp_path / "tagged.zarr"
+
+    with thyra_logs("thyra", logging.WARNING) as records:
+        assert convert_msi(
+            str(folder), str(output_path), dataset_id="rapiflex", pixel_size_um=20.0
+        )
+
+    sdata = SpatialData.read(str(output_path))
+    root = json.loads((output_path / "zarr.json").read_text(encoding="utf-8"))
+    element = root["attributes"]["optical_images"]["elements"][
+        "rapiflex_optical_highres"
+    ]
+    assert element["orientation"] == {"tag": 6, "applied": False}
+    x0, y0 = element["crop"]["origin"]
+    width, height = element["crop"]["size"]
+    whole = _cyx_of(PILImage.open(path))
+    np.testing.assert_array_equal(
+        sdata.images["rapiflex_optical_highres"].values,
+        whole[:, y0 : y0 + height, x0 : x0 + width],
+    )
+    named = [
+        r.getMessage()
+        for r in records
+        if r.levelno == logging.WARNING and "orientation tag" in r.getMessage()
+    ]
+    assert len(named) == 1
+    assert "sample_0000.jpg" in named[0] and "tag 6" in named[0]
+
+
+def test_a_dotted_ome_name_resolves_and_does_not_clash(tmp_path: Path):
+    """F138: ``x.ome.png`` is the alignment image; ``x.png`` is a second one."""
+    from thyra.convert import convert_msi
+
+    ome = "HE_section_04_brightfield_40x.ome.png"
+    folder = _rapiflex_acquisition(tmp_path / "acquisition", ome)
+    _save(_rgb(seed=8), folder / ome)
+    output_path = tmp_path / "ome.zarr"
+    assert convert_msi(
+        str(folder), str(output_path), dataset_id="rapiflex", pixel_size_um=20.0
+    )
+    sdata = SpatialData.read(str(output_path))
+    root = json.loads((output_path / "zarr.json").read_text(encoding="utf-8"))
+    attrs = root["attributes"]
+    reference = attrs["coordinate_systems"]["global"]["reference_element"]
+    alignment = attrs["optical_images"]["alignment_element"]
+    assert reference == alignment
+    assert alignment in sdata.images
+
+    plain = tmp_path / "plain.zarr"
+    _save(_rgb(seed=9), folder / "HE_section_04_brightfield_40x.png")
+    assert convert_msi(
+        str(folder), str(plain), dataset_id="rapiflex", pixel_size_um=20.0
+    )
+    sdata = SpatialData.read(str(plain))
+    attrs = json.loads((plain / "zarr.json").read_text(encoding="utf-8"))["attributes"]
+    optical_names = [n for n in sdata.images if "optical" in n]
+    assert len(optical_names) == 2
+    assert attrs["optical_images"]["alignment_element"] in optical_names
+    assert attrs["coordinate_systems"]["global"]["reference_element"] in optical_names
+
+
+# ---- TIFF colour models (F20) -------------------------------------------
+
+
+def test_a_palette_tiff_is_stored_as_rgb(tmp_path: Path):
+    colours = _rgb(1, 16, seed=1)[0]  # 16 8-bit colours
+    index = (np.arange(6 * 10).reshape(6, 10) % 16).astype(np.uint8)
+    colormap = np.zeros((3, 256), np.uint16)
+    colormap[:, :16] = colours.T.astype(np.uint16) * 257
+    path = tmp_path / "palette.tif"
+    tifffile.imwrite(str(path), index, photometric="palette", colormap=colormap)
+
+    source = probe_optical_source(path)
+    assert source.shape == (3, 6, 10)
+    assert source.dtype == np.dtype("uint8")
+    optical, store, declared = _stored(tmp_path, path)
+    (name,) = declared
+    np.testing.assert_array_equal(
+        _level0(store, name), np.moveaxis(colours[index], -1, 0)
+    )
+
+
+def test_a_palette_with_sixteen_bit_colours_keeps_them(tmp_path: Path):
+    index = (np.arange(6 * 10).reshape(6, 10) % 4).astype(np.uint8)
+    colormap = np.zeros((3, 256), np.uint16)
+    colormap[:, :4] = [[1000, 2000, 3000, 65535], [5, 40000, 777, 0], [9, 8, 7, 6]]
+    path = tmp_path / "palette16.tif"
+    tifffile.imwrite(str(path), index, photometric="palette", colormap=colormap)
+
+    optical, store, declared = _stored(tmp_path, path)
+    (name,) = declared
+    stored = _level0(store, name)
+    assert stored.dtype == np.dtype("uint16")
+    np.testing.assert_array_equal(stored, colormap[:, index])
+
+
+def test_a_miniswhite_tiff_is_stored_inverted(tmp_path: Path):
+    grey = _rgb(6, 10)[:, :, 0]
+    path = tmp_path / "white.tif"
+    tifffile.imwrite(str(path), grey, photometric="miniswhite")
+
+    optical, store, declared = _stored(tmp_path, path)
+    (name,) = declared
+    np.testing.assert_array_equal(_level0(store, name), (255 - grey)[np.newaxis])
+
+
+def test_a_bilevel_miniswhite_tiff_is_stored_inverted(tmp_path: Path):
+    bits = (np.arange(6 * 10).reshape(6, 10) % 3 == 0).astype(bool)
+    path = tmp_path / "bilevel.tif"
+    tifffile.imwrite(str(path), bits, photometric="miniswhite")
+
+    optical, store, declared = _stored(tmp_path, path)
+    (name,) = declared
+    stored = _level0(store, name)
+    assert stored.dtype == np.dtype("bool")
+    np.testing.assert_array_equal(stored, ~bits[np.newaxis])
+
+
+def test_a_cmyk_tiff_is_stored_as_rgb_the_way_pillow_converts_it(tmp_path: Path):
+    rng = np.random.default_rng(4)
+    ink = rng.integers(0, 256, size=(6, 10, 4), dtype=np.uint8)
+    path = tmp_path / "cmyk.tif"
+    tifffile.imwrite(str(path), ink, photometric="separated")
+
+    assert probe_optical_source(path).shape == (3, 6, 10)
+    optical, store, declared = _stored(tmp_path, path)
+    (name,) = declared
+    expected = _cyx_of(PILImage.fromarray(ink, "CMYK").convert("RGB"))
+    np.testing.assert_array_equal(_level0(store, name), expected)
+
+
+def test_an_uncompressed_ycbcr_tiff_is_stored_as_rgb(tmp_path: Path):
+    rng = np.random.default_rng(6)
+    samples = rng.integers(16, 240, size=(6, 10, 3), dtype=np.uint8)
+    samples[0, :4] = [100, 128, 128]  # grey: chroma at its centre
+    path = tmp_path / "ycbcr.tif"
+    tifffile.imwrite(str(path), samples, photometric="ycbcr", subsampling=(1, 1))
+
+    optical, store, declared = _stored(tmp_path, path)
+    (name,) = declared
+    stored = _level0(store, name)
+    np.testing.assert_array_equal(stored[:, 0, :4], np.full((3, 4), 100))
+    expected = _cyx_of(PILImage.fromarray(samples, "YCbCr").convert("RGB"))
+    assert np.abs(stored.astype(int) - expected.astype(int)).max() <= 1
+
+
+@pytest.mark.parametrize("subsampling", [None, (2, 2)])
+def test_uncompressed_ycbcr_without_four_four_four_is_refused(subsampling):
+    """An absent YCbCrSubSampling tag means (2, 2) in TIFF 6.0, not (1, 1)."""
+
+    class _Tags:
+        def valueof(self, _key, default=None):
+            return default
+
+    class _Page:
+        photometric = 6
+        compression = 1
+        samplesperpixel = 3
+        extrasamples = ()
+        dtype = np.dtype(np.uint8)
+        bitspersample = 8
+        tags = _Tags()
+
+    page = _Page()
+    page.subsampling = subsampling  # type: ignore[attr-defined]
+    with pytest.raises(ValueError, match="subsampled"):
+        optical_image.TiffColour.of(page, "ycbcr.tif")
+
+
+def test_a_cielab_tiff_is_skipped_with_a_warning(tmp_path: Path, thyra_logs):
+    path = tmp_path / "lab.tif"
+    tifffile.imwrite(str(path), _rgb(6, 10), photometric="cielab")
+    with pytest.raises(ValueError, match="CIELAB"):
+        probe_optical_source(path)
+
+    with thyra_logs("thyra.converters", logging.WARNING) as records:
+        optical = _declare(tmp_path, path)
+
+    assert optical.pending == {}
+    assert any(
+        "Failed to load optical image lab.tif" in r.getMessage()
+        and "CIELAB" in r.getMessage()
+        for r in records
+    )
+
+
+# ---- multi-page series (F137) -------------------------------------------
+
+
+def test_an_ome_tiff_with_channels_across_pages_is_stored_whole(tmp_path: Path):
+    rng = np.random.default_rng(8)
+    cyx = rng.integers(0, 256, size=(3, 7, 9), dtype=np.uint8)
+    path = tmp_path / "channels.ome.tif"
+    tifffile.imwrite(str(path), cyx, ome=True, metadata={"axes": "CYX"})
+
+    assert probe_optical_source(path).shape == (3, 7, 9)
+    optical, store, declared = _stored(tmp_path, path)
+    (name,) = declared
+    np.testing.assert_array_equal(_level0(store, name), cyx)
+
+
+def test_a_z_stack_keeps_its_first_plane_with_a_warning(tmp_path: Path, thyra_logs):
+    rng = np.random.default_rng(9)
+    zyx = rng.integers(0, 256, size=(3, 7, 9), dtype=np.uint8)
+    path = tmp_path / "stack.ome.tif"
+    tifffile.imwrite(str(path), zyx, ome=True, metadata={"axes": "ZYX"})
+
+    with thyra_logs("thyra.converters", logging.WARNING) as records:
+        optical, store, declared = _stored(tmp_path, path)
+
+    (name,) = declared
+    np.testing.assert_array_equal(_level0(store, name), zyx[:1])
+    assert any(
+        "only the first plane along Z is kept" in r.getMessage() for r in records
+    )
+
+
+# ---- 16-bit PNGs (F136) --------------------------------------------------
+
+
+def _png_chunk(kind: bytes, body: bytes) -> bytes:
+    return (
+        struct.pack(">I", len(body))
+        + kind
+        + body
+        + struct.pack(">I", zlib.crc32(kind + body))
+    )
+
+
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def _write_png16(path: Path, samples: np.ndarray, colour_type: int) -> Path:
+    """A 16-bit PNG of ``samples`` ``(h, w, c)``, written by hand."""
+    height, width = samples.shape[:2]
+    rows = b"".join(b"\x00" + samples[y].astype(">u2").tobytes() for y in range(height))
+    header = struct.pack(">IIBBBBB", width, height, 16, colour_type, 0, 0, 0)
+    path.write_bytes(
+        PNG_SIGNATURE
+        + _png_chunk(b"IHDR", header)
+        + _png_chunk(b"IDAT", zlib.compress(rows))
+        + _png_chunk(b"IEND", b"")
+    )
+    return path
+
+
+@pytest.mark.parametrize(
+    "colour_type, channels",
+    [(0, 1), (2, 3), (4, 2), (6, 4)],
+    ids=["L", "RGB", "LA", "RGBA"],
+)
+def test_a_sixteen_bit_png_keeps_its_depth_and_channels(
+    tmp_path: Path, colour_type: int, channels: int
+):
+    rng = np.random.default_rng(colour_type)
+    samples = rng.integers(0, 65536, size=(6, 10, channels), dtype=np.uint16)
+    samples[0, 0] = 65535
+    samples[0, 1] = 257  # distinct high and low bytes
+    path = _write_png16(tmp_path / "deep.png", samples, colour_type)
+
+    source = probe_optical_source(path)
+    assert source.shape == (channels, 6, 10)
+    assert source.dtype == np.dtype("uint16")
+    optical, store, declared = _stored(tmp_path, path)
+    (name,) = declared
+    stored = _level0(store, name)
+    assert stored.dtype == np.dtype("uint16")
+    np.testing.assert_array_equal(stored, np.moveaxis(samples, -1, 0))
+
+
+# ---- a header that promises more than the file can hold (F164) -----------
+
+
+def _forged_png(path: Path, width: int, height: int) -> Path:
+    header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    path.write_bytes(
+        PNG_SIGNATURE
+        + _png_chunk(b"IHDR", header)
+        + _png_chunk(b"IDAT", zlib.compress(b"\x00" * 4, 9))
+        + _png_chunk(b"IEND", b"")
+    )
+    return path
+
+
+def test_a_png_that_declares_more_than_it_can_hold_is_refused(tmp_path: Path):
+    path = _forged_png(tmp_path / "forged.png", 40000, 40000)
+    assert path.stat().st_size < 100
+
+    with pytest.raises(ValueError, match="can hold"):
+        probe_optical_source(path)
+
+
+def test_the_warning_names_the_forged_png(tmp_path: Path, thyra_logs):
+    path = _forged_png(tmp_path / "forged.png", 40000, 40000)
+
+    with thyra_logs("thyra.converters", logging.WARNING) as records:
+        optical = _declare(tmp_path, path)
+
+    assert optical.pending == {}
+    assert any(
+        "forged.png" in r.getMessage() and "can hold" in r.getMessage() for r in records
+    )
+
+
+def test_a_small_honest_png_is_not_refused(tmp_path: Path):
+    path = _save(np.zeros((64, 64, 3), np.uint8), tmp_path / "flat.png")
+
+    assert probe_optical_source(path).shape == (3, 64, 64)

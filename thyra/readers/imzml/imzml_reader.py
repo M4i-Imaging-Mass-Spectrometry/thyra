@@ -535,7 +535,7 @@ def _refuse_shifted_cache_coordinates(cache_coordinates: object) -> None:
 def _kept_indices(parser: Any) -> Sequence[int]:
     """The list positions of the spectra that are converted.
 
-    Every spectrum but the MSn spectra the per-pixel rule leaves out (D72).
+    Every spectrum but the MSn spectra the per-pixel rule leaves out (D73).
     A left-out spectrum keeps its place in the list, so the positions of
     the spectra after it do not move.
     """
@@ -830,7 +830,7 @@ class ImzMLReader(BaseMSIReader):
         self._report_left_out_msn(imzml_path)
 
     def _report_left_out_msn(self, imzml_path: Path) -> None:
-        """Say how many MSn spectra the per-pixel rule leaves out (D72)."""
+        """Say how many MSn spectra the per-pixel rule leaves out (D73)."""
         left_out = imzml_left_out(self.parser)
         if left_out is None:
             return
@@ -1712,7 +1712,7 @@ class ImzMLReader(BaseMSIReader):
             "Building common mass axis from all unique m/z values " "(processed mode)"
         )
 
-        # A spectrum that is not converted adds no m/z to the axis (D72).
+        # A spectrum that is not converted adds no m/z to the axis (D73).
         kept = _kept_indices(parser)
         total_spectra = len(kept)
         accumulator = MassAxisAccumulator(total_spectra, self.max_mass_axis_length)
@@ -1945,7 +1945,7 @@ class ImzMLReader(BaseMSIReader):
         spectrum was written with. imzML does not say whether a writer
         listed the spectra as they were acquired; the list is the only
         order the file has, and it is taken as the acquisition order. An
-        MSn spectrum left out beside MS1 (D72) is not yielded, and keeps
+        MSn spectrum left out beside MS1 (D73) is not yielded, and keeps
         its position.
         """
         yield from self._iter_spectra_with_order()
@@ -2056,7 +2056,7 @@ class ImzMLReader(BaseMSIReader):
             self.imzml_path, self._mobility.group_id, n_spectra
         )
         # Judged on the spectra that are converted: an MSn spectrum left out
-        # beside MS1 (D72) is never read, so its mobility array is not asked.
+        # beside MS1 (D73) is never read, so its mobility array is not asked.
         left_out = imzml_left_out(parser)
         converted = (
             np.ones(n_spectra, dtype=bool)
@@ -2106,7 +2106,7 @@ class ImzMLReader(BaseMSIReader):
         byte-identical to the first. Cheap on the feature-list files this
         exists for, and honest: a mismatch means per-pixel mobility. Only
         the spectra that are converted count: an MSn spectrum left out
-        beside MS1 (D72) cannot make the axis per pixel.
+        beside MS1 (D73) cannot make the axis per pixel.
         """
         if self._mobility_uniform is not None:
             return self._mobility_uniform
@@ -2199,7 +2199,7 @@ class ImzMLReader(BaseMSIReader):
     def _scan_mobility_span(self) -> Optional[Tuple[float, float]]:
         """Read every converted spectrum's mobility array for its extremes.
 
-        An MSn spectrum left out beside MS1 (D72) is not read: its values
+        An MSn spectrum left out beside MS1 (D73) is not read: its values
         would widen the range the heatmap and the grid bin over.
         """
         self._ensure_mobility_offsets()
@@ -2265,7 +2265,7 @@ class ImzMLReader(BaseMSIReader):
         to, so it is left out of the cloud (after the threshold, which
         tests the peak the summed table keeps) and counted once at the end;
         the summed table still holds it. An MSn spectrum left out beside
-        MS1 (D72) is not read.
+        MS1 (D73) is not read.
         """
         self._ensure_parser_initialized()
         if self._mobility is None:
@@ -2414,7 +2414,7 @@ class ImzMLReader(BaseMSIReader):
         """Return the number of spectra that are converted.
 
         Every spectrum in the file, but the MSn spectra left out beside MS1
-        (D72).
+        (D73).
         """
         self._ensure_parser_initialized()
         return len(_kept_indices(self.parser))
@@ -2426,7 +2426,7 @@ class ImzMLReader(BaseMSIReader):
         (``IMS:1000103``, held in ``parser.mzLengths``), so this is a sum
         over an in-memory list. It used to read and decode every binary
         array in the file to count values whose count was already known.
-        An MSn spectrum left out beside MS1 (D72) is not counted.
+        An MSn spectrum left out beside MS1 (D73) is not counted.
 
         Returns:
             Total number of peaks across the spectra that are converted

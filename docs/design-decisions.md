@@ -2598,7 +2598,9 @@ measured is 0.005 ppm, and the store says which encoding it came from.
 
 ## D29. An mzPeak archive converts to the store of its source
 
-**Status:** Implemented (2026-09-30), issue #422. Amended by D70.
+**Status:** Implemented (2026-09-30), issue #422. Amended by D69
+(2026-10-19): an embedded image with no alignment sits only in a
+coordinate system of its own. Amended by D70.
 
 **Decision.** Where an archive states the same fact as the file it was made
 from, Thyra reads it the way it reads that file. Five facts:
@@ -2833,7 +2835,8 @@ that.
 
 **Status:** Implemented (2026-10-06), issue #429. Extends D29, and replaces
 its "embedded images are carried into the store, unaligned" for an image
-fitted to the teaching points. Amended by D61 (2026-10-16).
+fitted to the teaching points. Amended by D61 (2026-10-16) and D69
+(2026-10-19).
 
 **Decision.** `mzpeak-convert` 0.17 states five more facts of a Bruker run.
 Thyra reads each the way it reads the `.d`.
@@ -3853,7 +3856,8 @@ long as `mz`.
 
 ## D48. A store in micrometres places its raster where the source did
 
-**Status:** Implemented (2026-10-14).
+**Status:** Implemented (2026-10-14). Amended by D69 (2026-10-19): an
+optical image with no alignment is not in `"global"` at all.
 
 **Decision.** A store whose `"global"` is in micrometres gets one more
 coordinate system, `"acquisition"`. Every TIC image, pixel polygon element
@@ -4865,6 +4869,8 @@ the same six spectra on z 1 and 2.
 
 **Status:** Implemented (2026-10-16), issue #497. Amends
 [D31](#d31-fleximaging-spots-are-placed-on-their-lattice-not-on-the-drawn-area).
+D69 extends its overview-photo rule to every optical image with no
+alignment.
 
 **Decision.** D31 asks which raster node sits on the `.mis` reference
 point: the one that puts every measured spot inside its Area, then the one
@@ -5080,8 +5086,10 @@ suffix followed mobility order; now it does.
   usual warning.
 - A value bad in some frames only splits one window into groups, and the
   schedule then reads as varying, so no `_msms` table is written.
-- The stem keeps six significant digits (`p{mz:g}`), so two targets above
-  m/z 1000 that round alike share a stem and are ranked as isomers, by m/z.
+- The stem kept six significant digits (`p{mz:g}`), so any two targets
+  that rounded alike, at any m/z (798.5401 and 798.5404 were both
+  `p798.54`), shared a stem and were ranked as isomers. Since D67 the stem
+  writes the m/z exactly, and only targets with the same m/z are ranked.
 - Leaving an isomer out (a bad window, or a `region=` store whose region
   lacks it, D57) re-ranks the other one.
 
@@ -5347,10 +5355,254 @@ spectra fit inside the declaration with its first spectrum away from 0,
 are still described from the head. Both touch only the preview and the
 metadata document, never a store.
 
+## D66. A timsTOF store records the calibration Bruker's library applied
+
+**Status:** Implemented (2026-10-19), issue #518. Qualifies D46 for TDF: the
+axis `values` are the first frame's, and a frame with a TIMS calibration of
+its own is converted with it. No schema version change.
+
+**Decision.** Five rules, each so that the store says what the library did.
+
+- **Each frame takes its own 1/K0.** Bruker's library turns a frame's scan
+  numbers into 1/K0 through the `TimsCalibration` row it applies to that
+  frame. When the frames take more than one row between them, each frame's
+  points are converted with the library's call for that frame, as its m/z
+  already are. The mobility table, the mass-mobility heatmap and the
+  mobility grid all take these values, and the range they bin over is
+  widened to every frame's own first and last scan. When every frame takes
+  the same row, the axis is used as before. When which rows apply cannot be
+  told (the library applied a state Thyra did not find, or a mapping cannot
+  be read), every frame is converted for itself, which is exact whatever
+  the rows are.
+- **The recorded row is the applied one.** `uns["mobility_axis"]["calibration"]`
+  holds the row the library applied to the first frame, the frame the axis
+  `values` come from: the applied `calibration.sqlite` state's row, or the
+  analysis database's row for that frame. New keys say which: `frame_id`,
+  `stored_in` (`calibration.sqlite` or `analysis.tdf`),
+  `calibration_state_id` when a state applied, and `n_frame_calibrations`,
+  the number of rows the file's frames use. It used to be the analysis
+  database's first row whatever was applied. When the applied state is
+  unknown, no row is recorded.
+- **A state is named as applied only when the library applies it.** The
+  library applies the newest state whose `FrameMzCalibrationMapping` (and,
+  on a TDF, `TimsCalibrationMapping`) names exactly the acquisition's
+  frames. A newer state that maps one frame too few or too many is skipped
+  and the one before it applied; with none left, the analysis database's
+  calibration is. Thyra now reads the mappings the same way, and checks its
+  answer against the library's `has_recalibrated_state` once the file is
+  open. When the library applies none, no state is named. When it applies
+  one that Thyra did not find, the m/z calibration step leaves
+  `calibration` out, as it does for an unreadable file. When a mapping
+  cannot be read, the newest state is taken, as before.
+- **A missing `CalibrationInfo` costs only the software version,** and a
+  `calibration.sqlite` with no state names the analysis database in the
+  m/z calibration step.
+- **TSF or TDF is decided in one place,** and the metadata takes the
+  reader's answer. `analysis.tsf` wins when both databases hold data; a
+  0-byte one gives way to the other.
+
+**Why.** Measured with the bundled library on copies of `synthetic_tims.d`.
+A state mapping one frame too few, or a frame the acquisition lacks, is
+skipped: the m/z were the state before it, or the analysis database's,
+while the store named the newest. On tims_msms_pos_brain1 the only state
+maps the 713 frames to 300 distinct TIMS rows; a frame's 1/K0 sat up to
+9e-4 (about three scans) from the first frame's. Every default conversion
+of a real TDF with a `calibration.sqlite` therefore binned later frames on
+the first frame's ramp. With `--no-recalibrated` every frame took one row,
+and the two stores still recorded the same coefficients. The pea and
+Xenium TSF folders hold a 0-byte `analysis.tdf`, so their stores said
+`bruker_tdf` with ion mobility present, while the spectra were read from
+`analysis.tsf`.
+
+**What changes in a store.**
+
+- A TDF converted with the recalibrated state on, whose state maps frames
+  to more than one TIMS row (every real one checked): the mobility table,
+  the heatmap, the grid and their bin edges move by up to a few scans'
+  width. The summed table does not change.
+- Every TDF: `uns["mobility_axis"]["calibration"]` gains the four keys, and
+  its coefficients are the applied state's when a state applied.
+- A source whose newest state the library skips: `format_specific.calibration`
+  and the m/z calibration step name the state applied, or none.
+- A TSF folder with a 0-byte `analysis.tdf`: `format_specific` says
+  `bruker_tsf`, and `ion_mobility` is `{present: false}`.
+
+The MS/MS table's `precursor_mobility` stays the first frame's 1/K0 at the
+window's middle scan: a window has one value, and the first frame's stands
+for the others, which differ by at most a few scans' width.
+
+**Alternatives.**
+
+- "Convert every frame through its own call, whatever the mappings." Exact,
+  but it costs a call per frame for files whose frames all share one row,
+  and changes nothing there.
+- "Record only the coefficients, and leave the axis as it is." The F36
+  half alone; the frames' points would still be binned on the wrong ramp.
+- "Name the newest state, and say the library may have skipped it." A
+  store should say what was applied; the library answers it.
+
+## D67. An MS/MS label carries its precursor m/z exactly
+
+**Status:** Implemented (2026-10-19), issue #518. Amends D60's known
+limits. Keeps D60's rank rule for isomers.
+
+**Decision.** The stem of an MS/MS column label is `p` followed by the
+shortest decimal that reads back as exactly the stored precursor m/z
+(Python's `repr`, a trailing `.0` dropped). The merged-precursor warning
+spells m/z values the same way. Two precursors with different m/z always
+get different stems. Only precursors with the same m/z (isomers kept apart
+by mobility) share one, and they take the `_1` suffix in mobility order
+(D60).
+
+**Why.** D2 named labels after the m/z so that `anndata.concat` cannot put
+two precursors in one column. At six significant digits (`p{mz:g}`),
+precursors 1 to 10 ppm apart shared a stem and were ranked as isomers, so
+one label could name different precursors in two stores: 798.5401 and
+798.5404 were both `p798.54`, and the second took `_1` only in a store that
+also held the first.
+
+**What changes in a store.** Only labels that were rounded change:
+`p1179.73_mz…` becomes `p1179.731_mz…`. Exact ones such as `p936.578` and
+`p500` keep their spelling, and so do all the labels of
+tims_msms_pos_brain1. Joining an old and a new store of one run on labels
+drops the changed columns; align on `(precursor_mz, precursor_mobility)`,
+as the docs already say.
+
+**Alternatives.**
+
+- "Keep six digits and document the limit." No store change, but the
+  docs' promise that a label names one precursor stays untrue.
+- "Fixed decimals, for example four." Uniform, but nearly every label
+  changes.
+
+## D68. A timsTOF source that Bruker's library must write into has to be writable
+
+**Status:** Implemented (2026-10-19), issue #518. Stored data does not
+change.
+
+**Decision.** Before the library opens a `.d`, Thyra reads the header bytes
+of each database it will open: the analysis database always, and
+`calibration.sqlite` when the recalibrated state is on. If one is in WAL
+mode and the `.d` folder cannot be written (tested by creating and removing
+an empty folder; a warning names it if it cannot be removed), the
+conversion stops with one line. The line names the
+database and says to copy the `.d` somewhere writable, or, for
+`calibration.sqlite` alone, to pass `--no-recalibrated`. The docs say that
+the library's `-shm` and `-wal` files appear in the `.d` during a run and
+can be left by a hard stop. `thyra metadata` opens no library and is not
+checked.
+
+**Why.** The library opens a WAL database read-write in place and puts
+`-shm` and `-wal` files beside it while it runs; every real
+`calibration.sqlite` checked is in WAL mode, and so is the pea
+`analysis.tsf`. In a folder it cannot write, a run ended in a traceback, or
+exited 0 with the recalibrated state silently not applied while the store
+named it. Checked on a copy of `synthetic_tims.d` with a deny-create
+permission on Windows: refused in one line, exit 1, no output and nothing
+new in the `.d`; `--no-recalibrated` converted.
+
+**Alternatives.**
+
+- "Document only." A read-only source would still fail with a traceback,
+  or convert with a state silently not applied.
+- "Open a temporary copy of the sqlite files." The source would stay
+  untouched, but it costs a copy per run, possibly of the multi-GB binary
+  on Windows. It waits until a measurement on a real read-only share shows
+  the refusal is not enough.
+
+## D69. An optical image is stored as its file shows it, and placed only where the store aligns it
+
+**Status:** Implemented (2026-10-19), issue #524. Generalises D59's rule for
+the overview photo, and amends D29, D33 and D48 where they place an
+unaligned image.
+
+**Decision.** Four rules for every optical image a conversion stores.
+
+- **Placement.** An image is in `"global"` and the dataset's coordinate
+  system only when the store holds an alignment for it: the image the
+  `.mis` (or an archive's teach points) names, once the TIC-to-image affine
+  is built, and a resampled copy of it, scaled onto it. Every other image
+  gets one coordinate system named after its element, with `Identity` and
+  nothing else. That covers a photo beside a `.d` with no `.mis`, a `.mis`
+  image whose alignment failed, every archive image with no teach-points
+  affine, and the copies of an alignment image that could not be aligned.
+  `alignment_element` still names the image the `.mis` designates.
+- **Orientation.** An image whose file carries an orientation tag (EXIF and
+  TIFF tag 274) other than 1 is stored upright: turned, and mirrored where
+  the tag says so. A quarter turn swaps height and width. The alignment
+  image and its resampled copies are the exception: they stay as encoded,
+  and the conversion warns. `optical_images.elements.<name>.orientation`
+  records `tag` and `applied` on each element whose file carries a tag
+  from 2 to 8.
+- **Decoding.** A file that starts like a TIFF is read by tifffile,
+  whatever its suffix or declared media type. A TIFF's colour model is
+  applied: a palette becomes RGB, inverted grey is turned back, CMYK and
+  uncompressed YCbCr become RGB. A colour model Thyra cannot turn into grey
+  or RGB is skipped with a warning. A TIFF whose channels span several pages
+  (an OME-TIFF) is stored with all of them; a z stack or time series keeps
+  its first plane, with a warning. A PNG with 16 bits a colour sample is
+  decoded at full depth by imagecodecs, with its own channel count.
+- **Names.** The part of an element name after `<dataset_id>_optical_`
+  keeps only lower-case ASCII letters, digits, `_` and `.`, has no dot at
+  either end, and is at most 30 characters. A second file whose name
+  cleans to a taken one gets `_1`, `_2` and so on, inside the 30. A second
+  file with the same stem (one picture saved as `.tif` and `.jpg`) still
+  replaces the first, with a warning.
+
+Three related fixes from the same issue. An archive image that cannot be
+copied out (a damaged member, a name the disk refuses) is skipped with a
+warning naming the member. A PNG whose header declares more pixel data
+than its file can hold, or any whole-page decode larger than the free
+memory, is skipped before the store declares it. Skip warnings name the
+archive member, not a temporary copy.
+
+**Why.** Identity to `"global"` drew an unaligned photo at 1 micrometre per
+photo pixel over the MSI data: the public desi_colad_centroid archive's
+1,920 x 1,200 px photo covered 1.92 x 1.2 mm of a 13.2 x 13.6 mm image. That
+placement is a guess about the frame, the kind D29 declined for an archive's
+own affine. The decoder ignored orientation on the TIFF route, and Pillow
+applied it to a TIFF on some compressions only, so a camera photo was stored
+sideways and the same bytes gave two stores under two suffixes. Palette
+TIFFs were stored as indices, 16-bit colour PNGs as their high bytes, and
+an OME-TIFF as its first channel, all at exit 0. Names could collide (one
+image replaced another), end in a dot (Windows drops it, so the root attrs
+named a missing element), or hold a character spatialdata refuses, which
+failed the whole conversion.
+
+**Why the alignment image is not turned.** Nobody knows whether a `.mis`
+states its teaching points against the encoded or the upright pixels, and
+no tagged FlexImaging file exists to check. Turning the pixels alone could
+break the alignment; keeping them as encoded cannot.
+
+**What changes in a store.** Only stores with optical images. An unaligned
+image leaves `"global"`, the dataset system and `"acquisition"`; its pixels
+do not move. A tagged non-alignment image is stored upright. A palette,
+inverted-grey, CMYK or YCbCr TIFF, a multi-page OME-TIFF and a 16-bit colour
+PNG change pixels, dtype or channel count. An element whose name held a
+character outside the new set, ended in a dot, or clashed with another
+changes name, in `optical_images` and `reference_element` too. Aligned grey
+and RGB single-page images, the TIC, the pixel polygons and the
+`coordinate_systems` attr do not change, and `convention_version` stays 1. No image in the test data, in
+tims_msms_pos_brain1 or in the public mzPeak archives carries an orientation
+tag.
+
+**Alternatives.**
+
+- "Keep the Identity to `global` and document it." No store change, but
+  viewers keep drawing a misplaced overlay.
+- "Stretch an unaligned image over the MSI extent." A rough overlay that
+  looks right, and the frame guess D29 declined.
+- "Turn the alignment image too, and its teaching points with it." Right if
+  the points refer to the encoded pixels, wrong if they already refer to the
+  upright ones.
+- "Store every image as encoded, and warn." Alignment-safe, but sideways
+  photos stay sideways.
+- "Refuse a name clash." One stray file name would block the conversion.
+
 ## D70. An mzPeak archive leaves MSn out per pixel, and no chunk loses a point
 
 **Status:** Implemented (2026-10-19), issue #522. Amends D28 and D29. Amended by
-D72: the imzML route applies the same MSn rule, which ends its first known
+D73: the imzML route applies the same MSn rule, which ends its first known
 limit.
 
 **Decision.** Five rules for the mzPeak reader.
@@ -5437,7 +5689,7 @@ with a warning on a resampled axis.
 - A null observed bound costs one pass over the signal member when the
   essential metadata is read. Only archives with such a bound pay it.
 
-## D72. An imzML leaves MSn out per pixel, as an mzPeak archive does
+## D73. An imzML leaves MSn out per pixel, as an mzPeak archive does
 
 **Status:** Implemented (2026-10-19), issue #522. Completes D70 for imzML.
 

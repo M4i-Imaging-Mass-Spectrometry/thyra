@@ -178,7 +178,7 @@ spectrum of such a file. `_pyimzml_compat.ensure_spectrum_check` reads it in
 the same per-spectrum step instead: the spectrum's own term first, then the
 groups it references (the last one listed that states a level, as pyimzml's
 `full` mode resolves them). It costs a loop over the spectrum's direct
-children, one byte per spectrum on the parser, and nothing more (D72).
+children, one byte per spectrum on the parser, and nothing more (D73).
 
 ---
 
