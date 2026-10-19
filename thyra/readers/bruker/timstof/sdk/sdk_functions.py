@@ -114,6 +114,9 @@ _TDF_CONVERSIONS = (
     "tims_scannum_to_voltage",
 )
 
+# The library's name prefix for each file type: ``tsf_open``, ``tims_open``.
+_OPEN_PREFIX = {"tsf": "tsf_", "tdf": "tims_"}
+
 # Words the scan-read buffer starts at when the frame carries no NumPeaks
 # hint. The SDK reports the size it needs and the read is retried, so this
 # only has to be a reasonable first guess.
@@ -303,6 +306,25 @@ class SDKFunctions:
             f"Opened {self.file_type.upper()} file: {file_path} (handle: {handle})"
         )
         return int(handle)
+
+    def has_recalibrated_state(self, handle: int) -> Optional[bool]:
+        """Whether the library applies a ``calibration.sqlite`` state to ``handle``.
+
+        Bruker's ``tims_has_recalibrated_state`` / ``tsf_has_recalibrated_state``.
+        It answers for the file as opened: a file opened without
+        ``use_recalibrated`` answers False even when it holds a state, and
+        so does one whose states all map frames other than the
+        acquisition's. ``None`` when the library does not export the call.
+        """
+        dll = self.dll_manager.dll
+        func = getattr(
+            dll, f"{_OPEN_PREFIX[self.file_type]}has_recalibrated_state", None
+        )
+        if func is None:
+            return None
+        func.argtypes = [c_uint64]
+        func.restype = c_uint32
+        return bool(func(handle))
 
     def close_file(self, handle: int) -> None:
         """Close a Bruker data file.

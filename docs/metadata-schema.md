@@ -288,8 +288,10 @@ Three things are deliberately not in the section. The first is which
 calibration a conversion applied: that is a processing step (below). On a
 timsTOF, Bruker's library turns every index into m/z itself. With
 `--use-recalibrated` (the default) it applies the newest state in
-`calibration.sqlite`, on TSF and TDF alike; with `--no-recalibrated` it
-applies the analysis database's own calibration and none of the states.
+`calibration.sqlite` that maps exactly the acquisition's frames, on TSF and
+TDF alike (a newer state that maps other frames is skipped); with
+`--no-recalibrated` it applies the analysis database's own calibration and
+none of the states.
 Measured on one acquisition of each: a DataAnalysis 6.1 recalibration moved
 every ion of a TSF by +1.3 to +1.7 ppm, and a SCiLS Lab 2027a alignment,
 written into a TDF as its second state, moved each frame by -2.3 to +0.1 ppm.
@@ -375,7 +377,7 @@ in the reader's own terms:
 |--------|-----------|---------|
 | PHI ToF-SIMS | `calibration`: `"appended"` / `"header"` | the coefficients Thyra computed m/z from: the recalibration appended to the file whenever there is one, unless the reader's `use_appended_calibration` was turned off |
 | Bruker tsf/tdf | `use_recalibrated_state`: `true` / `false` | the option Bruker's library was opened with (`--use-recalibrated` / `--no-recalibrated`) |
-| | `calibration`: `"calibration.sqlite"` / `"analysis.tsf"` / `"analysis.tdf"` | where the calibration the library applied is stored: the newest `calibration.sqlite` state with the option on, the analysis database with it off or without that file. Left out when the option is on and `calibration.sqlite` could not be read |
+| | `calibration`: `"calibration.sqlite"` / `"analysis.tsf"` / `"analysis.tdf"` | where the calibration the library applied is stored: the newest `calibration.sqlite` state that maps the acquisition's frames with the option on, the analysis database with it off, without that file or without such a state. Left out when the option is on and which state the library applied is unknown (`calibration.sqlite` could not be read, or the library applied a state Thyra did not find) |
 | | `calibration_state_id` | the `Id` of the `calibration.sqlite` state applied, when one was |
 
 Other readers take the m/z values the source stores, apply nothing and

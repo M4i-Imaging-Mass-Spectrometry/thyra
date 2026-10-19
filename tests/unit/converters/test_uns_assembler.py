@@ -361,6 +361,25 @@ class TestTheFragmentationSchedule:
         assert len(merged) == 1
         assert "msms_schedule" in merged[0].message
 
+    def test_the_warning_spells_close_precursors_apart(self, thyra_logs):
+        """Two masses 0.3 mDa apart are two precursors, and print as two (#518).
+
+        Six significant digits wrote both as 798.54 and listed one value.
+        A mass isolated at two collision energies is still listed once.
+        """
+        schedule = _StubSchedule(0)
+        schedule.windows = tuple(
+            SimpleNamespace(target=mz) for mz in (798.5401, 798.5404, 798.5404, 500.0)
+        )
+        assembler = _assembler(_StubReader(fragmentation=schedule))
+
+        with thyra_logs("thyra.converters.spatialdata", logging.WARNING) as records:
+            assembler.build(_context())
+
+        merged = [r.message for r in records if "isolates 3 precursors" in r.message]
+        assert len(merged) == 1
+        assert "(798.5401, 798.5404, 500)" in merged[0]
+
     def test_a_varying_schedule_claims_no_count_per_pixel(self, thyra_logs):
         """DIA window groups take turns: no pixel isolates all the windows."""
         schedule = _StubSchedule(6)
