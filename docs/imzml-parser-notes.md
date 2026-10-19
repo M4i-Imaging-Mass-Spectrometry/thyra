@@ -220,11 +220,12 @@ the two; sliding it to the origin would change its grid width, every
 a 0 down leaves every such file exactly where it was.
 
 The declared `IMS:1000042` / `IMS:1000043` pixel counts were the third
-candidate and are still unread here. `mzpeak_extractor` is the only place in
-Thyra that reads them at all, and it carries a comment about a declared extent
-disagreeing with the coordinates shipped beside it.
+candidate and are not used for the base. A conversion never reads them. The
+header-only preview reports them as the grid, but only when they fit the
+declared spectrum count and the first spectrum is at x and y of 1 or more
+([D65](design-decisions.md#d65-the-imzml-head-is-trusted-only-when-its-declarations-fit-together)).
 
-Whatever is subtracted is reported as
+The file's own coordinate of index 0 on each axis is reported as
 `EssentialMetadata.coordinate_offsets` and written to
 `coordinate_systems.global.coordinate_offsets_px`, so a store can say where its
 origin came from. Before this the imzML extractor set no offsets at all.
@@ -233,8 +234,16 @@ One exception, on z. pyimzml gives a spectrum without `IMS:1000052` the z of
 1. That 1 is subtracted, so the spectra sit on plane 0, but the store records
 a z offset of 0, as every format without z does
 ([D30](design-decisions.md#d30-a-z-the-source-does-not-state-is-recorded-as-0)).
-When every z is 1, the first spectrum is read again to tell a stated 1 from
-pyimzml's.
+
+Whether a file states z is judged on every spectrum, during the parser's own
+pass
+([D63](design-decisions.md#d63-an-imzml-states-z-on-every-spectrum-or-on-none)).
+A spectrum states z when its scan carries `IMS:1000052` itself, with a value.
+A file states z on every spectrum or on none. A file that mixes the two is
+refused with the mzPeak route's sentence. So is a file whose scans take z
+from a parameter group: pyimzml does not read it there, and gives those
+spectra its stand-in 1. It used to read the first spectrum only, so the
+recorded offset depended on which spectrum came first.
 
 Pinned by `tests/unit/readers/test_imzml_zero_based.py`, which converts a
 0-based file, a 1-based one and a cropped 1-based one -- the last being the
@@ -255,11 +264,15 @@ The information is never lost from the document, only from the dict, so
 `ImzMLMetadataExtractor` reads the unit-bearing path — each `cv_params`
 tuple is `(name, accession, value, raw_name, raw_value, unit_name,
 unit_accession)` — and converts: `UO:0000016` mm x1000, `UO:0000017` um x1,
-`UO:0000018` nm /1000. Any other declared unit is refused with a
-`ConversionRefused`, which fails the conversion and prints the one sentence
-naming the unit rather than a traceback; a cvParam with no unit at all keeps
-the historical micrometre reading, because real vendor files (the IONTOF class
-among them) write `IMS:1000046` unitless and were being read correctly.
+`UO:0000018` nm /1000. Any other declared unit is not read: a warning names
+the unit, the pixel size is left out, and a conversion asks for `--pixel-size`
+and converts at the size given, as the mzPeak route does. It used to be
+refused, so such a file could not be converted even with the flag. A cvParam
+with no unit at all keeps the historical micrometre reading, because real
+vendor files (the IONTOF class among them) write `IMS:1000046` unitless and
+were being read correctly. The unit and the name are read from the cvParam
+that holds the value, including one in a parameter group the scan settings
+reference.
 
 Corroboration that the ambiguity was genuine rather than theoretical: pyimzml's
 own `get_physical_coordinates` docstring says it returns **nanometers** while
@@ -268,7 +281,7 @@ micrometres. The library's author disagreed with Thyra about the unit.
 
 The behaviour is pinned by
 `tests/unit/readers/test_hand_authored_fixtures.py::TestUnitNanometre`, whose
-assertions now state the correct conversion — including the refusal — rather
+assertions now state the correct conversion, and the unread unit, rather
 than characterise the error.
 
 ### `IMS:1000046` was an area until 2017
@@ -395,6 +408,41 @@ layout, and the reader then goes on to read the third array itself, since
 `__iter_read_spectrum_meta` matches only the m/z and intensity group ids and
 ignores every other `binaryDataArray` -- see
 [Output Format: Ion mobility](output-format.md#ion-mobility).
+
+### pyimzml reads each array at its group's width, and trusts every length
+
+pyimzml takes each binary array's precision from its parameter group. It
+never reads a precision term on the array itself. It also reads as many values
+as a spectrum states, wherever they end. Both gave wrong values at exit 0.
+Thyra checks, before anything is read
+([D64](design-decisions.md#d64-imzml-arrays-precision-on-the-first-spectrum-byte-ranges-on-every-spectrum)):
+
+- **Overlapping arrays are refused, on every spectrum.** A spectrum that
+  stated more values than it stored read into the next array, and an invented
+  m/z joined the mass range. The m/z, intensity and ion mobility arrays are
+  checked from the offsets the parser already holds. Two arrays of the same
+  kind may share exactly the same bytes, as a continuous file's m/z axis does.
+- **Spectrum 0's own precision terms are read.** An array that states a width
+  other than its group's is refused, with or without an encoded length.
+- **A 16-bit float mobility array is read as 16-bit.** It used to fall
+  through to 64-bit. A precision Thyra cannot decode is refused by name.
+
+Known limits: a later spectrum's array that states its own precision still
+converts wrong. So does a later spectrum that states fewer values than it
+stores, which leaves a gap rather than an overlap. Checking either would take
+a second pass over the whole document.
+
+### A document pyimzml cannot read is refused in one line
+
+pyimzml raises whatever its XML parser or its own arithmetic raises, from deep
+inside its constructor. Thyra turns each into one `ConversionRefused` that
+names the file and the cause. Covered: XML that is not well-formed or cut
+short, an empty file, and a position that is not a whole number. So are a
+position in a parameter group or in a second `<scan>`, which the parser does
+not read, and a binary array read through a group the parser did not pick.
+Thyra refuses the position cases rather than reading them, as it refuses a z
+held in a group
+([D63](design-decisions.md#d63-an-imzml-states-z-on-every-spectrum-or-on-none)).
 
 ---
 

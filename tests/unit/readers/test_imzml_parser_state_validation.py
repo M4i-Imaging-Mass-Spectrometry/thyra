@@ -19,6 +19,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, List, Optional
+from xml.etree import ElementTree  # nosec B405
 
 import numpy as np
 import pytest
@@ -27,6 +28,7 @@ from pyimzml.ImzMLParser import ImzMLParser
 
 from thyra.convert import _create_converter
 from thyra.errors import ConversionRefused
+from thyra.metadata.document import read_metadata_document
 from thyra.preview import preview_msi
 from thyra.readers.imzml import imzml_reader as imzml_reader_module
 from thyra.readers.imzml.imzml_reader import ImzMLReader
@@ -231,6 +233,24 @@ def empty_the_spectrum_list(imzml_path: Path, declared: Optional[int] = None) ->
     return imzml_path
 
 
+def _edit_text(path: Path, old: str, new: str, count: int = 1) -> None:
+    """Replace ``old`` by ``new`` in the document, which must contain it."""
+    text = path.read_text(encoding="utf-8")
+    assert old in text, f"{old!r} not in {path.name}"
+    path.write_text(text.replace(old, new, count), encoding="utf-8")
+
+
+def _refusal(path: Path) -> ConversionRefused:
+    """The refusal ``get_essential_metadata`` raises for this file."""
+    with pytest.raises(ConversionRefused) as excinfo:
+        reader = ImzMLReader(path)
+        try:
+            reader.get_essential_metadata()
+        finally:
+            reader.close()
+    return excinfo.value
+
+
 class TestCleanFilesAreAccepted:
     """The validator must be invisible on anything well-formed."""
 
@@ -358,6 +378,59 @@ class TestOffsetsAgainstTheIbd:
             reader.close()
         assert any("unaccounted for" in r for r in records)
 
+    def test_a_later_spectrum_stating_more_values_than_it_stores_is_refused(
+        self, temp_dir
+    ):
+        """The F188 layout: six spectra of three peaks, spectrum 1 says four.
+
+        Its last m/z value was the first bytes of its intensity array, and
+        its last intensity the first bytes of the next m/z array: an invented
+        m/z of 134,217,760 joined the mass range. The extent check only
+        looks at the last array in the file, and spectrum 0 was the only one
+        whose lengths were compared.
+        """
+        path = write_imzml(
+            temp_dir,
+            n_spectra=6,
+            n_peaks=3,
+            mz_dtype=np.float64,
+            intensity_dtype=np.float32,
+        )
+        poison_cv_param(path, 1, "mzArray", "IMS:1000103", "4")
+        poison_cv_param(path, 1, "intensityArray", "IMS:1000103", "4")
+
+        reader = ImzMLReader(path)
+        with pytest.raises(ConversionRefused) as excinfo:
+            reader._ensure_parser_initialized()
+
+        message = str(excinfo.value)
+        assert "spectrum 1" in message
+        assert "runs into" in message
+
+    def test_a_continuous_file_sharing_one_mz_block_builds_quietly(self, temp_dir):
+        """Identical byte ranges are not an overlap.
+
+        Every spectrum of a continuous file points at the same m/z block, so
+        a check that refused any two arrays on the same bytes would refuse
+        every continuous file.
+        """
+        from pyimzml.ImzMLWriter import ImzMLWriter
+
+        path = temp_dir / "continuous.imzML"
+        mzs = np.linspace(100.0, 500.0, 5)
+        with ImzMLWriter(str(path), mode="continuous") as writer:
+            for i in range(6):
+                writer.addSpectrum(
+                    mzs, np.arange(1.0, 6.0) + i, (i % 3 + 1, i // 3 + 1, 1)
+                )
+
+        with _capture_module_logs() as records:
+            reader = ImzMLReader(path)
+            reader._ensure_parser_initialized()
+            reader.close()
+
+        assert records == []
+
 
 class TestBinaryArrayDeclarations:
     """Audit #6, #7, #8 and #13 -- what the param groups claim."""
@@ -453,6 +526,187 @@ class TestBinaryArrayDeclarations:
             reader.close()
         assert any("<scanSettings> blocks" in r for r in records)
 
+    @pytest.mark.parametrize("keeps_encoded_length", [False, True])
+    def test_an_array_stating_its_own_precision_against_its_group_is_refused(
+        self, temp_dir, keeps_encoded_length
+    ):
+        """F177 -- pyimzml decodes at the group's width and ignores the array.
+
+        Spectrum 0's intensity array states 32-bit float on itself while its
+        group says 64-bit. It used to decode at 64 bits: 514 stored for a row
+        that sums to 15. With the encoded length (``IMS:1000104``) left in,
+        it agrees with the group and the old encoded-length check passed;
+        with it removed there was nothing to compare at all.
+        """
+        path = write_imzml(temp_dir, mz_dtype=np.float64, intensity_dtype=np.float64)
+        text = path.read_text(encoding="utf-8")
+        block = _nth_binary_array_block(text, 0, "intensityArray")
+        own = block.group(0).replace(
+            '<referenceableParamGroupRef ref="intensityArray"/>',
+            '<referenceableParamGroupRef ref="intensityArray"/>'
+            '<cvParam cvRef="MS" accession="MS:1000521" name="32-bit float" '
+            'value=""/>',
+            1,
+        )
+        if not keeps_encoded_length:
+            own = re.sub(r"<cvParam[^>]*IMS:1000104[^>]*/>", "", own)
+            assert "IMS:1000104" not in own
+        path.write_text(
+            text[: block.start()] + own + text[block.end() :], encoding="utf-8"
+        )
+
+        reader = ImzMLReader(path)
+        with pytest.raises(ConversionRefused) as excinfo:
+            reader._ensure_parser_initialized()
+
+        message = str(excinfo.value)
+        assert "spectrum 0" in message
+        assert "intensity array" in message
+        assert "32-bit float" in message
+        assert "64-bit float" in message
+        assert "'intensityArray'" in message
+
+
+class TestAnUnreadableDocumentIsOneRefusal:
+    """F54, F48 and F192 -- pyimzml's own errors reached the user as tracebacks.
+
+    A cut-short or empty document, a position written ``2.0``, a position in
+    a parameter group or a second ``<scan>``, and a second group declaring
+    the m/z array each ended in four ERROR lines and a raw ``ParseError``,
+    ``ValueError``, ``TypeError`` or ``AttributeError``. Each is now one
+    ``ConversionRefused`` naming the file and the cause.
+
+    They use ``temp_dir``, whose removal fails on Windows while a file in it
+    is open: a refusal raised inside the parse once left the document's
+    handle to the garbage collector.
+    """
+
+    def test_a_document_cut_in_half_says_it_is_not_well_formed(self, temp_dir):
+        path = write_imzml(temp_dir, n_spectra=4)
+        text = path.read_bytes()
+        path.write_bytes(text[: len(text) // 2])
+
+        refusal = _refusal(path)
+
+        assert "not well-formed XML" in str(refusal)
+        assert path.name in str(refusal)
+
+    def test_the_original_error_is_kept_as_the_cause(self, temp_dir):
+        path = write_imzml(temp_dir, n_spectra=4)
+        text = path.read_bytes()
+        path.write_bytes(text[: len(text) // 2])
+
+        refusal = _refusal(path)
+
+        assert isinstance(refusal.__cause__, ElementTree.ParseError)
+
+    def test_an_empty_file_says_it_is_not_well_formed(self, temp_dir):
+        path = write_imzml(temp_dir, n_spectra=4)
+        path.write_bytes(b"")
+
+        refusal = _refusal(path)
+
+        assert "not well-formed XML" in str(refusal)
+
+    def test_a_position_written_with_a_decimal_point_names_the_spectrum(self, temp_dir):
+        path = write_imzml(temp_dir, n_spectra=4)
+        text = path.read_text(encoding="utf-8")
+        edited, n = re.subn(
+            r'(name="position y" value="2)"', r'\g<1>.0"', text, count=1
+        )
+        assert n == 1
+        path.write_text(edited, encoding="utf-8")
+
+        message = str(_refusal(path))
+
+        assert "position y (IMS:1000051)" in message
+        assert "'2.0'" in message
+        assert "Positions are whole numbers" in message
+        assert "spectrum" in message
+
+    def test_a_position_held_in_a_parameter_group_names_spectrum_and_group(
+        self, temp_dir
+    ):
+        """The last spectrum's x and y moved into a group its scan references."""
+        path = write_imzml(temp_dir, n_spectra=4)
+        text = path.read_text(encoding="utf-8")
+        positions = list(
+            re.finditer(
+                r'<cvParam[^>]*"IMS:1000050"[^>]*/>\s*<cvParam[^>]*"IMS:1000051"'
+                r"[^>]*/>",
+                text,
+            )
+        )
+        last = positions[-1]
+        text = (
+            text[: last.start()]
+            + '<referenceableParamGroupRef ref="pos"/>'
+            + text[last.end() :]
+        )
+        text = text.replace(
+            "</referenceableParamGroupList>",
+            f'<referenceableParamGroup id="pos">{last.group(0)}'
+            "</referenceableParamGroup></referenceableParamGroupList>",
+            1,
+        )
+        path.write_text(text, encoding="utf-8")
+
+        message = str(_refusal(path))
+
+        assert "spectrum 3" in message
+        assert "position x (IMS:1000050)" in message
+        assert "parameter group 'pos'" in message
+
+    def test_a_position_in_a_second_scan_behind_an_empty_first_scan(self, temp_dir):
+        """The F48 repro: an empty ``<scan/>`` ahead of the one with the position."""
+        path = write_imzml(temp_dir, n_spectra=4)
+        _edit_text(path, '<scanList count="1">', '<scanList count="2"><scan/>')
+
+        message = str(_refusal(path))
+
+        assert "spectrum 0" in message
+        assert "<scan> 2" in message
+        assert "reads only the first <scan>" in message
+
+    @pytest.mark.parametrize("used", [False, True], ids=["unused", "used"])
+    def test_a_second_mz_group_names_both_groups(self, temp_dir, used):
+        """The F192 repro: a second group carrying the m/z array term.
+
+        Declared and used by no spectrum, or used by every other one, the
+        parser took one group and raised an ``AttributeError`` on a spectrum
+        that referenced the other.
+        """
+        path = write_imzml(temp_dir, n_spectra=6, mz_dtype=np.float64)
+        text = path.read_text(encoding="utf-8")
+        group = re.search(
+            r'<referenceableParamGroup id="mzArray">.*?</referenceableParamGroup>',
+            text,
+            re.DOTALL,
+        )
+        assert group is not None
+        text = text.replace(
+            group.group(0),
+            group.group(0) + group.group(0).replace('id="mzArray"', 'id="mzArrayB"'),
+            1,
+        )
+        if used:
+            parts = text.split("<spectrum ")
+            parts = [
+                (
+                    p.replace('ref="mzArray"', 'ref="mzArrayB"', 1)
+                    if k % 2 == 0 and k
+                    else p
+                )
+                for k, p in enumerate(parts)
+            ]
+            text = "<spectrum ".join(parts)
+        path.write_text(text, encoding="utf-8")
+
+        message = str(_refusal(path))
+
+        assert "The file declares the m/z array in 2 groups" in message
+        assert "'mzArray', 'mzArrayB'" in message
+
 
 class TestRefusalCleansUp:
     """Refusing must not leave the reader holding the .ibd."""
@@ -507,7 +761,9 @@ class TestARefusedFileIsNotParsedTwice:
 
         Not every failure here is a ValueError Thyra raised: pyimzml itself
         raises whatever its XML and its own dependencies raise, and those
-        constructors do not all take a single message.
+        constructors do not all take a single message. The reader names the
+        file and the cause in one refusal (D63) and keeps the original as
+        its cause; the memo hands back that same refusal.
         """
 
         class _TwoArgError(Exception):
@@ -521,11 +777,17 @@ class TestARefusedFileIsNotParsedTwice:
         monkeypatch.setattr(imzml_reader_module, "ImzMLParser", _refusing_parser)
 
         reader = ImzMLReader(write_imzml(temp_dir))
+        refusals = []
         for _ in range(2):
-            with pytest.raises(_TwoArgError) as excinfo:
+            with pytest.raises(ConversionRefused) as excinfo:
                 reader._ensure_parser_initialized()
-            assert excinfo.value.code == 7
-            assert str(excinfo.value) == "7: the vendor library said no"
+            cause = excinfo.value.__cause__
+            assert isinstance(cause, _TwoArgError)
+            assert cause.code == 7
+            assert str(cause) == "7: the vendor library said no"
+            assert "7: the vendor library said no" in str(excinfo.value)
+            refusals.append(excinfo.value)
+        assert refusals[0] is refusals[1]
 
     def test_a_clean_file_is_still_parsed_exactly_once(self, temp_dir, monkeypatch):
         path = write_imzml(temp_dir, n_spectra=6)
@@ -637,6 +899,31 @@ class TestPreviewReportsARefusedFile:
         preview = preview_msi(path)
         assert preview.readable is True
         assert preview.n_pixels == 6
+
+    def test_a_too_long_encoded_length_on_the_last_array_is_not_a_truncation(
+        self, temp_dir
+    ):
+        """F155 -- the last array states 40 bytes, 20 are stored, all values present.
+
+        The preview ended the last array at offset plus its encoded length
+        (``IMS:1000104``) and called the file truncated, and ``thyra
+        metadata`` exited 1; the conversion read it. The end is now the
+        offset plus the value count times the item size, so all three agree.
+        """
+        path = write_imzml(
+            temp_dir,
+            n_spectra=4,
+            n_peaks=5,
+            mz_dtype=np.float64,
+            intensity_dtype=np.float32,
+        )
+        poison_cv_param(path, 3, "intensityArray", "IMS:1000104", "40")
+
+        preview = preview_msi(path)
+        document = read_metadata_document(path)
+
+        assert preview.readable is True, preview.error
+        assert document["ms_analysis"]["n_spectra"] == 4
 
 
 class TestIbdUuid:
@@ -845,20 +1132,24 @@ class TestADocumentThatDeclaresNoSpectra:
         finally:
             reader.close()
 
-    def test_a_document_that_will_not_parse_is_left_to_pyimzml(self, temp_dir):
+    def test_a_document_that_will_not_parse_is_refused_in_one_line(self, temp_dir):
         """This check must never be the one that condemns a broken document.
 
         It reads the file before pyimzml does, so a file neither can parse
         would otherwise be reported as declaring no spectra -- which is a
-        guess, and the wrong one.
+        guess, and the wrong one. The reader says it is not well-formed XML,
+        in one line, and keeps the parser's error as the cause.
         """
         path = write_imzml(temp_dir, n_spectra=6)
         path.write_text("<mzML><spectrumList count=", encoding="utf-8")
 
-        with pytest.raises(Exception) as excinfo:
+        with pytest.raises(ConversionRefused) as excinfo:
             ImzMLReader(path)._ensure_parser_initialized()
 
-        assert "declares no spectra" not in str(excinfo.value)
+        message = str(excinfo.value)
+        assert "declares no spectra" not in message
+        assert "not well-formed XML" in message
+        assert "\n" not in message
 
 
 @pytest.mark.skipif(

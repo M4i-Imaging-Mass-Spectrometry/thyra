@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## [4.5.1](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/compare/v4.5.0...v4.5.1) (2026-10-18)
+
+
+### Bug Fixes
+
+* **alignment:** place partly acquired FlexImaging runs by their planned grid ([#509](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/509)) ([799a806](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/799a806434a77f3517dbedf8189a51adeb4d12ef))
+* **convert:** keep a complete store when Ctrl-C lands in the cleanup after the save ([#504](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/504)) ([bd81e29](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/bd81e294e5b5059df9a3aa96be59c60df3069bdf))
+* **metadata:** a NaN or infinity from vendor metadata is left out of msi_metadata ([#515](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/515)) ([4df7518](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/4df751802efc3d0c4ef5b01d75ad62f6a1f824ca)), closes [#503](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/503)
+* **metadata:** refuse malformed metadata input in one line and describe Waters spot runs ([#502](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/502)) ([e44e729](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/e44e72999c993626b19e9cedeb94d22a08ca5749))
+* **mobility:** the heatmap is a mean over the summed table's rows ([#511](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/511)) ([15109b6](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/15109b6a224b5174678075951e655d1e50750b7a))
+* **msms:** screen the vendor's isolation windows, and rank isomer labels ([#513](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/513)) ([6cb13cc](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/6cb13ccdd90d3b5992941c0d4461a006c0851ebd))
+* **mzpeak:** an infinite m/z or a bad count no longer joins a TDF bin ([#514](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/514)) ([fb5ccb3](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/fb5ccb3667abbbd212371a8260a44e0c9dc3b843))
+* **mzpeak:** read a scan parameter of a non-integer type as not stated ([#501](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/501)) ([786aea6](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/786aea66b96d86724e66d9cadc7d92f9debccf6e))
+* **mzpeak:** read an ms_level or count column with no value and the null type ([#508](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/508)) ([7f05d8b](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/7f05d8b3ccabfbbf3d4b44ff757acb3cd69f5c02)), closes [#506](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/506)
+* **readers:** non-finite values no longer decide the threshold or the mass range, and a mislabelled positive scan term is read on spectra ([#505](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/505)) ([2f9f178](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/2f9f17892098fb8ce5f066a9194e9d4f31d55bd7))
+* **regions:** a region store describes only the region it holds ([#507](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/507)) ([5ee7b44](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/5ee7b4421f666849a50a9be764111e49c787f7a1)), closes [#496](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/496)
+* **resampling:** the stored resampling step records the axis it describes, and two messages name the way forward ([#510](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/510)) ([e54a2c5](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/e54a2c593a8a804574b334db1a3e64c748ad4c18))
+
 ## [4.5.0](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/compare/v4.4.0...v4.5.0) (2026-10-15)
 
 

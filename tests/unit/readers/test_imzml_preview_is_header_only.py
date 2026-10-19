@@ -372,6 +372,179 @@ class TestWhatTheHeadWillNotGuess:
         assert preview.readable is False
         assert ".ibd" in (preview.error or "")
 
+    def test_a_zero_based_file_listed_from_its_last_pixel_gets_its_full_grid(
+        self, temp_dir, parser_builds
+    ):
+        """F89 -- pyimzml's writer declares the largest coordinate, one short.
+
+        A 4 x 3 raster numbered from 0 and listed from its last pixel
+        declares 3 x 2 for 12 spectra, and its first spectrum is at (3, 2),
+        so nothing in the first spectrum says the file is 0-based. The
+        preview reported (3, 2). Twelve spectra do not fit a 3 x 2 raster,
+        so the head declines and the coordinates settle it.
+        """
+        import numpy as np
+        from pyimzml.ImzMLWriter import ImzMLWriter
+
+        path = temp_dir / "listed_from_the_end.imzML"
+        grid = [(x, y) for y in range(3) for x in range(4)]
+        with ImzMLWriter(str(path), mode="processed") as writer:
+            for i, (x, y) in enumerate(grid[::-1]):
+                writer.addSpectrum(
+                    np.array([100.0, 200.0]), np.array([1.0 + i, 2.0]), (x, y, 1)
+                )
+
+        preview = preview_msi(path)
+
+        assert preview.grid_dims == (4, 3)
+        assert preview.n_pixels == 12
+        assert len(parser_builds) == 1
+
+    @pytest.mark.parametrize("n_x, n_y", [(2, 1), (0, 0), (-1, -1)])
+    def test_a_raster_that_cannot_hold_the_spectra_is_not_reported(
+        self, temp_dir, parser_builds, n_x, n_y
+    ):
+        """F211 -- six spectra on a 3 x 2 raster, declared 2 x 1, 0 x 0 or -1 x -1.
+
+        The preview reported the declaration as the grid with
+        ``readable=True``. A side below 1, or fewer cells than spectra, is
+        not an acquisition, so the head declines and the positions give
+        (3, 2), as they do for the conversion.
+        """
+        path = write_imzml(temp_dir, n_spectra=6)
+        restate_raster(path, n_x, n_y)
+
+        preview = preview_msi(path)
+
+        assert preview.readable, preview.error
+        assert preview.grid_dims == (3, 2)
+        assert len(parser_builds) == 1
+
+    @pytest.mark.parametrize("count", [100, -3])
+    def test_a_wrong_spectrum_count_is_not_reported(self, temp_dir, count):
+        """F210 -- six spectra, a spectrum list declaring 100 or -3.
+
+        The preview's ``n_pixels`` and the metadata document's
+        ``n_spectra`` repeated the declaration; both are the spectra that
+        are present.
+        """
+        from thyra.metadata.document import read_metadata_document
+
+        path = write_imzml(temp_dir, n_spectra=6)
+        text = path.read_text(encoding="utf-8")
+        assert '<spectrumList count="6"' in text
+        path.write_text(
+            text.replace(
+                '<spectrumList count="6"', f'<spectrumList count="{count}"', 1
+            ),
+            encoding="utf-8",
+        )
+
+        preview = preview_msi(path)
+        document = read_metadata_document(path)
+
+        assert preview.n_pixels == 6
+        assert document["ms_analysis"]["n_spectra"] == 6
+
+
+def restate_raster(path: Path, n_x: int, n_y: int) -> Path:
+    """Declare another raster, matched by accession, and change nothing else."""
+    text = path.read_text(encoding="utf-8")
+    for accession, value in (("IMS:1000042", n_x), ("IMS:1000043", n_y)):
+        text, n = re.subn(
+            rf'(accession="{accession}"[^>]*value=")[^"]*', rf"\g<1>{value}", text
+        )
+        assert n == 1, f"{accession} not found once"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def write_varied_range_imzml(directory: Path) -> Path:
+    """Six processed spectra whose observed range is 100 to 250 in all."""
+    import numpy as np
+    from pyimzml.ImzMLWriter import ImzMLWriter
+
+    path = directory / "varied.imzML"
+    with ImzMLWriter(str(path), mode="processed") as writer:
+        for i in range(6):
+            writer.addSpectrum(
+                np.linspace(100 + 10 * i, 200 + 10 * i, 7),
+                np.arange(1.0, 8.0),
+                (1 + i % 3, 1 + i // 3, 1),
+            )
+    return path
+
+
+_RANGE_TERM = re.compile(
+    r'<cvParam cvRef="MS" accession="(MS:100052[78])" name="([^"]*)" '
+    r'value="([^"]*)"'
+)
+
+_SPELLINGS = {
+    "value_first": lambda m: (
+        f'<cvParam cvRef="MS" value="{m[3]}" accession="{m[1]}" name="{m[2]}"'
+    ),
+    "single_quotes": lambda m: (
+        f"<cvParam cvRef='MS' accession='{m[1]}' name='{m[2]}' value='{m[3]}'"
+    ),
+    "spaces_around_equals": lambda m: (
+        f'<cvParam cvRef="MS" accession = "{m[1]}" name="{m[2]}" value = "{m[3]}"'
+    ),
+}
+
+
+class TestTheRangeScanReadsXmlTheWayAParserDoes:
+    """F212 -- one attribute order and one quote matched; comments were read.
+
+    The preview found no m/z range in a valid document spelled another way,
+    and a commented-out term changed the range it did find.
+    """
+
+    @pytest.mark.parametrize("spelling", sorted(_SPELLINGS))
+    def test_every_spelling_gives_the_range_of_the_plain_file(self, temp_dir, spelling):
+        path = write_varied_range_imzml(temp_dir)
+        plain = preview_msi(path).mz_range
+        assert plain == pytest.approx((100.0, 250.0))
+        text = path.read_text(encoding="utf-8")
+        edited, n = _RANGE_TERM.subn(_SPELLINGS[spelling], text)
+        assert n == 12
+        path.write_text(edited, encoding="utf-8")
+
+        assert preview_msi(path).mz_range == pytest.approx(plain)
+
+    def test_a_commented_out_term_changes_nothing(self, temp_dir):
+        path = write_varied_range_imzml(temp_dir)
+        plain = preview_msi(path).mz_range
+        text = path.read_text(encoding="utf-8")
+        decoy = '<!-- <cvParam accession="MS:1000528" value="1.0"/> -->'
+        path.write_text(text.replace("<scanList", decoy + "<scanList", 1), "utf-8")
+
+        assert preview_msi(path).mz_range == pytest.approx(plain)
+
+    def test_a_comment_spanning_a_chunk_boundary_is_ignored(
+        self, temp_dir, monkeypatch
+    ):
+        """The comment is longer than the chunk, so it is open at a boundary.
+
+        Cut at the boundary, its first half held a term with nothing to say
+        it was commented out, and the extremes of 1 and 9999 were taken.
+        """
+        from thyra.readers.imzml import header as header_module
+
+        path = write_varied_range_imzml(temp_dir)
+        plain = preview_msi(path).mz_range
+        padding = " " * 700
+        decoy = (
+            f'<!--{padding}<cvParam accession="MS:1000528" value="1.0"/>'
+            f'<cvParam accession="MS:1000527" value="9999.0"/>{padding}-->'
+        )
+        text = path.read_text(encoding="utf-8")
+        path.write_text(text.replace("<scanList", decoy + "<scanList", 1), "utf-8")
+        monkeypatch.setattr(header_module, "_SCAN_CHUNK_BYTES", 512)
+        monkeypatch.setattr(header_module, "_SCAN_OVERLAP_BYTES", 256)
+
+        assert preview_msi(path).mz_range == pytest.approx(plain)
+
 
 class TestAMetadataOnlyReaderCanStillRead:
     def test_spectra_are_available_if_asked_for(self, temp_dir, parser_builds):

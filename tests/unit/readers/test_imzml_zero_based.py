@@ -258,10 +258,75 @@ class TestAZTheFileDoesNotStateIsRecordedAsZero:
         assert essential.dimensions == (1, 1, 2)
         assert sorted(z for _x, _y, z in coords) == [0, 1]
 
+    def test_the_fallback_judges_a_first_spectrum_without_z_next_to_others_with_z(
+        self, tmp_path
+    ):
+        """``states_z`` is the fallback for a parser built without the hook.
+
+        The first spectrum states no z and the other three state z = 3, so
+        the z values pyimzml reports are ``[1, 3, 3, 3]``. Any z other than 1
+        settles it as stated, without reading the file again. Deleting that
+        check made the fallback read the first spectrum, which states none,
+        and answer False; no test noticed (F66).
+        """
+        path = _write_imzml(
+            tmp_path / "mixed.imzML", [(1, 1), (2, 1, 3), (1, 2, 3), (2, 2, 3)]
+        )
+
+        assert states_z([1, 3, 3, 3], path) is True
+
     def test_a_file_that_cannot_be_read_again_keeps_what_was_subtracted(self, tmp_path):
         """The first spectrum is read again only when every z is 1."""
         assert states_z([1, 1], tmp_path / "missing.imzML") is True
         assert states_z([1, 2], tmp_path / "missing.imzML") is True
+
+
+_REBASING_LOGGER = "thyra.utils.imzml_coordinate_base"
+
+
+def _write_grid(path: Path, xs, ys) -> Path:
+    mzs = np.linspace(100.0, 200.0, 5)
+    with ImzMLWriter(str(path), mode="processed") as writer:
+        for y in ys:
+            for x in xs:
+                writer.addSpectrum(mzs, np.full(5, 50.0 + x + 10 * y), (x, y, 1))
+    return path
+
+
+class TestTheRebasingLineIsSaidOnceAndNamesEachBase:
+    """The INFO line named one base for both axes and was logged twice (F90)."""
+
+    def test_x_from_zero_and_y_from_one_names_both_bases(self, tmp_path, thyra_logs):
+        path = _write_grid(tmp_path / "x0y1.imzML", range(0, 4), range(1, 4))
+
+        with thyra_logs(_REBASING_LOGGER, logging.INFO) as records:
+            assert _convert(path, tmp_path / "x0y1.zarr") is True
+
+        said = [r.getMessage() for r in records if "Rebasing" in r.getMessage()]
+        assert len(said) == 1, said
+        assert "x=0 and y=1" in said[0]
+        assert "x is rebased on 0 and y on 1" in said[0]
+
+    def test_negative_coordinates_name_the_negative_bases(self, tmp_path, thyra_logs):
+        """The line used to say "from 0" for coordinates that go below 0."""
+        path = _write_grid(tmp_path / "neg.imzML", range(-2, 2), range(-1, 2))
+
+        with thyra_logs(_REBASING_LOGGER, logging.INFO) as records:
+            assert _convert(path, tmp_path / "neg.zarr") is True
+
+        said = [r.getMessage() for r in records if "Rebasing" in r.getMessage()]
+        assert len(said) == 1, said
+        assert "x=-2 and y=-1" in said[0]
+        assert "x is rebased on -2 and y on -1" in said[0]
+        assert "from 0" not in said[0]
+
+    def test_a_file_numbered_from_one_says_nothing(self, tmp_path, thyra_logs):
+        path = _write_grid(tmp_path / "one.imzML", range(1, 4), range(1, 4))
+
+        with thyra_logs(_REBASING_LOGGER, logging.INFO) as records:
+            assert _convert(path, tmp_path / "one.zarr") is True
+
+        assert [r for r in records if "Rebasing" in r.getMessage()] == []
 
 
 class TestTheStoreKeepsEveryPixel:
