@@ -13,6 +13,7 @@ mobility dimension silently dropped. This module finds the group and its
 offsets so the reader can keep it.
 """
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
@@ -30,13 +31,35 @@ _LENGTH_ACCESSION = "IMS:1000103"
 _ENCODED_LENGTH_ACCESSION = "IMS:1000104"
 _ZLIB_ACCESSION = "MS:1000574"
 
-# Binary data type terms and the numpy dtype each declares.
+# Binary data type terms and the numpy dtype each declares. Little-endian,
+# as the imzML specification stores every binary array.
 _PRECISION_DTYPES: Dict[str, np.dtype] = {
-    "MS:1000521": np.dtype(np.float32),
-    "MS:1000523": np.dtype(np.float64),
-    "MS:1000519": np.dtype(np.int32),
-    "MS:1000522": np.dtype(np.int64),
+    "MS:1000520": np.dtype("<f2"),
+    "MS:1000521": np.dtype("<f4"),
+    "MS:1000523": np.dtype("<f8"),
+    "MS:1000519": np.dtype("<i4"),
+    "MS:1000522": np.dtype("<i8"),
+    "IMS:1000141": np.dtype("<i4"),
+    "IMS:1000142": np.dtype("<i8"),
 }
+
+#: Every binary data type term in the PSI-MS and imzML vocabularies,
+#: including the one no binary array of numbers can use (MS:1001479,
+#: null-terminated ASCII string).
+BINARY_TYPE_ACCESSIONS = frozenset(_PRECISION_DTYPES) | {"MS:1001479"}
+
+_DTYPE_NAMES = {
+    np.dtype("<f2"): "16-bit float",
+    np.dtype("<f4"): "32-bit float",
+    np.dtype("<f8"): "64-bit float",
+    np.dtype("<i4"): "32-bit integer",
+    np.dtype("<i8"): "64-bit integer",
+}
+
+
+def dtype_name(dtype: np.dtype) -> str:
+    """The binary data type name of a numpy dtype, as pyimzml names it."""
+    return _DTYPE_NAMES.get(np.dtype(dtype), str(dtype))
 
 
 @dataclass(frozen=True)
@@ -80,11 +103,7 @@ def detect_mobility_array(metadata: Any) -> Optional[MobilityArraySpec]:
             continue
 
         accessions = {p[1] for p in cv_params if len(p) >= 2}
-        dtype = None
-        for accession, candidate in _PRECISION_DTYPES.items():
-            if accession in accessions:
-                dtype = candidate
-                break
+        dtype = _declared_dtype(str(group_id), cv_params)
         if dtype is None:
             # The writer both tools use declares 64-bit float; a file that
             # declares nothing gets the same reading pyimzml would give an
@@ -101,6 +120,45 @@ def detect_mobility_array(metadata: Any) -> Optional[MobilityArraySpec]:
             compressed=_ZLIB_ACCESSION in accessions,
         )
     return None
+
+
+def _declared_dtype(group_id: str, cv_params: Any) -> Optional[np.dtype]:
+    """The dtype the mobility group declares, or ``None`` if it declares none.
+
+    A 16-bit float array used to be read as 64-bit float, because the table
+    lacked MS:1000520 and an unlisted term fell through to the default:
+    every value came from the neighbouring bytes.
+
+    Raises:
+        ConversionRefused: If the group declares a precision Thyra cannot
+            decode, or more than one.
+    """
+    declared = [
+        (p[1], p[3] or p[0])
+        for p in cv_params
+        if len(p) >= 4
+        and (p[1] in BINARY_TYPE_ACCESSIONS or _BIT_WIDTH.search(str(p[3] or "")))
+    ]
+    if not declared:
+        return None
+    names = ", ".join(f"{name} ({accession})" for accession, name in declared)
+    if len(declared) > 1:
+        raise ConversionRefused(
+            f"imzML param group {group_id!r} declares {len(declared)} "
+            f"precision terms for its ion mobility array ({names}); exactly "
+            f"one is required."
+        )
+    dtype = _PRECISION_DTYPES.get(declared[0][0])
+    if dtype is None:
+        raise ConversionRefused(
+            f"imzML param group {group_id!r} declares its ion mobility array "
+            f"as {names}, a precision Thyra cannot decode. Supported: 16-, "
+            f"32- and 64-bit float, 32- and 64-bit integer."
+        )
+    return dtype
+
+
+_BIT_WIDTH = re.compile(r"\b\d+-bit (float|integer)\b")
 
 
 def _cv_param_int(elem: ElementTree.Element, accession: str) -> Optional[int]:

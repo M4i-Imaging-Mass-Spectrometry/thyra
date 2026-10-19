@@ -17,13 +17,19 @@ The same constant appeared one layer up in the extractor, deciding both
 lands on, so both layers are exercised here.
 """
 
+import re
 from pathlib import Path
 
 import numpy as np
 import pytest
 from pyimzml.ImzMLWriter import ImzMLWriter
 
+from tests.fixtures.mzpeak_builder import build_mzpeak, grid_spectra
+from thyra import convert_msi
+from thyra.errors import ConversionRefused
 from thyra.readers.imzml.imzml_reader import ImzMLReader
+from thyra.readers.mzpeak import MzPeakReader
+from thyra.utils.imzml_coordinate_base import PLANE_RULE
 
 _MZS = np.linspace(100.0, 200.0, 5)
 _INTENSITIES = np.arange(1.0, 6.0)
@@ -116,3 +122,173 @@ class TestSinglePlaneFilesAreUnchanged:
             ]
         finally:
             reader.close()
+
+
+_GRID = ((1, 1), (2, 1), (1, 2), (2, 2))
+_Z_TERM = re.compile(r"(<cvParam [^>]*IMS:1000052[^>]*/>)")
+
+
+def _write_grid(directory: Path, name: str, edit_z) -> Path:
+    """Four spectra that all state z = 1, with ``edit_z`` applied to the terms.
+
+    ``edit_z`` gets the list of the four position z terms as written and
+    returns what each is replaced with.
+    """
+    path = directory / f"{name}.imzML"
+    with ImzMLWriter(str(path), mode="continuous") as writer:
+        for x, y in _GRID:
+            writer.addSpectrum(_MZS, _INTENSITIES, (x, y, 1))
+    parts = _Z_TERM.split(path.read_text())
+    at = [i for i, part in enumerate(parts) if "IMS:1000052" in part]
+    assert len(at) == 4
+    for i, new in zip(at, edit_z([parts[i] for i in at])):
+        parts[i] = new
+    path.write_text("".join(parts))
+    return path
+
+
+def _without_z(unstated):
+    """Drop the z term of the spectra at these positions in the grid."""
+    return lambda terms: ["" if k in unstated else t for k, t in enumerate(terms)]
+
+
+def _essential(path: Path):
+    reader = ImzMLReader(path)
+    try:
+        return reader.get_essential_metadata()
+    finally:
+        reader.close()
+
+
+class TestSomeSpectraStateZ:
+    """Four spectra, three with z and one without: a plane cannot be stated.
+
+    The spectrum without z used to land on a plane made from pyimzml's
+    stand-in of 1; the recorded z offset then depended on which spectrum
+    came first.
+    """
+
+    @pytest.mark.parametrize("lacking", [0, 1, 3], ids=["first", "middle", "last"])
+    def test_the_reader_refuses_it_with_the_plane_rule(self, tmp_path, lacking):
+        path = _write_grid(tmp_path, f"lacks_{lacking}", _without_z({lacking}))
+
+        with pytest.raises(ConversionRefused, match="3 of 4 spectra a position z") as e:
+            _essential(path)
+
+        assert PLANE_RULE in str(e.value)
+        assert "IMS:1000052" in str(e.value)
+
+    def test_the_conversion_returns_false_and_writes_no_store(self, tmp_path):
+        path = _write_grid(tmp_path, "lacks_first", _without_z({0}))
+        store = tmp_path / "out.zarr"
+
+        assert convert_msi(path, store, pixel_size_um=10.0) is False
+
+        assert not store.exists()
+
+    def test_imzml_and_mzpeak_refuse_with_the_same_sentence(self, tmp_path):
+        """One rule, one sentence, whichever route the file takes."""
+        path = _write_grid(tmp_path, "lacks_last", _without_z({3}))
+        archive = build_mzpeak(
+            tmp_path / "somez.mzpeak", grid_spectra(2, 2), position_z=[1, 1, None, 1]
+        )
+        marker = "a position z (IMS:1000052) and the others none."
+
+        with pytest.raises(ConversionRefused) as imzml_refusal:
+            _essential(path)
+        with pytest.raises(ConversionRefused) as mzpeak_refusal:
+            with MzPeakReader(archive) as reader:
+                reader.get_essential_metadata()
+
+        imzml_tail = str(imzml_refusal.value).split(marker)
+        mzpeak_tail = str(mzpeak_refusal.value).split(marker)
+        assert len(imzml_tail) == len(mzpeak_tail) == 2
+        assert imzml_tail[1] == mzpeak_tail[1]
+
+
+class TestAZTermWithoutAValue:
+    """A z term that carries no value states no z, so the offset is 0.
+
+    It used to count as stated, recording 1 for what was only pyimzml's
+    stand-in.
+    """
+
+    def test_every_term_valueless_records_zero(self, tmp_path):
+        path = _write_grid(
+            tmp_path,
+            "valueless",
+            lambda terms: [t.replace(' value="1"', "") for t in terms],
+        )
+        assert " value=" not in "".join(_Z_TERM.findall(path.read_text()))
+
+        assert _essential(path).coordinate_offsets == (1, 1, 0)
+
+    def test_the_same_terms_with_a_value_record_one(self, tmp_path):
+        """Control: the valueless edit is the only difference."""
+        path = _write_grid(tmp_path, "valued", lambda terms: terms)
+
+        assert _essential(path).coordinate_offsets == (1, 1, 1)
+
+
+def _z_through_groups(path: Path, planes) -> None:
+    """Move each scan's z into a group the scan references, as a writer may."""
+    text = path.read_text()
+    pattern = (
+        r'(<referenceableParamGroupRef ref="scan1"/>)(\s*<cvParam[^>]*IMS:1000050'
+        r"[^>]*/>\s*<cvParam[^>]*IMS:1000051[^>]*/>)\s*<cvParam[^>]*IMS:1000052"
+        r'[^>]*value="(\d+)"/>'
+    )
+    text, n = re.subn(pattern, r'\1<referenceableParamGroupRef ref="z\3"/>\2', text)
+    assert n == len(planes) * 4
+    groups = "".join(
+        f'<referenceableParamGroup id="z{z}"><cvParam cvRef="IMS" '
+        f'accession="IMS:1000052" name="position z" value="{z}"/>'
+        f"</referenceableParamGroup>"
+        for z in sorted(set(planes))
+    )
+    path.write_text(
+        text.replace(
+            "</referenceableParamGroupList>", groups + "</referenceableParamGroupList>"
+        )
+    )
+
+
+def _write_grouped_planes(directory: Path, planes=(1, 2)) -> Path:
+    path = directory / "grouped.imzML"
+    with ImzMLWriter(str(path), mode="continuous") as writer:
+        for z in planes:
+            for x, y in _GRID:
+                writer.addSpectrum(_MZS, _INTENSITIES * 10**z, (x, y, z))
+    _z_through_groups(path, planes)
+    return path
+
+
+class TestZStatedThroughAGroup:
+    """pyimzml does not read z from a referenced group.
+
+    Two planes stated that way used to be summed into one table, and a
+    single plane at z = 3 recorded offset 0.
+    """
+
+    def test_the_reader_refuses_and_names_the_group(self, tmp_path):
+        path = _write_grouped_planes(tmp_path)
+
+        with pytest.raises(ConversionRefused) as e:
+            _essential(path)
+
+        assert "through a referenced parameter group" in str(e.value)
+        assert "parameter group 'z1'" in str(e.value)
+
+    def test_one_plane_through_a_group_is_refused_too(self, tmp_path):
+        path = _write_grouped_planes(tmp_path, planes=(3,))
+
+        with pytest.raises(ConversionRefused, match="parameter group 'z3'"):
+            _essential(path)
+
+    def test_the_conversion_returns_false_and_writes_no_store(self, tmp_path):
+        path = _write_grouped_planes(tmp_path)
+        store = tmp_path / "out.zarr"
+
+        assert convert_msi(path, store, pixel_size_um=10.0) is False
+
+        assert not store.exists()
