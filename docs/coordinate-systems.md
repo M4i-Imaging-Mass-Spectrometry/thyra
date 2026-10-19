@@ -21,8 +21,8 @@ In every Thyra-produced zarr,
 > unit and pixel-size calibration are recorded under
 > ``zarr.attrs["coordinate_systems"]["global"]``, and every element
 > registers a transform that lands in that frame. The one exception is an
-> optical image Thyra cannot place: it is left out of ``"global"`` and
-> has a coordinate system of its own.
+> optical image the store holds no alignment for: it is left out of
+> ``"global"`` and has a coordinate system of its own.
 
 If you only remember one thing, remember that.
 
@@ -130,8 +130,9 @@ The system is **not written**:
   There ``"global"`` is already the scan's frame, and the alignment affine
   absorbs the offset;
 - when the source reports no origin, because a zero there would claim one;
-- on an optical image that is not placed relative to the raster, one with
-  no alignment, which sits at ``Identity``.
+- on an optical image with no alignment. It is not in ``"global"`` at
+  all, only in a coordinate system named after its element
+  ([D69](design-decisions.md#d69-an-optical-image-is-stored-as-its-file-shows-it-and-placed-only-where-the-store-aligns-it)).
 
 A ``dataset_id`` of ``"acquisition"`` is refused, because the per-dataset
 system is named by the id.
@@ -201,6 +202,10 @@ meaningful frame is **physical micrometers of the imaged tissue**.
   MSI grid pixel size.
 - Every element also carries ``"acquisition"``, the same transform moved
   to the source's origin, when the source states one.
+- Optical images: with no alignment there is nothing to place them by. A
+  photo beside a ``.d`` with no ``.mis``, or an mzPeak archive image with
+  no teach-points affine, has one coordinate system, named after the
+  element, with ``Identity``, and is not in ``"global"``.
 
 The two pitches are equal on a square raster and are *not* assumed to be:
 an anisotropic acquisition (a DESI method with ``DesiXStep !=

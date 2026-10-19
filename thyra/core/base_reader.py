@@ -155,7 +155,9 @@ class OpticalImageLabel(NamedTuple):
     """
 
     name: str
-    """The element name after ``<dataset_id>_optical_``."""
+    """The image's name, from which the converter derives the element name
+    after ``<dataset_id>_optical_``: cleaned, cut to 30 characters and
+    numbered when another image already holds it."""
 
     source_file: str
     """What the store records the element came from."""

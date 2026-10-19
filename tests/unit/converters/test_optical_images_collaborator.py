@@ -24,6 +24,7 @@ test gives it teaching points and gets the lattice (D31).
 from __future__ import annotations
 
 import logging
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
@@ -44,8 +45,10 @@ from thyra.converters.spatialdata.acquisition_frame import (
     AcquisitionOrigin,
 )
 from thyra.converters.spatialdata.optical_image import (
+    NAME_BUDGET,
     OpticalImages,
     StreamedOpticalImage,
+    _clean_stem,
 )
 from thyra.core.base_reader import OpticalImageLabel
 
@@ -425,7 +428,7 @@ def test_a_photo_in_optical_pixels_has_no_acquisition_system(
 def test_an_unplaced_photo_has_no_acquisition_system(
     tmp_path: Path, tiff: Path
 ) -> None:
-    """No alignment: Identity in global says nothing about the raster."""
+    """No alignment: the photo is in no shared frame, only its own system."""
     optical = _optical(
         tmp_path,
         _StubReader([tiff], areas=[]),
@@ -438,7 +441,8 @@ def test_an_unplaced_photo_has_no_acquisition_system(
 
     assert optical.tic_to_image is None
     transformations = optical.pending["ds_optical_highres"].transformations
-    assert set(transformations) == {"ds", "global"}
+    assert transformations == {"ds_optical_highres": Identity()}
+    assert "acquisition" not in transformations
 
 
 def test_a_photo_with_no_readable_alignment_scan_has_no_acquisition_system(
@@ -446,8 +450,8 @@ def test_a_photo_with_no_readable_alignment_scan_has_no_acquisition_system(
 ) -> None:
     """Micrometre mode, but the scan every other image scales into is unreadable.
 
-    The second image then has no grid to scale into and lands at Identity,
-    which places nothing; it must not be moved by the raster's origin.
+    The second image then has no grid to scale into, so it is placed
+    nowhere: a coordinate system of its own, not moved by the raster's origin.
     """
     other = tmp_path / "SlideA_overview.tif"
     other.write_bytes(tiff.read_bytes())
@@ -465,8 +469,7 @@ def test_a_photo_with_no_readable_alignment_scan_has_no_acquisition_system(
     assert optical.tic_to_image is not None  # micrometre mode, alignment known
     (name,) = optical.pending
     transformations = optical.pending[name].transformations
-    assert isinstance(transformations["global"], Identity)
-    assert set(transformations) == {"ds", "global"}
+    assert transformations == {name: Identity()}
 
 
 def _second_image(tmp_path: Path, name: str, height: int, width: int) -> Path:
@@ -549,6 +552,175 @@ def test_a_turned_overview_is_not_placed_by_a_scale(
     # Still recorded as one of the store's optical images.
     attr = optical.root_attr()
     assert attr is not None and name in attr["elements"]
+
+
+class _PlainReader:
+    """A reader with no .mis at all: images found, nothing stated about them."""
+
+    def __init__(self, optical_paths: List[Path]) -> None:
+        self._optical_paths = list(optical_paths)
+
+    def get_optical_image_paths(self) -> List[Path]:
+        return list(self._optical_paths)
+
+    def get_primary_optical_image_path(self) -> Optional[Path]:
+        return None
+
+
+def test_a_photo_with_no_mis_is_in_a_system_of_its_own(
+    tmp_path: Path, tiff: Path
+) -> None:
+    """No alignment anywhere: not in "global", whatever the route (D69)."""
+    for apply_alignment in (True, False):
+        optical = _optical(
+            tmp_path,
+            _PlainReader([tiff]),
+            apply_alignment=apply_alignment,
+            acquisition_origin=lambda: ORIGIN,
+        )
+        optical.compute_alignment()
+        optical.build_tic_to_image_affine()
+        optical.add_images({})
+
+        (name,) = optical.pending
+        assert optical.tic_to_image is None
+        assert optical.pending[name].transformations == {name: Identity()}
+
+
+@pytest.mark.parametrize("apply_alignment", [True, False])
+def test_an_image_whose_areas_match_no_region_is_unplaced(
+    tmp_path: Path, tiff: Path, apply_alignment: bool
+) -> None:
+    """The .mis names the scan, but no Area is acquired: the scan is unplaced.
+
+    The scan is still the alignment element, and its resampled copy is as
+    unplaced as it is: a Scale into a frame that is nowhere is nowhere.
+    """
+    derived = _second_image(tmp_path, "SlideA_0001.tif", 12, 16)
+    reader = _StubReader([tiff, derived])
+    reader._positions = [{"region": 3, "raster_x": 0, "raster_y": 0}]
+    optical = _optical(tmp_path, reader, apply_alignment=apply_alignment)
+    optical.compute_alignment()
+    optical.build_tic_to_image_affine()
+    optical.add_images({})
+
+    assert optical.tic_to_image is None
+    assert optical.alignment_element == "ds_optical_highres"
+    for name in ("ds_optical_highres", "ds_optical_derived"):
+        assert optical.pending[name].transformations == {name: Identity()}
+
+
+def test_a_photo_beside_a_converted_acquisition_is_not_in_global(
+    tmp_path: Path,
+) -> None:
+    """End to end on the committed synthetic acquisition, which has no .mis."""
+    import json
+
+    from spatialdata.transformations import get_transformation
+
+    from thyra.convert import convert_msi
+    from thyra.readers.bruker.timstof.timstof_reader import BrukerReader
+    from thyra.utils.bruker_exceptions import SDKError
+
+    fixture = (
+        Path(__file__).resolve().parents[2] / "data" / "fixtures" / "synthetic_tims.d"
+    )
+    folder = tmp_path / "acquisition"
+    source = folder / "copy.d"
+    shutil.copytree(fixture, source)
+    try:
+        BrukerReader(source).close()
+    except (SDKError, OSError) as exc:  # the vendor library is not loadable here
+        pytest.skip(f"Bruker library not loadable on this platform: {exc}")
+    from PIL import Image
+
+    Image.fromarray(np.zeros((12, 16, 3), np.uint8)).save(folder / "photo.png")
+
+    output = tmp_path / "out.zarr"
+    assert convert_msi(str(source), str(output), dataset_id="tims", pixel_size_um=20.0)
+
+    import spatialdata
+
+    sdata = spatialdata.read_zarr(str(output))
+    photo = sdata.images["tims_optical_photo"]
+    assert list(get_transformation(photo, get_all=True)) == ["tims_optical_photo"]
+    root = json.loads((output / "zarr.json").read_text(encoding="utf-8"))
+    assert root["attributes"]["optical_images"]["alignment_element"] is None
+    # The TIC image is still placed as ever.
+    assert "global" in get_transformation(sdata.images["tims_z0_tic"], get_all=True)
+
+
+def _named(tmp_path: Path, names: List[str]) -> List[str]:
+    """The element names a labelling reader's images get, in order."""
+    rng = np.random.default_rng(11)
+    labels: Dict[Path, Optional[OpticalImageLabel]] = {}
+    for number, name in enumerate(names):
+        path = tmp_path / f"file{number}.tif"
+        tifffile.imwrite(str(path), rng.integers(0, 256, (8, 8, 3), dtype=np.uint8))
+        labels[path] = OpticalImageLabel(name, f"images/{name}.tif")
+    optical = _optical(tmp_path, _LabellingReader(labels))
+    optical.compute_alignment()
+    images: Dict[str, Any] = {}
+    optical.add_images(images)
+    return [n.removeprefix("ds_optical_") for n in images]
+
+
+def test_names_that_differ_only_by_a_cleaned_character_do_not_clash(
+    tmp_path: Path,
+) -> None:
+    assert _named(tmp_path, ["my-scan", "my scan", "MY_SCAN"]) == [
+        "my_scan",
+        "my_scan_1",
+        "my_scan_2",
+    ]
+
+
+def test_names_that_differ_only_past_the_cut_do_not_clash(tmp_path: Path) -> None:
+    first, second = "x" * NAME_BUDGET + "a", "x" * NAME_BUDGET + "b"
+    assert len(first) == 31
+    got = _named(tmp_path, [first, second])
+    assert got == ["x" * NAME_BUDGET, "x" * (NAME_BUDGET - 2) + "_1"]
+    assert all(len(n) <= NAME_BUDGET for n in got)
+
+
+def test_a_numbered_name_stays_inside_the_budget(tmp_path: Path) -> None:
+    names = [f"{'y' * 40}{n}" for n in range(12)]
+    got = _named(tmp_path, names)
+    assert len(set(got)) == 12
+    assert all(len(n) <= NAME_BUDGET for n in got)
+    assert got[10].endswith("_10")
+
+
+def test_a_name_cut_to_end_in_a_dot_has_no_trailing_dot(tmp_path: Path) -> None:
+    got = _named(tmp_path, ["a" * 29 + ".b", "scan."])
+    assert got == ["a" * 29, "scan"]
+
+
+@pytest.mark.parametrize("character", list("()&#,:+"))
+def test_characters_a_store_cannot_name_become_underscores(
+    tmp_path: Path, character: str
+) -> None:
+    assert _named(tmp_path, [f"a{character}b"]) == ["a_b"]
+
+
+@pytest.mark.parametrize(
+    "stem, expected",
+    [
+        ("Slide A (2)", "slide_a__2_"),
+        ("UPPER", "upper"),
+        ("x" * 45, "x" * NAME_BUDGET),
+        ("v1.2.3", "v1.2.3"),
+        (".hidden.", "hidden"),
+        ("", "image"),
+        ("...", "image"),
+    ],
+)
+def test_clean_stem(stem: str, expected: str) -> None:
+    assert _clean_stem(stem) == expected
+
+
+def test_a_cleaned_name_that_is_empty_is_called_image(tmp_path: Path) -> None:
+    assert _named(tmp_path, ["...", ".."]) == ["image", "image_1"]
 
 
 def test_excluded_optical_images_leave_every_piece_of_state_empty(
