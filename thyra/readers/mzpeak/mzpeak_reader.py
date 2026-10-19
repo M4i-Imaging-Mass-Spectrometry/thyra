@@ -2275,9 +2275,12 @@ class MzPeakReader(BaseMSIReader):
         (``CON``, ``NUL``, ``COM1`` ...) gets a trailing ``_``, and the
         length is capped so the copy's path stays short.
         """
+        # The suffix is cut here, not by ``Path.stem``: what ``stem`` makes
+        # of a name like ``....png`` differs between Python versions.
+        base, dot, _ = Path(name).name.rpartition(".")
         stem = "".join(
             c if c.isascii() and (c.isalnum() or c in "_-.") else "_"
-            for c in Path(name).stem.strip(". ")
+            for c in (base if dot else Path(name).name).strip(". ")
         )[:100].rstrip(".")
         reserved = {"CON", "PRN", "AUX", "NUL"} | {
             f"{port}{n}" for port in ("COM", "LPT") for n in range(1, 10)
