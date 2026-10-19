@@ -195,6 +195,19 @@ def _precursor_axis(
     return targets[order], mobility[order], rank
 
 
+def precursor_mz_text(mz: float) -> str:
+    """A precursor m/z written exactly: the shortest decimal that reads back as it.
+
+    Python's ``repr`` of the float, with a trailing ``.0`` dropped, so
+    ``500.0`` is ``500`` and ``1179.731`` stays ``1179.731``. Two
+    different m/z values never get the same text, which six significant
+    digits (``{mz:g}``) did not promise: ``798.5401`` and ``798.5404``
+    were both ``798.54`` (issue #518).
+    """
+    text = repr(float(mz))
+    return text[:-2] if text.endswith(".0") else text
+
+
 def _var_labels(
     precursor_mz: NDArray[np.float64],
     precursor_index: NDArray[np.int64],
@@ -205,15 +218,20 @@ def _var_labels(
     Named after the precursor's m/z rather than its position in the
     schedule: a rank is only meaningful inside one dataset, so labelling
     by it would let two samples with different schedules concatenate the
-    wrong precursors onto each other without an error. Isomers share an
-    m/z and so share a stem. Each takes its rank among the windows of its
-    stem, in mobility order over the whole schedule (``precursor_mz`` is
-    the axis, sorted by m/z then mobility), and every one of its columns
-    carries that rank: the first isomer none, the second ``_1``. The
-    suffix used to be given only in a mass bin both isomers held, so one
-    label could name a different isomer in two stores (issue #498).
+    wrong precursors onto each other without an error. The stem writes
+    the m/z exactly (:func:`precursor_mz_text`), so a stem names one
+    exact precursor m/z and two different m/z never share one. Only
+    isomers, windows at the same m/z, share a stem. Each takes its rank
+    among the windows of its stem, in mobility order over the whole
+    schedule (``precursor_mz`` is the axis, sorted by m/z then mobility),
+    and every one of its columns carries that rank: the first isomer
+    none, the second ``_1``. The suffix used to be given only in a mass
+    bin both isomers held, so one label could name a different isomer in
+    two stores (issue #498).
     """
-    stems = np.array([f"p{mz:g}" for mz in precursor_mz.tolist()], dtype=_STRING)
+    stems = np.array(
+        [f"p{precursor_mz_text(mz)}" for mz in precursor_mz.tolist()], dtype=_STRING
+    )
     _unique_stems, first, stem_id = np.unique(
         stems, return_index=True, return_inverse=True
     )
