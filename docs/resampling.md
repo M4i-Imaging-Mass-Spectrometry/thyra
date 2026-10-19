@@ -577,7 +577,8 @@ The count is then derived per axis type:
 Each is the integral of `1 / width(m)` across the mass range, so the bin width
 the axis actually realizes at your reference m/z is the width you asked for.
 The `reflector_tof`, `orbitrap` and `fticr` counts divide by the lower end, so
-a range starting at or below m/z 0 is refused on those axes. Set
+a range starting at or below m/z 0 is refused on those axes, and on a `tof`
+axis whose law has no linear term. Set
 `--resample-min-mz` above 0, or use a `constant` axis.
 A count derived this way is floored at 100 bins; a count given with
 `--resample-bins` is used as it is. When the floor or a given count sets the

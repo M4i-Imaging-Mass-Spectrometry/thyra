@@ -327,6 +327,25 @@ class TestALowerEndAtZeroIsRefusedOnAnInverseAxis:
 
         assert planner.resolve().min_mz == 0.0
 
+    def test_a_tof_law_without_a_linear_term_is_refused(self):
+        told = {"essential_metadata": {"mass_range": (0.0, 1100.0)}}
+        planner = AxisPlanner.from_metadata(
+            told, ResamplingConfig(axis_type=AxisType.TOF, tof_a=0.0, tof_b=1e-5)
+        )
+
+        with pytest.raises(ConversionRefused, match="needs a lower end above 0"):
+            planner.resolve()
+
+    def test_a_tof_law_with_a_linear_term_lays_from_zero(self):
+        told = {"essential_metadata": {"mass_range": (0.0, 1100.0)}}
+        planner = AxisPlanner.from_metadata(
+            told, ResamplingConfig(axis_type=AxisType.TOF, tof_a=0.01, tof_b=1e-8)
+        )
+
+        plan = planner.resolve()
+        assert plan.min_mz == 0.0
+        assert plan.target_bins >= 2
+
     def test_a_non_finite_range_is_still_refused_as_not_finite(self):
         told = {"essential_metadata": {"mass_range": (0.0, np.inf)}}
         planner = AxisPlanner.from_metadata(

@@ -5231,15 +5231,18 @@ clause of D50.
   every sample falls between two axis points, or when the gap tolerance
   vetoes every bin. When the range holds no sample, nothing is placed.
 - **A spectrum whose largest value is above 2^900 is resampled scaled down**
-  by a power of two, then scaled back. Scaling by a power of two is exact,
-  so every other spectrum is resampled bit for bit as before.
+  by a power of two, then scaled back. Every other spectrum is resampled
+  bit for bit as before. Inside a scaled spectrum, a value more than about
+  2^1020 below its largest loses precision or reads as zero.
 - **The table's `average_spectrum` divides before it sums in a column whose
   sum overflows.** Every other column is summed and then divided, as before.
 - **A range starting at or below m/z 0 is refused on a `reflector_tof`,
-  `orbitrap` or `fticr` axis,** in one line that names where the bound came
-  from. Their bin counts divide by the lower end, and a centroid source with
-  a peak at m/z 0 ended the default conversion in a `ZeroDivisionError`.
-  `constant`, `linear_tof` and `tof` axes lay a range from 0, and still do.
+  `orbitrap` or `fticr` axis, and on a `tof` axis whose law has `A = 0`,**
+  in one line that names where the bound came from. Their bin counts divide
+  by the lower end or take its logarithm, and a centroid source with a peak
+  at m/z 0 ended the default conversion in a `ZeroDivisionError`. `constant`
+  and `linear_tof` axes, and a `tof` law with `A > 0`, lay a range from 0,
+  and still do.
 - **Messages.** A store emptied by `--intensity-threshold` is refused as
   "every peak was below --intensity-threshold", not "the reader yielded no
   spectra at all". The "dropping N empty pixel rows" line counts positions
@@ -5281,7 +5284,7 @@ finite.
 - Stores with values near the float64 maximum keep every row and get a
   finite average spectrum.
 - A source with a peak at m/z 0 on a `reflector_tof`, `orbitrap` or `fticr`
-  axis is refused where it crashed.
+  axis, or a `tof` axis with `A = 0`, is refused where it crashed.
 
 A `tic_preserving` store whose spectra lie inside the range and hold no
 repeated m/z does not move, and neither does any `nearest_neighbor` or

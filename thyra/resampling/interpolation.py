@@ -471,9 +471,11 @@ def _overflow_safe_scale(intensities: NDArray[np.float64]) -> float:
     an axis length of values each no larger than the spectrum's largest.
     Near the top of the float64 range those sums overflowed to infinity,
     the rescale factor came out zero, and the pixel was dropped (issue
-    #516). Scaling by a power of two is exact, so a spectrum is scaled only
-    when it needs it, and every other spectrum is resampled bit for bit as
-    before.
+    #516). A spectrum is scaled only when it needs it, so every other
+    spectrum is resampled bit for bit as before. Scaling by a power of two
+    is exact while a value stays a normal float; in a spectrum that is
+    scaled, a value more than about 2^1020 below its largest loses
+    precision or reads as zero.
 
     Returns:
         ``1.0``, or the power of two that brings the largest value below 1.
@@ -506,6 +508,9 @@ def _nearest_bins(
     indices, values = nn_accumulate(
         nn_map_to_bins(axis, mzs[inside]), intensities[inside]
     )
+    if not float(np.sum(values)) > 0.0:
+        # No current to keep, as the rescale would have found.
+        return _empty()
     return indices, values
 
 

@@ -331,6 +331,17 @@ class TestNothingInterpolatedStillKeepsTheCurrent:
         assert indices.size == 0
         assert values.size == 0
 
+    def test_a_spectrum_with_no_positive_current_stays_empty(self):
+        indices, values = tic_preserving_sparse(
+            self.AXIS,
+            np.array([400.6, 400.7]),
+            np.array([-1.0, -2.0]),
+            None,
+            (100.0, 900.0),
+        )
+        assert indices.size == 0
+        assert values.size == 0
+
 
 class TestHugeIntensitiesStayFinite:
     def test_a_value_near_the_float_maximum_does_not_overflow(self):
