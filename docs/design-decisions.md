@@ -5737,7 +5737,7 @@ each spectrum's z (D63), at one byte per spectrum.
 holds MS1 too. A file with no level, with level 0 or 1 only, or with MSn on
 pixels of their own converts as before. Before and after were converted
 from the same tree otherwise: the committed imzML and timsTOF fixtures, two
-public imzML sets, two profile imzML exports, a 918,855-spectrum imzML and
+example imzML sets, two profile imzML exports, a 918,855-spectrum imzML and
 four mzPeak archives. All 17 stores are identical. Reading the levels adds
 about 3 s to the 46 s parse of the 918,855-spectrum file.
 
