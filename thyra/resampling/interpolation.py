@@ -23,7 +23,7 @@ from typing import Optional, Tuple
 import numpy as np
 from numpy.typing import NDArray
 
-from .binning import BinLayout, kept_mz_range
+from .binning import BinLayout, kept_mz_range, nn_accumulate, nn_map_to_bins
 from .gaps import zero_across_gaps
 from .tic import preserved_tic, rescale_to_preserved_tic
 
@@ -107,7 +107,8 @@ def wide_bins(
     nothing, so a repeated or
     closely spaced explicit zero does not count; two samples at the same
     m/z count when either carries intensity, since interpolation reads
-    only one of them. On an
+    only one of them. :func:`tic_preserving_sparse` sums such samples
+    first (:func:`sum_repeated_mz`), so from there a tie never counts. On an
     evenly sampled source it cannot happen until bins are twice the sample
     spacing, so the default Waters profile route, at 1.14 bins per sample,
     and the default rapifleX one, at 0.2, never come here.
@@ -385,24 +386,139 @@ def tic_preserving_sparse(
         layout: The axis's bins for this range. ``None`` lays them here; a
             caller resampling many spectra onto one axis lays them once.
 
+    Samples that share one m/z are added up first (:func:`sum_repeated_mz`),
+    so the result does not depend on the order a source lists them in. A
+    spectrum whose largest value is near the top of the float64 range is
+    worked on scaled down by a power of two, which is exact, so no sum on
+    the way overflows (:func:`_overflow_safe_scale`).
+
     Returns:
         ``(bin_indices, intensities)`` holding only the non-zero bins,
         indices ascending.
     """
-    empty = (np.array([], dtype=np.int_), np.array([], dtype=np.float64))
     if mzs.size == 0:
-        return empty
+        return _empty()
 
     kept_range = kept_mz_range(axis, axis_range)
+    mzs_sorted, intensities_sorted = sum_repeated_mz(mzs, intensities)
 
-    if np.all(mzs[:-1] <= mzs[1:]):
-        mzs_sorted = mzs
-        intensities_sorted = intensities
-    else:
-        order = np.argsort(mzs)
-        mzs_sorted = mzs[order]
-        intensities_sorted = intensities[order]
+    scale = _overflow_safe_scale(intensities_sorted)
+    if scale == 1.0:
+        return _resample_sorted(
+            axis, mzs_sorted, intensities_sorted, gap_tolerance_da, kept_range, layout
+        )
+    indices, values = _resample_sorted(
+        axis,
+        mzs_sorted,
+        intensities_sorted * scale,
+        gap_tolerance_da,
+        kept_range,
+        layout,
+    )
+    return indices, values / scale
 
+
+def _empty() -> Tuple[NDArray[np.int_], NDArray[np.float64]]:
+    """A resampled spectrum with no bins."""
+    return np.array([], dtype=np.int_), np.array([], dtype=np.float64)
+
+
+def sum_repeated_mz(
+    mzs: NDArray[np.float64],
+    intensities: NDArray[np.float64],
+) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Sort a spectrum by m/z and add up the samples that share one m/z.
+
+    A source that lists one point per mobility scan repeats each m/z once
+    per scan. Interpolation reads only one of the tied points and the
+    support and rebinning steps read another, so the stored spectrum used
+    to depend on the order the scans were listed in: two orders of the
+    same points differed in half the bins (issue #516). Summing them is
+    what ``nearest_neighbor`` does, and what a timsTOF ``.d`` folder does
+    when it sums the scans per TOF index.
+
+    Tied points are sorted by value before they are added, so the sum is
+    the same float for every order they arrive in. A spectrum that is
+    ascending without a repeat is returned as it came.
+
+    Args:
+        mzs: Source m/z values, any order.
+        intensities: Source intensities, parallel to ``mzs``.
+
+    Returns:
+        ``(mzs, intensities)``, m/z strictly ascending.
+    """
+    if mzs.size < 2 or bool(np.all(mzs[:-1] < mzs[1:])):
+        return mzs, intensities
+    order = np.lexsort((intensities, mzs))
+    mzs = mzs[order]
+    intensities = intensities[order]
+    starts = np.flatnonzero(np.concatenate(([True], mzs[1:] != mzs[:-1])))
+    if starts.size == mzs.size:
+        return mzs, intensities
+    summed = np.add.reduceat(intensities.astype(np.float64, copy=False), starts)
+    return mzs[starts], summed
+
+
+#: Above this, a spectrum is resampled scaled down; see _overflow_safe_scale.
+_HUGE = 2.0**900
+
+
+def _overflow_safe_scale(intensities: NDArray[np.float64]) -> float:
+    """A power of two that keeps every sum over a spectrum finite.
+
+    The resampled bins and the totals the rescale reads are sums of up to
+    an axis length of values each no larger than the spectrum's largest.
+    Near the top of the float64 range those sums overflowed to infinity,
+    the rescale factor came out zero, and the pixel was dropped (issue
+    #516). Scaling by a power of two is exact, so a spectrum is scaled only
+    when it needs it, and every other spectrum is resampled bit for bit as
+    before.
+
+    Returns:
+        ``1.0``, or the power of two that brings the largest value below 1.
+    """
+    if intensities.size == 0:
+        return 1.0
+    peak = float(np.max(np.abs(intensities)))
+    if not (np.isfinite(peak) and peak > _HUGE):
+        return 1.0
+    return float(np.ldexp(1.0, -int(np.frexp(peak)[1])))
+
+
+def _nearest_bins(
+    axis: NDArray[np.float64],
+    kept_range: Tuple[float, float],
+    mzs: NDArray[np.float64],
+    intensities: NDArray[np.float64],
+) -> Tuple[NDArray[np.int_], NDArray[np.float64]]:
+    """Each sample inside the kept range, summed into its nearest bin.
+
+    The placement ``nearest_neighbor`` makes, for a spectrum interpolation
+    left nothing of: its samples all fell between two axis points, or the
+    gap tolerance vetoed every bin it reached. Without it the pixel was
+    dropped and logged as outside the acquisition polygon (issue #516).
+    """
+    lo, hi = kept_range
+    inside = (mzs >= lo) & (mzs <= hi)
+    if not inside.any():
+        return _empty()
+    indices, values = nn_accumulate(
+        nn_map_to_bins(axis, mzs[inside]), intensities[inside]
+    )
+    return indices, values
+
+
+def _resample_sorted(
+    axis: NDArray[np.float64],
+    mzs_sorted: NDArray[np.float64],
+    intensities_sorted: NDArray[np.float64],
+    gap_tolerance_da: Optional[float],
+    kept_range: Tuple[float, float],
+    layout: Optional[BinLayout],
+) -> Tuple[NDArray[np.int_], NDArray[np.float64]]:
+    """:func:`tic_preserving_sparse` on a spectrum strictly ascending in m/z."""
+    empty = _empty()
     if mzs_sorted.size == 1:
         # np.interp cannot interpolate a lone point onto a grid that does
         # not contain it -- it would return all zeros and lose the peak.
@@ -429,7 +545,7 @@ def tic_preserving_sparse(
         # Interpolate only the bins that are not rebinned.
         indices = indices[~np.isin(indices, wide, assume_unique=True)]
     elif indices.size == 0:
-        return empty
+        return _nearest_bins(axis, kept_range, mzs_sorted, intensities_sorted)
 
     targets = axis[indices]
     values = np.interp(targets, mzs_sorted, intensities_sorted, left=0.0, right=0.0)
@@ -450,6 +566,10 @@ def tic_preserving_sparse(
             mzs_sorted,
             rebin_wide_bins(layout, wide, mzs_sorted, intensities_sorted),
         )
+
+    if not float(np.sum(values)) > 0.0:
+        # Nothing interpolated survived, so there is nothing to rescale.
+        return _nearest_bins(axis, kept_range, mzs_sorted, intensities_sorted)
 
     # Rescale to the required TIC -- the step that makes the method live up
     # to its name. Reads only the kept range and the sum of ``values``, so

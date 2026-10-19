@@ -128,12 +128,9 @@ class TestCroppedAxis:
 
         out = _resample(axis, mzs, intensities)
 
-        # The kept share is measured by area, not by counting the source
-        # points that happen to fall inside. Trapezoid area over the whole
-        # spectrum is 35,000; over [450, 550] -- taking the interpolated
-        # value 75 at each cut point and the sample 50 at 500 -- it is
-        # 6,250. So 6250/35000 of a 450 TIC survives.
-        assert out.sum() == pytest.approx(450.0 * 6250.0 / 35000.0, rel=1e-9)
+        # The kept total is the sum of the samples inside [450, 550], as
+        # nearest_neighbor keeps it (D63): only the 50 at 500.
+        assert out.sum() == pytest.approx(50.0, rel=1e-9)
         assert out.sum() < intensities.sum()
 
     def test_full_range_axis_preserves_whole_tic(self):
@@ -148,8 +145,8 @@ class TestCroppedAxis:
         Counting the source points inside the range reports zero here --
         the nearest samples sit at 500.0 and 501.0, outside a window of
         [500.2, 500.8] -- and would blank a spectrum that interpolation
-        represents perfectly well. Measuring the kept share by area does
-        not have that discontinuity.
+        represents perfectly well. A window that holds no sample falls
+        back to the area share, which has no such discontinuity.
         """
         mzs = np.arange(400.0, 601.0, 1.0)
         intensities = np.full_like(mzs, 10.0)

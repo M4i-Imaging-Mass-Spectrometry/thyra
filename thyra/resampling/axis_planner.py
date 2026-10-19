@@ -693,6 +693,38 @@ def _refuse_unusable_range(
         )
 
 
+def _refuse_non_positive_floor(
+    config: ResamplingConfig, min_mz: float, axis_type: Any
+) -> None:
+    """Refuse a lower end at or below m/z 0 for an axis laid in 1/m or log m.
+
+    A ``reflector_tof``, ``orbitrap`` or ``fticr`` axis lays its bins in
+    ``log m``, ``m^-1/2`` or ``1/m``, so its bin count divides by the
+    lower end or takes its logarithm. A centroid source with a peak at
+    m/z 0 ended the default conversion in a ``ZeroDivisionError`` or
+    ``OverflowError`` traceback and wrote no store (issue #516). The
+    ``constant``, ``linear_tof`` and ``tof`` laws lay a range from 0 and
+    are left alone.
+
+    Raises:
+        ConversionRefused: If ``min_mz`` is not above 0 on such an axis.
+    """
+    name = axis_name(axis_type)
+    if name not in _NEEDS_POSITIVE_FLOOR or min_mz > 0.0:
+        return
+    raise ConversionRefused(
+        f"The resampling mass range starts at {min_mz:g} m/z, but a {name} "
+        "mass axis needs a lower end above 0. "
+        + _range_origin(config)
+        + " Set --resample-min-mz above 0, pass --mass-axis-type constant, "
+        "or convert with --no-resample."
+    )
+
+
+#: Axis laws whose bin count divides by the lower end of the range.
+_NEEDS_POSITIVE_FLOOR = frozenset({"reflector_tof", "orbitrap", "fticr"})
+
+
 def _empty_source_range_remedy(
     config: ResamplingConfig, min_mz: float, max_mz: float
 ) -> str:
@@ -1225,6 +1257,7 @@ class AxisPlanner:
                 self._detected_reference_width = tree.select_reference_width(metadata)
 
         self._regate_tic_preserving(tree, axis_type)
+        _refuse_non_positive_floor(config, min_mz, axis_type)
 
         self._settle_width_law(tree, axis_type)
         target_bins = self._target_bins(min_mz, max_mz, axis_type)

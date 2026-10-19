@@ -32,16 +32,26 @@ so a window cropped with ``--resample-min-mz`` / ``--resample-max-mz`` would
 claim every ion from the parts that were cut away. The preserved total is
 therefore the share of the spectrum that lies inside the axis range.
 
-Why that share is measured by integral, not by counting samples
----------------------------------------------------------------
+Why that share is the samples inside the range
+----------------------------------------------
 
-The obvious implementation -- sum the source intensities whose m/z falls
-inside the axis range -- is wrong whenever the target axis is narrower than
-the spacing between source points. A 0.6 Da window over a spectrum sampled
-every 1 Da can contain no source points at all, and the sum-based rule then
-reports zero and blanks a spectrum that interpolation would have represented
-perfectly well. Integrating handles that continuously: a narrow window keeps
-a proportionally small share rather than falling off a cliff.
+The share is the sum of the source samples inside the range, bounds
+included: the samples ``nearest_neighbor`` keeps, so the two methods store
+the same total for one pixel. It used to be measured by area, the integral
+over the range against the integral over the whole spectrum. A sum and a
+total are in one unit; an area share is not, once the samples are unevenly
+spaced. A spectrum with gaps -- left by ``--intensity-threshold``, or by a
+profile file that stores only its peaks -- had straight lines drawn across
+each gap, so the share followed the spacing of the samples rather than the
+ions: on public files the stored in-window current came out 0.26 to 4.9
+times what was measured there, and 126 times on a constructed one (design
+decision D63, extending D13).
+
+The area share stays for one case: a window that holds no sample at all.
+A 0.6 Da window over a spectrum sampled every 1 Da contains no source
+point, and a sum would report zero and blank a spectrum interpolation
+represents perfectly well. There the integral keeps a proportionally small
+share rather than falling off a cliff.
 
 The common case, where the axis spans the whole spectrum, is short-circuited
 so it returns the input TIC exactly rather than to within rounding.
@@ -74,8 +84,10 @@ def preserved_tic(
 
     Returns:
         The total ion current the resampled spectrum should carry. Equal to
-        ``intensities.sum()`` when the axis spans the spectrum, and ``0.0``
-        when the two ranges do not overlap.
+        ``intensities.sum()`` when the axis spans the spectrum, the sum of
+        the samples inside ``[axis_min, axis_max]`` when the range cuts it,
+        the area share when the range holds no sample, and ``0.0`` when the
+        two ranges do not overlap.
     """
     if mzs.size == 0:
         return 0.0
@@ -89,6 +101,14 @@ def preserved_tic(
     if axis_min <= mzs[0] and axis_max >= mzs[-1]:
         return total_tic
 
+    # The range cuts the spectrum: the current measured inside it, bounds
+    # included, as nearest_neighbor keeps it (D63).
+    inside = (mzs >= axis_min) & (mzs <= axis_max)
+    if inside.any():
+        return float(np.sum(intensities[inside]))
+
+    # The range holds no sample. Only an area can say how much of the
+    # spectrum lies between two samples.
     lo = max(axis_min, float(mzs[0]))
     hi = min(axis_max, float(mzs[-1]))
     if hi <= lo:
@@ -97,17 +117,14 @@ def preserved_tic(
 
     total_integral = float(np.trapezoid(intensities, mzs))
     if total_integral <= 0.0:
-        # Degenerate sampling -- repeated m/z values, or a spectrum whose
-        # points carry intensity but enclose no area. Integration says
-        # nothing useful here, so fall back to the samples inside the range.
-        inside = (mzs >= lo) & (mzs <= hi)
-        return float(np.sum(intensities[inside]))
+        # Points that carry intensity but enclose no area say nothing
+        # about the stretch between two of them.
+        return 0.0
 
-    # Integrate the source over the overlap, using interpolated values at the
-    # two cut points so a window narrower than the source spacing still gets
-    # a sensible share rather than zero.
-    interior = mzs[(mzs > lo) & (mzs < hi)]
-    kept_mz = np.concatenate(([lo], interior, [hi]))
+    # Interpolated values at the two cut points, so a window narrower than
+    # the source spacing still gets a sensible share rather than zero. No
+    # sample lies strictly between them.
+    kept_mz = np.array([lo, hi])
     kept_integral = float(np.trapezoid(np.interp(kept_mz, mzs, intensities), kept_mz))
 
     fraction = min(max(kept_integral / total_integral, 0.0), 1.0)
@@ -155,8 +172,10 @@ def rescale_to_preserved_tic(
 
     current = float(np.sum(resampled))
     if current <= 0.0:
-        # Every source peak landed strictly between two axis points. There is
-        # nothing to scale and nothing to recover.
+        # Nothing interpolated survived: every source peak landed strictly
+        # between two axis points, or the gap tolerance vetoed every bin.
+        # There is nothing to scale; tic_preserving_sparse places the
+        # current in the nearest bins instead.
         return resampled
 
     resampled *= target / current

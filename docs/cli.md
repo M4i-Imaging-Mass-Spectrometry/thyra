@@ -47,6 +47,7 @@ as a bug.
 A conversion that would store **nothing** is one of those failures. If no
 position carries a spectrum -- an all-zero source, every spectrum empty,
 every peak outside a narrowed `--resample-min-mz`/`--resample-max-mz` range,
+every peak below `--intensity-threshold`,
 every coordinate off the declared grid -- the conversion exits `1` and
 leaves no store, rather than exiting `0` with a zarr holding no table. The
 message names which of those happened. A multi-slice source with *some*

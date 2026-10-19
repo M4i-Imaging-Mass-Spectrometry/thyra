@@ -175,28 +175,38 @@ class TestTheDropIsReported:
 class TestTicPreservingAlreadyAgreed:
     """The two methods must not disagree about what the axis covers.
 
-    ``TICPreservingStrategy`` never had this bug -- ``np.interp`` is
-    given ``left=0, right=0`` and the rescale target comes from
-    ``preserved_tic``, which integrates only over the range the axis
-    covers. Pinning it here so a future change cannot make
-    nearest-neighbour the odd one out again in the other direction.
+    Both keep the samples inside the declared range and store their sum
+    (D63, extending D13); before D63 ``tic_preserving`` measured the share
+    by area and so stored a different total for a spectrum with gaps.
+    Pinning it here so neither method can become the odd one out.
     """
 
-    def test_tic_preserving_keeps_only_the_in_range_share(self):
+    MZS = [90.0, 100.0, 110.0, 120.0]
+    INTENSITIES = [1000.0, 7.0, 11.0, 5000.0]
+
+    def test_tic_preserving_stores_the_total_nearest_neighbor_stores(self):
         axis = np.linspace(100.0, 110.0, 11)
         strategy = TICPreservingStrategy(axis, None)
 
         resampled = strategy.to_dense(
-            *strategy.resample(
-                np.array([90.0, 100.0, 110.0, 120.0]),
-                np.array([1000.0, 7.0, 11.0, 5000.0]),
-            )
+            *strategy.resample(np.array(self.MZS), np.array(self.INTENSITIES))
         )
 
-        assert resampled.sum() < 1000.0
-        assert resampled.sum() == pytest.approx(
-            _resample(
-                _strategy(axis), [90.0, 100.0, 110.0, 120.0], [1000, 7, 11, 5000]
-            )[1].sum(),
-            rel=0.5,
-        )
+        nearest = _resample(_strategy(axis), self.MZS, self.INTENSITIES)[1].sum()
+        assert nearest == pytest.approx(18.0)
+        assert resampled.sum() == pytest.approx(nearest, rel=1e-9)
+
+    def test_a_window_that_cuts_the_spectrum_counts_what_it_drops(self):
+        axis = np.linspace(95.0, 115.0, 2001)
+        strategy = TICPreservingStrategy(axis, (95.0, 115.0))
+
+        with _CaptureWarnings() as captured:
+            _, values = strategy.resample(
+                np.array(self.MZS), np.array(self.INTENSITIES)
+            )
+            strategy.resample(np.array(self.MZS), np.array(self.INTENSITIES))
+
+        assert values.sum() == pytest.approx(18.0, rel=1e-9)
+        assert strategy.out_of_range_peaks == 4
+        assert len(captured.messages) == 1
+        assert "Dropping peaks that fall outside" in captured.messages[0]

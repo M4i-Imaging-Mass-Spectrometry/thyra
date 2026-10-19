@@ -38,6 +38,7 @@ three hooks the base workflow calls, ``_create_data_structures``,
 
 import logging
 import math
+import numbers
 from typing import Any, Dict, Generator, List, Literal, Optional, Tuple, Union
 
 import numpy as np
@@ -78,6 +79,25 @@ def _obs_frame(adata: AnnData) -> pd.DataFrame:
     if not isinstance(obs, pd.DataFrame):
         raise TypeError(f"Expected obs as a DataFrame, got {type(obs).__name__}")
     return obs
+
+
+def _column_means(matrix: Any, n_rows: int) -> NDArray[np.float64]:
+    """The mean of each column of ``matrix`` over its ``n_rows`` rows.
+
+    Summed, then divided, so every store with finite column sums keeps the
+    values it always had. A column whose sum overflows -- finite values
+    near the float64 maximum -- is taken again dividing first, so a
+    matrix of finite values never gets an infinite mean (issue #516).
+    """
+    rows = max(n_rows, 1)
+    means = np.asarray(matrix.sum(axis=0), dtype=np.float64).ravel() / rows
+    overflowed = np.flatnonzero(~np.isfinite(means))
+    if overflowed.size:
+        columns = matrix[:, overflowed]
+        means[overflowed] = np.asarray(
+            (columns / rows).sum(axis=0), dtype=np.float64
+        ).ravel()
+    return means
 
 
 def _cell_centred_scale(pitches: List[float], axes: Tuple[str, ...]) -> Any:
@@ -133,6 +153,10 @@ class _TableUnit:
         # var is the mass axis, and an empty column is still a bin.
         self.assembly = CscAssembly(n_cols, n_rows=0, keep_empty_columns=True)
         self.occupancy = np.zeros(self.n_grid, dtype=bool)
+        #: Positions a spectrum reached, empty or not. A position measured
+        #: but left empty is dropped like one never measured, and the log
+        #: tells the two apart (issue #516).
+        self.measured = np.zeros(self.n_grid, dtype=bool)
         #: Positions the source gave more than one spectrum for. Their
         #: entries are summed into the one row the position gets, so both
         #: the row's TIC and pass 2's per-row check have to accumulate
@@ -176,6 +200,7 @@ class _TableUnit:
             self.repeats[grid] = True
             self.assembly.merge_duplicates = True
         self.occupancy[grid] = True
+        self.measured[grid] = True
         self.tic.reshape(-1)[grid] += values.sum()
         if self.acquisition_order is not None:
             if order is None:
@@ -188,8 +213,11 @@ class _TableUnit:
             if order < self.acquisition_order[grid]:
                 self.acquisition_order[grid] = order
 
-    def finish_counting(self) -> None:
+    def finish_counting(self, no_spectrum_note: str = "") -> None:
         """Decide which grid positions become rows, and in what order.
+
+        ``no_spectrum_note`` adds another reason a position can have no
+        spectrum to the log line, such as a reader's intensity threshold.
 
         Kept rows stay in grid order and keep their **grid index** as
         ``instance_id``: the index has gaps where the empty positions
@@ -209,13 +237,21 @@ class _TableUnit:
         self.assembly.finish_counting()
         n_dropped = self.n_grid - self.n_rows
         if n_dropped:
+            # A measured spectrum left empty -- every peak below the
+            # threshold or outside the mass range -- is not a position
+            # outside the polygon, and was logged as one (issue #516).
+            n_emptied = int(np.count_nonzero(self.measured & ~self.occupancy))
             logger.info(
                 "%s: dropping %d empty pixel rows from obs (%d non-empty pixels "
-                "remain). These positions are inside the bounding box but "
-                "outside the acquisition polygon.",
+                "remain): %d positions the reader gave no spectrum for (inside "
+                "the bounding box but outside the acquisition polygon%s); %d "
+                "measured spectra empty after processing.",
                 self.key,
                 n_dropped,
                 self.n_rows,
+                n_dropped - n_emptied,
+                no_spectrum_note,
+                n_emptied,
             )
         self.observed = {}
         n_repeats = int(np.count_nonzero(self.repeats))
@@ -738,8 +774,14 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         units.sort(key=lambda unit: -1 if unit.plane is None else unit.plane)
 
         logger.info("Step 2/3: Allocating memory-mapped CSC arrays...")
+        threshold = self._intensity_threshold()
+        note = (
+            ""
+            if threshold is None
+            else f", or every peak below --intensity-threshold {threshold:g}"
+        )
         for unit in units:
-            unit.finish_counting()
+            unit.finish_counting(note)
 
         # The rows that are written, not the spectra that were read: a
         # position measured twice is one row, and an empty or out-of-grid
@@ -840,6 +882,14 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         off_grid = int(state.out_of_grid_spectra)
         peaks_in = int(state.input_peaks)
 
+        # A reader skips a spectrum its threshold emptied, so a threshold
+        # above every peak looked like a source with no spectra (#516).
+        threshold = self._intensity_threshold()
+        if threshold is not None and (pixel_count == 0 or peaks_in == 0):
+            return (
+                f"every peak was below --intensity-threshold {threshold:g}, "
+                "or the source holds none -- lower the threshold to keep them"
+            )
         if pixel_count == 0:
             return "the reader yielded no spectra at all"
         if off_grid == pixel_count:
@@ -874,6 +924,13 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 f"[{lo_mz:.4f}, {hi_mz:.4f}] m/z -- {fix}"
             )
         return "every intensity in the source is zero"
+
+    def _intensity_threshold(self) -> Optional[float]:
+        """The reader's ``--intensity-threshold``, or ``None`` when none is set."""
+        threshold = getattr(self.reader, "intensity_threshold", None)
+        if isinstance(threshold, numbers.Real):
+            return float(threshold)
+        return None
 
     def _finish_region_averages(self, state: ConversionState) -> None:
         """Divide each region's summed intensity by the rows it covers.
@@ -937,6 +994,9 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # refusal tells its causes apart by comparing the dropped totals
         # with this one (see _why_nothing_survived).
         n_input_peaks = 0
+        # Empty spectra measured on a plane that has no table yet, by plane:
+        # the table may come later, and its log counts them as measured.
+        emptied_early: Dict[int, List[int]] = {}
         self._suppress_reader_progress()
 
         with tqdm(
@@ -952,6 +1012,12 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                 mz_indices, values = self._process_spectrum(mzs, intensities)
                 nnz = int(mz_indices.size)
                 unit, grid = self._locate(units, x, y, z, create=nnz > 0)
+                if nnz == 0:
+                    if unit is not None:
+                        unit.measured[grid] = True
+                    elif self._on_an_unmet_plane(units, coords):
+                        n_x = self._grid_dimensions()[0]
+                        emptied_early.setdefault(z, []).append(y * n_x + x)
 
                 if frame is not None and passes is not None:
                     # The row the sinks count under is the grid position,
@@ -991,6 +1057,11 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
 
                 pixel_count += 1
                 pbar.update(1)
+
+        for plane, grids in emptied_early.items():
+            met = self._units_by_plane.get(plane)
+            if met is not None:
+                met.measured[grids] = True
 
         total_nnz = sum(unit.assembly.n_nonzeros for unit in units)
         if total_nnz == 0:
@@ -1148,9 +1219,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # accumulated alongside it so it *is* ``X.mean(axis=0)``, which is
         # what docs/output-format.md promises and what Ousia reads, rather
         # than a second number that has to be kept in step with it.
-        adata.uns["average_spectrum"] = np.asarray(
-            matrix.sum(axis=0), dtype=np.float64
-        ).ravel() / max(unit.n_rows, 1)
+        adata.uns["average_spectrum"] = _column_means(matrix, unit.n_rows)
         # The per-region means stay dataset-wide, because a region has no
         # z: see _finish_region_averages. On a multi-plane store they
         # therefore describe a wider population than the key above, which

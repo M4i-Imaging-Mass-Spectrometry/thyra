@@ -15,7 +15,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from thyra.resampling.interpolation import tic_preserving_sparse, tic_support_bins
+from thyra.resampling.interpolation import (
+    _overflow_safe_scale,
+    sum_repeated_mz,
+    tic_preserving_sparse,
+    tic_support_bins,
+)
 from thyra.resampling.strategies import TICPreservingStrategy
 
 
@@ -204,3 +209,161 @@ class TestOnTheDefaultMRTAxis:
         right = np.clip(right, 0, mzs.size - 1)
         ceiling = np.maximum(its[left], its[right]) * scale
         assert np.all(vals <= ceiling * (1 + 1e-12))
+
+
+_TIED_MZ = np.repeat([300.0, 300.5, 301.0, 301.5, 302.0], 3)
+_TIED_A = np.array(
+    [5, 80, 400, 300, 20, 1, 9, 9, 200, 60, 600, 3, 40, 7, 90], dtype=float
+)
+
+
+def _reverse_each_group(values):
+    return values.reshape(5, 3)[:, ::-1].ravel()
+
+
+class TestSumRepeatedMz:
+    def test_ties_are_added_and_the_result_ascends(self):
+        mzs, its = sum_repeated_mz(
+            np.array([2.0, 1.0, 2.0, 3.0]), np.array([5.0, 7.0, 6.0, 1.0])
+        )
+        np.testing.assert_array_equal(mzs, [1.0, 2.0, 3.0])
+        np.testing.assert_array_equal(its, [7.0, 11.0, 1.0])
+
+    def test_an_ascending_spectrum_is_returned_as_it_came(self):
+        mzs = np.array([1.0, 2.0, 3.0])
+        its = np.array([4.0, 5.0, 6.0])
+        out_mzs, out_its = sum_repeated_mz(mzs, its)
+        assert out_mzs is mzs
+        assert out_its is its
+
+    def test_the_sum_does_not_depend_on_the_order_of_the_ties(self):
+        values = np.array([1e16, 1.0, -1e16, 1.0, 0.5])
+        mzs = np.full(values.size, 10.0)
+        forward = sum_repeated_mz(mzs, values)[1]
+        backward = sum_repeated_mz(mzs, values[::-1].copy())[1]
+        assert forward.tolist() == backward.tolist()
+
+
+class TestTiedMzDoNotDependOnOrder:
+    """A source listing one point per scan repeats each m/z (issue #516)."""
+
+    # A kept range never narrows below the axis itself, so the window case
+    # lays its axis inside the window.
+    CASES = {
+        "whole": (np.linspace(299.0, 303.0, 4001), (299.0, 303.0)),
+        "window": (np.linspace(300.6, 301.4, 801), (300.6, 301.4)),
+    }
+
+    @pytest.mark.parametrize("case", ["whole", "window"])
+    def test_reversed_ties_and_summed_ties_give_the_same_spectrum(self, case):
+        axis, axis_range = self.CASES[case]
+        forward = tic_preserving_sparse(axis, _TIED_MZ, _TIED_A, None, axis_range)
+        backward = tic_preserving_sparse(
+            axis, _TIED_MZ, _reverse_each_group(_TIED_A), None, axis_range
+        )
+        summed_mz, summed_a = sum_repeated_mz(_TIED_MZ, _TIED_A)
+        summed = tic_preserving_sparse(axis, summed_mz, summed_a, None, axis_range)
+
+        for other in (backward, summed):
+            np.testing.assert_array_equal(forward[0], other[0])
+            np.testing.assert_array_equal(forward[1], other[1])
+
+    def test_the_whole_range_keeps_every_sample(self):
+        axis, axis_range = self.CASES["whole"]
+        _, values = tic_preserving_sparse(axis, _TIED_MZ, _TIED_A, None, axis_range)
+        assert values.sum() == pytest.approx(_TIED_A.sum(), rel=1e-12)
+
+    def test_a_window_keeps_the_samples_inside_it(self):
+        axis, axis_range = self.CASES["window"]
+        _, values = tic_preserving_sparse(axis, _TIED_MZ, _TIED_A, None, axis_range)
+        # Only the tied group at 301.0 lies inside: 9 + 9 + 200.
+        assert values.sum() == pytest.approx(218.0, rel=1e-12)
+
+
+class TestNothingInterpolatedStillKeepsTheCurrent:
+    """A pixel the interpolation leaves empty is placed, not dropped (#516)."""
+
+    AXIS = np.linspace(100.0, 900.0, 800)
+
+    def test_peaks_the_gap_tolerance_vetoes_land_in_their_nearest_bins(self):
+        indices, values = tic_preserving_sparse(
+            self.AXIS,
+            np.array([200.0, 400.0, 600.0]),
+            np.array([7.0, 7.0, 7.0]),
+            0.05,
+            (100.0, 900.0),
+        )
+        assert values.sum() == pytest.approx(21.0)
+        assert indices.size == 3
+        for index, mz in zip(indices, (200.0, 400.0, 600.0)):
+            assert index == np.argmin(np.abs(self.AXIS - mz))
+
+    def test_two_peaks_between_two_axis_points_are_kept(self):
+        _, values = tic_preserving_sparse(
+            self.AXIS,
+            np.array([400.6, 400.7]),
+            np.array([2.0, 3.0]),
+            0.05,
+            (100.0, 900.0),
+        )
+        assert values.sum() == pytest.approx(5.0)
+
+    def test_two_samples_either_side_of_a_bin_edge_are_kept_without_a_tolerance(
+        self,
+    ):
+        _, values = tic_preserving_sparse(
+            self.AXIS,
+            np.array([400.8, 400.95]),
+            np.array([2.0, 3.0]),
+            None,
+            (100.0, 900.0),
+        )
+        assert values.sum() == pytest.approx(5.0)
+
+    def test_a_spectrum_wholly_outside_the_range_stays_empty(self):
+        indices, values = tic_preserving_sparse(
+            self.AXIS,
+            np.array([50.0, 950.0]),
+            np.array([1.0, 1.0]),
+            0.05,
+            (100.0, 900.0),
+        )
+        assert indices.size == 0
+        assert values.size == 0
+
+
+class TestHugeIntensitiesStayFinite:
+    def test_a_value_near_the_float_maximum_does_not_overflow(self):
+        axis = np.linspace(100.0, 300.0, 1001)
+        _, values = tic_preserving_sparse(
+            axis,
+            np.array([100.0, 150.0, 200.0, 250.0, 300.0]),
+            np.array([1e308, 1.0, 1.0, 1.0, 1.0]),
+            None,
+            (100.0, 300.0),
+        )
+        assert np.isfinite(values).all()
+        assert values.sum() == pytest.approx(1e308 + 4.0, rel=1e-12)
+
+    def test_an_ordinary_spectrum_is_not_scaled(self):
+        assert _overflow_safe_scale(np.array([1e200, 1.0])) == 1.0
+        assert _overflow_safe_scale(np.array([])) == 1.0
+
+    def test_a_huge_spectrum_is_scaled_by_a_power_of_two(self):
+        scale = _overflow_safe_scale(np.array([1e308, 1.0]))
+        mantissa, _ = np.frexp(scale)
+        assert mantissa == 0.5
+        assert 1e308 * scale < 1.0
+
+
+class TestSpectrumOutsideTheRangeIsCounted:
+    def test_every_sample_is_counted_and_nothing_is_stored(self):
+        strategy = TICPreservingStrategy(np.linspace(100.0, 110.0, 11), (100.0, 110.0))
+
+        indices, values = strategy.resample(
+            np.array([50.0, 60.0, 70.0]), np.array([1.0, 2.0, 3.0])
+        )
+
+        assert indices.size == 0
+        assert values.size == 0
+        assert strategy.out_of_range_peaks == 3

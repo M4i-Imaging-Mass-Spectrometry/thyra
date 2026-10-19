@@ -8,9 +8,10 @@ drifted: the converter lost its rescaling step entirely, inflating TIC by
 47x on the default axis. Pinning the rule here, rather than only through
 its two callers, is what keeps them honest.
 
-The rule: preserve the share of the spectrum lying inside the target axis
-range, measured by area. Measuring by area rather than by counting the
-source points inside the range is what keeps a window narrower than the
+The rule: preserve the sum of the source samples inside the target axis
+range, bounds included -- the samples ``nearest_neighbor`` keeps (D63,
+extending D13). Only a window that holds no sample at all falls back to
+the share of the spectrum's area, which keeps a window narrower than the
 source spacing from collapsing to zero.
 """
 
@@ -46,22 +47,21 @@ class TestUncroppedIsExact:
 
 
 class TestCropping:
-    """A narrower axis keeps proportionally less."""
+    """A narrower axis keeps the sum of the samples inside it, bounds included."""
 
     @pytest.mark.parametrize(
-        "lo,hi,expected_fraction",
+        "lo,hi,expected",
         [
-            (500.0, 600.0, 0.5),
-            (450.0, 550.0, 0.5),
-            (400.0, 500.0, 0.5),
-            (475.0, 525.0, 0.25),
-            (400.0, 600.0, 1.0),
+            (500.0, 600.0, 1010.0),
+            (450.0, 550.0, 1010.0),
+            (400.0, 500.0, 1010.0),
+            (475.0, 525.0, 510.0),
+            (400.0, 600.0, 2010.0),
         ],
     )
-    def test_flat_spectrum_keeps_width_fraction(self, lo, hi, expected_fraction):
+    def test_flat_spectrum_keeps_the_samples_inside(self, lo, hi, expected):
         mzs, intensities = _flat()
-        kept = preserved_tic(mzs, intensities, lo, hi)
-        assert kept == pytest.approx(intensities.sum() * expected_fraction, rel=1e-6)
+        assert preserved_tic(mzs, intensities, lo, hi) == expected
 
     def test_kept_share_is_monotonic_in_width(self):
         mzs, intensities = _flat()
@@ -73,6 +73,12 @@ class TestCropping:
         mzs, intensities = _flat()
         for lo, hi in [(0.0, 1e6), (400.0, 600.0), (399.0, 601.0)]:
             assert preserved_tic(mzs, intensities, lo, hi) <= intensities.sum()
+
+    def test_uneven_spacing_is_not_an_area(self):
+        """Peaks far apart carry their own intensity, not the gap between them."""
+        mzs = np.array([90.0, 100.0, 110.0, 120.0])
+        intensities = np.array([1000.0, 7.0, 11.0, 5000.0])
+        assert preserved_tic(mzs, intensities, 95.0, 115.0) == 18.0
 
 
 class TestNarrowWindow:
@@ -97,12 +103,16 @@ class TestNarrowWindow:
 
 
 class TestNoOverlap:
-    """Disjoint ranges keep nothing."""
+    """Disjoint ranges keep nothing; a touching bound keeps its sample."""
 
-    @pytest.mark.parametrize("lo,hi", [(0.0, 100.0), (900.0, 1000.0), (600.0, 700.0)])
-    def test_disjoint_or_touching_returns_zero(self, lo, hi):
+    @pytest.mark.parametrize("lo,hi", [(0.0, 100.0), (900.0, 1000.0)])
+    def test_disjoint_returns_zero(self, lo, hi):
         mzs, intensities = _flat()
         assert preserved_tic(mzs, intensities, lo, hi) == 0.0
+
+    def test_a_range_touching_the_last_sample_keeps_it(self):
+        mzs, intensities = _flat()
+        assert preserved_tic(mzs, intensities, 600.0, 700.0) == 10.0
 
 
 class TestDegenerateInput:
