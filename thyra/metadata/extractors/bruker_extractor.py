@@ -71,6 +71,7 @@ class BrukerMetadataExtractor(MetadataExtractor):
         skip_total_peaks: bool = False,
         mis_metadata: Optional[Dict[str, Any]] = None,
         spectrum_type: Optional[str] = None,
+        file_type: Optional[str] = None,
     ):
         """Initialize Bruker metadata extractor.
 
@@ -98,6 +99,11 @@ class BrukerMetadataExtractor(MetadataExtractor):
                 ``None`` when unknown. The database does not state it (a
                 TDF is read as centroid or profile by choice of the reader),
                 so the reader says.
+            file_type: ``"tsf"`` or ``"tdf"``, as the reader decided it.
+                ``None`` asks the same rule the reader uses
+                (:func:`~thyra.readers.bruker.timstof.timstof_reader.analysis_database`),
+                so the two can never disagree about a folder that holds
+                both databases (issue #518).
         """
         super().__init__(conn)
         self.conn = conn
@@ -107,6 +113,7 @@ class BrukerMetadataExtractor(MetadataExtractor):
         self._skip_total_peaks = bool(skip_total_peaks)
         self._mis_metadata = dict(mis_metadata or {})
         self._spectrum_type = spectrum_type
+        self._file_type = file_type
 
     def _query_imaging_bounds(self, cursor):
         """Query imaging area bounds from GlobalMetadata."""
@@ -936,8 +943,13 @@ class BrukerMetadataExtractor(MetadataExtractor):
         return raw_metadata
 
     def _is_tdf_format(self) -> bool:
-        """Check if this is TDF format (vs TSF)."""
-        return (self.data_path / "analysis.tdf").exists()
+        """Whether the reader reads ``analysis.tdf`` (TDF) rather than ``analysis.tsf``."""
+        if self._file_type is None:
+            # Deferred: the reader module imports this one.
+            from ...readers.bruker.timstof.timstof_reader import analysis_database
+
+            self._file_type = analysis_database(self.data_path)[0]
+        return self._file_type == "tdf"
 
     def _is_maldi_dataset(self) -> bool:
         """Check if this is a MALDI dataset by checking for laser info."""

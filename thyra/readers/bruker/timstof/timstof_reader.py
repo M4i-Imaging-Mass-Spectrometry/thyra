@@ -347,6 +347,49 @@ def read_calibration_states(data_path: Path) -> List[Dict[str, Any]]:
         return []
 
 
+#: The keys of ``_read_calibration_metadata`` that describe the applied state.
+_APPLIED_STATE_KEYS = (
+    "calibration_id",
+    "calibration_uuid",
+    "calibration_datetime",
+    "calibration_source",
+    "calibration_software_version",
+)
+
+
+def analysis_database(data_path: Path) -> Tuple[str, Path]:
+    """Which analysis database a timsTOF ``.d`` is read from, and its type.
+
+    The one place that decides TSF or TDF; the reader and its metadata
+    extractor both take the answer from here, so the store cannot record
+    one format while the spectra were read from the other (issue #518).
+    ``analysis.tsf`` wins when both are present, unless it is empty and
+    ``analysis.tdf`` is not: a 0-byte database is what a stray sqlite
+    probe leaves behind, never an acquisition.
+
+    Args:
+        data_path: The ``.d`` directory.
+
+    Returns:
+        ``("tsf", path)`` or ``("tdf", path)``.
+
+    Raises:
+        FileFormatError: When neither database is present.
+    """
+    found = [
+        (file_type, path)
+        for file_type, path in (
+            ("tsf", data_path / "analysis.tsf"),
+            ("tdf", data_path / "analysis.tdf"),
+        )
+        if path.is_file()
+    ]
+    if not found:
+        raise FileFormatError(f"No analysis.tsf or analysis.tdf found in {data_path}")
+    not_empty = [entry for entry in found if entry[1].stat().st_size > 0]
+    return (not_empty or found)[0]
+
+
 def _get_frame_count(db_path: Path) -> int:
     """Get total frame count directly from database.
 
@@ -728,6 +771,7 @@ class BrukerReader(BrukerBaseMSIReader):
         # reads come from the sqlite database.
         if not self._metadata_only:
             self._initialize_sdk()
+            self._confirm_applied_calibration()
         else:
             self.dll_manager = None
             self.sdk = None
@@ -834,21 +878,8 @@ class BrukerReader(BrukerBaseMSIReader):
             ) from e
 
     def _detect_file_type(self) -> None:
-        """Detect whether this is TSF or TDF data."""
-        tsf_path = self.data_path / "analysis.tsf"
-        tdf_path = self.data_path / "analysis.tdf"
-
-        if tsf_path.exists():
-            self.file_type = "tsf"
-            self.db_path = tsf_path
-        elif tdf_path.exists():
-            self.file_type = "tdf"
-            self.db_path = tdf_path
-        else:
-            raise FileFormatError(
-                f"No analysis.tsf or analysis.tdf found in {self.data_path}"
-            )
-
+        """Detect whether this is TSF or TDF data (:func:`analysis_database`)."""
+        self.file_type, self.db_path = analysis_database(self.data_path)
         logger.debug(f"Detected file type: {self.file_type.upper()}")
 
     def _read_calibration_metadata(self) -> Optional[Dict]:
@@ -858,12 +889,14 @@ class BrukerReader(BrukerBaseMSIReader):
             Dictionary containing calibration metadata, or None if unavailable.
             The first five keys describe the state Bruker's library applies,
             and are all None when it applies none
-            (``use_recalibrated_state=False``):
+            (``use_recalibrated_state=False``, or no state maps this
+            acquisition's frames; see :meth:`_applied_state`):
             - calibration_id: ``Id`` of the applied state
             - calibration_uuid: its unique ``Key``
             - calibration_datetime: when it was made
             - calibration_source: the software that made it
-            - calibration_software_version: that software's version
+            - calibration_software_version: that software's version, None
+              when ``CalibrationInfo`` does not record it
             The rest describe the file, whichever state was applied:
             - num_calibration_versions: Total number of calibration states
             - recalibrated: Whether a state was added after the first
@@ -875,6 +908,10 @@ class BrukerReader(BrukerBaseMSIReader):
               only when it is not the applied one
         """
         cal_file = self.data_path / "calibration.sqlite"
+        # Whether the calibration the library applies is known. False only
+        # when calibration.sqlite exists, would be applied, and cannot be
+        # read (or the library disagrees with what was read).
+        self._applied_calibration_known = True
 
         if not cal_file.exists():
             # Dedupe: this reader is instantiated multiple times per
@@ -899,6 +936,7 @@ class BrukerReader(BrukerBaseMSIReader):
             raise
         except Exception as e:
             logger.error(f"Failed to read calibration metadata: {e}")
+            self._applied_calibration_known = not self.use_recalibrated_state
             return None
 
     def _parse_calibration_state(
@@ -906,19 +944,25 @@ class BrukerReader(BrukerBaseMSIReader):
     ) -> Optional[Dict]:
         """What ``calibration.sqlite`` holds, and which state gets applied.
 
-        Bruker's library applies the newest state when opened with
-        ``use_recalibrated_state`` and none of them without it: it then
+        Bruker's library applies the newest state that maps this
+        acquisition's frames when opened with ``use_recalibrated_state``,
+        and none of them without it (:meth:`_applied_state`): it then
         applies the calibration in the analysis database, which the
         extractor reports as ``instrument_calibration``. That is not the
         first state, although timsControl writes one as a MALDI run
         starts. Opened without the option, the library's own
         ``has_recalibrated_state`` answers 0 on a file that holds one, and
         a TSF whose only state is a later recalibration reads exactly like
-        its copy without the file. So with the option off, the applied
-        state's keys are all ``None``, and the newest state is reported
-        under ``latest_`` names: it is still what the source states as
-        current, and the schema's ``calibration`` section describes it
-        whichever state a conversion applied.
+        its copy without the file. So with no state applied, the applied
+        state's keys are all ``None``. Whenever the newest state is not
+        the applied one, it is reported under ``latest_`` names: it is
+        still what the source states as current, and the schema's
+        ``calibration`` section describes it whichever state a conversion
+        applied.
+
+        A file with no state at all is ``None``: the library then applies
+        the analysis database's calibration, which is known, so the m/z
+        calibration step still names it (issue #518).
         """
         cursor = conn.cursor()
         cursor.execute(
@@ -926,11 +970,22 @@ class BrukerReader(BrukerBaseMSIReader):
         )
         states = cursor.fetchall()
         if not states:
-            logger.warning(f"{cal_file} holds no calibration state")
+            logger.warning(
+                f"{cal_file} holds no calibration state; Bruker's library "
+                "applies the analysis database's calibration"
+            )
             return None
         num_versions = len(states)
         newest = self._calibration_state(cursor, states[-1])
-        applied = newest if self.use_recalibrated_state else dict.fromkeys(newest)
+        applied_row = (
+            self._applied_state(cursor, states) if self.use_recalibrated_state else None
+        )
+        if applied_row is None:
+            applied = dict.fromkeys(newest)
+        elif applied_row is states[-1]:
+            applied = newest
+        else:
+            applied = self._calibration_state(cursor, applied_row)
 
         metadata: Dict[str, Any] = {
             **applied,
@@ -941,11 +996,17 @@ class BrukerReader(BrukerBaseMSIReader):
             ),
             "calibration_file_size": cal_file.stat().st_size,
         }
-        if not self.use_recalibrated_state:
+        if applied is not newest:
             metadata.update({f"latest_{key}": value for key, value in newest.items()})
 
         # Log which calibration is being used
-        if self.use_recalibrated_state:
+        if not self.use_recalibrated_state:
+            logger.info(
+                "Using the analysis database's calibration "
+                "(use_recalibrated_state=False), none of the "
+                f"{num_versions} state(s) in calibration.sqlite"
+            )
+        elif applied is newest:
             recalibrations = num_versions - 1
             recal_info = (
                 f" (recalibrated {recalibrations} "
@@ -958,13 +1019,75 @@ class BrukerReader(BrukerBaseMSIReader):
                 f"{newest['calibration_datetime']}{recal_info}"
             )
         else:
-            logger.info(
-                "Using the analysis database's calibration "
-                "(use_recalibrated_state=False), none of the "
-                f"{num_versions} state(s) in calibration.sqlite"
+            fallback = (
+                "the analysis database's calibration"
+                if applied["calibration_id"] is None
+                else f"calibration state {applied['calibration_id']}"
+            )
+            logger.warning(
+                f"Calibration state {newest['calibration_id']} in "
+                "calibration.sqlite does not map exactly this acquisition's "
+                "frames, so Bruker's library does not apply it; it applies "
+                f"{fallback} instead"
             )
 
         return metadata
+
+    def _applied_state(
+        self, cursor: sqlite3.Cursor, states: List[Tuple[Any, ...]]
+    ) -> Optional[Tuple[Any, ...]]:
+        """The ``CalibrationState`` row Bruker's library applies, or ``None``.
+
+        The newest state whose frame mappings name exactly this
+        acquisition's frames. Measured with the bundled library on a copy
+        of ``synthetic_tims.d`` (2026-10-19): a newest state that maps one
+        frame too few, or one frame that is not in the acquisition, is
+        skipped and the state before it applied; when no state qualifies,
+        ``has_recalibrated_state`` answers 0 and the m/z are the analysis
+        database's. A TDF state needs both ``FrameMzCalibrationMapping``
+        and ``TimsCalibrationMapping`` to match; a TSF one only the first,
+        as a TSF's ``TimsCalibrationMapping`` is empty.
+
+        When the acquisition's frames cannot be read, the newest state is
+        taken, as before; the library's own answer is checked once it is
+        open (:meth:`_confirm_applied_calibration`).
+        """
+        frame_ids = self._acquisition_frame_ids()
+        if frame_ids is None:
+            return states[-1]
+        for state in reversed(states):
+            if self._state_maps_frames(cursor, int(state[0]), frame_ids):
+                return state
+        return None
+
+    def _acquisition_frame_ids(self) -> Optional[set]:
+        """Every ``Frames.Id`` of the analysis database, or ``None`` if unreadable."""
+        try:
+            with closing(open_read_only(self.db_path)) as conn:
+                return {int(row[0]) for row in conn.execute("SELECT Id FROM Frames")}
+        except (sqlite3.Error, TypeError, ValueError) as e:
+            logger.debug(f"Could not read the frame ids of {self.db_path}: {e}")
+            return None
+
+    def _state_maps_frames(
+        self, cursor: sqlite3.Cursor, state_id: int, frame_ids: set
+    ) -> bool:
+        """Whether a state's frame mappings name exactly ``frame_ids``."""
+        queries = [
+            "SELECT FrameId FROM FrameMzCalibrationMapping WHERE CalibrationState = ?"
+        ]
+        if self.file_type == "tdf":
+            queries.append(
+                "SELECT FrameId FROM TimsCalibrationMapping WHERE CalibrationState = ?"
+            )
+        for query in queries:
+            try:
+                mapped = {int(row[0]) for row in cursor.execute(query, (state_id,))}
+            except (sqlite3.Error, TypeError, ValueError):
+                return False
+            if mapped != frame_ids:
+                return False
+        return True
 
     @staticmethod
     def _calibration_state(
@@ -975,18 +1098,22 @@ class BrukerReader(BrukerBaseMSIReader):
         # The software version only. CalibrationInfo also records who
         # calibrated (CalibrationUser, MobilityCalibrationUser): a person,
         # which does nothing in a store and is not read at all -- see
-        # thyra.metadata.personal_data.
-        cursor.execute(
-            """
-            SELECT KeyName, Value
-            FROM CalibrationInfo
-            WHERE CalibrationState = ?
-            AND KeyName = 'CalibrationSoftwareVersion'
-        """,
-            (state_id,),
-        )
-
-        extra_info = dict(cursor.fetchall())
+        # thyra.metadata.personal_data. A file without the table loses the
+        # version only, not the state (issue #518).
+        try:
+            cursor.execute(
+                """
+                SELECT KeyName, Value
+                FROM CalibrationInfo
+                WHERE CalibrationState = ?
+                AND KeyName = 'CalibrationSoftwareVersion'
+            """,
+                (state_id,),
+            )
+            extra_info = dict(cursor.fetchall())
+        except sqlite3.Error as e:
+            logger.debug(f"No software version for calibration state {state_id}: {e}")
+            extra_info = {}
 
         return {
             "calibration_id": state_id,
@@ -998,20 +1125,61 @@ class BrukerReader(BrukerBaseMSIReader):
             ),
         }
 
+    def _confirm_applied_calibration(self) -> None:
+        """Check the state read from the file against the library's own answer.
+
+        Bruker's library says whether it applied a ``calibration.sqlite``
+        state to the open file. When it applied none but the file read
+        named one, the store must not name it; when it applied one the
+        file read did not find, which one is unknown, so the m/z
+        calibration step leaves ``calibration`` out.
+        """
+        if not self.use_recalibrated_state:
+            return
+        sdk = getattr(self, "sdk", None)
+        ask = getattr(sdk, "has_recalibrated_state", None)
+        if ask is None:
+            return
+        answer = ask(self.handle)
+        if not isinstance(answer, bool):
+            return
+        metadata = self._calibration_metadata
+        named = (metadata or {}).get("calibration_id")
+        if answer == (named is not None):
+            return
+        if metadata is not None and named is not None:
+            logger.warning(
+                f"Bruker's library applies no calibration.sqlite state to this "
+                f"file, though state {named} maps its frames; the analysis "
+                "database's calibration is recorded as applied"
+            )
+            if "latest_calibration_id" not in metadata:
+                metadata.update(
+                    {f"latest_{key}": metadata[key] for key in _APPLIED_STATE_KEYS}
+                )
+            metadata.update(dict.fromkeys(_APPLIED_STATE_KEYS))
+            return
+        logger.warning(
+            "Bruker's library applies a calibration.sqlite state to this file "
+            "that Thyra could not identify; the store does not say which"
+        )
+        self._applied_calibration_known = False
+
     def get_applied_mz_calibration(self) -> Optional[Dict[str, Any]]:
         """Which calibration Bruker's library applies, and where it is stored.
 
         Bruker's library converts every digitiser index to m/z itself, and
         Thyra's one decision is ``use_recalibrated_state``. With it on, the
-        library applies the newest state in ``calibration.sqlite``; with it
-        off, or without that file, it applies the calibration in the
-        analysis database and none of the states. That holds for both file
-        types. Measured with the bundled library on 2026-09-28: a
-        DataAnalysis 6.1 recalibration moved every ion of a TSF by +1.3 to
-        +1.7 ppm with the option on, and left the m/z exactly as acquired
-        with it off. A SCiLS Lab 2027a alignment, written into a TDF as its
-        second state, moved each frame by -2.3 to +0.1 ppm with it on and
-        not at all with it off.
+        library applies the newest state in ``calibration.sqlite`` that
+        maps this acquisition's frames; with it off, or without such a
+        state, it applies the calibration in the analysis database and
+        none of the states. That holds for both file types. Measured with
+        the bundled library on 2026-09-28: a DataAnalysis 6.1
+        recalibration moved every ion of a TSF by +1.3 to +1.7 ppm with the
+        option on, and left the m/z exactly as acquired with it off. A
+        SCiLS Lab 2027a alignment, written into a TDF as its second state,
+        moved each frame by -2.3 to +0.1 ppm with it on and not at all with
+        it off.
 
         What a state changes is still the library's business. The online
         lock-mass state a MALDI run writes as it starts removed a 1.5 ppm
@@ -1025,9 +1193,10 @@ class BrukerReader(BrukerBaseMSIReader):
             with the state's ``Id`` as ``calibration_state_id``, or the
             analysis database, ``"analysis.tsf"`` or ``"analysis.tdf"``.
             ``calibration`` is left out when the option is on and a
-            ``calibration.sqlite`` exists that this reader could not read,
-            since which state the library took is then unknown. ``None``
-            for a metadata-only reader, which converts nothing.
+            ``calibration.sqlite`` exists whose applied state is unknown
+            (it could not be read, or the library applied a state the read
+            did not find). ``None`` for a metadata-only reader, which
+            converts nothing.
         """
         if self._metadata_only:
             return None
@@ -1038,10 +1207,7 @@ class BrukerReader(BrukerBaseMSIReader):
         if state_id is not None:
             applied["calibration"] = "calibration.sqlite"
             applied["calibration_state_id"] = int(state_id)
-        elif not (
-            self.use_recalibrated_state
-            and (self.data_path / "calibration.sqlite").exists()
-        ):
+        elif getattr(self, "_applied_calibration_known", True):
             applied["calibration"] = f"analysis.{self.file_type}"
         return applied
 
@@ -1228,6 +1394,7 @@ class BrukerReader(BrukerBaseMSIReader):
             skip_total_peaks=self._metadata_only,
             mis_metadata=self._mis_metadata,
             spectrum_type=self._delivered_spectrum_type(),
+            file_type=self.file_type,
         )
 
     def _detect_regions(self) -> List[Tuple[int, int]]:
