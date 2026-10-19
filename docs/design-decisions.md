@@ -5349,7 +5349,9 @@ metadata document, never a store.
 
 ## D70. An mzPeak archive leaves MSn out per pixel, and no chunk loses a point
 
-**Status:** Implemented (2026-10-19), issue #522. Amends D28 and D29.
+**Status:** Implemented (2026-10-19), issue #522. Amends D28 and D29. Amended by
+D72: the imzML route applies the same MSn rule, which ends its first known
+limit.
 
 **Decision.** Five rules for the mzPeak reader.
 
@@ -5434,3 +5436,69 @@ with a warning on a resampled axis.
   is left to its own change.
 - A null observed bound costs one pass over the signal member when the
   essential metadata is read. Only archives with such a bound pay it.
+
+## D72. An imzML leaves MSn out per pixel, as an mzPeak archive does
+
+**Status:** Implemented (2026-10-19), issue #522. Completes D70 for imzML.
+
+**Decision.** The imzML route reads each spectrum's MS level and applies
+D70's rule. A spectrum of level 2 and up is left out where a spectrum of
+level 1, level 0 or no stated level sits on the same pixel. The pixel is the
+spectrum's x, y and z, so a spectrum on another plane is on another pixel.
+An MSn spectrum on a pixel of its own is kept. The log counts what was left
+out and what was kept, as the mzPeak reader's does. Both routes call one
+function for the rule.
+
+- **The level is read on the spectrum, then in its groups.** A spectrum's
+  own `MS:1000511` comes first. Otherwise the groups it references are read,
+  the last one listed that states a level, as pyimzml resolves them. A value
+  that is not a whole number, or is below 0, counts as none.
+- **A spectrum left out is not read.** It adds nothing to `X`, the raw mass
+  axis, the mass range, `n_spectra` or the peak count. Nor does it add
+  anything to the mobility point clouds or the mobility range, and it is
+  not asked for a mobility array or for one as long as its m/z array. A continuous file takes its shared axis from
+  the first spectrum that is kept.
+- **A spectrum keeps its place in the list.** `obs["acquisition_order"]`
+  still counts every `<spectrum>`, so the spectra after one left out do not
+  move (D26).
+
+**Why.** The 4.3.3 stress test (#427, F26) converted an imzML with an MS2
+spectrum on an MS1 pixel, and its own `mzpeak-convert` archive.
+
+| Input | Before | After |
+|---|---|---|
+| the imzML, level stated on each spectrum | TIC 40 and 1280 | 40 and 80 |
+| the imzML, level stated in a group | TIC 40 and 1280 | 40 and 80 |
+| its mzPeak archive (D70) | TIC 40 and 80 | 40 and 80 |
+
+D70 gives the reason for the rule: an MS2 spectrum summed into its pixel's
+MS1 spectrum was never measured. Reading the level through pyimzml's
+per-spectrum values does not work. They never follow a group reference, and
+the pyimzml writer and `mzpeak-convert` both state the level in a group.
+The full per-spectrum metadata would follow it, at about 10 GiB on a
+918,855-spectrum file. So the level is read in the step that already records
+each spectrum's z (D63), at one byte per spectrum.
+
+**What changes in a store.** Only files with an MSn spectrum on a pixel that
+holds MS1 too. A file with no level, with level 0 or 1 only, or with MSn on
+pixels of their own converts as before. Before and after were converted
+from the same tree otherwise: the committed imzML and timsTOF fixtures, two
+public imzML sets, two profile imzML exports, a 918,855-spectrum imzML and
+four mzPeak archives. All 17 stores are identical. Reading the levels adds
+about 3 s to the 46 s parse of the 918,855-spectrum file.
+
+**Alternatives.**
+
+- "Refuse an imzML that holds MS1 and MSn on one pixel." Its archive
+  converts, so the two routes would still disagree.
+- "Ask pyimzml for the level with `include_spectra_metadata`." It misses a
+  level stated in a group, which is where most writers state it.
+
+**Known limits.**
+
+- The metadata-only route and a mass axis plan read the imzML header, not
+  the spectra, when the header is enough. Their spectrum count and observed
+  range then still include MSn spectra that a conversion leaves out. A plan's axis can then reach past
+  the converted spectra; no point is lost.
+- `format_specific.spectrum_count` stays the number of spectra the file
+  holds, as on the metadata-only route.
