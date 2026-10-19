@@ -466,57 +466,81 @@ class TiffColour:
                 any other image Thyra cannot read.
         """
         photometric = tifffile.PHOTOMETRIC(int(page.photometric))
-        samples = int(page.samplesperpixel)
-        colour = samples - len(page.extrasamples or ())
-        dtype = np.dtype(page.dtype)
-        bits = int(page.bitspersample)
         if photometric in (tifffile.PHOTOMETRIC.MINISBLACK, tifffile.PHOTOMETRIC.RGB):
             return cls()
-        if photometric == tifffile.PHOTOMETRIC.PALETTE:
-            colormap = page.colormap
-            if colormap is None or samples != 1 or dtype.kind != "u":
-                raise ValueError(f"{name}: palette image without a usable colour map")
-            return cls(model="palette", colormap=cls._narrow_colormap(colormap))
-        if photometric == tifffile.PHOTOMETRIC.MINISWHITE:
-            if dtype.kind == "b":
-                return cls(model="miniswhite", white=1, colour_samples=colour)
-            if dtype.kind != "u":
-                raise ValueError(f"{name}: inverted grey with {dtype} samples")
-            return cls(model="miniswhite", white=2**bits - 1, colour_samples=colour)
-        if photometric == tifffile.PHOTOMETRIC.SEPARATED:
-            inkset = page.tags.valueof(332, 1)
-            if inkset != 1 or colour != 4 or dtype.kind != "u":
-                raise ValueError(
-                    f"{name}: separated colour with {colour} inks (inkset {inkset}); "
-                    "only CMYK is read"
-                )
-            return cls(model="cmyk", white=2**bits - 1, colour_samples=4)
-        if photometric == tifffile.PHOTOMETRIC.YCBCR:
-            if int(page.compression) in (6, 7):
-                # OJPEG and JPEG: tifffile's decoder already returns RGB.
-                return cls()
-            # TIFF 6.0's default for an absent YCbCrSubSampling is (2, 2).
-            if page.subsampling is None or tuple(page.subsampling) != (1, 1):
-                raise ValueError(f"{name}: subsampled uncompressed YCbCr is not read")
-            if colour != 3 or dtype.kind != "u":
-                raise ValueError(f"{name}: YCbCr with {colour} {dtype} samples")
-            white = 2**bits - 1
-            half = 2 ** (bits - 1)
-            luma = _tag_numbers(page.tags.valueof(529), 3) or (0.299, 0.587, 0.114)
-            reference = _tag_numbers(page.tags.valueof(532), 6) or (
-                0.0,
-                float(white),
-                float(half),
-                float(white),
-                float(half),
-                float(white),
+        readers = {
+            tifffile.PHOTOMETRIC.PALETTE: cls._palette,
+            tifffile.PHOTOMETRIC.MINISWHITE: cls._inverted_grey,
+            tifffile.PHOTOMETRIC.SEPARATED: cls._separated,
+            tifffile.PHOTOMETRIC.YCBCR: cls._luma_chroma,
+        }
+        read = readers.get(photometric)
+        if read is None:
+            raise ValueError(
+                f"{name}: colour model {photometric.name} is not read; "
+                "only grey, RGB, palette, CMYK and YCbCr are"
             )
-            return cls(
-                model="ycbcr", white=white, colour_samples=3, ycbcr=luma + reference
+        return read(page, name)
+
+    @staticmethod
+    def _layout(page: Any) -> Tuple[int, int, np.dtype, int]:
+        """``(samples, colour samples, dtype, bits)`` of a TIFF page."""
+        samples = int(page.samplesperpixel)
+        colour = samples - len(page.extrasamples or ())
+        return samples, colour, np.dtype(page.dtype), int(page.bitspersample)
+
+    @classmethod
+    def _palette(cls, page: Any, name: str) -> "TiffColour":
+        samples, _, dtype, _ = cls._layout(page)
+        colormap = page.colormap
+        if colormap is None or samples != 1 or dtype.kind != "u":
+            raise ValueError(f"{name}: palette image without a usable colour map")
+        return cls(model="palette", colormap=cls._narrow_colormap(colormap))
+
+    @classmethod
+    def _inverted_grey(cls, page: Any, name: str) -> "TiffColour":
+        _, colour, dtype, bits = cls._layout(page)
+        if dtype.kind == "b":
+            return cls(model="miniswhite", white=1, colour_samples=colour)
+        if dtype.kind != "u":
+            raise ValueError(f"{name}: inverted grey with {dtype} samples")
+        return cls(model="miniswhite", white=2**bits - 1, colour_samples=colour)
+
+    @classmethod
+    def _separated(cls, page: Any, name: str) -> "TiffColour":
+        _, colour, dtype, bits = cls._layout(page)
+        inkset = page.tags.valueof(332, 1)
+        if inkset != 1 or colour != 4 or dtype.kind != "u":
+            raise ValueError(
+                f"{name}: separated colour with {colour} inks (inkset {inkset}); "
+                "only CMYK is read"
             )
-        raise ValueError(
-            f"{name}: colour model {photometric.name} is not read; "
-            "only grey, RGB, palette, CMYK and YCbCr are"
+        return cls(model="cmyk", white=2**bits - 1, colour_samples=4)
+
+    @classmethod
+    def _luma_chroma(cls, page: Any, name: str) -> "TiffColour":
+        if int(page.compression) in (6, 7):
+            # OJPEG and JPEG: tifffile's decoder already returns RGB.
+            return cls()
+        _, colour, dtype, bits = cls._layout(page)
+        # TIFF 6.0's default for an absent YCbCrSubSampling is (2, 2).
+        if page.subsampling is None or tuple(page.subsampling) != (1, 1):
+            raise ValueError(f"{name}: subsampled uncompressed YCbCr is not read")
+        if colour != 3 or dtype.kind != "u":
+            raise ValueError(f"{name}: YCbCr with {colour} {dtype} samples")
+        white = float(2**bits - 1)
+        half = float(2 ** (bits - 1))
+        luma = _tag_numbers(page.tags.valueof(529), 3) or (0.299, 0.587, 0.114)
+        reference = _tag_numbers(page.tags.valueof(532), 6) or (
+            0.0,
+            white,
+            half,
+            white,
+            half,
+            white,
+        )
+        return cls(
+            model="ycbcr", white=int(white), colour_samples=3, ycbcr=luma + reference
         )
 
     @staticmethod
@@ -2232,8 +2256,6 @@ class OpticalImages:
         # per-image guard in add_images turns that into the same
         # "skip with a warning" the whole-page decode used to give.
         probed = probe_optical_source(image_path)
-        source: AnyOpticalSource = probed
-        n_channels, y_size, x_size = source.shape
         if isinstance(probed, OpticalTiffSource) and probed.dropped_planes:
             logger.warning(
                 f"  {source_file}: only the first plane along "
@@ -2241,88 +2263,12 @@ class OpticalImages:
                 f"{probed.dropped_planes} page(s) are left out"
             )
 
-        # Determine transform.  Two cases, both only with an alignment:
-        #
-        # 1. apply_optical_alignment=True (default): "global" is
-        #    optical-image pixel space.  Primary image is Identity;
-        #    a resampled copy of it Scales to match primary dims.
-        #
-        # 2. apply_optical_alignment=False (e.g. Ousia wizard):
-        #    "global" is MSI micrometer space.  Map the primary
-        #    image's pixel coordinates into MSI um using the inverse
-        #    of the tic-to-image affine, then scale by pixel_size_um.
-        #    This way the optical image lands alongside the MSI in
-        #    the same um frame and downstream registration steps
-        #    map both together.
-        #
-        # Without the affine (no .mis, an alignment that failed, an
-        # archive image with no teach points) "global" says nothing about
-        # where the image is, so it is not placed there at all.
-        aligned = self._tic_to_image is not None
-        um_mode = not self._apply_alignment and aligned
         is_primary = self._is_primary_optical(image_path)
-        crop: Optional[OpticalCrop] = None
-        placed = aligned
-        keep_encoded = is_primary
-        transform: Any = Identity()
-        if is_primary:
-            # The FULL dimensions, crop or not: the other images scale into
-            # the whole scan's pixel grid, which is the frame everything on
-            # the MSI side is stated in.
-            self._primary_dims = (x_size, y_size)
-            if um_mode:
-                transform = self._to_um_transform()
-                logger.info(
-                    f"  Primary image -> um via inverse alignment: {x_size}x{y_size}"
-                )
-            else:
-                logger.info(f"  Primary alignment image: {x_size}x{y_size}")
-            crop = self._crop_for_alignment_image(x_size, y_size)
-            if crop is not None:
-                # The crop's pixel (u, v) is the scan's (x0 + u, y0 + v):
-                # that translation goes FIRST, and then whatever carried the
-                # whole scan into the store's frame carries the crop. So
-                # the raster-to-image affine, the pixel polygons and the
-                # coordinate_systems attr keep describing the scan's grid.
-                shift = Translation([crop.x0, crop.y0], axes=("x", "y"))
-                transform = (
-                    shift
-                    if isinstance(transform, Identity)
-                    else SequenceTransform([shift, transform])
-                )
-                source = CroppedOpticalSource(probed, crop)
-                n_channels, y_size, x_size = source.shape
-                self._crop = crop
-                logger.info(
-                    f"  Cropped to region {crop.region_id} ('{crop.region_name}'): "
-                    f"{crop.width}x{crop.height} at ({crop.x0}, {crop.y0}) of "
-                    f"{crop.full_width}x{crop.full_height}"
-                )
-        else:
-            # Non-primary: first scale to match primary, then if
-            # we're in um-mode, chain through the same um affine. An image
-            # a Scale cannot place stays out of both frames (D59). The
-            # stored dimensions decide, before any turn.
-            base = self._scale_transform(x_size, y_size)
-            keep_encoded = base is not None
-            if base is None:
-                placed = False
-            elif um_mode:
-                transform = SequenceTransform([base, self._to_um_transform()])
-            else:
-                transform = base
-        if not aligned:
-            logger.info(
-                "  No alignment for this image in the store: it is kept in a "
-                "coordinate system of its own, not in 'global'"
-            )
-        elif not placed and self._primary_dims is None:
-            logger.info(
-                "  The alignment image is not in the store, so nothing places "
-                "this one: it is kept in a coordinate system of its own"
-            )
-
-        source = self._oriented(probed, source, source_file, image_name, keep_encoded)
+        um_mode = not self._apply_alignment and self._tic_to_image is not None
+        transform, placed, keep_encoded, placed_source = self._place(probed, is_primary)
+        source = self._oriented(
+            probed, placed_source, source_file, image_name, keep_encoded
+        )
         n_channels, y_size, x_size = source.shape
 
         # Multi-scale pyramid + chunked layout.
@@ -2403,6 +2349,101 @@ class OpticalImages:
             f"({n_channels} channel{'s' if n_channels > 1 else ''}){pyramid_desc}"
             "; pixels stream in once the store is written"
         )
+
+    def _place(
+        self, probed: OpticalSource, is_primary: bool
+    ) -> Tuple[Any, bool, bool, AnyOpticalSource]:
+        """Where an image goes: ``(transform, placed, keep_encoded, source)``.
+
+        Two cases, both only with an alignment:
+
+        1. apply_optical_alignment=True (default): "global" is optical-image
+           pixel space. The primary image is Identity; a resampled copy of
+           it Scales to match the primary's dimensions.
+        2. apply_optical_alignment=False (e.g. Ousia wizard): "global" is
+           MSI micrometer space. The primary image's pixel coordinates map
+           into MSI um through the inverse of the tic-to-image affine, then
+           the pixel size, so the optical image lands alongside the MSI in
+           the same um frame and downstream registration steps map both
+           together.
+
+        Without the affine (no .mis, an alignment that failed, an archive
+        image with no teach points) "global" says nothing about where the
+        image is, so it is not placed there at all (D69). ``keep_encoded``
+        is true for the primary image and its resampled copies, which are
+        not turned by their orientation tag. ``source`` is the crop of the
+        primary image when the conversion covers one region.
+        """
+        aligned = self._tic_to_image is not None
+        if is_primary:
+            transform, source = self._place_primary(probed)
+            placed, keep_encoded = aligned, True
+        else:
+            base = self._scale_transform(probed.shape[2], probed.shape[1])
+            transform, source = self._place_copy(base), probed
+            placed, keep_encoded = aligned and base is not None, base is not None
+        if not aligned:
+            logger.info(
+                "  No alignment for this image in the store: it is kept in a "
+                "coordinate system of its own, not in 'global'"
+            )
+        elif not placed and self._primary_dims is None:
+            logger.info(
+                "  The alignment image is not in the store, so nothing places "
+                "this one: it is kept in a coordinate system of its own"
+            )
+        return transform, placed, keep_encoded, source
+
+    def _place_primary(self, probed: OpticalSource) -> Tuple[Any, AnyOpticalSource]:
+        """The primary image's transform, and its crop when it has one."""
+        _, y_size, x_size = probed.shape
+        # The FULL dimensions, crop or not: the other images scale into the
+        # whole scan's pixel grid, which is the frame everything on the MSI
+        # side is stated in.
+        self._primary_dims = (x_size, y_size)
+        transform: Any = Identity()
+        if not self._apply_alignment and self._tic_to_image is not None:
+            transform = self._to_um_transform()
+            logger.info(
+                f"  Primary image -> um via inverse alignment: {x_size}x{y_size}"
+            )
+        else:
+            logger.info(f"  Primary alignment image: {x_size}x{y_size}")
+        crop = self._crop_for_alignment_image(x_size, y_size)
+        if crop is None:
+            return transform, probed
+        # The crop's pixel (u, v) is the scan's (x0 + u, y0 + v): that
+        # translation goes FIRST, and then whatever carried the whole scan
+        # into the store's frame carries the crop. So the raster-to-image
+        # affine, the pixel polygons and the coordinate_systems attr keep
+        # describing the scan's grid.
+        shift = Translation([crop.x0, crop.y0], axes=("x", "y"))
+        transform = (
+            shift
+            if isinstance(transform, Identity)
+            else SequenceTransform([shift, transform])
+        )
+        self._crop = crop
+        logger.info(
+            f"  Cropped to region {crop.region_id} ('{crop.region_name}'): "
+            f"{crop.width}x{crop.height} at ({crop.x0}, {crop.y0}) of "
+            f"{crop.full_width}x{crop.full_height}"
+        )
+        return transform, CroppedOpticalSource(probed, crop)
+
+    def _place_copy(self, base: Optional[Any]) -> Any:
+        """A non-primary image's transform from its Scale onto the primary.
+
+        First the Scale to match the primary, then, in micrometre mode, the
+        same um affine. An image a Scale cannot place (``base`` is
+        ``None``) stays out of both frames (D59); the stored dimensions
+        decide, before any turn.
+        """
+        if base is None:
+            return Identity()
+        if not self._apply_alignment and self._tic_to_image is not None:
+            return SequenceTransform([base, self._to_um_transform()])
+        return base
 
     @staticmethod
     def _oriented(
