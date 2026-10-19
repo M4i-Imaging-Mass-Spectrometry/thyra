@@ -79,9 +79,11 @@ from ...core.registry import register_reader
 from ...errors import ConversionRefused
 from .chunk_decoding import (
     ENCODING_GRID,
+    INTENSITY_TRANSFORMS,
     LOSSY_ENCODINGS,
     decode_chunks,
     describe_term,
+    refuse_intensity_transform,
     validate_chunk_columns,
     validate_encodings,
 )
@@ -481,6 +483,51 @@ def _summed_per_bin(
     return ordered[starts], np.asarray(summed, dtype=np.float64)
 
 
+def rows_per_batch(rows: int, points: int) -> int:
+    """Rows of the chunked member to decode at a time.
+
+    Sized from the archive's own average, so that a batch holds about
+    :data:`CHUNK_BATCH_POINTS` points whether a row is a handful of
+    centroids or a long stretch of a profile spectrum.
+
+    Args:
+        rows: Rows the member holds.
+        points: Points the spectra hold.
+    """
+    low, high = CHUNK_BATCH_ROWS
+    if rows == 0 or points == 0:
+        return high
+    return int(min(max(CHUNK_BATCH_POINTS * rows // points, low), high))
+
+
+def _is_padding(mzs: NDArray[Any], intensities: NDArray[Any]) -> NDArray[np.bool_]:
+    """Which points are padding: no m/z, and no intensity or a zero one.
+
+    Null pairs have neither. MS-Numpress stores a null m/z as 0.0, so a
+    true m/z of 0.0 comes back null too, beside its intensity of 0; it
+    carries nothing either. A point with an m/z of NaN that carries an
+    intensity is not padding. It is passed on, so that the converter drops
+    or refuses it by the rule every reader follows (D55) instead of losing
+    its intensity here.
+    """
+    intensities = np.asarray(intensities, dtype=np.float64)
+    return np.asarray(
+        np.isnan(np.asarray(mzs, dtype=np.float64))
+        & (np.isnan(intensities) | (intensities == 0.0)),
+        dtype=bool,
+    )
+
+
+def _point_field(table: Any, field: str) -> NDArray[Any]:
+    """Pull one child out of the ``point`` struct column as numpy."""
+    column = table.column("point").combine_chunks()
+    # ChunkedArray.combine_chunks() yields a ChunkedArray of one chunk on
+    # some pyarrow versions and a StructArray on others; normalise.
+    if hasattr(column, "num_chunks"):
+        column = column.chunk(0)
+    return column.field(field).to_numpy(zero_copy_only=False)
+
+
 class MzPeakSpatialIndex(NamedTuple):
     """Everything about the archive that is one value per spectrum.
 
@@ -501,12 +548,18 @@ class MzPeakSpatialIndex(NamedTuple):
             subtracted, plus any ``imaging.position_offset`` the writer
             took out.
         complete: Whether every spectrum the archive lists is kept. When
-            one is left out (no position, or an MSn spectrum beside MS1),
-            the axis, the mass range and the peak count skip it too.
+            one is left out (no position, or an MSn spectrum on a pixel
+            with MS1), the peak count keeps the padding of the whole
+            member. The axis and the mass range always skip spectra that
+            are not kept.
         z_offset: The position z the archive states for its one plane, 0
             when it states none (D30).
         scan_rows: Row of the scans member each spectrum's position was
             read from, so that other values of the same scan can be read.
+        placed_coordinates: ``(m, 2)`` pixel coordinates of every spectrum
+            on a pixel, before MSn spectra beside MS1 are left out. A
+            region's listed frame count may count those spectra too.
+            ``None`` means the same as ``coordinates``.
     """
 
     spectrum_indices: NDArray[np.int64]
@@ -517,6 +570,7 @@ class MzPeakSpatialIndex(NamedTuple):
     complete: bool = True
     z_offset: int = 0
     scan_rows: Optional[NDArray[np.int64]] = None
+    placed_coordinates: Optional[NDArray[np.int64]] = None
 
 
 class MzPeakArchive:
@@ -800,34 +854,52 @@ class MzPeakArchive:
         )
         return spectrum_index, counts, levels
 
-    def _first_level_only(self, levels: NDArray[np.int64]) -> NDArray[np.bool_]:
-        """Which placed spectra to keep: all but MSn, when MS1 is placed too.
+    def _first_level_only(
+        self, levels: NDArray[np.int64], positions: NDArray[np.int64]
+    ) -> NDArray[np.bool_]:
+        """Which placed spectra to keep: all but MSn on a pixel with MS1.
 
         Spectra that share a pixel are summed into it. An MS2 spectrum
         summed with the MS1 spectrum of its pixel makes a spectrum the
-        instrument never measured, so when MS1 spectra are placed, spectra
-        of level 2 and up are left out, and the log says how many. Level 0
-        means the source stated none (mzpeak-convert writes 0 then); such
-        spectra are kept. Without a placed MS1 spectrum all are kept.
+        instrument never measured, so a spectrum of level 2 and up is left
+        out where a spectrum of a lower level sits on the same pixel, and
+        the log says how many. Level 0 means the source stated none
+        (mzpeak-convert writes 0 then), and so does a null; beside MSn
+        spectra either is read as MS1. An MSn spectrum on a pixel of its
+        own is kept: leaving it out would lose the pixel.
+
+        Args:
+            levels: MS level of each placed spectrum, 0 where none is given.
+            positions: ``(n, 2)`` position of each placed spectrum.
         """
+        keep = np.ones(levels.size, dtype=bool)
         higher = levels >= 2
-        if not (levels == 1).any() or not higher.any():
-            return np.ones(levels.size, dtype=bool)
-        first = ~higher
-        other = levels[higher]
+        if not higher.any() or higher.all():
+            return keep
+        _, pixel = np.unique(positions, axis=0, return_inverse=True)
+        pixel = np.asarray(pixel, dtype=np.int64).ravel()
+        has_first = np.zeros(int(pixel.max()) + 1, dtype=bool)
+        has_first[pixel[~higher]] = True
+        left_out = higher & has_first[pixel]
+        if not left_out.any():
+            return keep
+        other = levels[left_out]
         logger.warning(
-            "%s places %d MS1 spectra and %d MSn spectra (%s). The MSn "
-            "spectra are left out: summed into the same pixels, they would "
-            "give spectra the instrument never measured.",
+            "%s places %d MSn spectra (%s) on pixels that hold an MS1 "
+            "spectrum too (level 1, 0 or none stated). They are left out: "
+            "summed into those pixels, they would give spectra the "
+            "instrument never measured. %d MSn spectra on pixels of their "
+            "own are kept.",
             self.path.name,
-            int((levels == 1).sum()),
             int(other.size),
             ", ".join(
                 f"level {level}: {count}"
                 for level, count in zip(*np.unique(other, return_counts=True))
             ),
+            int((higher & ~left_out).sum()),
         )
-        return first
+        keep[left_out] = False
+        return keep
 
     def layout(self) -> str:
         """Return the physical layout of the signal member that is read.
@@ -863,6 +935,72 @@ class MzPeakArchive:
             values = values.field(name)
         return sorted(str(value or "") for value in values.unique().to_pylist())
 
+    def _holds_values(self, column: str) -> bool:
+        """Whether one child of the ``chunk`` struct is non-null on any row."""
+        table = self.signal().read(columns=[column])
+        values = table.column("chunk").combine_chunks()
+        if hasattr(values, "num_chunks"):
+            values = values.chunk(0)
+        for name in column.split(".")[1:]:
+            values = values.field(name)
+        return bool(values.null_count < len(values))
+
+    def iter_points(
+        self, batch_rows: int
+    ) -> Generator[Tuple[NDArray[np.int64], NDArray[Any], NDArray[Any]], None, None]:
+        """Yield the member that is read as runs of points, in stored order.
+
+        Both layouts come out alike: the ``spectrum_index``, m/z and
+        intensity of each point, with ``NaN`` m/z on padding. A block is a
+        row group of the point layout, or a batch of decoded rows of the
+        chunked layout.
+
+        Args:
+            batch_rows: Rows of the chunked layout to decode at a time.
+        """
+        data = self.signal()
+        if self.layout() == "chunk":
+            batches = data.iter_batches(batch_size=batch_rows, columns=["chunk"])
+            for batch in batches:
+                if batch.num_rows == 0:
+                    continue
+                decoded = decode_chunks(batch.column(0), str(self.path))
+                yield decoded.spectrum_index, decoded.mz, decoded.intensity
+            return
+        for group in range(data.metadata.num_row_groups):
+            table = data.read_row_group(group, columns=["point"])
+            if table.num_rows == 0:
+                continue
+            yield (
+                _point_field(table, "spectrum_index").astype(np.int64, copy=False),
+                _point_field(table, "mz"),
+                _point_field(table, "intensity"),
+            )
+
+    def observed_range(self, wanted: NDArray[np.int64]) -> Tuple[float, float]:
+        """Lowest and highest m/z the member read holds for some spectra.
+
+        For spectra whose metadata gives no observed bound. Padding is
+        passed over, and so is a point whose m/z is not finite.
+
+        Args:
+            wanted: ``spectrum_index`` of the spectra to look at.
+
+        Returns:
+            ``(low, high)``; ``(inf, -inf)`` when they hold no such point.
+        """
+        index = self.spatial_index()
+        batch = rows_per_batch(
+            int(self.signal().metadata.num_rows), int(index.point_counts.sum())
+        )
+        low, high = np.inf, -np.inf
+        for indices, mzs, _ in self.iter_points(batch):
+            mzs = np.asarray(mzs, dtype=np.float64)
+            mzs = mzs[np.isin(indices, wanted) & np.isfinite(mzs)]
+            if mzs.size:
+                low, high = min(low, float(mzs.min())), max(high, float(mzs.max()))
+        return low, high
+
     def chunk_encodings(self) -> List[str]:
         """Chunk encodings the member that is read uses, as CV accessions.
 
@@ -882,6 +1020,11 @@ class MzPeakArchive:
 
         names = self.chunk_columns()
         validate_chunk_columns(names, str(self.path))
+        for column in INTENSITY_TRANSFORMS:
+            # Beside 'intensity', a transform column is read only where it
+            # holds a value; a row whose intensities sit there is refused.
+            if column in names and self._holds_values(f"chunk.{column}"):
+                refuse_intensity_transform(column, str(self.path))
         encodings = self._distinct("chunk.chunk_encoding")
         grid_types: List[str] = []
         if ENCODING_GRID in encodings and "mz_grid" in names:
@@ -1068,7 +1211,11 @@ class MzPeakArchive:
 
         # After the position filter, so that an MS1 scan on no pixel, a
         # survey scan for one, cannot cost the placed spectra their place.
-        first = self._first_level_only(levels)
+        # The rule leaves a pixel's MSn spectra out only beside its MS1
+        # spectrum, so every pixel keeps a spectrum and the grid is the
+        # same before and after it.
+        placed_raw = np.stack([xs[rows], ys[rows]], axis=1)
+        first = self._first_level_only(levels, placed_raw)
         spectrum_index, counts, rows = (
             spectrum_index[first],
             counts[first],
@@ -1076,7 +1223,7 @@ class MzPeakArchive:
         )
         complete = spectrum_index.size == n_listed
 
-        raw = np.stack([xs[rows], ys[rows]], axis=1)
+        raw = placed_raw[first]
         z_offset = self._z_offset(self._scan_z(scans, z_column), scan_row[rows])
         self._report_shared_pixels(raw)
         bases = self._position_bases(raw)
@@ -1092,6 +1239,7 @@ class MzPeakArchive:
             complete=complete,
             z_offset=z_offset,
             scan_rows=scan_row[rows],
+            placed_coordinates=placed_raw - np.array(bases, dtype=np.int64),
         )
         return self._spatial_index
 
@@ -1715,9 +1863,9 @@ class MzPeakReader(BaseMSIReader):
         # denominator rather than a missing one.
         accumulator = MassAxisAccumulator(max_length=self.max_mass_axis_length)
         for mzs in self._iter_mz_blocks(data):
-            # Null-pair padding carries no intensity; excluded so the
-            # axis holds only channels that can actually take a value.
-            accumulator.add(mzs[~np.isnan(mzs)])
+            # Null-pair padding carries no intensity and is already left
+            # out, so the axis holds only channels that can take a value.
+            accumulator.add(mzs)
 
         try:
             axis = accumulator.finish()
@@ -1738,83 +1886,33 @@ class MzPeakReader(BaseMSIReader):
         return self._common_axis
 
     def _chunk_rows_per_batch(self, data: Any) -> int:
-        """Rows of the chunked member to decode at a time.
-
-        Sized from the archive's own average, so that a batch holds about
-        :data:`CHUNK_BATCH_POINTS` points whether a row is a handful of
-        centroids or a long stretch of a profile spectrum.
-        """
-        low, high = CHUNK_BATCH_ROWS
-        rows = int(data.metadata.num_rows)
-        points = int(self._require(self._point_counts).sum())
-        if rows == 0 or points == 0:
-            return high
-        return int(min(max(CHUNK_BATCH_POINTS * rows // points, low), high))
-
-    def _iter_chunk_blocks(self, data: Any) -> Generator[
-        Tuple[NDArray[np.int64], NDArray[np.float64], NDArray[np.float64]],
-        None,
-        None,
-    ]:
-        """Decode the chunked member, a batch of rows at a time."""
-        batches = data.iter_batches(
-            batch_size=self._chunk_rows_per_batch(data), columns=["chunk"]
+        """Rows of the chunked member to decode at a time; see :func:`rows_per_batch`."""
+        return rows_per_batch(
+            int(data.metadata.num_rows), int(self._require(self._point_counts).sum())
         )
-        for batch in batches:
-            if batch.num_rows == 0:
-                continue
-            decoded = decode_chunks(batch.column(0), str(self.data_path))
-            yield decoded.spectrum_index, decoded.mz, decoded.intensity
 
     def _iter_mz_blocks(self, data: Any) -> Generator[NDArray[Any], None, None]:
         """Yield the m/z of the member that is read, in stored order.
 
         Only the m/z of spectra that are converted: one left out, on no
-        pixel or of another MS level, would add channels no pixel fills.
+        pixel, of another MS level, or with rows the metadata does not
+        list, would add channels no pixel fills. Padding is left out too.
+        A non-finite m/z that carries an intensity is kept, so that the
+        raw axis is refused for it as an imzML's is (D55).
         """
-        if not self.archive.spatial_index().complete:
-            kept = self._require(self._spectrum_indices)
-            for indices, mzs, _ in self._iter_blocks(data):
-                yield mzs[np.isin(indices, kept, assume_unique=False)]
-            return
-        if self.archive.layout() == "chunk":
-            for _, mzs, _ in self._iter_chunk_blocks(data):
-                yield mzs
-            return
-        for group in range(data.metadata.num_row_groups):
-            table = data.read_row_group(group, columns=["point"])
-            yield self._point_field(table, "mz")
+        kept = self._require(self._spectrum_indices)
+        for indices, mzs, intensities in self._iter_blocks(data):
+            wanted = np.isin(indices, kept) & ~_is_padding(mzs, intensities)
+            yield mzs[wanted]
 
     def _iter_blocks(
         self, data: Any
     ) -> Generator[Tuple[NDArray[np.int64], NDArray[Any], NDArray[Any]], None, None]:
         """Yield the member that is read as runs of points, in stored order.
 
-        Both layouts come out alike: the ``spectrum_index``, m/z and
-        intensity of each point, with ``NaN`` m/z on padding.
+        See :meth:`MzPeakArchive.iter_points`.
         """
-        if self.archive.layout() == "chunk":
-            yield from self._iter_chunk_blocks(data)
-            return
-        for group in range(data.metadata.num_row_groups):
-            table = data.read_row_group(group, columns=["point"])
-            if table.num_rows == 0:
-                continue
-            yield (
-                self._point_field(table, "spectrum_index").astype(np.int64, copy=False),
-                self._point_field(table, "mz"),
-                self._point_field(table, "intensity"),
-            )
-
-    @staticmethod
-    def _point_field(table: Any, field: str) -> NDArray[Any]:
-        """Pull one child out of the ``point`` struct column as numpy."""
-        column = table.column("point").combine_chunks()
-        # ChunkedArray.combine_chunks() yields a ChunkedArray of one chunk on
-        # some pyarrow versions and a StructArray on others; normalise.
-        if hasattr(column, "num_chunks"):
-            column = column.chunk(0)
-        return column.field(field).to_numpy(zero_copy_only=False)
+        yield from self.archive.iter_points(self._chunk_rows_per_batch(data))
 
     def iter_spectra(self) -> Generator[
         Tuple[Tuple[int, int, int], NDArray[np.float64], NDArray[np.float64]],
@@ -1955,11 +2053,13 @@ class MzPeakReader(BaseMSIReader):
         # are null on those rows, so a surviving NaN would propagate into the
         # mass axis and into every intensity statistic downstream. See
         # MzPeakArchive.null_count() for why filling them is the wrong repair.
-        valid = ~np.isnan(mzs)
-        if not valid.all():
-            self._dropped_points += int((~valid).sum())
-            mzs = mzs[valid]
-            intensities = intensities[valid]
+        # A NaN m/z beside an intensity is not padding; the converter drops
+        # or refuses it (D55).
+        padding = _is_padding(mzs, intensities)
+        if padding.any():
+            self._dropped_points += int(padding.sum())
+            mzs = mzs[~padding]
+            intensities = intensities[~padding]
 
         if self._accumulation is not None:
             mzs, intensities = _on_tdf_scale(
@@ -2048,6 +2148,12 @@ class MzPeakReader(BaseMSIReader):
 
         coordinates = self._require(self._coordinates)
         offsets = self._require_offsets()
+        # MSn spectra left out beside MS1 were frames of their region too.
+        # Which of the two counts a writer lists is not known, so a region
+        # matches on either.
+        placed = self.archive.spatial_index().placed_coordinates
+        placed = coordinates if placed is None else placed
+        placed_counts: Dict[int, int] = {}
         assigned = np.full(coordinates.shape[0], -1, dtype=np.int64)
         overlaps = 0
         info: List[Dict[str, Any]] = []
@@ -2058,6 +2164,14 @@ class MzPeakReader(BaseMSIReader):
                 & (coordinates[:, 0] <= x_hi)
                 & (coordinates[:, 1] >= y_lo)
                 & (coordinates[:, 1] <= y_hi)
+            )
+            placed_counts[number] = int(
+                (
+                    (placed[:, 0] >= x_lo)
+                    & (placed[:, 0] <= x_hi)
+                    & (placed[:, 1] >= y_lo)
+                    & (placed[:, 1] <= y_hi)
+                ).sum()
             )
             overlaps += int((inside & (assigned >= 0)).sum())
             assigned[inside] = number
@@ -2071,7 +2185,11 @@ class MzPeakReader(BaseMSIReader):
             info.append(entry)
 
         counts = {n: int((assigned == n).sum()) for n, _, _, _ in listed}
-        mismatched = [n for n, _, frames, _ in listed if counts[n] != frames]
+        mismatched = [
+            n
+            for n, _, frames, _ in listed
+            if frames not in (counts[n], placed_counts[n])
+        ]
         unplaced = int((assigned < 0).sum())
         if overlaps or unplaced or mismatched:
             logger.warning(

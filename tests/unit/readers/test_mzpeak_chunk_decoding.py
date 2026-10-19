@@ -38,6 +38,7 @@ from tests.fixtures.mzpeak_builder import (
     PLAIN,
     SQUARE_ROOT_GRID,
     Spectrum,
+    _half_bytes_of,
     chunk_table,
     delta_encode,
     grid_indices,
@@ -269,6 +270,51 @@ class TestNumpressLinear:
         with pytest.raises(ConversionRefused, match="too short"):
             decode_numpress_linear(data[:14], np.array([14]), counts, SOURCE)
 
+    @pytest.mark.parametrize("claimed", [0, 1, 2])
+    def test_two_intensities_or_fewer_beside_more_values_are_refused(self, claimed):
+        """A buffer that holds more values than its row has intensities.
+
+        Such a row once lost its surplus values without a word, and with
+        them a pixel's points.
+        """
+        data, lengths, _ = _numpress([[100.0, 101.0, 102.5, 103.0, 105.0]])
+
+        with pytest.raises(ConversionRefused, match="counts disagree.*MS:1002312"):
+            decode_numpress_linear(data, lengths, np.array([claimed]), SOURCE)
+
+    @pytest.mark.parametrize("values", [[], [100.0], [100.0, 101.5]])
+    def test_a_header_alone_holds_its_values(self, values):
+        """No value, one or two: the header is the whole buffer."""
+        data, lengths, counts = _numpress([values])
+
+        decoded = decode_numpress_linear(data, lengths, counts, SOURCE)
+
+        np.testing.assert_array_equal(decoded, values)
+
+    def test_only_a_zero_half_byte_after_the_last_value_is_padding(self):
+        """A half byte that is not zero there is one more value."""
+        values = [100.0, 101.0, 102.5]
+        buffer = bytearray(numpress_linear_encode(values))
+        scale = struct.unpack(">d", bytes(buffer[:8]))[0]
+        whole = [int(value * scale + 0.5) for value in values]
+        residual = whole[2] - (2 * whole[1] - whole[0])
+        # The fixture holds an odd number of residual half bytes, so the
+        # last half byte of the buffer is the padding.
+        assert len(_half_bytes_of(residual)) % 2 == 1
+        assert buffer[-1] & 0xF == 0
+        buffer[-1] |= 0x8
+        data = np.frombuffer(bytes(buffer), dtype=np.uint8)
+
+        with pytest.raises(ConversionRefused, match="counts disagree.*MS:1002312"):
+            decode_numpress_linear(data, np.array([data.size]), np.array([3]), SOURCE)
+
+    def test_a_buffer_that_ends_inside_a_value_is_refused(self):
+        """The last value's half bytes run past the end of the buffer."""
+        data, lengths, counts = _numpress([[100.0, 101.0, 102.0, 5000.0]])
+
+        with pytest.raises(ConversionRefused, match="ends inside a value"):
+            decode_numpress_linear(data[:-1], lengths - 1, counts, SOURCE)
+
 
 class TestDelta:
     """Delta encoding, nulls included."""
@@ -357,6 +403,40 @@ class TestDelta:
                 SOURCE,
             )
 
+    def test_a_list_as_long_as_the_intensities_must_open_with_a_null(self):
+        """Otherwise its first value would stand where the start belongs."""
+        with pytest.raises(ConversionRefused, match="counts disagree.*MS:1003089"):
+            decode_delta(
+                np.array([100.0]),
+                np.array([0.5, 0.5, 0.5]),
+                np.array([3]),
+                np.array([3]),
+                SOURCE,
+            )
+
+    def test_a_null_start_is_refused(self):
+        """The first stored difference would be read as an m/z."""
+        with pytest.raises(ConversionRefused, match="mz_chunk_start is null.*1003089"):
+            decode_delta(
+                np.array([600.0, np.nan]),
+                np.array([0.25, 0.5]),
+                np.array([1, 1]),
+                np.array([2, 2]),
+                SOURCE,
+            )
+
+    def test_a_row_that_opens_with_a_null_needs_no_start(self):
+        """Its list holds the null in place of the start."""
+        decoded = decode_delta(
+            np.array([np.nan]),
+            np.array([np.nan, 200.0, 0.25]),
+            np.array([3]),
+            np.array([3]),
+            SOURCE,
+        )
+
+        np.testing.assert_array_equal(decoded, [np.nan, 200.0, 200.25])
+
     def test_short_and_long_runs_sum_alike(self, monkeypatch):
         """The two routes through the running sum give the same bits."""
         rng = np.random.default_rng(7)
@@ -400,6 +480,17 @@ class TestPlain:
                 np.array([100.5, 101.0]),
                 np.array([2]),
                 np.array([2]),
+                SOURCE,
+            )
+
+    def test_a_null_start_is_refused(self):
+        """The row's first point would have no m/z."""
+        with pytest.raises(ConversionRefused, match="mz_chunk_start is null.*1000576"):
+            decode_plain(
+                np.array([np.nan]),
+                np.array([100.5, 101.0]),
+                np.array([2]),
+                np.array([3]),
                 SOURCE,
             )
 
@@ -474,6 +565,18 @@ class TestGrid:
                 (np.array(GRID_PARAMETERS), np.array([3])),
                 (np.array([4, 2], dtype=np.uint32), np.array([2])),
                 np.array([3]),
+                SOURCE,
+            )
+
+    @pytest.mark.parametrize("grid_type", [LINEAR_GRID, SQUARE_ROOT_GRID])
+    def test_one_parameter_is_refused(self, grid_type):
+        """An intercept with no slope gives no m/z."""
+        with pytest.raises(ConversionRefused, match="1 parameters; the model needs"):
+            decode_grid(
+                grid_type,
+                (np.array([10.0]), np.array([1])),
+                (np.array([4, 2], dtype=np.uint32), np.array([2])),
+                np.array([2]),
                 SOURCE,
             )
 
@@ -638,6 +741,17 @@ class TestRows:
         )
         np.testing.assert_array_equal(decoded.spectrum_index, [0] * 7)
 
+    def test_a_null_m_z_beside_an_intensity_keeps_its_intensity(self):
+        """It is not padding; the reader passes it on with its intensity."""
+        chunk = _chunk(self.SPECTRA[:1], encoding=DELTA, chunk_points=50)
+        row = chunk.to_pylist()[0]
+        row["mz_chunk_values"] = [0.5, None, 150.25, 0.75]
+
+        decoded = decode_chunks(pa.array([row], type=chunk.type), SOURCE)
+
+        np.testing.assert_array_equal(decoded.mz, [100.0, 100.5, np.nan, 150.25, 151.0])
+        np.testing.assert_array_equal(decoded.intensity, [1, 2, 3, 4, 5])
+
     def test_a_sliced_batch_is_read_from_its_own_rows(self):
         """A batch is a window on a larger array, offsets and all."""
         chunk = _chunk(self.SPECTRA, encoding=DELTA, chunk_points=2)
@@ -650,8 +764,11 @@ class TestRows:
         )
 
 
-def _numpress_row(start, end, intensities=14):
-    """The converter's MS-Numpress chunk as a row, under chosen bounds."""
+def _numpress_row(start, end, intensities=14, buffer=None):
+    """The converter's MS-Numpress chunk as a row, under chosen bounds.
+
+    ``buffer`` stands in for the converter's bytes when given.
+    """
     fields = [
         pa.field("spectrum_index", pa.uint64()),
         pa.field("mz_chunk_start", pa.float64()),
@@ -668,9 +785,20 @@ def _numpress_row(start, end, intensities=14):
         "mz_chunk_values": None,
         "chunk_encoding": NUMPRESS_LINEAR,
         "intensity": [float(i) for i in range(intensities)],
-        "mz_numpress_linear_bytes": CONVERTER_NUMPRESS_BYTES,
+        "mz_numpress_linear_bytes": (
+            CONVERTER_NUMPRESS_BYTES if buffer is None else list(buffer)
+        ),
     }
     return pa.array([row], type=pa.struct(fields))
+
+
+#: The highest m/z of a row, and the scale mzpeak-convert picks for it,
+#: ``floor((2**31 - 1) / m/z)``.
+HIGH_MZ = 51234.567891
+HIGH_MZ_SCALE = float(np.floor(0x7FFFFFFF / HIGH_MZ))
+#: A value that decodes 0.45 of one over that scale above itself: 1.07e-5,
+#: past the tolerance every other encoding is held to.
+HIGH_MZ_LAST = (np.floor(HIGH_MZ * HIGH_MZ_SCALE) + 0.55) / HIGH_MZ_SCALE
 
 
 class TestBounds:
@@ -707,6 +835,83 @@ class TestBounds:
         )
 
         decoded = decode_chunks(_numpress_row(100.0, 150.0), SOURCE)
+
+        np.testing.assert_array_equal(decoded.mz, as_decoded)
+
+    def test_a_bound_a_few_tolerances_out_is_left_alone(self):
+        """The tolerance is that small: 3e-5 is too far, at either end."""
+        buffer = np.array(CONVERTER_NUMPRESS_BYTES, dtype=np.uint8)
+        as_decoded = decode_numpress_linear(
+            buffer, np.array([buffer.size]), np.array([14]), SOURCE
+        )
+        off = 3e-5
+
+        decoded = decode_chunks(
+            _numpress_row(as_decoded[0] - off, as_decoded[-1] + off), SOURCE
+        )
+
+        np.testing.assert_array_equal(decoded.mz, as_decoded)
+
+    def test_the_tolerance_is_pinned(self):
+        """Inside 1e-5 a bound is taken, at 3e-5 it is not, at either end."""
+        mz = np.array([100.0, 101.0, 102.0, 200.0, 201.0, 202.0])
+        counts = np.array([3, 3])
+
+        take_bounds(
+            mz,
+            counts,
+            np.array([100.0 - 5e-6, 200.0 - 3e-5]),
+            np.array([102.0 + 3e-5, 202.0 + 5e-6]),
+        )
+
+        np.testing.assert_array_equal(
+            mz, [100.0 - 5e-6, 101.0, 102.0, 200.0, 201.0, 202.0 + 5e-6]
+        )
+
+    def test_a_high_mass_end_is_held_to_its_own_scale(self):
+        """An end 1.07e-5 off is still the value at m/z 51,234.
+
+        The scale fits the row's largest m/z into 31 bits, so one step of
+        it is 2.4e-5 there. Before, such an end kept its decoded value,
+        fell outside the archive's mass range and was left out of the
+        store.
+        """
+        values = [4000.125, 31000.75, HIGH_MZ_LAST]
+        buffer = numpress_linear_encode(values, fixed_point=HIGH_MZ_SCALE)
+        as_decoded = decode_numpress_linear(
+            np.frombuffer(buffer, dtype=np.uint8),
+            np.array([len(buffer)]),
+            np.array([3]),
+            SOURCE,
+        )
+        assert as_decoded[-1] - HIGH_MZ_LAST > chunk_decoding.BOUND_TOLERANCE
+
+        decoded = decode_chunks(
+            _numpress_row(values[0], HIGH_MZ_LAST, intensities=3, buffer=buffer),
+            SOURCE,
+        )
+
+        assert decoded.mz[-1] == HIGH_MZ_LAST
+        assert decoded.mz[0] == values[0]
+
+    def test_a_high_mass_bound_three_steps_out_is_left_alone(self):
+        """The row's own tolerance is one step of its scale, not more."""
+        values = [4000.125, 31000.75, HIGH_MZ_LAST]
+        buffer = numpress_linear_encode(values, fixed_point=HIGH_MZ_SCALE)
+        as_decoded = decode_numpress_linear(
+            np.frombuffer(buffer, dtype=np.uint8),
+            np.array([len(buffer)]),
+            np.array([3]),
+            SOURCE,
+        )
+        off = 3 / HIGH_MZ_SCALE
+
+        decoded = decode_chunks(
+            _numpress_row(
+                as_decoded[0] - off, as_decoded[-1] + off, intensities=3, buffer=buffer
+            ),
+            SOURCE,
+        )
 
         np.testing.assert_array_equal(decoded.mz, as_decoded)
 
@@ -777,6 +982,39 @@ class TestRefusals:
         message = str(refusal.value)
         assert "MS:1002314 (MS-Numpress short logged float compression)" in message
         assert "intensity_numpress_slof_bytes" in message
+
+    @pytest.mark.parametrize(
+        "column", ["intensity_numpress_slof_bytes", "intensity_numpress_pic_bytes"]
+    )
+    def test_a_transform_beside_intensity_that_holds_a_value(self, column):
+        """One row keeps its intensities there and leaves 'intensity' null.
+
+        Read as padding, that row's pixel was lost.
+        """
+        chunk = _chunk(TestRows.SPECTRA, encoding=DELTA, chunk_points=50)
+        rows = chunk.to_pylist()
+        rows[1][column] = [0, 1, 2, 3]
+        rows[1]["intensity"] = None
+        typed = pa.struct([*chunk.type, pa.field(column, pa.large_list(pa.uint8()))])
+
+        with pytest.raises(ConversionRefused) as refusal:
+            decode_chunks(pa.array(rows, type=typed), SOURCE)
+
+        message = str(refusal.value)
+        assert chunk_decoding.INTENSITY_TRANSFORMS[column] in message
+        assert column in message
+
+    def test_an_empty_transform_column_beside_intensity_is_read(self):
+        """A writer may give the column and leave it null on every row."""
+        chunk = _chunk(TestRows.SPECTRA, encoding=DELTA, chunk_points=50)
+        column = "intensity_numpress_slof_bytes"
+        typed = pa.struct([*chunk.type, pa.field(column, pa.large_list(pa.uint8()))])
+
+        decoded = decode_chunks(pa.array(chunk.to_pylist(), type=typed), SOURCE)
+
+        np.testing.assert_array_equal(
+            decoded.mz, np.concatenate([s.mzs for s in TestRows.SPECTRA])
+        )
 
     def test_chunks_cut_along_another_axis(self):
         """No m/z bounds, no m/z chunks."""

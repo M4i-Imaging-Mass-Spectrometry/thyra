@@ -24,18 +24,25 @@ count that needs no decoding, and every decoder is held to it. A row that
 disagrees is refused by name.
 
 Two of the encodings are lossy: a decoded m/z is the stored one to within
-1e-6 or so. The two ends of a row are an exception. ``mz_chunk_start`` and
+1e-6 or so, and under MS-Numpress to within half of one over the row's
+scale, which passes 1e-5 at high m/z. The two ends of a row are an
+exception. ``mz_chunk_start`` and
 ``mz_chunk_end`` hold the first and the last m/z of the row as plain
-numbers, so the decoded ends are replaced by them. That keeps every
+numbers, so the decoded ends are replaced by them, where each lies within
+the row's own tolerance of its bound. That keeps every
 spectrum inside the m/z range the archive declares for it, which is the
 range the resampled axis is built on: a first peak that decodes 1e-7 below
 that range would be left out of the store.
 
-Null marking follows the point layout: a point whose m/z or intensity is
-null is padding for a removed run of zeros. It comes back as ``NaN`` in the
-m/z array, and the reader drops it. MS-Numpress has no null, so the
-reference writer stores such an m/z as ``0.0`` and the reference reader
-turns ``0.0`` back into a null; this module does the same.
+Null marking follows the point layout: a point whose m/z and intensity are
+both null is padding for a removed run of zeros. A point with a null
+intensity is padding whatever its m/z says, since the grid encoding has no
+null m/z to mark it with. Padding comes back as ``NaN`` in the m/z array,
+and the reader drops it. MS-Numpress has no null, so the reference writer
+stores such an m/z as ``0.0`` and the reference reader turns ``0.0`` back
+into a null; this module does the same. A null m/z beside an intensity is
+not padding: it comes back as ``NaN`` with its intensity, and the reader
+passes it on.
 """
 
 from __future__ import annotations
@@ -119,6 +126,7 @@ ENCODING_COLUMNS: Dict[str, str] = {
 #: How far a decoded end of a row may lie from the bound that replaces it.
 #: Ten times the largest error measured on a lossy encoding. A bound
 #: further off than this is not the value of that point, and is left alone.
+#: An MS-Numpress row may be allowed more; see :func:`numpress_tolerances`.
 BOUND_TOLERANCE = 1e-5
 
 #: Runs up to this length are summed side by side, longer ones one by one.
@@ -154,6 +162,47 @@ def _decoded(terms: Dict[str, str]) -> str:
     return ", ".join(describe_term(term) for term in terms)
 
 
+def refuse_intensity_transform(column: str, source: str) -> None:
+    """Raise for intensities stored under a transform this module cannot undo.
+
+    Args:
+        column: The chunk column that holds the transformed intensities.
+        source: Name of the archive, for the message.
+
+    Raises:
+        ConversionRefused: Always, naming the transform and the column.
+    """
+    raise ConversionRefused(
+        f"{source} stores its intensity array under "
+        f"{describe_term(INTENSITY_TRANSFORMS[column])}, in column "
+        f"'{column}'. Thyra does not decode that transform. Convert the "
+        f"source again with the intensities stored as they are."
+    )
+
+
+def validate_intensity_transforms(chunk: Any, source: str) -> None:
+    """Refuse a batch whose rows hold intensities under a transform.
+
+    A transform column beside ``intensity`` is read only where it holds a
+    value: a row whose intensities sit there has a null ``intensity``, and
+    reading it as padding would lose its pixel.
+
+    Args:
+        chunk: The ``chunk`` struct column of a batch.
+        source: Name of the archive, for the message.
+
+    Raises:
+        ConversionRefused: If a transform column holds a value.
+    """
+    names = [chunk.type.field(i).name for i in range(chunk.type.num_fields)]
+    for column in INTENSITY_TRANSFORMS:
+        if column not in names:
+            continue
+        values = chunk.field(column)
+        if values.null_count < len(values):
+            refuse_intensity_transform(column, source)
+
+
 def validate_chunk_columns(names: Sequence[str], source: str) -> None:
     """Refuse a chunk row this module cannot read, before any row is read.
 
@@ -174,14 +223,9 @@ def validate_chunk_columns(names: Sequence[str], source: str) -> None:
         )
     if "intensity" in names:
         return
-    for column, accession in INTENSITY_TRANSFORMS.items():
+    for column in INTENSITY_TRANSFORMS:
         if column in names:
-            raise ConversionRefused(
-                f"{source} stores its intensity array under "
-                f"{describe_term(accession)}, in column '{column}'. Thyra "
-                f"does not decode that transform. Convert the source again "
-                f"with the intensities stored as they are."
-            )
+            refuse_intensity_transform(column, source)
     raise ConversionRefused(
         f"{source} uses the mzPeak chunked layout, but its chunks have no "
         f"'intensity' column. This member holds {', '.join(names)}."
@@ -286,6 +330,24 @@ def _refuse_count(source: str, encoding: str, row: int, found: int, n: int) -> N
     )
 
 
+def _refuse_null_start(
+    source: str, encoding: str, starts: NDArray[np.float64], leads: NDArray[np.bool_]
+) -> None:
+    """Raise for a row whose first m/z is ``mz_chunk_start`` and that is null.
+
+    Without it the row's first stored value would open the row, and under
+    delta encoding that value is a difference, not an m/z.
+    """
+    missing = np.flatnonzero(leads & np.isnan(starts))
+    if missing.size:
+        raise ConversionRefused(
+            f"{source} holds a chunk whose mz_chunk_start is null: row "
+            f"{int(missing[0])} of a batch, encoded as "
+            f"{describe_term(encoding)}, leaves its first m/z to that "
+            f"column."
+        )
+
+
 def running_sums(
     values: NDArray[np.float64],
     starts: NDArray[np.int64],
@@ -349,6 +411,7 @@ def decode_plain(
         _refuse_count(
             source, ENCODING_PLAIN, row, int(lengths[row]) + 1, int(counts[row])
         )
+    _refuse_null_start(source, ENCODING_PLAIN, starts, counts > 0)
     decoded = np.empty(int(counts.sum()), dtype=np.float64)
     first = _starts(counts)
     decoded[first] = starts
@@ -398,6 +461,7 @@ def decode_delta(
         _refuse_count(
             source, ENCODING_DELTA, row, int(lengths[row]) + 1, int(counts[row])
         )
+    _refuse_null_start(source, ENCODING_DELTA, starts, leads)
 
     decoded = np.empty(int(counts.sum()), dtype=np.float64)
     decoded[first[leads]] = starts[leads]
@@ -517,13 +581,22 @@ def _numpress_residuals(
     counts: NDArray[np.int64],
     source: str,
 ) -> NDArray[np.int64]:
-    """Read every residual of every buffer, held to the expected count."""
+    """Read every residual of every buffer, held to the expected count.
+
+    A buffer of two values or fewer is held to its count too: a residual
+    after its header is a value with no intensity beside it.
+    """
     wanted = np.maximum(counts - 2, 0)
     ends = 2 * (begin + lengths)
-    # A buffer with no residual has no seed inside it.
-    seeds = np.where(wanted > 0, 2 * (begin + 16), ends)
+    # Residuals begin after the header of 16 bytes. A buffer with nothing
+    # after it has no seed inside it.
+    beyond = lengths > 16
+    seeds = np.where(beyond, 2 * (begin + 16), ends)
     halves = _half_bytes(data)
-    heads, owner, rank = _residual_heads(halves, seeds, ends, wanted)
+    # A buffer that should hold no residual is still walked, one residual
+    # far, so that one it does hold is seen.
+    walk = np.where(beyond & (wanted == 0), 1, wanted)
+    heads, owner, rank = _residual_heads(halves, seeds, ends, walk)
 
     found = np.bincount(owner, minlength=counts.size)
     # One half byte may follow the last residual: the padding that fills
@@ -531,14 +604,16 @@ def _numpress_residuals(
     surplus = rank >= wanted[owner]
     padding = surplus & (heads == ends[owner] - 1) & (halves[heads] == 0)
     found -= np.bincount(owner[padding], minlength=counts.size)
-    wrong = np.flatnonzero(found != wanted)
+    # The values the header holds: none, the first, or the first two.
+    header = np.where(lengths < 12, 0, np.where(lengths < 16, 1, 2))
+    wrong = np.flatnonzero(header + found != counts)
     if wrong.size:
         row = int(wrong[0])
         _refuse_count(
             source,
             ENCODING_NUMPRESS_LINEAR,
             row,
-            int(found[row]) + 2,
+            int(header[row] + found[row]),
             int(counts[row]),
         )
 
@@ -552,6 +627,38 @@ def _numpress_residuals(
             f"value (row {int(owner[cut[0]])} of a batch)."
         )
     return _residuals(halves, heads)
+
+
+def numpress_tolerances(
+    data: NDArray[np.uint8], lengths: NDArray[np.int64]
+) -> NDArray[np.float64]:
+    """How far each MS-Numpress row's decoded ends may lie from its bounds.
+
+    A value is stored as the whole number nearest to it times the row's
+    scale, so it decodes to within half of one over the scale. The scale
+    is chosen to fit the largest m/z of the row into 31 bits, so the error
+    grows with m/z: above m/z 42,950 or so it can pass
+    :data:`BOUND_TOLERANCE`. Each row is allowed one over its own scale,
+    and never less than :data:`BOUND_TOLERANCE`.
+
+    Args:
+        data: The bytes of every buffer, end to end.
+        lengths: Bytes in each buffer.
+
+    Returns:
+        The tolerance of each row.
+    """
+    tolerance = np.full(lengths.size, BOUND_TOLERANCE, dtype=np.float64)
+    scaled = lengths >= 8
+    at = _starts(lengths)[scaled]
+    scale = np.ascontiguousarray(data[at[:, None] + np.arange(8)]).view(">f8")[:, 0]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        quantum = np.abs(1.0 / scale)
+    usable = np.isfinite(quantum)
+    tolerance[np.flatnonzero(scaled)[usable]] = np.maximum(
+        quantum[usable], BOUND_TOLERANCE
+    )
+    return tolerance
 
 
 def decode_numpress_linear(
@@ -782,30 +889,36 @@ def take_bounds(
     counts: NDArray[np.int64],
     starts: NDArray[np.float64],
     ends: NDArray[np.float64],
+    tolerance: Optional[NDArray[np.float64]] = None,
 ) -> None:
     """Replace the decoded ends of each row by the row's bounds, in place.
 
     The first and the last m/z of a row that are not padding are set to
     ``mz_chunk_start`` and ``mz_chunk_end``, where the decoded value is
-    within :data:`BOUND_TOLERANCE` of the bound.
+    within the row's tolerance of the bound.
 
     Args:
         mz: The decoded m/z of every row, ``NaN`` on padding.
         counts: Points in each row.
         starts: ``mz_chunk_start`` of each row.
         ends: ``mz_chunk_end`` of each row.
+        tolerance: How far each row's ends may lie from its bounds;
+            :data:`BOUND_TOLERANCE` for every row when not given.
     """
     rows = np.flatnonzero(counts > 0)
     if rows.size == 0:
         return
+    if tolerance is None:
+        tolerance = np.full(counts.size, BOUND_TOLERANCE, dtype=np.float64)
     begin = _starts(counts)[rows]
     place = np.arange(mz.size, dtype=np.int64)
     valid = ~np.isnan(mz)
     lowest = np.minimum.reduceat(np.where(valid, place, mz.size), begin)
     highest = np.maximum.reduceat(np.where(valid, place, -1), begin)
+    allowed = tolerance[rows]
     for at, bound in ((lowest, starts[rows]), (highest, ends[rows])):
         held = np.flatnonzero(lowest <= highest)
-        near = np.abs(mz[at[held]] - bound[held]) <= BOUND_TOLERANCE
+        near = np.abs(mz[at[held]] - bound[held]) <= allowed[held]
         mz[at[held][near]] = bound[held][near]
 
 
@@ -816,22 +929,28 @@ def _decode_rows(
     starts: NDArray[np.float64],
     counts: NDArray[np.int64],
     source: str,
-) -> NDArray[np.float64]:
-    """Decode the rows of one encoding, in row order."""
+) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Decode the rows of one encoding, in row order.
+
+    Returns:
+        ``(mz, tolerance)``: the m/z of every point, and how far each
+        row's decoded ends may lie from its bounds.
+    """
     import pyarrow as pa  # noqa: WPS433 - deliberate lazy import
 
     column = chunk.field(ENCODING_COLUMNS[encoding]).take(pa.array(rows))
+    tolerance = np.full(rows.size, BOUND_TOLERANCE, dtype=np.float64)
     if encoding == ENCODING_GRID:
-        return _decode_grid_rows(column, counts, source)
+        return _decode_grid_rows(column, counts, source), tolerance
     values, lengths = _list_parts(column)
     if encoding == ENCODING_NUMPRESS_LINEAR:
-        return decode_numpress_linear(
-            np.asarray(values, dtype=np.uint8), lengths, counts, source
-        )
+        data = np.asarray(values, dtype=np.uint8)
+        decoded = decode_numpress_linear(data, lengths, counts, source)
+        return decoded, numpress_tolerances(data, lengths)
     values = np.asarray(values, dtype=np.float64)
     if encoding == ENCODING_DELTA:
-        return decode_delta(starts, values, lengths, counts, source)
-    return decode_plain(starts, values, lengths, counts, source)
+        return decode_delta(starts, values, lengths, counts, source), tolerance
+    return decode_plain(starts, values, lengths, counts, source), tolerance
 
 
 def _numbers(chunk: Any, name: str, kind: Any) -> NDArray[Any]:
@@ -855,6 +974,7 @@ def decode_chunks(chunk: Any, source: str) -> DecodedChunks:
     """
     names = [chunk.type.field(i).name for i in range(chunk.type.num_fields)]
     validate_chunk_columns(names, source)
+    validate_intensity_transforms(chunk, source)
 
     intensity, counts = _list_parts(chunk.field("intensity"))
     intensity = np.asarray(intensity, dtype=np.float64)
@@ -871,13 +991,15 @@ def decode_chunks(chunk: Any, source: str) -> DecodedChunks:
     holds = ~((starts == 0.0) & (ends == 0.0))
     used = sorted(set(encodings[holds]))
     validate_encodings(used, [], names, source)
+    tolerance = np.full(counts.size, BOUND_TOLERANCE, dtype=np.float64)
     for encoding in used:
         rows = np.flatnonzero(holds & (encodings == encoding))
-        mz[_positions(first[rows], counts[rows])] = _decode_rows(
+        decoded, tolerance[rows] = _decode_rows(
             chunk, encoding, rows, starts[rows], counts[rows], source
         )
+        mz[_positions(first[rows], counts[rows])] = decoded
 
-    take_bounds(mz, counts, starts, ends)
+    take_bounds(mz, counts, starts, ends, tolerance)
     # Padding is null in both arrays. A point with no intensity cannot be
     # stored, so it is padding whatever its m/z says.
     mz[np.isnan(intensity)] = np.nan
