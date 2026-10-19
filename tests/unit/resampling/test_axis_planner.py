@@ -297,7 +297,7 @@ class TestANonFiniteRangeIsRefused:
 
 
 class TestALowerEndAtZeroIsRefusedOnAnInverseAxis:
-    """A bin count that divides by the lower end cannot start at 0 (D63)."""
+    """A bin count that divides by the lower end cannot start at 0 (D71)."""
 
     @pytest.mark.parametrize(
         "axis_type", [AxisType.REFLECTOR_TOF, AxisType.ORBITRAP, AxisType.FTICR]

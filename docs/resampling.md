@@ -330,7 +330,7 @@ source samples inside the range, bounds included: the same samples
 `nearest_neighbor` keeps, so both methods store the same total for a pixel. A
 window that holds no sample at all, narrower than the spacing between two
 source points, keeps an area share instead of collapsing to zero. See
-[D63](design-decisions.md#d63-tic-preserving-resampling-keeps-the-current-measured-inside-the-window).
+[D71](design-decisions.md#d71-tic-preserving-resampling-keeps-the-current-measured-inside-the-window).
 
 A spectrum that lists one m/z more than once, as a source with one point per
 mobility scan does, has those points added up first, as `nearest_neighbor`

@@ -176,7 +176,7 @@ class TestTicPreservingAlreadyAgreed:
     """The two methods must not disagree about what the axis covers.
 
     Both keep the samples inside the declared range and store their sum
-    (D63, extending D13); before D63 ``tic_preserving`` measured the share
+    (D71, extending D13); before D71 ``tic_preserving`` measured the share
     by area and so stored a different total for a spectrum with gaps.
     Pinning it here so neither method can become the odd one out.
     """

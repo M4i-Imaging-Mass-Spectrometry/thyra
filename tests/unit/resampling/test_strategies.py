@@ -221,7 +221,7 @@ class TestTheDeclaredBound:
     "strategy_cls", [NearestNeighborStrategy, TICPreservingStrategy]
 )
 class TestOutOfRangeAccounting:
-    """Both methods count and report what falls outside the range (D63)."""
+    """Both methods count and report what falls outside the range (D71)."""
 
     def test_the_count_accumulates_across_spectra(self, strategy_cls):
         strategy = strategy_cls(np.linspace(100.0, 110.0, 11), None)

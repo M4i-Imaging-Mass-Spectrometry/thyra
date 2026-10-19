@@ -129,7 +129,7 @@ class TestCroppedAxis:
         out = _resample(axis, mzs, intensities)
 
         # The kept total is the sum of the samples inside [450, 550], as
-        # nearest_neighbor keeps it (D63): only the 50 at 500.
+        # nearest_neighbor keeps it (D71): only the 50 at 500.
         assert out.sum() == pytest.approx(50.0, rel=1e-9)
         assert out.sum() < intensities.sum()
 

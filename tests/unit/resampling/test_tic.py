@@ -9,7 +9,7 @@ drifted: the converter lost its rescaling step entirely, inflating TIC by
 its two callers, is what keeps them honest.
 
 The rule: preserve the sum of the source samples inside the target axis
-range, bounds included -- the samples ``nearest_neighbor`` keeps (D63,
+range, bounds included -- the samples ``nearest_neighbor`` keeps (D71,
 extending D13). Only a window that holds no sample at all falls back to
 the share of the spectrum's area, which keeps a window narrower than the
 source spacing from collapsing to zero.

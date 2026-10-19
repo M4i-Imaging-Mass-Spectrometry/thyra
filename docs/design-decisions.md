@@ -5207,7 +5207,7 @@ remedy is the user's own: convert again.
   report is absent, not null.
 - "Coerce to a finite stand-in, such as 0." That invents a measurement.
 
-## D63. TIC-preserving resampling keeps the current measured inside the window
+## D71. TIC-preserving resampling keeps the current measured inside the window
 
 **Status:** Implemented (2026-10-19), issue #516. Extends D13 and D22,
 supersedes the "share is measured by area" clause of D36 and the tied-m/z

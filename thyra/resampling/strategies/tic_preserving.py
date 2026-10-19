@@ -94,7 +94,7 @@ class TICPreservingStrategy(ResamplingStrategy):
 
         Samples outside the declared range are counted, and the first
         spectrum that has any is reported once, as ``nearest_neighbor``
-        reports it (D22). Until D63 this method never counted them, so a
+        reports it (D22). Until D71 this method never counted them, so a
         narrowed window dropped signal without a word and a window that
         held no peak was refused as an all-zero source.
 

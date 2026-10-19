@@ -45,7 +45,7 @@ profile file that stores only its peaks -- had straight lines drawn across
 each gap, so the share followed the spacing of the samples rather than the
 ions: on public files the stored in-window current came out 0.26 to 4.9
 times what was measured there, and 126 times on a constructed one (design
-decision D63, extending D13).
+decision D71, extending D13).
 
 The area share stays for one case: a window that holds no sample at all.
 A 0.6 Da window over a spectrum sampled every 1 Da contains no source
@@ -102,7 +102,7 @@ def preserved_tic(
         return total_tic
 
     # The range cuts the spectrum: the current measured inside it, bounds
-    # included, as nearest_neighbor keeps it (D63).
+    # included, as nearest_neighbor keeps it (D71).
     inside = (mzs >= axis_min) & (mzs <= axis_max)
     if inside.any():
         return float(np.sum(intensities[inside]))
