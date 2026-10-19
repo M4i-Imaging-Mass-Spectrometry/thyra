@@ -206,6 +206,9 @@ def _mobility_db(reader, n_scans=2382, first_frame=1, k0=("1.000000", "1.290000"
 
     reader.conn = MagicMock()
     reader.conn.execute.side_effect = execute
+    # The mocked calibration.sqlite cannot be read; this reader stands for
+    # one whose applied calibration is known (the analysis database's).
+    reader._applied_calibration_known = True
 
 
 def _axis(n_scans: int) -> MobilityAxis:
@@ -276,6 +279,8 @@ class TestMobilityIteration:
         reader._num_scans_cache = {frame_id: 2382 for frame_id, _ in frames}
         reader._num_peaks_cache = {frame_id: 500 for frame_id, _ in frames}
         reader._mobility_axis = _axis(2382)
+        # Every frame takes one TIMS calibration row, so the axis is theirs.
+        reader._per_frame_mobility = False
         sdk.index_to_mz.side_effect = lambda h, f, idx: 100.0 + 0.001 * np.asarray(idx)
 
     def test_yields_the_raw_cloud_with_the_frame_id_as_is(self):

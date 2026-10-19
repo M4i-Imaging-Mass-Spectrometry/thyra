@@ -5225,16 +5225,20 @@ its own is converted with it. No schema version change.
   points are converted with the library's call for that frame, as its m/z
   already are. The mobility table, the mass-mobility heatmap and the
   mobility grid all take these values, and the range they bin over is
-  widened to every frame's first and last scan. When every frame takes the
-  same row, the axis is used as before.
+  widened to every frame's own first and last scan. When every frame takes
+  the same row, the axis is used as before. When which rows apply cannot be
+  told (the library applied a state Thyra did not find, or a mapping cannot
+  be read), every frame is converted for itself, which is exact whatever
+  the rows are.
 - **The recorded row is the applied one.** `uns["mobility_axis"]["calibration"]`
   holds the row the library applied to the first frame, the frame the axis
   `values` come from: the applied `calibration.sqlite` state's row, or the
   analysis database's row for that frame. New keys say which: `frame_id`,
   `stored_in` (`calibration.sqlite` or `analysis.tdf`),
   `calibration_state_id` when a state applied, and `n_frame_calibrations`,
-  the number of rows the frames use. It used to be the analysis database's
-  first row whatever was applied.
+  the number of rows the file's frames use. It used to be the analysis
+  database's first row whatever was applied. When the applied state is
+  unknown, no row is recorded.
 - **A state is named as applied only when the library applies it.** The
   library applies the newest state whose `FrameMzCalibrationMapping` (and,
   on a TDF, `TimsCalibrationMapping`) names exactly the acquisition's
@@ -5340,7 +5344,8 @@ change.
 of each database it will open: the analysis database always, and
 `calibration.sqlite` when the recalibrated state is on. If one is in WAL
 mode and the `.d` folder cannot be written (tested by creating and removing
-an empty folder), the conversion stops with one line. The line names the
+an empty folder; a warning names it if it cannot be removed), the
+conversion stops with one line. The line names the
 database and says to copy the `.d` somewhere writable, or, for
 `calibration.sqlite` alone, to pass `--no-recalibrated`. The docs say that
 the library's `-shm` and `-wal` files appear in the `.d` during a run and

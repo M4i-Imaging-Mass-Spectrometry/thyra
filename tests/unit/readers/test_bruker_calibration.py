@@ -733,3 +733,98 @@ class TestRealCalibrationData:
             assert metadata["num_calibration_versions"] == 3
             assert metadata["recalibrated"] is True
             assert metadata["calibration_id"] == 3  # Active state
+
+
+class TestTheLibraryResolvesAnUnreadableFile:
+    def test_no_state_applied_names_the_analysis_database(self, tmp_path):
+        """An unreadable calibration.sqlite, and the library applied none of it."""
+        data_path = tmp_path / "broken.d"
+        data_path.mkdir()
+        with closing(sqlite3.connect(data_path / "calibration.sqlite")) as conn:
+            conn.execute("CREATE TABLE DummyTable (id INTEGER)")
+            conn.commit()
+        reader = _reader(data_path, True)
+        assert reader.get_applied_mz_calibration() == {"use_recalibrated_state": True}
+
+        reader.sdk = MagicMock()
+        reader.sdk.has_recalibrated_state.return_value = False
+        reader.handle = 42
+        reader._confirm_applied_calibration()
+
+        assert reader.get_applied_mz_calibration() == {
+            "use_recalibrated_state": True,
+            "calibration": "analysis.tdf",
+        }
+
+
+def _mobility_reader(frames, applied_known=True):
+    """A TDF reader over an in-memory Frames table, with a fake 1/K0 call.
+
+    The fake library extrapolates linearly past any ramp, as Bruker's does,
+    and shifts each frame's ramp by 0.001 per frame id.
+    """
+    import numpy as np
+
+    from thyra.core.mobility import MobilityAxis
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE Frames (Id INTEGER PRIMARY KEY, NumScans INTEGER, "
+        "TimsCalibration INTEGER)"
+    )
+    conn.executemany("INSERT INTO Frames VALUES (?, ?, ?)", frames)
+    reader = BrukerReader.__new__(BrukerReader)
+    reader.conn = conn
+    reader.file_type = "tdf"
+    reader.data_path = Path("/fake/run.d")
+    reader._calibration_metadata = None
+    reader._applied_calibration_known = applied_known
+    reader._region_frame_ids = None
+    reader.handle = 42
+    reader.sdk = MagicMock()
+    reader.sdk.scannum_to_oneoverk0.side_effect = lambda handle, frame, scans: (
+        2.0 - 0.01 * np.asarray(scans, dtype=float) - 0.001 * frame
+    )
+    n_axis = max(row[1] for row in frames)
+    reader._mobility_axis = MobilityAxis(
+        kind_accession="MS:1002815",
+        kind_name="inverse reduced ion mobility",
+        unit_accession="MS:1002814",
+        unit_name="volt-second per square centimeter",
+        values=2.0 - 0.01 * np.arange(n_axis, dtype=float) - 0.001,
+        source="bruker_tdf",
+    )
+    return reader
+
+
+class TestPerFrameMobilityWhenTheRowsAreUnknown:
+    def test_an_unidentified_state_converts_per_frame_and_records_no_row(self):
+        reader = _mobility_reader([(1, 10, 1), (2, 10, 1)], applied_known=False)
+
+        assert reader._mobility_calibrated_per_frame()
+        assert reader._tims_calibration() is None
+
+    def test_one_known_row_keeps_the_axis(self):
+        reader = _mobility_reader([(1, 10, 1), (2, 10, 1)])
+        assert not reader._mobility_calibrated_per_frame()
+
+
+class TestTheRangeOverFramesOfDifferentLength:
+    def test_each_frame_is_asked_for_its_own_last_scan_only(self):
+        """Asking a short frame for the longest ramp's last scan extrapolates."""
+        reader = _mobility_reader([(1, 10, 1), (2, 4, 2)])
+
+        assert reader._mobility_calibrated_per_frame()
+        lower, upper = reader.get_mobility_value_range()
+
+        # Frame 1: 1.999 down to 1.909; frame 2: 1.998 down to 1.968.
+        assert lower == pytest.approx(1.909)
+        assert upper == pytest.approx(1.999)
+
+    def test_it_is_read_once(self):
+        reader = _mobility_reader([(1, 10, 1), (2, 4, 2)])
+        first = reader.get_mobility_value_range()
+        calls = reader.sdk.scannum_to_oneoverk0.call_count
+
+        assert reader.get_mobility_value_range() == first
+        assert reader.sdk.scannum_to_oneoverk0.call_count == calls

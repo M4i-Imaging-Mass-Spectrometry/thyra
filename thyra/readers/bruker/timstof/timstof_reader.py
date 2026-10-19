@@ -14,18 +14,7 @@ import sqlite3
 import uuid
 from contextlib import closing
 from pathlib import Path
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    Generator,
-    Iterable,
-    List,
-    Optional,
-    Tuple,
-    Union,
-    cast,
-)
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -414,7 +403,11 @@ def folder_is_writable(folder: Path) -> bool:
     try:
         probe.rmdir()
     except OSError:
-        logger.debug("Could not remove the write check folder %s", probe)
+        logger.warning(
+            "Could not remove the empty folder %s that checked the source "
+            "could be written; it can be deleted",
+            probe,
+        )
     return True
 
 
@@ -838,6 +831,7 @@ class BrukerReader(BrukerBaseMSIReader):
             None
         )
         self._per_frame_mobility: Optional[bool] = None
+        self._mobility_value_range: Optional[Tuple[float, float]] = None
         self._fragmentation: Optional[FragmentationSchedule] = None
         self._fragmentation_read: bool = False
         #: Scan ranges of schedule rows the screen left out (#498); any
@@ -1196,6 +1190,10 @@ class BrukerReader(BrukerBaseMSIReader):
             return
         metadata = self._calibration_metadata
         named = (metadata or {}).get("calibration_id")
+        if not answer:
+            # No state applied: the analysis database's calibration is, and
+            # that is known even when calibration.sqlite could not be read.
+            self._applied_calibration_known = True
         if answer == (named is not None):
             return
         if metadata is not None and named is not None:
@@ -2204,6 +2202,10 @@ class BrukerReader(BrukerBaseMSIReader):
         column order (``C0``, ``C1``, ...); a NULL becomes NaN so
         positions are preserved.
         """
+        if not getattr(self, "_applied_calibration_known", True):
+            # The library applied a state Thyra could not identify, so which
+            # row it applied is unknown too; none is recorded.
+            return None
         frame_id = self._mobility_ramp()[1]
         mapping = self._frame_tims_calibrations()
         state_id, row_id = mapping.get(frame_id, (None, None))
@@ -2290,6 +2292,7 @@ class BrukerReader(BrukerBaseMSIReader):
         except (sqlite3.Error, TypeError, ValueError) as e:
             logger.debug(f"Could not read which TIMS calibration each frame takes: {e}")
             mapping = {}
+            self._tims_calibration_map_unread = True
         self._tims_calibration_map = mapping
         return mapping
 
@@ -2303,11 +2306,20 @@ class BrukerReader(BrukerBaseMSIReader):
         to hundreds of rows, and on one 713-frame run a frame's 1/K0 sat
         up to 9e-4 (about three scans) from the first frame's. With one
         row, every frame's 1/K0 equals the axis, which is then used as is.
+
+        Also True when which rows the frames take cannot be told: the
+        library applied a state Thyra could not identify, or the mapping
+        could not be read. Converting each frame through the library is
+        exact whatever the rows are; assuming one row is not.
         """
         flag: Optional[bool] = getattr(self, "_per_frame_mobility", None)
         if flag is None:
             mapping = self._frame_tims_calibrations()
-            flag = len(set(mapping.values())) > 1
+            flag = bool(
+                len(set(mapping.values())) > 1
+                or not getattr(self, "_applied_calibration_known", True)
+                or getattr(self, "_tims_calibration_map_unread", False)
+            )
             self._per_frame_mobility = flag
         return flag
 
@@ -2333,22 +2345,37 @@ class BrukerReader(BrukerBaseMSIReader):
         The axis values when the frames share one TIMS calibration row.
         When they do not, a frame's ramp sits a few scans off the first
         frame's, so the range is widened to the first and last scan of
-        every frame read (1/K0 is monotonic in the scan number), and the
-        heatmap and the grid bin no frame's points past their edge.
+        every frame read, each frame's own last scan (``NumScans - 1``):
+        the library extrapolates past a frame's ramp, to below zero at
+        twice its length. 1/K0 is monotonic in the scan number, so the two
+        ends bound the frame. The heatmap and the grid then bin no frame's
+        points past their edge. Read once; three consumers ask.
         """
+        cached: Optional[Tuple[float, float]] = getattr(
+            self, "_mobility_value_range", None
+        )
+        if cached is not None:
+            return cached
         span = super().get_mobility_value_range()
-        if span is None or not self._mobility_calibrated_per_frame():
-            return span
+        if span is not None and self._mobility_calibrated_per_frame():
+            span = self._per_frame_value_range(span)
+        self._mobility_value_range = span
+        return span
+
+    def _per_frame_value_range(self, span: Tuple[float, float]) -> Tuple[float, float]:
+        """``span`` widened to the first and last scan of every frame read."""
         sdk = getattr(self, "sdk", None)
         if sdk is None or not self.handle:
             return span
-        n_axis = self._mobility_values()[1]
-        ends = np.array([0.0, float(n_axis - 1)], dtype=np.float64)
-        frame_ids: Iterable[int] = self._frame_tims_calibrations().keys()
-        if self._region_frame_ids is not None:
-            frame_ids = self._region_frame_ids & set(frame_ids)
+        rows = self._database().execute("SELECT Id, NumScans FROM Frames").fetchall()
+        wanted = self._region_frame_ids
         lower, upper = span
-        for frame_id in frame_ids:
+        for frame_id, num_scans in rows:
+            if num_scans is None or int(num_scans) < 1:
+                continue
+            if wanted is not None and int(frame_id) not in wanted:
+                continue
+            ends = np.array([0.0, float(int(num_scans) - 1)], dtype=np.float64)
             edges = sdk.scannum_to_oneoverk0(self.handle, int(frame_id), ends)
             lower = min(lower, float(np.min(edges)))
             upper = max(upper, float(np.max(edges)))
