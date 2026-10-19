@@ -5080,7 +5080,7 @@ suffix followed mobility order; now it does.
   schedule then reads as varying, so no `_msms` table is written.
 - The stem kept six significant digits (`p{mz:g}`), so any two targets
   that rounded alike, at any m/z (798.5401 and 798.5404 were both
-  `p798.54`), shared a stem and were ranked as isomers. Since D@B the stem
+  `p798.54`), shared a stem and were ranked as isomers. Since D67 the stem
   writes the m/z exactly, and only targets with the same m/z are ranked.
 - Leaving an isomer out (a bad window, or a `region=` store whose region
   lacks it, D57) re-ranks the other one.
@@ -5211,7 +5211,7 @@ remedy is the user's own: convert again.
 
 ---
 
-## D@A. A timsTOF store records the calibration Bruker's library applied
+## D66. A timsTOF store records the calibration Bruker's library applied
 
 **Status:** Implemented (2026-10-19), issue #518. Qualifies D46 for TDF: the
 axis `values` are the first frame's, and a frame with a TIMS calibration of
@@ -5299,7 +5299,7 @@ for the others, which differ by at most a few scans' width.
 
 ---
 
-## D@B. An MS/MS label carries its precursor m/z exactly
+## D67. An MS/MS label carries its precursor m/z exactly
 
 **Status:** Implemented (2026-10-19), issue #518. Amends D60's known
 limits. Keeps D60's rank rule for isomers.
@@ -5335,7 +5335,7 @@ as the docs already say.
 
 ---
 
-## D@C. A timsTOF source that Bruker's library must write into has to be writable
+## D68. A timsTOF source that Bruker's library must write into has to be writable
 
 **Status:** Implemented (2026-10-19), issue #518. Stored data does not
 change.
