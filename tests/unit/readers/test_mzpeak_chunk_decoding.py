@@ -308,6 +308,17 @@ class TestNumpressLinear:
         with pytest.raises(ConversionRefused, match="counts disagree.*MS:1002312"):
             decode_numpress_linear(data, np.array([data.size]), np.array([3]), SOURCE)
 
+    @pytest.mark.parametrize(("length", "count"), [(0, 0), (8, 0), (12, 1), (16, 2)])
+    def test_a_whole_header_is_read(self, length, count):
+        """No buffer, the scale alone, or the scale and one or two values."""
+        data, _, _ = _numpress([[100.0, 101.0, 102.5, 103.0]])
+
+        decoded = decode_numpress_linear(
+            data[:length], np.array([length]), np.array([count]), SOURCE
+        )
+
+        np.testing.assert_array_equal(decoded, [100.0, 101.0][:count])
+
     @pytest.mark.parametrize(("length", "count"), [(4, 0), (10, 0), (14, 1)])
     def test_a_header_cut_inside_a_value_is_refused(self, length, count):
         """Stray bytes after the scale or the first value are not a value."""
@@ -511,6 +522,21 @@ class TestPlain:
 
         np.testing.assert_array_equal(decoded.mz, [np.nan, 100.0, 101.0])
         np.testing.assert_array_equal(decoded.intensity, [np.nan, 2.0, 3.0])
+
+    def test_a_null_start_beside_an_intensity_keeps_it(self):
+        """The point keeps its intensity; the converter decides on it (D55)."""
+        chunk = _chunk(TestRows.SPECTRA[:1], encoding=PLAIN, chunk_points=50)
+        row = dict(
+            chunk.to_pylist()[0],
+            mz_chunk_start=None,
+            mz_chunk_values=[100.0, 101.0],
+            intensity=[5.0, 2.0, 3.0],
+        )
+
+        decoded = decode_chunks(pa.array([row], type=chunk.type), SOURCE)
+
+        np.testing.assert_array_equal(decoded.mz, [np.nan, 100.0, 101.0])
+        np.testing.assert_array_equal(decoded.intensity, [5.0, 2.0, 3.0])
 
 
 class TestGrid:

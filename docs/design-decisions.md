@@ -2425,7 +2425,7 @@ is in one number read two ways, and that is what the test covers.
 
 ## D28. The chunked mzPeak layout is decoded into the same spectra
 
-**Status:** Implemented (2026-09-29). Amended by D63.
+**Status:** Implemented (2026-09-29). Amended by D70.
 
 **Decision.** The mzPeak reader reads the chunked layout. It decodes the
 chunks into the stream of spectra the point layout gives, so nothing after
@@ -2597,7 +2597,7 @@ measured is 0.005 ppm, and the store says which encoding it came from.
 
 ## D29. An mzPeak archive converts to the store of its source
 
-**Status:** Implemented (2026-09-30), issue #422. Amended by D63.
+**Status:** Implemented (2026-09-30), issue #422. Amended by D70.
 
 **Decision.** Where an archive states the same fact as the file it was made
 from, Thyra reads it the way it reads that file. Five facts:
@@ -5207,7 +5207,7 @@ remedy is the user's own: convert again.
   report is absent, not null.
 - "Coerce to a finite stand-in, such as 0." That invents a measurement.
 
-## D63. An mzPeak archive leaves MSn out per pixel, and no chunk loses a point
+## D70. An mzPeak archive leaves MSn out per pixel, and no chunk loses a point
 
 **Status:** Implemented (2026-10-19), issue #522. Amends D28 and D29.
 
