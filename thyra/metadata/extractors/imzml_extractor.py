@@ -14,6 +14,7 @@ from ...utils.imzml_coordinate_base import (
     coordinate_bases,
     recorded_offsets,
 )
+from ...utils.ms_levels import imzml_left_out
 from ...utils.pyimzml_direct import read_spectrum_mzs_only
 from ..constants import (
     MIXED_POLARITY,
@@ -364,7 +365,10 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         coordinate_bounds = self._calculate_bounds(coords)
         mass_range, total_peaks = self._get_mass_range_complete()
         pixel_size = self._extract_pixel_size_fast()
-        n_spectra = len(coords)
+        # The spectra that are converted: MSn spectra left out beside MS1
+        # are not counted (D70). Every pixel keeps one, so the dimensions,
+        # bounds and offsets here are those of every spectrum.
+        n_spectra = len(self._kept_indices())
 
         # Check for centroid spectrum
         spectrum_type = self._detect_centroid_spectrum()
@@ -393,6 +397,17 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             spectrum_type=spectrum_type,
             spectrum_type_guessed=self._spectrum_type_guessed,
         )
+
+    def _kept_indices(self) -> List[int]:
+        """The list positions of the spectra that are converted.
+
+        Every spectrum but the MSn spectra the per-pixel rule leaves out
+        (D70), as the reader reads them.
+        """
+        left_out = imzml_left_out(self.parser)
+        if left_out is None:
+            return list(range(len(self.parser.coordinates)))
+        return [int(i) for i in np.flatnonzero(~left_out)]
 
     def _z_states(self) -> Optional[bytearray]:
         """Each spectrum's z as the parser hook recorded it, or ``None``.
@@ -514,17 +529,17 @@ class ImzMLMetadataExtractor(MetadataExtractor):
                 silently described wrongly.
         """
         try:
-            coords = self.parser.coordinates
-            n_spectra = len(coords)
+            # Only the spectra that are converted shape the range (D70).
+            kept = self._kept_indices()
 
             # Check if continuous mode - all spectra share the same m/z axis
             # Detection: check file_description.param_by_name for "continuous" key
             is_continuous = self._is_continuous_mode()
 
             if is_continuous:
-                return self._get_mass_range_continuous(n_spectra)
+                return self._get_mass_range_continuous(kept)
             else:
-                return self._get_mass_range_processed(coords, n_spectra)
+                return self._get_mass_range_processed(kept)
 
         except ValueError:
             # The two branches above raise this when they find no mass range.
@@ -539,31 +554,37 @@ class ImzMLMetadataExtractor(MetadataExtractor):
 
     def _get_mass_range_continuous(
         self,
-        n_spectra: int,
+        kept: List[int],
     ) -> Tuple[Tuple[float, float], int]:
         """Get mass range for continuous mode - read only first spectrum.
 
         In continuous mode, all spectra share the same m/z axis, so we only
         need to read one spectrum to get the mass range and peak count.
 
+        Args:
+            kept: List positions of the spectra that are converted.
+
         Raises:
-            ValueError: If spectrum 0 is empty. In continuous mode it is the
-                only spectrum read, so an empty one leaves nothing to derive
-                a range from.
+            ValueError: If the first converted spectrum (spectrum 0, unless
+                an MSn spectrum left out sits there) is empty. In continuous
+                mode it is the only spectrum read, so an empty one leaves
+                nothing to derive a range from.
         """
         logger.info(
             "Continuous mode detected - reading m/z axis from first spectrum only"
         )
 
         # Read first spectrum to get shared m/z axis
-        mzs, _ = self.parser.getspectrum(0)
+        first = kept[0]
+        mzs, _ = self.parser.getspectrum(first)
         n_peaks_per_spectrum = len(mzs)
 
         if n_peaks_per_spectrum == 0:
             raise ValueError(
                 f"Could not determine the mass range of {self.imzml_path}: "
                 "the file declares continuous mode, so every spectrum shares "
-                "the m/z axis of spectrum 0 -- and spectrum 0 has no peaks."
+                f"the m/z axis of spectrum {first} -- and spectrum {first} "
+                "has no peaks."
             )
 
         extent = _finite_extent(mzs)
@@ -571,11 +592,11 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             raise ValueError(
                 f"Could not determine the mass range of {self.imzml_path}: "
                 "the file declares continuous mode, so every spectrum shares "
-                "the m/z axis of spectrum 0 -- and not one of its m/z is a "
-                "finite number."
+                f"the m/z axis of spectrum {first} -- and not one of its m/z "
+                "is a finite number."
             )
         min_mass, max_mass = extent
-        total_peaks = n_peaks_per_spectrum * n_spectra
+        total_peaks = n_peaks_per_spectrum * len(kept)
 
         logger.info(f"Mass range: {min_mass:.2f} - {max_mass:.2f} m/z")
         logger.info(
@@ -585,20 +606,24 @@ class ImzMLMetadataExtractor(MetadataExtractor):
 
     def _get_mass_range_processed(
         self,
-        coords: List,
-        n_spectra: int,
+        kept: List[int],
     ) -> Tuple[Tuple[float, float], int]:
         """Get mass range for processed mode - scan all spectra.
 
         In processed mode, each spectrum can have different m/z values,
-        so we must scan all spectra to find the complete mass range.
+        so we must scan all spectra to find the complete mass range. An
+        MSn spectrum left out beside MS1 (D70) is not scanned.
+
+        Args:
+            kept: List positions of the spectra that are converted.
 
         Raises:
             ValueError: If not one of the scanned spectra yielded a peak.
         """
         logger.info("Processed mode - scanning ALL spectra for complete mass range...")
 
-        min_mass, max_mass, total_peaks = self._scan_all_spectra(coords, n_spectra)
+        min_mass, max_mass, total_peaks = self._scan_all_spectra(kept)
+        n_spectra = len(kept)
 
         if min_mass == float("inf"):
             if total_peaks > 0:
@@ -619,14 +644,12 @@ class ImzMLMetadataExtractor(MetadataExtractor):
 
     def _scan_all_spectra(
         self,
-        coords: List,
-        n_spectra: int,
+        kept: List[int],
     ) -> Tuple[float, float, int]:
-        """Scan all spectra to find mass range and count peaks.
+        """Scan the converted spectra to find mass range and count peaks.
 
         Args:
-            coords: List of spectrum coordinates.
-            n_spectra: Total number of spectra.
+            kept: List positions of the spectra that are converted.
 
         Returns:
             Tuple of (min_mass, max_mass, total_peaks).
@@ -638,11 +661,11 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         total_peaks = 0
 
         with tqdm(
-            total=n_spectra,
+            total=len(kept),
             desc="Scanning mass range and counting peaks",
             unit="spectrum",
         ) as pbar:
-            for idx in range(n_spectra):
+            for idx in kept:
                 result = self._process_spectrum_for_range(idx)
                 if result is not None:
                     spec_min, spec_max, n_peaks = result

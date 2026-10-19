@@ -77,6 +77,7 @@ from ...core.mass_axis import MassAxisAccumulator
 from ...core.region_map import build_region_map
 from ...core.registry import register_reader
 from ...errors import ConversionRefused
+from ...utils.ms_levels import msn_left_out
 from .chunk_decoding import (
     ENCODING_GRID,
     INTENSITY_TRANSFORMS,
@@ -873,16 +874,11 @@ class MzPeakArchive:
             positions: ``(n, 2)`` position of each placed spectrum.
         """
         keep = np.ones(levels.size, dtype=bool)
+        # The imzML route applies the same rule through the same function.
+        left_out = msn_left_out(levels, positions)
+        if left_out is None:
+            return keep
         higher = levels >= 2
-        if not higher.any() or higher.all():
-            return keep
-        _, pixel = np.unique(positions, axis=0, return_inverse=True)
-        pixel = np.asarray(pixel, dtype=np.int64).ravel()
-        has_first = np.zeros(int(pixel.max()) + 1, dtype=bool)
-        has_first[pixel[~higher]] = True
-        left_out = higher & has_first[pixel]
-        if not left_out.any():
-            return keep
         other = levels[left_out]
         logger.warning(
             "%s places %d MSn spectra (%s) on pixels that hold an MS1 "
