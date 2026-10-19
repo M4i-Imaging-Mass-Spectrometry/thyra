@@ -217,17 +217,24 @@ class TestTheDeclaredBound:
         assert values.sum() < 23.0
 
 
+@pytest.mark.parametrize(
+    "strategy_cls", [NearestNeighborStrategy, TICPreservingStrategy]
+)
 class TestOutOfRangeAccounting:
-    def test_the_count_accumulates_across_spectra(self):
-        strategy = NearestNeighborStrategy(np.linspace(100.0, 110.0, 11), None)
+    """Both methods count and report what falls outside the range (D71)."""
+
+    def test_the_count_accumulates_across_spectra(self, strategy_cls):
+        strategy = strategy_cls(np.linspace(100.0, 110.0, 11), None)
 
         strategy.resample(np.array([90.0, 105.0, 120.0]), np.ones(3))
         strategy.resample(np.array([95.0, 105.0]), np.ones(2))
 
         assert strategy.out_of_range_peaks == 3
 
-    def test_it_warns_once_and_names_the_kept_range(self, warnings_from_the_strategy):
-        strategy = NearestNeighborStrategy(np.linspace(100.0, 110.0, 11), None)
+    def test_it_warns_once_and_names_the_kept_range(
+        self, strategy_cls, warnings_from_the_strategy
+    ):
+        strategy = strategy_cls(np.linspace(100.0, 110.0, 11), None)
 
         strategy.resample(np.array([90.0, 105.0]), np.ones(2))
         strategy.resample(np.array([90.0, 105.0]), np.ones(2))
@@ -241,8 +248,10 @@ class TestOutOfRangeAccounting:
         assert "100.0000" in warnings[0].getMessage()
         assert "110.0000" in warnings[0].getMessage()
 
-    def test_nothing_is_said_when_nothing_is_dropped(self, warnings_from_the_strategy):
-        strategy = NearestNeighborStrategy(np.linspace(100.0, 110.0, 11), None)
+    def test_nothing_is_said_when_nothing_is_dropped(
+        self, strategy_cls, warnings_from_the_strategy
+    ):
+        strategy = strategy_cls(np.linspace(100.0, 110.0, 11), None)
 
         strategy.resample(np.array([101.0, 105.0]), np.ones(2))
 

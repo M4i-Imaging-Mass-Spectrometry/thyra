@@ -92,6 +92,12 @@ class TICPreservingStrategy(ResamplingStrategy):
         A spectrum in which no centre skips a sample is resampled exactly
         as before. See design decision D50.
 
+        Samples outside the declared range are counted, and the first
+        spectrum that has any is reported once, as ``nearest_neighbor``
+        reports it (D22). Until D71 this method never counted them, so a
+        narrowed window dropped signal without a word and a window that
+        held no peak was refused as an all-zero source.
+
         Args:
             mzs: Original m/z values from the spectrum.
             intensities: Corresponding intensity values.
@@ -99,6 +105,11 @@ class TICPreservingStrategy(ResamplingStrategy):
         Returns:
             Tuple of (bin_indices, intensities) containing only non-zero bins.
         """
+        if mzs.size:
+            lo_mz, hi_mz = self.kept_range
+            n_outside = int(np.count_nonzero((mzs < lo_mz) | (mzs > hi_mz)))
+            if n_outside:
+                self._count_out_of_range(n_outside, int(mzs.size))
         return tic_preserving_sparse(
             self.axis,
             mzs,

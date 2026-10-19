@@ -18,6 +18,7 @@ with no row *anywhere* has nothing to write.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -63,6 +64,20 @@ class _EverySpectrumEmpty(MockMSIReader):
     def iter_spectra(self):
         for coords, _mzs, _intensities in super().iter_spectra():
             yield coords, np.array([]), np.array([])
+
+
+class _ThresholdEmptiedEverything(_NoSpectraAtAll):
+    """A reader whose intensity threshold skipped every spectrum."""
+
+    intensity_threshold = 21.0
+
+
+class _OneSpectrumAllZeros(MockMSIReader):
+    """A full 3x2 raster in which the first position measured only zeros."""
+
+    def iter_spectra(self):
+        for n, (coords, mzs, intensities) in enumerate(super().iter_spectra()):
+            yield coords, mzs, (np.zeros_like(intensities) if n == 0 else intensities)
 
 
 class _EveryCoordinateOffTheGrid(MockMSIReader):
@@ -143,3 +158,37 @@ class TestSomeEmptyPlanesAreNotRefused:
         sdata = spatialdata.SpatialData.read(str(output))
         assert set(sdata.tables) == {"m_z1"}
         assert sdata.tables["m_z1"].n_obs == N_X * N_Y
+
+
+class TestTheThresholdIsNamedWhenItEmptiedTheSource:
+    """A threshold above every peak looked like a source with no spectra (#516)."""
+
+    def test_the_refusal_names_the_intensity_threshold(self, tmp_path):
+        converter = _converter(
+            _ThresholdEmptiedEverything(_config()), tmp_path / "t.zarr"
+        )
+        with pytest.raises(ConversionRefused, match="--intensity-threshold 21"):
+            converter._initialize_conversion()
+            converter._process_spectra(converter._create_data_structures())
+
+    def test_a_reader_without_a_threshold_keeps_the_old_reason(self, tmp_path):
+        converter = _converter(_NoSpectraAtAll(_config()), tmp_path / "u.zarr")
+        with pytest.raises(ConversionRefused) as refused:
+            converter._initialize_conversion()
+            converter._process_spectra(converter._create_data_structures())
+        assert "--intensity-threshold" not in str(refused.value)
+
+
+class TestEmptiedSpectraAreToldApartFromUnmeasuredPositions:
+    """A measured spectrum left empty is not outside the polygon (#516)."""
+
+    def test_the_drop_line_counts_each_kind(self, tmp_path, thyra_logs):
+        converter = _converter(_OneSpectrumAllZeros(_config()), tmp_path / "v.zarr")
+
+        with thyra_logs("thyra.converters.spatialdata", logging.INFO) as records:
+            assert converter.convert() is True
+
+        dropped = [m for m in records.messages if "dropping" in m]
+        assert len(dropped) == 1, records.messages
+        assert "0 positions the reader gave no spectrum for" in dropped[0]
+        assert "1 measured spectra empty after processing" in dropped[0]

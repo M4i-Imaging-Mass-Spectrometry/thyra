@@ -325,9 +325,16 @@ The total that is preserved is the share of the spectrum inside the axis range.
 If you crop with `--resample-min-mz` or `--resample-max-mz`, intensity outside
 the window is dropped rather than redistributed over the bins you kept, so the
 per-pixel total falls by whatever you cropped out -- a cropped window should not
-claim ions from the parts that were cut away. That share is measured by area, so
-a window narrower than the spacing between source points still keeps a
-proportionate amount instead of collapsing to zero.
+claim ions from the parts that were cut away. That share is the sum of the
+source samples inside the range, bounds included: the same samples
+`nearest_neighbor` keeps, so both methods store the same total for a pixel. A
+window that holds no sample at all, narrower than the spacing between two
+source points, keeps an area share instead of collapsing to zero. See
+[D71](design-decisions.md#d71-tic-preserving-resampling-keeps-the-current-measured-inside-the-window).
+
+A spectrum that lists one m/z more than once, as a source with one point per
+mobility scan does, has those points added up first, as `nearest_neighbor`
+adds them. The result does not depend on the order they are listed in.
 
 With the default axis, which spans the dataset's own mass range, nothing is
 dropped and the total is preserved exactly.
@@ -355,7 +362,9 @@ thyra data.imzML out.zarr \
 Masking happens **before** the TIC rescale, so the intensity returns to the
 bins that do have measurements behind them rather than being deleted; the
 per-pixel total is still preserved. A rebinned bin holds measured samples,
-and the tolerance never removes it.
+and the tolerance never removes it. When the tolerance leaves no bin at all,
+each sample inside the range goes to its nearest bin, as `nearest_neighbor`
+places it, so the pixel keeps its current.
 
 Sizing it: on a source grid of uniform step `s`, no target bin is ever more
 than `s/2` from a source point, so **any tolerance above half the widest gap in
@@ -567,6 +576,10 @@ The count is then derived per axis type:
 
 Each is the integral of `1 / width(m)` across the mass range, so the bin width
 the axis actually realizes at your reference m/z is the width you asked for.
+The `reflector_tof`, `orbitrap` and `fticr` counts divide by the lower end, so
+a range starting at or below m/z 0 is refused on those axes, and on a `tof`
+axis whose law has no linear term. Set
+`--resample-min-mz` above 0, or use a `constant` axis.
 A count derived this way is floored at 100 bins; a count given with
 `--resample-bins` is used as it is. When the floor or a given count sets the
 axis, its bins are not the width asked for, and the stored resampling step
