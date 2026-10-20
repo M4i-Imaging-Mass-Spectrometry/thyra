@@ -323,11 +323,18 @@ def _checked_values(config: ResamplingConfig) -> ResamplingConfig:
     :func:`_refuse_dropped_settings`, which says so in its own words.
 
     Returns:
-        ``config``, with a whole-number bin count stored as an ``int``.
+        ``config``, with a numpy bin count stored as an ``int``.
 
     Raises:
         ConversionRefused: On the first value the CLI would refuse.
     """
+    _refuse_non_positive_quantities(config)
+    _refuse_a_bad_tof_law(config)
+    return _checked_bin_count(config)
+
+
+def _refuse_non_positive_quantities(config: ResamplingConfig) -> None:
+    """Widths, bounds, tolerances: numbers above 0, ``min_mz`` below ``max_mz``."""
     for field_name, key in _POSITIVE_CONFIG_FIELDS:
         value = getattr(config, field_name)
         if value is None:
@@ -350,6 +357,10 @@ def _checked_values(config: ResamplingConfig) -> ResamplingConfig:
             f"resampling_config['min_mz'] ({config.min_mz!r}) must be below "
             f"'max_mz' ({config.max_mz!r})."
         )
+
+
+def _refuse_a_bad_tof_law(config: ResamplingConfig) -> None:
+    """Both terms at least 0, and not both 0, as ``--tof-law`` requires."""
     for field_name in ("tof_a", "tof_b"):
         value = getattr(config, field_name)
         if value is not None and (not _is_real(value) or value < 0):
@@ -362,6 +373,14 @@ def _checked_values(config: ResamplingConfig) -> ResamplingConfig:
             "resampling_config sets 'tof_a' and 'tof_b' both to 0, a TOF width "
             "law with no width; give at least one of them a positive value."
         )
+
+
+def _checked_bin_count(config: ResamplingConfig) -> ResamplingConfig:
+    """A whole number of at least 2; a numpy integer becomes an ``int``.
+
+    A whole float is left as given, as it always was, so the record holds
+    what it held before.
+    """
     # Any, not the field's declared int: a caller may hand in anything.
     bins: Any = config.target_bins
     if bins is None:
@@ -378,8 +397,6 @@ def _checked_values(config: ResamplingConfig) -> ResamplingConfig:
         )
     if not isinstance(bins, np.integer):
         return config
-    # A numpy integer becomes an int, so the record can hold it; a whole
-    # float is left as given, as it always was.
     return dataclasses.replace(config, target_bins=int(bins))
 
 

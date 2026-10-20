@@ -782,6 +782,65 @@ def _perform_conversion(converter: BaseMSIConverter) -> bool:
     return bool(result)
 
 
+def _plain_values(
+    handle_3d: Any, pixel_size_um: Any, z_spacing_um: Any
+) -> Tuple[bool, Optional[float], Optional[float]]:
+    """The validated arguments as plain Python types, taken once.
+
+    An int pitch made an integer ``obs["spatial_x"]`` (issue #519), and a
+    numpy bool is no JSON value.
+    """
+    return (
+        bool(handle_3d),
+        None if pixel_size_um is None else float(pixel_size_um),
+        None if z_spacing_um is None else float(z_spacing_um),
+    )
+
+
+def _checked_resampling_config(config: Any) -> Tuple[Any, bool]:
+    """The config normalised, and whether it passed the CLI's checks.
+
+    Checked before the source is opened, as the CLI checks its flags,
+    rather than when the converter is built (issue #519). The converter
+    normalises the result again, which a ``ResamplingConfig`` passes
+    unchanged and without a second word.
+    """
+    if config is None:
+        return None, True
+    from .resampling.axis_planner import normalize_resampling_config
+
+    try:
+        return normalize_resampling_config(config), True
+    except ConversionRefused as e:
+        logger.error("%s", str(e))
+        return config, False
+
+
+def _warn_z_spacing_without_3d(z_spacing_um: Optional[float], handle_3d: bool) -> None:
+    """Say that a z spacing without ``handle_3d`` changes nothing.
+
+    The 2D route writes one image per slice and never builds a z axis. A
+    caller who set it believes their volume is calibrated.
+    """
+    if z_spacing_um is not None and not handle_3d:
+        logger.warning(
+            "z_spacing_um=%g was given without handle_3d=True and will be "
+            "ignored: without 3D handling each slice is written as its own "
+            "2D image and there is no z axis to space out. Pass "
+            "handle_3d=True (--handle-3d) to build a volume.",
+            z_spacing_um,
+        )
+
+
+def _with_region(
+    reader_options: Optional[Dict[str, Any]], region: Optional[Union[int, str]]
+) -> Optional[Dict[str, Any]]:
+    """``reader_options`` with ``region`` merged in, when one was given."""
+    if region is None:
+        return reader_options
+    return {**(reader_options or {}), "region": region}
+
+
 def convert_msi(
     input_path: Union[str, Path],
     output_path: Union[str, Path],
@@ -967,39 +1026,13 @@ def convert_msi(
         _validate_handle_3d(handle_3d) and _validate_keywords(kwargs, reader_options)
     ):
         return False
-    # Taken as the plain types once, here: an int pitch made an integer
-    # obs["spatial_x"] (issue #519), and a numpy bool is no JSON value.
-    handle_3d = bool(handle_3d)
-    if pixel_size_um is not None:
-        pixel_size_um = float(pixel_size_um)
-    if z_spacing_um is not None:
-        z_spacing_um = float(z_spacing_um)
-
-    # Checked now, as the CLI checks its flags, rather than when the
-    # converter is built after the source is open (issue #519). The
-    # converter normalises the result again, which a ResamplingConfig
-    # passes unchanged and without a second word.
-    if resampling_config is not None:
-        from .resampling.axis_planner import normalize_resampling_config
-
-        try:
-            resampling_config = normalize_resampling_config(resampling_config)
-        except ConversionRefused as e:
-            logger.error("%s", str(e))
-            return False
-
-    # A z spacing without --handle-3d changes nothing: the 2D route
-    # writes one image per slice and never builds a z axis. Say so rather
-    # than accepting it silently -- a caller who set it believes their
-    # volume is calibrated.
-    if z_spacing_um is not None and not handle_3d:
-        logger.warning(
-            "z_spacing_um=%g was given without handle_3d=True and will be "
-            "ignored: without 3D handling each slice is written as its own "
-            "2D image and there is no z axis to space out. Pass "
-            "handle_3d=True (--handle-3d) to build a volume.",
-            z_spacing_um,
-        )
+    handle_3d, pixel_size_um, z_spacing_um = _plain_values(
+        handle_3d, pixel_size_um, z_spacing_um
+    )
+    resampling_config, ok = _checked_resampling_config(resampling_config)
+    if not ok:
+        return False
+    _warn_z_spacing_without_3d(z_spacing_um, handle_3d)
 
     # Convert to Path objects and validate
     input_path = Path(input_path).resolve()
@@ -1021,10 +1054,7 @@ def convert_msi(
     # still ask it whether the store was already complete (issue #500).
     converter: Optional[BaseMSIConverter] = None
 
-    # Merge region into reader_options if provided
-    if region is not None:
-        reader_options = dict(reader_options or {})
-        reader_options["region"] = region
+    reader_options = _with_region(reader_options, region)
 
     try:
         # Create reader with format-specific options. A mobility grid
