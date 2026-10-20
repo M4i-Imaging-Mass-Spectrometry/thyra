@@ -302,15 +302,98 @@ def _optional_int(value: Any) -> Optional[int]:
     return None if value is None else int(value)
 
 
-def read_calibration_states(data_path: Path) -> List[Dict[str, Any]]:
+def acquisition_frame_ids(db_path: Optional[Path]) -> Optional[set]:
+    """Every ``Frames.Id`` of an analysis database, or ``None`` if unreadable."""
+    if db_path is None:
+        return None
+    try:
+        with closing(open_read_only(db_path)) as conn:
+            return {int(row[0]) for row in conn.execute("SELECT Id FROM Frames")}
+    except (sqlite3.Error, OSError, TypeError, ValueError, OverflowError) as e:
+        logger.debug(f"Could not read the frame ids of {db_path}: {e}")
+        return None
+
+
+def _state_maps_frames(
+    cursor: sqlite3.Cursor, state_id: int, frame_ids: set, file_type: str
+) -> Optional[bool]:
+    """Whether a state's frame mappings name exactly ``frame_ids``.
+
+    ``None`` when a mapping table cannot be read, so it cannot be told.
+    """
+    queries = [
+        "SELECT FrameId FROM FrameMzCalibrationMapping WHERE CalibrationState = ?"
+    ]
+    if file_type == "tdf":
+        queries.append(
+            "SELECT FrameId FROM TimsCalibrationMapping WHERE CalibrationState = ?"
+        )
+    for query in queries:
+        try:
+            mapped = {int(row[0]) for row in cursor.execute(query, (state_id,))}
+        except (sqlite3.Error, TypeError, ValueError, OverflowError):
+            return None
+        if mapped != frame_ids:
+            return False
+    return True
+
+
+def applied_calibration_state_id(
+    cursor: sqlite3.Cursor,
+    state_ids: List[int],
+    frame_ids: Optional[set],
+    file_type: str,
+) -> Optional[int]:
+    """The state Bruker's library applies with ``use_recalibrated_state``.
+
+    The newest state whose frame mappings name exactly the acquisition's
+    frames. Measured with the bundled library on a copy of
+    ``synthetic_tims.d`` (2026-10-19): a newest state that maps one frame
+    too few, or one frame that is not in the acquisition, is skipped and
+    the state before it applied; when no state qualifies,
+    ``has_recalibrated_state`` answers 0 and the m/z are the analysis
+    database's, so this is ``None``. A TDF state needs both
+    ``FrameMzCalibrationMapping`` and ``TimsCalibrationMapping`` to
+    match; a TSF one only the first, as a TSF's ``TimsCalibrationMapping``
+    is empty.
+
+    When this cannot be checked (``frame_ids`` is ``None``, or a mapping
+    table cannot be read), the newest state is taken.
+
+    Args:
+        cursor: A cursor on ``calibration.sqlite``.
+        state_ids: Every ``CalibrationState.Id``, oldest first; not empty.
+        frame_ids: The acquisition's ``Frames.Id``
+            (:func:`acquisition_frame_ids`).
+        file_type: ``"tsf"`` or ``"tdf"``.
+
+    Returns:
+        The applied state's id, or ``None`` when the library applies none.
+    """
+    if frame_ids is None:
+        return state_ids[-1]
+    for state_id in reversed(state_ids):
+        maps = _state_maps_frames(cursor, state_id, frame_ids, file_type)
+        if maps is None:
+            return state_ids[-1]
+        if maps:
+            return state_id
+    return None
+
+
+def read_calibration_states(
+    data_path: Path, use_recalibrated_state: bool = True
+) -> List[Dict[str, Any]]:
     """Every calibration state of a Bruker ``.d``, oldest first.
 
-    Opened with ``use_recalibrated_state`` (the default), Bruker's
-    library applies the newest state that maps exactly the acquisition's
-    frames, which is ``states[-1]`` unless that state maps other frames
-    (see :meth:`BrukerReader._applied_state`); opened without it, the
-    library applies none of them. ``len(states) - 1`` is how many times
-    the acquisition has been recalibrated since.
+    Each state says whether Bruker's library applies it. Opened with
+    ``use_recalibrated_state`` (the default), the library applies the
+    newest state that maps exactly the acquisition's frames
+    (:func:`applied_calibration_state_id`, the rule
+    :meth:`BrukerReader._applied_state` follows), which may be an older
+    one or none; opened without it, the library applies none of them.
+    ``len(states) - 1`` is how many times the acquisition has been
+    recalibrated since.
 
     This is a plain file read rather than a method, because the CLI
     displays it before any reader exists; constructing a
@@ -319,11 +402,14 @@ def read_calibration_states(data_path: Path) -> List[Dict[str, Any]]:
 
     Args:
         data_path: The ``.d`` directory.
+        use_recalibrated_state: Whether the conversion asks the library
+            for a recalibrated state at all.
 
     Returns:
-        One dict per state with ``id``, ``datetime`` and ``source``.
-        Empty when the file is absent or unreadable -- a missing
-        calibration is not an error here, it is simply nothing to show.
+        One dict per state with ``id``, ``datetime``, ``source`` and
+        ``applied``; at most one state is applied. Empty when the file is
+        absent or unreadable -- a missing calibration is not an error
+        here, it is simply nothing to show.
     """
     cal_file = data_path / "calibration.sqlite"
     if not cal_file.exists():
@@ -331,23 +417,37 @@ def read_calibration_states(data_path: Path) -> List[Dict[str, Any]]:
 
     try:
         with closing(open_read_only(cal_file)) as conn:
+            # The reader's own columns, ``Key`` included: a file the reader
+            # cannot read names no state in the store, so it lists none here.
             rows = conn.execute(
-                "SELECT Id, DateTime, Source FROM CalibrationState ORDER BY Id"
+                "SELECT Id, Key, DateTime, Source FROM CalibrationState ORDER BY Id"
             ).fetchall()
-        # Inside the guard: a NULL or non-integer ``Id`` would otherwise
-        # escape as a TypeError through the click callback, where the
-        # code this replaced returned an empty list and the CLI carried
-        # on. A calibration listing is informational; it must not be the
-        # thing that ends a run.
+            # Inside the guard: a NULL or non-integer ``Id`` would otherwise
+            # escape as a TypeError through the click callback, where the
+            # code this replaced returned an empty list and the CLI carried
+            # on. A calibration listing is informational; it must not be the
+            # thing that ends a run.
+            state_ids = [int(row[0]) for row in rows]
+            applied_id = None
+            if use_recalibrated_state and state_ids:
+                found = analysis_database(data_path)
+                file_type, db_path = found if found else ("tdf", None)
+                applied_id = applied_calibration_state_id(
+                    conn.cursor(),
+                    state_ids,
+                    acquisition_frame_ids(db_path),
+                    file_type,
+                )
         return [
             {
-                "id": int(state_id),
+                "id": state_id,
                 "datetime": datetime_str or "Unknown",
                 "source": source or "Unknown",
+                "applied": state_id == applied_id,
             }
-            for state_id, datetime_str, source in rows
+            for state_id, (_, _, datetime_str, source) in zip(state_ids, rows)
         ]
-    except (sqlite3.Error, TypeError, ValueError) as e:
+    except (sqlite3.Error, TypeError, ValueError, OverflowError) as e:
         logger.debug(f"Could not read calibration states from {cal_file}: {e}")
         return []
 
@@ -1073,66 +1173,20 @@ class BrukerReader(BrukerBaseMSIReader):
     ) -> Optional[Tuple[Any, ...]]:
         """The ``CalibrationState`` row Bruker's library applies, or ``None``.
 
-        The newest state whose frame mappings name exactly this
-        acquisition's frames. Measured with the bundled library on a copy
-        of ``synthetic_tims.d`` (2026-10-19): a newest state that maps one
-        frame too few, or one frame that is not in the acquisition, is
-        skipped and the state before it applied; when no state qualifies,
-        ``has_recalibrated_state`` answers 0 and the m/z are the analysis
-        database's. A TDF state needs both ``FrameMzCalibrationMapping``
-        and ``TimsCalibrationMapping`` to match; a TSF one only the first,
-        as a TSF's ``TimsCalibrationMapping`` is empty.
-
-        When this cannot be checked (the acquisition's frames or a
-        mapping table cannot be read), the newest state is taken, as
-        before; the library's own answer is checked once it is open
-        (:meth:`_confirm_applied_calibration`).
+        The rule is :func:`applied_calibration_state_id`, shared with the
+        CLI's calibration display. When it cannot be checked, the newest
+        state is taken; the library's own answer is checked once it is
+        open (:meth:`_confirm_applied_calibration`).
         """
-        frame_ids = self._acquisition_frame_ids()
-        if frame_ids is None:
-            return states[-1]
-        for state in reversed(states):
-            maps = self._state_maps_frames(cursor, int(state[0]), frame_ids)
-            if maps is None:
-                return states[-1]
-            if maps:
-                return state
-        return None
-
-    def _acquisition_frame_ids(self) -> Optional[set]:
-        """Every ``Frames.Id`` of the analysis database, or ``None`` if unreadable."""
-        db_path = getattr(self, "db_path", None)
-        if db_path is None:
-            return None
-        try:
-            with closing(open_read_only(db_path)) as conn:
-                return {int(row[0]) for row in conn.execute("SELECT Id FROM Frames")}
-        except (sqlite3.Error, OSError, TypeError, ValueError) as e:
-            logger.debug(f"Could not read the frame ids of {db_path}: {e}")
-            return None
-
-    def _state_maps_frames(
-        self, cursor: sqlite3.Cursor, state_id: int, frame_ids: set
-    ) -> Optional[bool]:
-        """Whether a state's frame mappings name exactly ``frame_ids``.
-
-        ``None`` when a mapping table cannot be read, so it cannot be told.
-        """
-        queries = [
-            "SELECT FrameId FROM FrameMzCalibrationMapping WHERE CalibrationState = ?"
-        ]
-        if self.file_type == "tdf":
-            queries.append(
-                "SELECT FrameId FROM TimsCalibrationMapping WHERE CalibrationState = ?"
-            )
-        for query in queries:
-            try:
-                mapped = {int(row[0]) for row in cursor.execute(query, (state_id,))}
-            except (sqlite3.Error, TypeError, ValueError):
-                return None
-            if mapped != frame_ids:
-                return False
-        return True
+        applied_id = applied_calibration_state_id(
+            cursor,
+            [int(state[0]) for state in states],
+            acquisition_frame_ids(getattr(self, "db_path", None)),
+            # Only read when the frames are known, which needs ``db_path``,
+            # set together with ``file_type``.
+            getattr(self, "file_type", "tdf"),
+        )
+        return next((state for state in states if int(state[0]) == applied_id), None)
 
     @staticmethod
     def _calibration_state(

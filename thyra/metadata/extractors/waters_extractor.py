@@ -44,6 +44,8 @@ class WatersMetadataExtractor(MetadataExtractor):
         use_centroid: bool = True,
         excluded_functions: Optional[Dict[int, Dict[str, Any]]] = None,
         mobility_report: Optional[Dict[str, Any]] = None,
+        function_settings: Optional[Dict[str, Dict[str, Any]]] = None,
+        cyclic_sequence: Optional[Dict[str, Any]] = None,
     ):
         """Initialize Waters metadata extractor.
 
@@ -71,6 +73,14 @@ class WatersMetadataExtractor(MetadataExtractor):
                 reported as ``format_specific["ion_mobility"]``. ``None``
                 for a run without readable drift bins, which reports
                 nothing: "not reported" is not "no mobility".
+            function_settings: What the converted functions' sections of
+                ``_extern.inf`` declare (``WatersReader.function_settings``),
+                reported as ``format_specific["function_settings"]`` when
+                any function declares something.
+            cyclic_sequence: The Cyclic IMS separation sequence from the
+                run's method file
+                (:func:`thyra.readers.waters.instrument.read_cyclic_sequence`),
+                reported as ``format_specific["cyclic_sequence"]``.
         """
         super().__init__(ml)
         self._ml = ml
@@ -84,6 +94,10 @@ class WatersMetadataExtractor(MetadataExtractor):
         self._excluded_functions = dict(excluded_functions or {})
         self._mobility_report = (
             dict(mobility_report) if mobility_report is not None else None
+        )
+        self._function_settings = dict(function_settings or {})
+        self._cyclic_sequence = (
+            dict(cyclic_sequence) if cyclic_sequence is not None else None
         )
 
     def _extract_essential_impl(self) -> EssentialMetadata:
@@ -411,6 +425,12 @@ class WatersMetadataExtractor(MetadataExtractor):
         specific.update(self._function_layout())
         if self._mobility_report is not None:
             specific["ion_mobility"] = dict(self._mobility_report)
+        if self._function_settings:
+            specific["function_settings"] = {
+                f: dict(entry) for f, entry in self._function_settings.items()
+            }
+        if self._cyclic_sequence is not None:
+            specific["cyclic_sequence"] = dict(self._cyclic_sequence)
         return specific
 
     def _function_layout(self) -> Dict[str, Any]:
@@ -530,7 +550,9 @@ class WatersMetadataExtractor(MetadataExtractor):
             "manufacturer": "Waters",
             "format": "MassLynx .raw",
         }
-        if self._instrument is not None and self._instrument.is_mrt:
+        if self._instrument is not None and (
+            self._instrument.is_mrt or self._instrument.is_cyclic_ims
+        ):
             info["instrument_model"] = self._instrument.name
         if self._instrument is not None and self._instrument.resolution is not None:
             info["declared_resolution"] = self._instrument.resolution

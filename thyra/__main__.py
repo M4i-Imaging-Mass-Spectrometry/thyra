@@ -33,7 +33,7 @@ import os  # noqa: E402
 import warnings  # noqa: E402
 from math import isfinite  # noqa: E402
 from pathlib import Path  # noqa: E402
-from typing import Any, Dict, Literal, Optional, Tuple  # noqa: E402
+from typing import Any, Dict, List, Literal, Optional, Tuple  # noqa: E402
 from uuid import uuid4  # noqa: E402
 
 import click  # noqa: E402
@@ -311,7 +311,10 @@ def _display_calibration_info(input: Path, use_recalibrated: bool) -> None:
     """
     from thyra.readers.bruker.timstof.timstof_reader import read_calibration_states
 
-    states = read_calibration_states(input)
+    # Which state is applied is the reader's own rule (issue #518): the
+    # newest state that maps exactly this acquisition's frames, which is
+    # not always the newest state, and none with --no-recalibrated.
+    states = read_calibration_states(input, use_recalibrated)
     if not states:
         return
 
@@ -320,7 +323,7 @@ def _display_calibration_info(input: Path, use_recalibrated: bool) -> None:
     # ``state["id"] - 1``, which made a three-state file claim the
     # second state had been recalibrated once and the third twice.
     n_recalibrations = len(states) - 1
-    active_id = states[-1]["id"]
+    applied = next((state for state in states if state["applied"]), None)
 
     click.echo("\n" + "=" * 60)
     click.echo("Calibration Information (Display Only)")
@@ -331,33 +334,45 @@ def _display_calibration_info(input: Path, use_recalibrated: bool) -> None:
             f"{'s' if n_recalibrations > 1 else ''} since acquisition"
         )
     for state in states:
-        # With --no-recalibrated, Bruker's library applies none of the
-        # states, the newest included: it takes the analysis database's
-        # own calibration instead.
-        active_marker = (
-            " (active/will be used)"
-            if use_recalibrated and state["id"] == active_id
-            else ""
-        )
+        marker = " (will be used)" if state["applied"] else ""
         click.echo(
             f"  State {state['id']}: {state['datetime']} "
-            f"[{state['source']}]{active_marker}"
+            f"[{state['source']}]{marker}"
         )
 
-    if use_recalibrated:
-        click.echo(f"\nUsing active calibration state (State {active_id})")
-    else:
-        click.echo(
-            "\nUsing original calibration (--no-recalibrated flag set): "
-            "none of these states"
-        )
-
+    click.echo("\n" + _applied_calibration_line(states, applied, use_recalibrated))
     click.echo(
         "\nNote: this lists the states only; one cannot be chosen here. "
-        "Thyra uses the active state, or the original calibration with "
-        "--no-recalibrated."
+        "Thyra uses the newest state that maps this acquisition's frames, "
+        "or the original calibration with --no-recalibrated."
     )
     click.echo("=" * 60 + "\n")
+
+
+def _applied_calibration_line(
+    states: List[Dict[str, Any]],
+    applied: Optional[Dict[str, Any]],
+    use_recalibrated: bool,
+) -> str:
+    """The one line saying which calibration the conversion applies."""
+    if not use_recalibrated:
+        return (
+            "Using original calibration (--no-recalibrated flag set): "
+            "none of these states"
+        )
+    newest = states[-1]["id"]
+    if applied is None:
+        return (
+            "Using original calibration: no state maps exactly this "
+            "acquisition's frames, so Bruker's library applies none of them"
+        )
+    if applied["id"] == newest:
+        return f"Using the newest calibration state (State {newest})"
+    return (
+        f"Using calibration state {applied['id']}, not the newest: the newer "
+        "states do not map exactly this acquisition's frames, so Bruker's "
+        "library skips them"
+    )
 
 
 def _select_bruker_dataset(input_path: Path) -> Path:

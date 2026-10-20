@@ -92,7 +92,9 @@ class ScanInfoData:
     laser_x_pos: float  # in mm from DLL
     laser_y_pos: float  # in mm from DLL
     #: The quadrupole isolation window and collision energy of an MS/MS
-    #: scan, as MassLynx reports them; 0.0 when the scan is MS1. Defaulted
+    #: scan, as MassLynx reports them; 0.0 when a Synapt scan is MS1. A
+    #: Cyclic IMS reports a precursor on full scans too, so the function's
+    #: declared ``MSMSMode`` decides there (D72). Defaulted
     #: so a scan record built without them (older callers, tests) is intact.
     quad_isolation_start: float = 0.0
     quad_isolation_end: float = 0.0
@@ -488,7 +490,11 @@ class MassLynxLib:
         return int(self._ensure_loaded().getNumberOfMobilityScans(handle, function))
 
     def get_drift_times(self, handle, n_bins: int) -> NDArray[np.float64]:
-        """The drift time of each of the first ``n_bins`` bins, in ms.
+        """``getMobility`` for each of the first ``n_bins`` bins, in ms.
+
+        On a Synapt this is each bin's drift time. On a Cyclic IMS it is the
+        bin index times one pusher period, which the reader places on the
+        run's declared bin timing (``WatersReader._arrival_times``).
 
         ``getMobility`` takes no function argument, and an index past the
         file's last bin raises a C++ exception inside the library (SEH

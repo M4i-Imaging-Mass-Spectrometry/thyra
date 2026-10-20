@@ -1,7 +1,7 @@
 # Ion mobility and MS/MS
 
 Some instruments measure more than m/z. A Bruker timsTOF or a Waters Synapt
-can also separate ions by their ion mobility. A timsTOF can break selected
+or Cyclic IMS can also separate ions by their ion mobility. A timsTOF can break selected
 ions into fragments (MS/MS). Thyra keeps both, next to the usual spectra.
 
 ## Which data has them
@@ -13,6 +13,7 @@ ions into fragments (MS/MS). Thyra keeps both, next to the usual spectra.
 | imzML in continuous mode with a mobility array, as TIMSImaging writes | ion mobility |
 | imzML in processed mode with a mobility array, as TIMSCONVERT writes | ion mobility |
 | Waters Synapt `.raw` folder, with ion mobility on | ion mobility (drift time) |
+| Waters Cyclic IMS `.raw` folder | ion mobility (drift time) |
 
 You do not need to switch anything on. Thyra finds the mobility and the
 MS/MS data by itself.
@@ -134,6 +135,8 @@ precursor 0, one value per pixel.
 - Older Waters Synapt G1 runs with ion mobility on are refused. The Waters
   library cannot read them safely.
 - CCS is computed from 1/K0 only, never from a drift time.
+- On a Cyclic IMS run with several passes, ions outside the targeted mass
+  range can lap. Their drift time then says little about their mobility.
 - diaPASEF and data-dependent PASEF runs give the spectra table only. Their
   list of precursors changes from pixel to pixel.
 - MALDI iprm-PASEF runs from the released Bruker software have been tested

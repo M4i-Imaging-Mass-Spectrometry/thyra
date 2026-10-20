@@ -21,7 +21,9 @@ from thyra.readers.waters.instrument import (
     WatersInstrument,
     identify_waters_instrument,
     parse_extern_inf,
+    parse_function_parameters,
     parse_header_txt,
+    read_cyclic_sequence,
 )
 from thyra.readers.waters.masslynx_lib import FunctionType, ScanInfoData
 from thyra.readers.waters.waters_reader import WatersReader
@@ -66,6 +68,81 @@ SYNAPT_HEADER = (
     "$$ Acquired Name: 20201216_MDA468_slide20200630_synapt\n"
     "$$ Job Code: 20201216_MDA468_slide20200630_synapt\n"
 )
+
+# A Cyclic IMS full-scan run: the field set and formatting of a real one,
+# cut to what the reader reads. No "Acquisition Algorithm" line anywhere.
+CYCLIC_EXTERN = (
+    "Instrument Configuration:\n"
+    "Lteff                    \t2190.0\n"
+    "Veff                    \t6925.44\n"
+    "Resolution              \t30000.00\n"
+    "Acquisition Device\tWatersADC\n"
+    "ADC Sample Frequency (GHz)\t7.2\n"
+    "\n"
+    "Experimental Instrument Parameters\n"
+    "Quad.MSFixedMass.Setting                                         \t500.0\n"
+    "TofADC.IMSCycleStartDelay.Setting                                \t4682\n"
+    "\n"
+    "Function Parameters - Function 1 - TOF HDMS FUNCTION\n"
+    "ADC Sample Frequency (GHz)                   \t7.2\n"
+    "ADC Pusher Period (us)                       \t66.0\n"
+    "IMS Cycle Start Delay (ms)                   \t4682\n"
+    "Pushes Per IMS Increment                     \t3\n"
+    "MSMSMode                                     \tMS\n"
+    "OpticMode                                    \tV-Mode\n"
+    "TOFMode                                      \tIMS\n"
+    "CCS Calibration                              \tNo\n"
+    "[COLLISION ENERGY]\n"
+    "Using Auto Trap MS Collision Energy (eV)     \t6.0000\n"
+)
+CYCLIC_HEADER = (
+    "$$ Version: 04.20\n"
+    "$$ Acquired Name: cyclic_run_01\n"
+    "$$ Instrument: Cyclic-IMS\n"
+    "#GBA001\n"
+    "\n"
+)
+#: The two function sections of the public Synapt XS image
+#: (MSV000092638), cut to a few of their fields.
+SYNAPT_XS_EXTERN = (
+    "Instrument Configuration:\n"
+    "Acquisition Device\t\t\t\tWatersADC\n"
+    "Acquisition Algorithm\t\t\t\tADC Mode\n"
+    "ADC Pushes Per IMS Increment\t\t\t1\n"
+    "Function Parameters - Function 1 - MALDI MOBILITY TOF MS FUNCTION\n"
+    "[MS]\n"
+    "Start Mass\t\t\t\t\t50.0\n"
+    "ADC Pusher Frequency (\xb5s)\t\t\t66.0\n"
+    "Function Parameters - Function 2 - MALDI MOBILITY TOF MS FUNCTION\n"
+    "[MS]\n"
+    "Start Mass\t\t\t\t\t50.0\n"
+    "ADC Pusher Frequency (\xb5s)\t\t\t66.0\n"
+)
+#: What a Synapt G1 run writes in _header.txt: a serial, no model.
+G1_HEADER = "$$ Version: 01.00\n$$ Instrument: UAA232\n"
+CYCLIC_METHOD_XML = """<?xml version="1.0"?>
+<MsMethod InstrumentType="QTof" InstrumentModel="Cyclic IMS" Version="1.0">
+    <Settings>
+        <Setting Name="PushesPerBin" Value="3"/>
+        <Table Name="CyclicSequence" Filename="LPC 20 passes" IMSCycleTime="348.58">
+            <Row>
+                <Setting Name="CyclicFunction" Value="0"/>
+                <Setting Name="CyclicArrayMode" Value="0"/>
+                <Setting Name="Time" Value="10"/>
+            </Row>
+            <Row>
+                <Setting Name="CyclicFunction" Value="1"/>
+                <Setting Name="CyclicArrayMode" Value="3"/>
+                <Setting Name="Time" Value="298.98"/>
+            </Row>
+            <Row>
+                <Setting Name="CyclicFunction" Value="6"/>
+                <Setting Name="CyclicArrayMode" Value="7"/>
+            </Row>
+        </Table>
+    </Settings>
+</MsMethod>
+"""
 
 
 def _raw_dir(tmp_path, extern=None, header=None):
@@ -313,3 +390,166 @@ class TestMobilityReadable:
         decision = identify_waters_instrument(_raw_dir(tmp_path, None, None))
 
         assert decision.mobility_readable is False
+
+    def test_a_cyclic_run_is_readable(self, tmp_path):
+        decision = identify_waters_instrument(
+            _raw_dir(tmp_path, CYCLIC_EXTERN, CYCLIC_HEADER)
+        )
+
+        assert decision.acquisition_algorithm is None
+        assert decision.acquisition_device == "WatersADC"
+        assert decision.is_cyclic_ims
+        assert decision.mobility_readable is True
+        assert decision.name == "SELECT SERIES Cyclic IMS"
+        assert not decision.is_mrt
+
+    def test_the_header_label_alone_is_not_enough(self, tmp_path):
+        extern = CYCLIC_EXTERN.replace("Acquisition Device\tWatersADC\n", "")
+        decision = identify_waters_instrument(_raw_dir(tmp_path, extern, CYCLIC_HEADER))
+
+        assert decision.is_cyclic_ims
+        assert decision.mobility_readable is False
+
+    @pytest.mark.parametrize(
+        "extern, header",
+        [
+            (SYNAPT_EXTERN, SYNAPT_HEADER),
+            (MRT_EXTERN, MRT_HEADER),
+            (CYCLIC_EXTERN, G1_HEADER),
+        ],
+        ids=["synapt", "mrt", "g1-header"],
+    )
+    def test_the_adc_alone_is_not_enough(self, tmp_path, extern, header):
+        # A Synapt G2-Si and an MRT declare WatersADC too, and no algorithm.
+        decision = identify_waters_instrument(_raw_dir(tmp_path, extern, header))
+
+        assert decision.acquisition_device == "WatersADC"
+        assert decision.mobility_readable is False
+
+    def test_a_g1_run_stays_unreadable(self, tmp_path):
+        extern = "Instrument Configuration:\nPusher Interval (\xb5S)\t90\n"
+        decision = identify_waters_instrument(_raw_dir(tmp_path, extern, G1_HEADER))
+
+        assert not decision.is_cyclic_ims
+        assert decision.mobility_readable is False
+
+    def test_the_header_is_found_in_capitals(self, tmp_path):
+        raw = _raw_dir(tmp_path, CYCLIC_EXTERN)
+        (raw / "_HEADER.TXT").write_text(CYCLIC_HEADER, encoding="latin-1")
+
+        assert identify_waters_instrument(raw).mobility_readable is True
+
+
+class TestFunctionParameters:
+    """Each function's own section of _extern.inf (D72)."""
+
+    def test_sections_are_keyed_from_zero(self):
+        sections = parse_function_parameters(CYCLIC_EXTERN)
+
+        assert list(sections) == [0]
+        assert sections[0]["MSMSMode"] == "MS"
+        assert sections[0]["Pushes Per IMS Increment"] == "3"
+        # The sub-header carries no tab; the line after it is still read.
+        assert sections[0]["Using Auto Trap MS Collision Energy (eV)"] == "6.0000"
+        # The instrument-wide setting is not a function parameter.
+        assert "TofADC.IMSCycleStartDelay.Setting" not in sections[0]
+
+    def test_each_function_keeps_its_own_values(self):
+        text = (
+            "Function Parameters - Function 1 - TOF MS FUNCTION\n"
+            "MSMSMode\tMS\nMSMSMode\tSIM\n"
+            "Function Parameters - Function 2 - TOF MSMS FUNCTION\n"
+            "MSMSMode\tMSMS\n"
+        )
+        sections = parse_function_parameters(text)
+
+        assert sections[0]["MSMSMode"] == "MS"
+        assert sections[1]["MSMSMode"] == "MSMS"
+        # The whole-file parser keeps only the first function's value.
+        assert parse_extern_inf(text)["MSMSMode"] == "MS"
+
+    def test_a_synapt_run_has_none(self):
+        assert parse_function_parameters(SYNAPT_EXTERN) == {}
+        # A real Synapt XS section: its own fields, none of the Cyclic ones.
+        sections = parse_function_parameters(SYNAPT_XS_EXTERN)
+        assert sections[0]["ADC Pusher Frequency (\xb5s)"] == "66.0"
+        assert sections[1]["Start Mass"] == "50.0"
+
+    def test_msms_mode_and_bin_timing(self, tmp_path):
+        decision = identify_waters_instrument(
+            _raw_dir(tmp_path, CYCLIC_EXTERN, CYCLIC_HEADER)
+        )
+
+        assert decision.msms_mode(0) == "MS"
+        assert decision.msms_mode(1) is None
+        assert decision.drift_bin_timing(0) == (4682, 3)
+        assert decision.drift_bin_timing(1) is None
+
+    def test_a_synapt_run_declares_no_bin_timing(self, tmp_path):
+        decision = identify_waters_instrument(_raw_dir(tmp_path, SYNAPT_XS_EXTERN))
+
+        assert decision.function_parameters
+        for function in (0, 1):
+            assert decision.drift_bin_timing(function) is None
+            assert decision.msms_mode(function) is None
+
+    @pytest.mark.parametrize(
+        "fields",
+        [
+            "Pushes Per IMS Increment\t2\n",
+            "IMS Cycle Start Delay (ms)\t4682\n",
+            "IMS Cycle Start Delay (ms)\t309.002\nPushes Per IMS Increment\t3\n",
+            "IMS Cycle Start Delay (ms)\t4682\nPushes Per IMS Increment\t0\n",
+            "IMS Cycle Start Delay (ms)\t-1\nPushes Per IMS Increment\t3\n",
+        ],
+        ids=["no-delay", "no-pushes", "delay-in-ms", "zero-pushes", "negative"],
+    )
+    def test_a_timing_that_places_nothing_is_refused(self, tmp_path, fields):
+        extern = "Function Parameters - Function 1 - TOF HDMS FUNCTION\n" + fields
+        decision = identify_waters_instrument(_raw_dir(tmp_path, extern))
+
+        with pytest.raises(ValueError, match="do not place its drift bins"):
+            decision.drift_bin_timing(0)
+
+
+class TestCyclicSequence:
+    """The separation sequence from the run's method file, as declared."""
+
+    def test_the_sequence_is_read(self, tmp_path):
+        raw = _raw_dir(tmp_path, CYCLIC_EXTERN, CYCLIC_HEADER)
+        (raw / "cyclic_run_01.xml").write_text(CYCLIC_METHOD_XML, encoding="utf-8")
+
+        sequence = read_cyclic_sequence(raw)
+
+        assert sequence == {
+            "sequence_name": "LPC 20 passes",
+            "ims_cycle_time_ms": pytest.approx(348.58),
+            "steps": [
+                {"function": 0, "array_mode": 0, "time_ms": 10.0},
+                {"function": 1, "array_mode": 3, "time_ms": pytest.approx(298.98)},
+                {"function": 6, "array_mode": 7},
+            ],
+        }
+
+    def test_no_method_file_gives_none(self, tmp_path):
+        assert read_cyclic_sequence(_raw_dir(tmp_path, CYCLIC_EXTERN)) is None
+
+    def test_a_method_without_a_sequence_gives_none(self, tmp_path):
+        raw = _raw_dir(tmp_path)
+        (raw / "run.xml").write_text(
+            '<?xml version="1.0"?><MsMethod><Settings/></MsMethod>', encoding="utf-8"
+        )
+        (raw / "broken.xml").write_text("<MsMethod", encoding="utf-8")
+
+        assert read_cyclic_sequence(raw) is None
+
+    def test_an_entity_declaration_is_refused_not_expanded(self, tmp_path):
+        raw = _raw_dir(tmp_path)
+        (raw / "run.xml").write_text(
+            '<?xml version="1.0"?><!DOCTYPE m [<!ENTITY n "x">]>'
+            '<MsMethod><Settings><Table Name="CyclicSequence" Filename="&n;"/>'
+            "</Settings></MsMethod>",
+            encoding="utf-8",
+        )
+
+        assert read_cyclic_sequence(raw) is None

@@ -34,7 +34,11 @@ from ...core.registry import register_reader
 from ...errors import ConversionRefused
 from ...metadata.extractors.waters_extractor import WatersMetadataExtractor
 from .imaging_grid import ImagingGrid, build_imaging_grid, regrid_for_functions
-from .instrument import WatersInstrument, identify_waters_instrument
+from .instrument import (
+    WatersInstrument,
+    identify_waters_instrument,
+    read_cyclic_sequence,
+)
 from .masslynx_lib import FunctionType, MassLynxLib, ScanInfoData
 
 logger = logging.getLogger(__name__)
@@ -48,12 +52,19 @@ FRAGMENTATION_SOURCE = "waters_masslynx"
 #: 0.06625150 ms on a Synapt XS run).
 _DRIFT_STEP_TOLERANCE = 1e-4
 
+#: ``MSMSMode`` values of a function that fragments nothing: a full scan,
+#: and a quadrupole selection (selected ion monitoring).
+_NOT_FRAGMENTED_MODES = frozenset({"MS", "SIM"})
+
 
 def _equal_step(values: NDArray[np.float64]) -> Optional[float]:
     """The common step of ascending drift times, or ``None`` when they have none.
 
-    Every Synapt run measured has one: drift bins one pusher period apart
-    from 0 ms. A run that did not would be binned like any continuum.
+    Every Waters run measured has one. On a Synapt it is the bin width:
+    bins one pusher period apart from 0 ms. On a Cyclic IMS it is the
+    library's period, which the run's declared bin timing scales (see
+    :meth:`WatersReader._arrival_times`). A run that had none would be
+    binned like any continuum.
     """
     if values.size < 2:
         return None
@@ -103,7 +114,9 @@ class WatersReader(BaseMSIReader):
       ``excluded_functions`` in the Waters-specific metadata block.
 
     A file whose converted functions carry a precursor m/z holds fragment
-    spectra and says so through :meth:`get_fragmentation`.
+    spectra and says so through :meth:`get_fragmentation`, unless the
+    function declares an ``MSMSMode`` that fragments nothing (``MS``,
+    ``SIM``; D72).
     """
 
     def __init__(
@@ -174,7 +187,8 @@ class WatersReader(BaseMSIReader):
         self._common_mass_axis_cache: Optional[NDArray[np.float64]] = None
         #: Functions MassLynx reports drift bins for, converted or not.
         self._drift_functions: Set[int] = set()
-        #: Drift functions left out because the run lacks "ADC Mode".
+        #: Drift functions left out because the run is not one the library
+        #: reads drift bins from (WatersInstrument.mobility_readable).
         self._unreadable_drift_functions: List[int] = []
         #: The drift axis, read once: ``None`` until asked, then the axis,
         #: or ``False`` when the converted functions give none.
@@ -306,7 +320,7 @@ class WatersReader(BaseMSIReader):
         ]
 
         # A run the library cannot read drift bins from (no "ADC Mode" in
-        # _extern.inf): its mobility functions stay out, as they always did
+        # _extern.inf, and not a Cyclic IMS): its mobility functions stay out, as they always did
         # before drift time was read, and the run is refused only when
         # nothing else is left. Decided here, before the grid build, so no
         # spectrum of theirs is ever asked for -- an access violation in
@@ -399,13 +413,15 @@ class WatersReader(BaseMSIReader):
             f"{self.data_path.name} was acquired with ion mobility on "
             f"(function(s) {', '.join(str(f) for f in drift)}), and its "
             "_extern.inf does not declare 'Acquisition Algorithm: ADC "
-            "Mode'. On every such run measured (older Synapt G1 "
-            "acquisitions) the Waters library crashed or returned "
-            "inconsistent data, so Thyra does not read them."
+            "Mode', nor is it a Cyclic IMS run ('Acquisition Device: "
+            "WatersADC' with a Cyclic-IMS header). On every such run "
+            "measured (older Synapt G1 acquisitions) the Waters library "
+            "crashed or returned inconsistent data, so Thyra does not read "
+            "them."
         )
 
     def _record_unreadable_drift_functions(self) -> None:
-        """List the mobility functions left out of a run without ADC Mode."""
+        """List the mobility functions left out of a run the library cannot read."""
         left_out = [
             f
             for f in self._unreadable_drift_functions
@@ -437,7 +453,7 @@ class WatersReader(BaseMSIReader):
 
         A converted mobility function without its ``_FUNCnnn.CDT`` drift
         file is the mobility counterpart of a missing ``.DAT`` (issue
-        #229). A run without ``ADC Mode`` never gets here with a mobility
+        #229). A run the library cannot read never gets here with a mobility
         function: :meth:`_ensure_initialized` leaves those out before the
         grid is built, and refusing here as well is a safety net.
         """
@@ -749,9 +765,22 @@ class WatersReader(BaseMSIReader):
         )
         return [f for f in group if f not in drift]
 
+    def _function_precursors(self, func: int, grid: "ImagingGrid") -> List[float]:
+        """The distinct precursor m/z values a function's scans report, ascending.
+
+        Empty for a function whose ``_extern.inf`` section declares
+        ``MSMSMode`` as ``MS`` or ``SIM``: nothing was fragmented, whatever
+        the scans report. A Cyclic IMS full-scan run reports 500.0 on
+        every scan, which is its ``Quad.MSFixedMass`` setting, and an
+        HDSIM run reports the quadrupole set mass (D72).
+        """
+        if self._instrument.msms_mode(func) in _NOT_FRAGMENTED_MODES:
+            return []
+        return self._reported_precursors(func, grid)
+
     @classmethod
-    def _function_precursors(cls, func: int, grid: "ImagingGrid") -> List[float]:
-        """The distinct precursor m/z values a function's scans report, ascending."""
+    def _reported_precursors(cls, func: int, grid: "ImagingGrid") -> List[float]:
+        """The distinct positive precursor m/z the scans report, whatever the mode."""
         values = {
             round(float(info.precursor_mz), 4)
             for info in cls._positioned_scans(func, grid)
@@ -760,6 +789,37 @@ class WatersReader(BaseMSIReader):
             if math.isfinite(info.precursor_mz) and info.precursor_mz > 0
         }
         return sorted(values)
+
+    def function_settings(self) -> Dict[str, Dict[str, Any]]:
+        """What each converted function's ``_extern.inf`` section declares.
+
+        Keyed by function index as a string, only for functions that declare
+        anything: ``msms_mode``, the quadrupole ``sim_set_mass_mz`` of a
+        ``SIM`` function (the m/z its scans report, since nothing else
+        carries it), and ``ccs_calibration`` as written (``No`` on every
+        Cyclic run measured). Synapt runs declare none of these.
+        """
+        _ml, _handle, grid, _types, ms_functions = self._require_initialized()
+        settings: Dict[str, Dict[str, Any]] = {}
+        for func in ms_functions:
+            entry: Dict[str, Any] = {}
+            mode = self._instrument.msms_mode(func)
+            if mode is not None:
+                entry["msms_mode"] = mode
+            if mode == "SIM":
+                set_mass = self._reported_precursors(func, grid)
+                if len(set_mass) == 1:
+                    entry["sim_set_mass_mz"] = set_mass[0]
+                elif set_mass:
+                    entry["sim_set_mass_mz"] = set_mass
+            ccs = self._instrument.function_parameters.get(func, {}).get(
+                "CCS Calibration"
+            )
+            if ccs:
+                entry["ccs_calibration"] = ccs
+            if entry:
+                settings[str(func)] = entry
+        return settings
 
     @property
     def has_fragmentation(self) -> bool:
@@ -785,7 +845,9 @@ class WatersReader(BaseMSIReader):
         MS1 raster. A file whose converted functions do carry precursors
         reports them: one isolation window per distinct precursor, and
         ``constant_across_pixels`` false as soon as a function's precursor
-        changes from scan to scan.
+        changes from scan to scan. A precursor is not evidence either when
+        the function declares ``MSMSMode`` ``MS`` or ``SIM``: a Cyclic IMS
+        reports one on every full scan (:meth:`_function_precursors`).
         """
         _ml, _handle, grid, _types, ms_functions = self._require_initialized()
         precursors = {f: self._function_precursors(f, grid) for f in ms_functions}
@@ -910,6 +972,12 @@ class WatersReader(BaseMSIReader):
             use_centroid=self._use_centroid,
             excluded_functions=self._excluded_functions,
             mobility_report=self.mobility_report(),
+            function_settings=self.function_settings(),
+            cyclic_sequence=(
+                read_cyclic_sequence(self.data_path)
+                if self._instrument.is_cyclic_ims
+                else None
+            ),
         )
 
     def get_common_mass_axis(self) -> NDArray[np.float64]:
@@ -1094,8 +1162,10 @@ class WatersReader(BaseMSIReader):
     #
     # A Waters mobility scan has the shape of a Bruker TDF frame: one
     # pixel, a fixed list of drift bins shared by every scan, a different
-    # point cloud in each bin. The bins are equal steps of drift time from
-    # 0 ms, one pusher period apart (200 bins on every Synapt run measured).
+    # point cloud in each bin. The bins are equal steps of drift time: from
+    # 0 ms one pusher period apart on a Synapt (200 bins on every run
+    # measured), and from the declared start delay a declared number of
+    # pushes apart on a Cyclic IMS (D72).
     # iter_spectra keeps yielding the spectrum summed over the bins.
     # ------------------------------------------------------------------
 
@@ -1113,8 +1183,9 @@ class WatersReader(BaseMSIReader):
     def get_mobility_axis(self) -> Optional[MobilityAxis]:
         """The drift-time axis, in ms, or ``None`` when there is none.
 
-        ``values[b]`` is the drift time of bin ``b`` as the library reports
-        it, ascending. Read once and cached.
+        ``values[b]`` is the drift time of bin ``b``, ascending: the
+        library's value on a Synapt, placed by the declared bin timing on a
+        Cyclic IMS (:meth:`_arrival_times`). Read once and cached.
         """
         if self._mobility_axis is None:
             axis = self._build_mobility_axis()
@@ -1147,7 +1218,11 @@ class WatersReader(BaseMSIReader):
                 ", ".join(f"{f}: {n}" for f, n in counts.items()),
             )
             return None
-        values = ml.get_drift_times(handle, counts[drift[0]])
+        values = self._arrival_times(
+            drift, ml.get_drift_times(handle, counts[drift[0]])
+        )
+        if values is None:
+            return None
         return MobilityAxis(
             kind_accession=DRIFT_TIME_ACCESSION,
             kind_name=MOBILITY_KIND_NAMES[DRIFT_TIME_ACCESSION],
@@ -1157,6 +1232,56 @@ class WatersReader(BaseMSIReader):
             source="waters_raw",
             bin_width=_equal_step(values),
         )
+
+    def _arrival_times(
+        self, drift: List[int], library_times: NDArray[np.float64]
+    ) -> Optional[NDArray[np.float64]]:
+        """Each bin's drift time, from the library's axis and the run's bin timing.
+
+        ``getMobility`` numbers the bins one pusher period apart from 0
+        ms. That is the drift time on a Synapt, whose functions declare no
+        bin timing. A Cyclic IMS function declares where its bins start
+        and how many pushes each spans (:meth:`WatersInstrument.
+        drift_bin_timing`), and bin ``i`` then arrives at ``(delay + i *
+        pushes)`` periods, the period being the library's own step. On
+        the Cyclic runs measured this matches the drift times MassLynx
+        writes into its own drift-time export to float32 precision
+        (309.002 to 348.403 ms in 0.198 ms steps, D72).
+
+        Returns:
+            The drift times, or ``None`` (logged) when the functions
+            declare different timings, a timing that is not two whole
+            numbers of pushes, or the library's steps are uneven, since
+            none of those can be placed on one axis.
+        """
+        try:
+            timings = {f: self._instrument.drift_bin_timing(f) for f in drift}
+        except ValueError as error:
+            logger.warning(
+                "%s: %s; no mobility is recorded.", self.data_path.name, error
+            )
+            return None
+        if all(timing is None for timing in timings.values()):
+            return library_times
+        if len(set(timings.values())) != 1:
+            logger.warning(
+                "The mobility functions declare different drift bin timings "
+                "(%s); no mobility is recorded.",
+                ", ".join(f"{f}: {t}" for f, t in timings.items()),
+            )
+            return None
+        timing = timings[drift[0]]
+        period = _equal_step(library_times)
+        if timing is None or period is None:
+            logger.warning(
+                "The Waters library's drift bins are not one pusher period "
+                "apart, so the declared bin timing cannot place them; no "
+                "mobility is recorded."
+            )
+            return None
+        delay, pushes = timing
+        bins = np.arange(library_times.size, dtype=np.float64)
+        return (delay + pushes * bins) * period
 
     @property
     def lossless_spectrum_option(self) -> Optional[str]:
@@ -1177,6 +1302,11 @@ class WatersReader(BaseMSIReader):
         report = axis.to_extractor_report()
         if axis.values is not None:
             report["num_scans"] = int(axis.values.size)
+        drift = [f for f in self._ms_functions or () if f in self._drift_functions]
+        timing = self._instrument.drift_bin_timing(drift[0]) if drift else None
+        if timing is not None:
+            # How the axis was placed (_arrival_times), in the run's units.
+            report["start_delay_pushes"], report["pushes_per_bin"] = timing
         return report
 
     def iter_mobility_spectra(self) -> Generator[
