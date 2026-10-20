@@ -105,7 +105,6 @@ def _builder(reader=None, **overrides) -> RootAttrsBuilder:
         dataset_id="stub",
         pixel_size_detection_info=None,
         handle_3d=False,
-        conversion_options={},
     )
     kwargs.update(overrides)
     return RootAttrsBuilder(reader or _StubReader(), **kwargs)
@@ -216,21 +215,6 @@ class TestTheTwoSectionsRescuedFromTheDeadMethod:
             "z_spacing_source": ZSpacingSource.ASSUMED_ISOTROPIC.value,
             "dataset_id": "stub",
         }
-
-    def test_a_caller_keyword_neither_overwrites_nor_adds(self):
-        """Only computed values are recorded (issue #519, Q6)."""
-        attrs = _builder(
-            conversion_options={
-                "pixel_size_y_um": 99.0,
-                "z_spacing_source": "measured",
-                "use_csc": True,
-            }
-        ).build(_context())
-
-        options = attrs["conversion_options"]
-        assert options["pixel_size_y_um"] == 50.0
-        assert options["z_spacing_source"] == ZSpacingSource.ASSUMED_ISOTROPIC.value
-        assert "use_csc" not in options
 
     def test_a_numpy_handle_3d_is_stored_as_a_plain_bool(self):
         attrs = _builder(handle_3d=np.bool_(True)).build(_context())

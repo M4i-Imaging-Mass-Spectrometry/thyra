@@ -669,6 +669,11 @@ class UnsAssembler:
             if parameters.get("axis_type", "tof") != "tof":
                 for field_name in ("tof_a", "tof_b", "bins_per_fwhm"):
                     parameters.pop(field_name, None)
+            # Only interpolation reads the gap tolerance; under
+            # nearest_neighbor it changed nothing, so it is not a setting
+            # the axis was filled with (issue #519).
+            if parameters.get("method") == "nearest_neighbor":
+                parameters.pop("gap_tolerance_da", None)
             steps.append(
                 ProcessingStep(
                     name="mass axis resampling",

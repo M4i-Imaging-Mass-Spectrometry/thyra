@@ -21,7 +21,7 @@ from this format" from "available and empty".
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 import pandas as pd
 
@@ -101,7 +101,6 @@ class RootAttrsBuilder:
         dataset_id: str,
         pixel_size_detection_info: Optional[Dict[str, Any]],
         handle_3d: bool,
-        conversion_options: Optional[Mapping[str, Any]] = None,
     ) -> None:
         """Build the root-attr builder of one conversion.
 
@@ -115,14 +114,11 @@ class RootAttrsBuilder:
                 asked, which is why it is not
                 ``RootAttrsContext.is_volume`` -- that one says whether a
                 volume was actually written.
-            conversion_options: Any further options the conversion was
-                given, recorded verbatim.
         """
         self.reader = reader
         self._dataset_id = dataset_id
         self._pixel_size_detection_info = pixel_size_detection_info
         self._handle_3d = handle_3d
-        self._conversion_options = dict(conversion_options or {})
 
     def build(
         self, ctx: RootAttrsContext, comprehensive_metadata_obj: Any = None
@@ -211,11 +207,12 @@ class RootAttrsBuilder:
         # survive anywhere else.
         if ctx.coordinate_bounds is not None:
             attrs["coordinate_bounds"] = list(ctx.coordinate_bounds)
-        # Only what Thyra computed. A caller's leftover keyword was merged
-        # in after these, so it could overwrite one (``pixel_size_y_um=99``
-        # on a 20 um store), record an option nothing applied, or hold a
-        # value JSON cannot, which failed the save after both passes
-        # (issue #519). handle_3d as a plain bool for the same reason.
+        # Only what Thyra computed. A caller's leftover keywords used to be
+        # merged in after these, so one could overwrite them
+        # (``pixel_size_y_um=99`` on a 20 um store), record an option
+        # nothing applied, or hold a value JSON cannot, which failed the
+        # save after both passes (issue #519). handle_3d as a plain bool
+        # for the same reason.
         attrs["conversion_options"] = {
             "handle_3d": bool(self._handle_3d),
             "pixel_size_um": float(px),
