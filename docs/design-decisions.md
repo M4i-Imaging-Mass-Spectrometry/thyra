@@ -5960,3 +5960,90 @@ about 3 s to the 46 s parse of the 918,855-spectrum file.
   plan's axis can then reach past the converted spectra; no point is lost.
 - `format_specific.spectrum_count` stays the number of spectra the file
   holds, as on the metadata-only route.
+
+## D77. A conversion that will not fit is refused before it allocates, on memory and on disk
+
+**Status:** Implemented (2026-10-20), issue #528. Extends the mass-axis
+guard (#251) and D4's reading of free memory; amends D2.
+
+**Decision.** Five changes, each one line in the log where a traceback
+used to be.
+
+- **The count ceiling is part of the axis guard.** One table counts at most
+  268,435,456 keys (a 1 GiB `uint32` count array). The mass-axis guard now
+  checks that first, so an axis of more bins is refused before it is built,
+  however much memory is free. The count array still raises past the
+  ceiling as a backstop, now as a refusal that is also a `MemoryError`, so
+  the callers that leave a sibling table out still catch it.
+- **The MS/MS table is left out past the ceiling.** Precursors x mass bins
+  past 268,435,456 keys is asked when the table is planned. The table is
+  left out with a `WARNING` naming `--resample-bins` and `--no-msms-table`,
+  and the summed table is written, as for the mobility grid. D2 said the
+  default never breaks a conversion; this was the case where it did.
+- **Tables and regions count.** The projection is `bins x (200 + 36 per
+  table past the first + 20 per region when there are two or more)` bytes.
+  The regions are known before their arrays are made, and are checked
+  then. The 2D route's tables are known only after the pre-scan, which
+  finds the planes, and are checked then, before the matrix is allocated.
+  Every check compares with the free memory read the first time, before
+  the axis, since by the later checks the conversion holds part of what
+  the projection counts.
+- **Free memory is what this process can take.** The smaller of the
+  machine's free memory and a limit on the process: a Windows job object
+  (per process or per job), a Linux cgroup (v1 or v2, every level up to the
+  root) or `RLIMIT_AS`. A cgroup's reclaimable page cache (`inactive_file`)
+  is not counted as used. The mobility tables' guards (D4) read the same
+  function.
+- **Free disk is checked after the pre-scan.** The counted bytes of every
+  matrix about to be allocated (12 bytes per entry, 16 past 2^31 entries),
+  summed tables and the siblings fed from the same passes, are compared
+  with the free space of the output's drive, where the scratch folders go.
+  More than the free space is refused, naming both sizes. More than half
+  of it warns, because the store is written to the same drive while the
+  files exist. A sibling table counted on its own pass meets the refusal
+  when it allocates.
+
+**Why.** The 4.3.3 stress test (#427) found each case ending in a traceback.
+
+| Finding | Before | After |
+|---|---|---|
+| F59: 270M bins, 150 GB free | the axis built, then `MemoryError` | refused before the axis |
+| F154: 240 precursors x 1.2M bins | conversion stopped, no store | MS/MS table left out, store written |
+| F148: six regions at 5M bins | 19.5 B/bin per region not counted | counted at 20 |
+| F116: ten planes, 2D route | 511 B/bin against 200 | counted at 200 + 36 x 9 |
+| F194: 2 GB job limit, 18M bins | admitted, then `MemoryError` | refused, 2.0 GB free |
+| F149: matrix twice the drive | `[Errno 28]` after the pre-scan | refused after the pre-scan |
+
+The per-table figure is the slope of the stress test's measurements: one
+plane 200 B/bin, ten planes 511. The per-region figure is two `float64`
+arrays per region (the total and the mean, 16 B/bin) plus what building
+them costs, measured at 19.5. The thresholds for disk follow the memory
+guard's shape: the matrix files are an exact count, not a projection, so
+the refusal is at all of the free space; the store is compressed, often
+to a fraction of the matrix, so its share is a warning.
+
+**What changes in a store.** Nothing. A conversion that fitted before
+converts the same way. A conversion that crashed now ends in a refusal or,
+for the MS/MS table, in a store without that table. A source with many
+regions or many planes, near the memory limit, may now be refused where it
+used to be attempted.
+
+**Alternatives.**
+
+- "Say in the docs that 200 bytes per bin is per table." It leaves the
+  guard admitting what it knows will not fit.
+- "Refuse the conversion when the MS/MS table is too wide." The grid in the
+  same case is left out, and the summed table is the store's main content.
+- "Read the cgroup's `memory.current` as used." A source read once fills
+  the page cache, and the guard would refuse a conversion that fits.
+
+**Known limits.**
+
+- On Linux the matrix files are sparse, so free space falls only as they
+  are written. The check after the pre-scan counts every file the passes
+  allocate; a sibling table counted later is compared with what is left
+  then, which does not subtract files allocated but not yet written.
+- The fused passes' count arrays for the grid and the MS/MS table (each up
+  to 1 GiB) are allocated before the passes and are not in the projection.
+- The 2D route's plane tables each hold a count array during the pre-scan,
+  4 bytes per bin, before the table count is known.

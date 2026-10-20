@@ -325,6 +325,30 @@ class TestTheMsmsRefusalOrder:
 
         assert siblings.msms_table_key == f"{_TABLE_KEY}_msms"
 
+    def test_an_axis_too_fine_to_count_leaves_it_out_with_a_warning(
+        self, tmp_path: Path, monkeypatch, thyra_logs
+    ):
+        """Planned out, so the summed table never names it (issue #528).
+
+        It used to stop the conversion with a ``MemoryError`` when the
+        accumulator was built, where the grid is left out with a warning.
+        """
+        from thyra.converters.spatialdata import msms_table
+
+        monkeypatch.setattr(msms_table, "MAX_COUNT_KEYS", MASS_AXIS.size)
+        reader = _fragmenting(GridStubReader, n_windows=2)
+        siblings = SiblingTables(reader, lambda: tmp_path / "out.zarr")
+
+        with thyra_logs("thyra", logging.INFO) as records:
+            siblings.plan(_context(siblings, reader), _TABLE_KEY)
+
+        assert siblings.msms_table_key is None
+        warned = [r.getMessage() for r in records if r.levelname == "WARNING"]
+        assert any(
+            "No demultiplexed MS/MS table" in m and "--no-msms-table" in m
+            for m in warned
+        ), warned
+
 
 class TestADeclinedSiblingIsUnnamed:
     """Issue #343, reproduced with no converter and no store.

@@ -65,7 +65,7 @@ import pandas as pd
 from numpy.typing import NDArray
 
 from ...core.base_reader import BaseMSIReader
-from ...errors import MALFORMED_METADATA
+from ...errors import MALFORMED_METADATA, ConversionRefused
 from ...resampling.mobility_grid import (
     MOBILITY_CHANNELS,
     MobilityGrid,
@@ -603,6 +603,15 @@ class SiblingTables:
                 type(self.reader).__name__,
             )
             return None
+        # A warning, not the info above: the table was asked for and the
+        # source could give it, but not on an axis this fine (issue #528).
+        if ctx.mass_axis is not None:
+            from .msms_table import msms_ceiling_refusal
+
+            ceiling = msms_ceiling_refusal(ctx.fragmentation(), len(ctx.mass_axis))
+            if ceiling is not None:
+                logger.warning("No demultiplexed MS/MS table: %s", ceiling)
+                return None
         # The fragment axis is the summed table's axis whatever that axis
         # is (design decision D6): resampled, it is the grid the user chose
         # for the whole store; raw, it is the union of the very fragment
@@ -834,6 +843,32 @@ class SiblingTables:
         scratch = self._new_scratch(prefix)
         self._table_scratch.append((assembly, scratch))
         return scratch
+
+    def refuse_a_full_disk(self, assemblies: Iterable[Any], passes: Any = None) -> None:
+        """Refuse matrix files the output's drive cannot hold, before any is made.
+
+        Asked after the pre-scan, when every summed table -- and every
+        sibling fed from the same passes -- has counted its entries, so the
+        bytes are known, not estimated. A source too big for the drive used
+        to finish that pass and then fail on ``[Errno 28]`` with a
+        traceback (issue #528, F149). A sibling table counted later, on its
+        own pass, meets the same test in :meth:`CscAssembly.allocate`.
+
+        Raises:
+            ConversionRefused: When the files need more than the drive's
+                free space.
+        """
+        from .csc_assembly import disk_refusal, matrix_file_bytes
+
+        counted = list(assemblies)
+        if passes is not None:
+            for sink in (passes.discovery, passes.msms):
+                if sink is not None:
+                    counted.append(sink.assembly)
+        needed = sum(matrix_file_bytes(a.n_nonzeros, a.n_rows) for a in counted)
+        refusal = disk_refusal(needed, self.store_path().parent)
+        if refusal is not None:
+            raise ConversionRefused(refusal)
 
     def release_scratch(self, tables: Optional[Dict[str, Any]] = None) -> None:
         """Drop every table's memmaps and remove their scratch directories.
