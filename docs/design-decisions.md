@@ -928,7 +928,7 @@ has already read.
 **Why the keyword is answered instead of being accepted as a no-op.**
 Unknown keyword arguments fall through `**kwargs` into
 `BaseMSIConverter.options` without a word (through `convert_msi` they are
-refused since D74). Dropping `sparse_format` from the signature and stopping
+refused since D76). Dropping `sparse_format` from the signature and stopping
 there would mean `sparse_format="csr"` silently producing CSC -- which is
 exactly the failure D9 found and this decision is meant to end. So the
 base converter names it: the message says the keyword is gone, that CSC is
@@ -5962,7 +5962,7 @@ about 3 s to the 46 s parse of the 918,855-spectrum file.
 - `format_specific.spectrum_count` stays the number of spectra the file
   holds, as on the metadata-only route.
 
-## D74. `convert_msi` refuses every keyword it does not use, and checks its values as the CLI does
+## D76. `convert_msi` refuses every keyword it does not use, and checks its values as the CLI does
 
 **Status:** Implemented (2026-10-20), issue #519. Extends D10, which answered
 only `sparse_format`. Leaves D44's refusal of `region` as it is.
