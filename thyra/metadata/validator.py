@@ -3,12 +3,28 @@
 
 import logging
 import xml.etree.ElementTree as ET  # nosec B405
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List
 
 from .ontology.cache import ONTOLOGY
 
 logger = logging.getLogger(__name__)
+
+#: What ``validate_file`` raises for a file it cannot read: an empty, cut
+#: short or wrongly encoded file is an ``ET.ParseError`` (an encoding the
+#: parser cannot use, a ``ValueError``), and a folder or a locked file an
+#: ``OSError``. ``validate_directory`` reports and skips them.
+UNREADABLE_ERRORS = (ET.ParseError, OSError, ValueError)
+
+
+def describe_unreadable(error: BaseException) -> str:
+    """One line saying why a file could not be read."""
+    if isinstance(error, ET.ParseError):
+        return f"not a readable XML file ({error})"
+    if isinstance(error, OSError):
+        return error.strerror or str(error)
+    return str(error) or type(error).__name__
 
 
 class ImzMLOntologyValidator:
@@ -20,7 +36,11 @@ class ImzMLOntologyValidator:
         self.unknown_terms: Dict[str, List[str]] = {}
 
     def validate_file(self, imzml_path: Path) -> Dict[str, Any]:
-        """Validate all ontology terms in an imzML file."""
+        """Validate all ontology terms in an imzML file.
+
+        Raises:
+            One of ``UNREADABLE_ERRORS`` when the file cannot be read as XML.
+        """
         logger.info(f"Validating ontology terms in {imzml_path}")
 
         # Parse XML
@@ -130,20 +150,44 @@ class ImzMLOntologyValidator:
         return "\n".join(lines)
 
     def validate_directory(self, directory: Path) -> Dict[str, Any]:
-        """Validate all imzML files in a directory."""
-        imzml_files = list(directory.glob("**/*.imzML"))
+        """Validate all imzML files in a directory and its subfolders.
+
+        A file that cannot be read is recorded under ``unreadable_files``
+        with the reason, and the other files are still checked. A folder
+        whose name ends in ``.imzML`` is not a file and is left out.
+
+        ``all_unknown_terms`` is a list, most often seen first, then by
+        accession, so the order is the same on every run;
+        ``unknown_term_counts`` holds how often each was seen.
+        """
+        # Case-insensitive on every platform: ``sample.imzml`` was found on
+        # Windows and missed on Linux.
+        imzml_files = sorted(
+            path
+            for path in directory.glob("**/*.imzML", case_sensitive=False)
+            if path.is_file()
+        )
 
         per_file_results: Dict[str, Any] = {}
-        all_unknown_terms: set = set()
+        unreadable_files: Dict[str, str] = {}
+        counts: Counter = Counter()
 
         for imzml_file in imzml_files:
-            results = self.validate_file(imzml_file)
+            try:
+                results = self.validate_file(imzml_file)
+            except UNREADABLE_ERRORS as error:
+                reason = describe_unreadable(error)
+                logger.warning(f"Skipping {imzml_file}: {reason}")
+                unreadable_files[str(imzml_file)] = reason
+                continue
             per_file_results[str(imzml_file)] = results
-            for term in results["unknown_list"]:
-                all_unknown_terms.add(term["accession"])
+            counts.update(term["accession"] for term in results["unknown_list"])
 
+        ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
         return {
-            "files_checked": len(imzml_files),
-            "all_unknown_terms": all_unknown_terms,
+            "files_checked": len(per_file_results),
+            "all_unknown_terms": [accession for accession, _ in ranked],
+            "unknown_term_counts": dict(ranked),
+            "unreadable_files": unreadable_files,
             "per_file_results": per_file_results,
         }
