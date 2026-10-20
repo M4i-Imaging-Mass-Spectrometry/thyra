@@ -375,3 +375,151 @@ class TestDeclaredPair:
 
         assert pixel_size is None
         assert "--pixel-size" in _warnings(records)
+
+
+NANOMETRE = "UO:0000018"
+
+
+class TestTheDeclaredGrid:
+    """What a count and an extent have to be before they test anything."""
+
+    @pytest.mark.parametrize(
+        ("count", "extent_mm"),
+        [
+            # 1e307 pixels of 100 um is 1e306 mm, so the area reading fits
+            # on paper, but 1e306 mm overflows to infinity in micrometres.
+            (1e307, 1e306),
+            # Fits neither reading. Both products overflow.
+            (1e305, 1e307),
+        ],
+    )
+    def test_numbers_that_overflow_confirm_nothing(
+        self, tmp_path, thyra_logs, count, extent_mm
+    ):
+        """inf is close to inf, so an overflowed grid would confirm any size."""
+        with thyra_logs(EXTRACTOR_LOGGER, logging.INFO) as records:
+            pixel_size = _pixel_size(
+                tmp_path,
+                [
+                    old_pixel_size(10000),
+                    count_x(count),
+                    count_y(count),
+                    extent_x(extent_mm, MILLIMETRE),
+                    extent_y(extent_mm, MILLIMETRE),
+                ],
+            )
+
+        assert pixel_size is None
+        assert "confirmed by the declared" not in "\n".join(records.messages)
+
+    @pytest.mark.parametrize(("count", "extent"), [(0, 0), (-5, -500)])
+    def test_a_grid_of_zeros_or_negatives_confirms_nothing(
+        self, tmp_path, count, extent
+    ):
+        """0 x 10000 is 0, and -5 x 100 is -500: both fit, and mean nothing."""
+        pixel_size = _pixel_size(
+            tmp_path, [old_pixel_size(10000), count_x(count), extent_x(extent)]
+        )
+
+        assert pixel_size is None
+
+    def test_an_axis_with_no_extent_does_not_overrule_one_with(self, tmp_path):
+        """y declares 3 pixels over 0 um. x alone decides: a 100 um pixel."""
+        pixel_size = _pixel_size(
+            tmp_path,
+            [
+                old_pixel_size(10000),
+                count_x(5),
+                extent_x(500),
+                count_y(3),
+                extent_y(0),
+            ],
+        )
+
+        assert pixel_size == pytest.approx((100.0, 100.0))
+
+    @pytest.mark.parametrize(
+        ("extent", "unit"),
+        [(0.5, MILLIMETRE), (500000, NANOMETRE), (500, MICROMETRE)],
+    )
+    def test_the_extent_is_read_in_its_unit(self, tmp_path, extent, unit):
+        """5 pixels of 100 um over 0.5 mm, 500000 nm or 500 um."""
+        pixel_size = _pixel_size(
+            tmp_path,
+            [pixel_size_x(100, MICROMETRE), count_x(5), extent_x(extent, unit)],
+        )
+
+        assert pixel_size == pytest.approx((100.0, 100.0))
+
+    def test_an_extent_in_an_unknown_unit_tests_nothing(self, tmp_path, thyra_logs):
+        """500 cm would be 500 um if the unit were dropped; it is refused."""
+        with thyra_logs(EXTRACTOR_LOGGER, logging.WARNING) as records:
+            pixel_size = _pixel_size(
+                tmp_path,
+                [pixel_size_x(100, MICROMETRE), count_x(5), extent_x(500, CENTIMETRE)],
+            )
+
+        assert pixel_size is None
+        assert CENTIMETRE in _warnings(records)
+
+
+class TestBothReadingsWindow:
+    """Where the length and the area reading can both pass, length wins."""
+
+    @pytest.mark.parametrize(("value", "extent"), [(0.962, 97.15), (1.04, 102.98)])
+    def test_near_one_the_length_is_taken(self, tmp_path, value, extent):
+        """Inside 0.9606 to 1.0410 both readings pass; the length is taken."""
+        pixel_size = _pixel_size(
+            tmp_path,
+            [
+                pixel_size_x(value),
+                count_x(100),
+                count_y(100),
+                extent_x(extent),
+                extent_y(extent),
+            ],
+        )
+
+        assert pixel_size == pytest.approx((value, value))
+
+
+class TestSeveralScanSettingsBlocks:
+    """Terms from several blocks: kept, as on the imzML path, with a warning."""
+
+    def test_the_log_says_the_blocks_may_disagree(self, tmp_path, thyra_logs):
+        """Block 1 gives x = 10 um, block 2 gives 50 x 50 um."""
+
+        def grid(extent):
+            return [count_x(2), count_y(2), extent_x(extent), extent_y(extent)]
+
+        archive = build_mzpeak(
+            tmp_path / "two_blocks.mzpeak",
+            grid_spectra(2, 2),
+            pixel_size=None,
+            footer_metadata=False,
+            index_metadata={
+                "scan_settings_list": [
+                    {"id": "s1", "parameters": grid(20) + [pixel_size_x(10.0)]},
+                    {
+                        "id": "s2",
+                        "parameters": grid(100)
+                        + [pixel_size_x(50.0), pixel_size_y(50.0)],
+                    },
+                ]
+            },
+        )
+        with thyra_logs(EXTRACTOR_LOGGER, logging.WARNING) as records:
+            with MzPeakReader(archive) as reader:
+                pixel_size = reader.get_essential_metadata().pixel_size
+
+        assert pixel_size == pytest.approx((10.0, 50.0))
+        logged = _warnings(records)
+        assert "2 scan-settings blocks" in logged
+        assert "describe no single region" in logged
+
+    def test_one_block_says_nothing(self, tmp_path, thyra_logs):
+        """The usual archive has one block and no such warning."""
+        with thyra_logs(EXTRACTOR_LOGGER, logging.WARNING) as records:
+            _pixel_size(tmp_path, [pixel_size_x(25), pixel_size_y(25)])
+
+        assert "scan-settings blocks" not in _warnings(records)

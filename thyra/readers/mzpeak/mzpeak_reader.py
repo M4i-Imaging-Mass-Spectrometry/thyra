@@ -67,6 +67,7 @@ from typing import (
     Optional,
     Set,
     Tuple,
+    Type,
 )
 
 import numpy as np
@@ -137,6 +138,9 @@ CENTROID_KIND = "peaks"
 #: layout counts rows, and a row is a run of points, so one row group can
 #: hold the whole archive (60 million points in one, on a real file).
 CHUNK_BATCH_POINTS = 2_000_000
+
+#: Fields of the ``point`` struct the point layout is read from.
+POINT_FIELDS = ("spectrum_index", "mz", "intensity")
 
 #: Bounds on the rows of one batch, whatever the points per row.
 CHUNK_BATCH_ROWS = (16, 65536)
@@ -255,6 +259,160 @@ def _lazy_pyarrow() -> Tuple[Any, Any]:
     return pyarrow, pq
 
 
+def _damage() -> Tuple[Type[BaseException], ...]:
+    """What reading a damaged member can raise.
+
+    pyarrow's own errors, a cut or empty member, and the ZIP's check of a
+    member's CRC, which fails only once the member is read to its end.
+    """
+    import pyarrow as pa  # noqa: WPS433 - deliberate lazy import
+
+    return (pa.ArrowException, OSError, EOFError, zipfile.BadZipFile)
+
+
+class _ParquetMember:
+    """One Parquet member of an archive, read so that damage is named.
+
+    pyarrow reads a column a member does not have as no column at all, and
+    a damaged member fails inside pyarrow. Either ended in a traceback
+    some way into the conversion. Here a missing column, and a member that
+    cannot be read, are refused by the archive's and the member's name.
+    """
+
+    def __init__(self, archive: Path, name: str, handle: Any):
+        """Wrap an open ``pyarrow.parquet.ParquetFile``.
+
+        Args:
+            archive: The archive, for the message.
+            name: The member's name in the archive.
+            handle: The open Parquet file.
+        """
+        self.archive = archive
+        self.name = name
+        self._handle = handle
+
+    @property
+    def schema_arrow(self) -> Any:
+        """The member's Arrow schema."""
+        return self._handle.schema_arrow
+
+    @property
+    def metadata(self) -> Any:
+        """The member's Parquet footer."""
+        return self._handle.metadata
+
+    def refuse(self, exc: BaseException) -> ConversionRefused:
+        """The refusal for a member that cannot be read."""
+        return ConversionRefused(
+            f"{self.archive}: its member '{self.name}' cannot be read "
+            f"({type(exc).__name__}: {exc}). The member is damaged, or uses "
+            f"a Parquet feature this pyarrow does not read."
+        )
+
+    def require(self, columns: List[str]) -> None:
+        """Refuse when the member lacks one of ``columns``.
+
+        A nested column, ``chunk.chunk_encoding``, is looked up by its
+        top-level name.
+        """
+        names = set(self.schema_arrow.names)
+        missing = [c for c in columns if c.split(".")[0] not in names]
+        if missing:
+            raise ConversionRefused(
+                f"{self.archive} has no {', '.join(repr(c) for c in missing)} "
+                f"column in its member '{self.name}'. Columns found: "
+                f"{', '.join(sorted(names)) or 'none'}."
+            )
+
+    def read(self, columns: List[str]) -> Any:
+        """Read whole columns, which must all be present."""
+        self.require(columns)
+        try:
+            return self._handle.read(columns=columns)
+        except _damage() as exc:
+            raise self.refuse(exc) from exc
+
+    def read_row_group(self, group: int, columns: List[str]) -> Any:
+        """Read one row group of some columns, which must all be present."""
+        self.require(columns)
+        try:
+            return self._handle.read_row_group(group, columns=columns)
+        except _damage() as exc:
+            raise self.refuse(exc) from exc
+
+    def iter_batches(self, batch_size: int, columns: List[str]) -> Any:
+        """Yield record batches of some columns, which must all be present."""
+        self.require(columns)
+        batches = self._handle.iter_batches(batch_size=batch_size, columns=columns)
+        while True:
+            try:
+                batch = next(batches)
+            except StopIteration:
+                return
+            except _damage() as exc:
+                raise self.refuse(exc) from exc
+            yield batch
+
+
+def _numbers(column: Any, name: str, member: str, path: Path) -> Any:
+    """A position column as numbers, whatever type it was stored as.
+
+    Whole numbers written as text are read as the numbers they are, as
+    4.3.0 read them: ``"3"`` and ``"3.0"`` alike, and a blank as no
+    position. Any other type, or text that is not a whole number, is
+    refused by the column's name and type: a cast at the first use ended
+    in a pyarrow traceback.
+
+    Args:
+        column: The column as pyarrow reads it.
+        name: The column's name, for the message.
+        member: The member that holds it, for the message.
+        path: The archive, for the message.
+    """
+    import pyarrow as pa  # noqa: WPS433 - deliberate lazy import
+    import pyarrow.compute as pc  # noqa: WPS433 - deliberate lazy import
+
+    kind = column.type
+    if pa.types.is_dictionary(kind):
+        # A categorical column, as pandas writes one: read its values.
+        column = column.cast(kind.value_type)
+        kind = column.type
+    if pa.types.is_integer(kind) or pa.types.is_floating(kind):
+        return column
+    if pa.types.is_null(kind):
+        return column
+    if pa.types.is_string(kind) or pa.types.is_large_string(kind):
+        # Built by pyarrow.compute at import time, so absent from its source.
+        strip = pc.utf8_trim_whitespace  # pyright: ignore[reportAttributeAccessIssue]
+        equal = pc.equal  # pyright: ignore[reportAttributeAccessIssue]
+        if_else = pc.if_else  # pyright: ignore[reportAttributeAccessIssue]
+        text = strip(column)
+        text = if_else(equal(text, ""), pa.scalar(None, text.type), text)
+        try:
+            numbers = text.cast(pa.float64())
+        except pa.ArrowException:
+            numbers = None
+        if numbers is not None:
+            values = np.asarray(numbers.drop_null().to_numpy(), dtype=np.float64)
+            if bool((np.isfinite(values) & (values == np.floor(values))).all()):
+                logger.warning(
+                    "%s stores the position column %r as text; its whole "
+                    "numbers are read as positions.",
+                    path.name,
+                    name,
+                )
+                return numbers
+        raise ConversionRefused(
+            f"{path} stores the position column '{name}' of its member "
+            f"'{member}' as text, and not every value is a whole number. "
+            f"A position is a whole number."
+        )
+    raise ConversionRefused(
+        f"{path} stores the position column '{name}' of its member "
+        f"'{member}' as {kind}. A position is a whole number."
+    )
+
+
 def _positions(column: Any) -> Tuple[NDArray[np.int64], NDArray[np.bool_]]:
     """Read one position column, keeping apart the scans that have none.
 
@@ -263,7 +421,8 @@ def _positions(column: Any) -> Tuple[NDArray[np.int64], NDArray[np.bool_]]:
     would then put the origin of the grid at that scan.
 
     Args:
-        column: The position column of the scans member, as pyarrow reads it.
+        column: The position column of the scans member, as pyarrow reads
+            it, holding numbers (see :func:`_numbers`).
 
     Returns:
         The positions as integers, 0 where there is none, and a mask that is
@@ -561,6 +720,10 @@ class MzPeakSpatialIndex(NamedTuple):
             on a pixel, before MSn spectra beside MS1 are left out. A
             region's listed frame count may count those spectra too.
             ``None`` means the same as ``coordinates``.
+        member_points: Points every spectrum the metadata lists has in the
+            member that is read, kept or not. A batch of the chunked layout
+            is sized from these, since it decodes every row it reads.
+            ``None`` means the sum of ``point_counts``.
     """
 
     spectrum_indices: NDArray[np.int64]
@@ -572,6 +735,25 @@ class MzPeakSpatialIndex(NamedTuple):
     z_offset: int = 0
     scan_rows: Optional[NDArray[np.int64]] = None
     placed_coordinates: Optional[NDArray[np.int64]] = None
+    member_points: Optional[int] = None
+
+    def batch_rows(self, rows: int) -> int:
+        """Rows of the chunked member to decode at a time.
+
+        Sized by the points of the whole member, not of the spectra that
+        are kept: a batch decodes every row it reads. Sized by the kept
+        spectra alone, a batch grew as fewer were kept, up to the whole
+        member when nearly all were left out.
+
+        Args:
+            rows: Rows the member holds.
+        """
+        points = (
+            self.member_points
+            if self.member_points is not None
+            else int(self.point_counts.sum())
+        )
+        return rows_per_batch(rows, points)
 
 
 class MzPeakArchive:
@@ -594,7 +776,7 @@ class MzPeakArchive:
         """
         self.path = Path(path)
         self._zip: Optional[zipfile.ZipFile] = None
-        self._parquet_cache: Dict[str, Any] = {}
+        self._parquet_cache: Dict[str, _ParquetMember] = {}
         self._file_metadata: Optional[Dict[str, Any]] = None
         self._spatial_index: Optional[MzPeakSpatialIndex] = None
         #: The registered image once looked for; ``()`` when there is none.
@@ -602,6 +784,9 @@ class MzPeakArchive:
         self._null_count: Optional[int] = None
         self._null_count_cached = False
         self._signal_kind: Optional[str] = None
+        #: Rows of the centroid member, ``None`` when it is absent or could
+        #: not be opened beside a profile member that is read.
+        self._centroid_rows: Optional[int] = None
         self._chunk_encodings: Optional[List[str]] = None
 
         if not zipfile.is_zipfile(self.path):
@@ -609,7 +794,12 @@ class MzPeakArchive:
                 f"Not an mzPeak archive (not a ZIP container): {self.path}"
             )
 
-        self._zip = zipfile.ZipFile(self.path)
+        try:
+            self._zip = zipfile.ZipFile(self.path)
+        except (zipfile.BadZipFile, OSError, EOFError) as exc:
+            raise ConversionRefused(
+                f"Not an mzPeak archive (a damaged ZIP container): {self.path}: {exc}"
+            ) from exc
         self._members = set(self._zip.namelist())
         if INDEX_MEMBER not in self._members:
             raise ConversionRefused(
@@ -618,7 +808,13 @@ class MzPeakArchive:
 
         try:
             index = json.loads(self._zip.read(INDEX_MEMBER))
-        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        except (
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+            zipfile.BadZipFile,
+            OSError,
+            EOFError,
+        ) as exc:
             raise ConversionRefused(
                 f"Malformed {INDEX_MEMBER} in {self.path}: {exc}"
             ) from exc
@@ -704,18 +900,27 @@ class MzPeakArchive:
             )
         return found
 
-    def parquet(self, entity_type: str, data_kind: str) -> Any:
+    def parquet(self, entity_type: str, data_kind: str) -> _ParquetMember:
         """Open the Parquet member filling a role.
 
         The handle is cached: members are STORED, so pyarrow reads the
         footer once and then seeks within the archive without re-inflating.
+
+        Raises:
+            ConversionRefused: If no member fills the role, or the member is
+                not a Parquet file that can be opened (cut short, empty).
         """
         entry = self.require_entry(entity_type, data_kind)
         name = entry["name"]
         if name not in self._parquet_cache:
             _, pq = _lazy_pyarrow()
             assert self._zip is not None
-            self._parquet_cache[name] = pq.ParquetFile(self._zip.open(name))
+            member = _ParquetMember(self.path, name, None)
+            try:
+                handle = pq.ParquetFile(self._zip.open(name))
+            except _damage() as exc:
+                raise member.refuse(exc) from exc
+            self._parquet_cache[name] = _ParquetMember(self.path, name, handle)
         return self._parquet_cache[name]
 
     @staticmethod
@@ -753,6 +958,22 @@ class MzPeakArchive:
             return None
         return int(self.parquet("spectrum", data_kind).metadata.num_rows)
 
+    def _unused_rows(self, data_kind: str) -> Optional[int]:
+        """Rows of a signal member that is not read, ``None`` if unknown.
+
+        Only the log uses the count. A member that cannot be opened holds
+        nothing this conversion reads, so it is reported and passed over
+        rather than refused.
+        """
+        try:
+            return self._signal_rows(data_kind)
+        except ConversionRefused as exc:
+            logger.warning(
+                "%s The member is not read, so the conversion goes on without it.",
+                exc,
+            )
+            return None
+
     def signal_kind(self) -> str:
         """Decide which signal member this archive is read from.
 
@@ -776,7 +997,14 @@ class MzPeakArchive:
             return self._signal_kind
 
         profile_rows = self._signal_rows(PROFILE_KIND)
-        centroid_rows = self._signal_rows(CENTROID_KIND)
+        # The centroid member is read only when the profile member holds
+        # nothing; otherwise its count is for the log alone.
+        centroid_rows = (
+            self._unused_rows(CENTROID_KIND)
+            if profile_rows
+            else self._signal_rows(CENTROID_KIND)
+        )
+        self._centroid_rows = centroid_rows
         if profile_rows is None and centroid_rows is None:
             # Raises, naming the roles the archive does have.
             self.require_entry("spectrum", PROFILE_KIND)
@@ -811,10 +1039,13 @@ class MzPeakArchive:
         return self.parquet("spectrum", self.signal_kind())
 
     def holds_both_representations(self) -> bool:
-        """Whether the profile and the centroid member both hold rows."""
-        return bool(self._signal_rows(PROFILE_KIND)) and bool(
-            self._signal_rows(CENTROID_KIND)
-        )
+        """Whether the profile and the centroid member both hold rows.
+
+        A centroid member that cannot be opened beside a profile member
+        that holds rows counts as holding none (see :meth:`signal_kind`).
+        """
+        self.signal_kind()
+        return bool(self._signal_rows(PROFILE_KIND)) and bool(self._centroid_rows)
 
     def _read_point_counts(
         self,
@@ -916,6 +1147,33 @@ class MzPeakArchive:
             f"top-level 'point' or 'chunk' column, found {fields}."
         )
 
+    def require_point_fields(self) -> None:
+        """Refuse a ``point`` struct without the fields the reader reads.
+
+        Checked before any spectrum is read. A field under another name
+        ended in a bare ``KeyError`` once the conversion had started.
+
+        Raises:
+            ConversionRefused: If ``spectrum_index``, ``mz`` or
+                ``intensity`` is missing from the struct, or the column is
+                not a struct.
+        """
+        member = self.signal()
+        point = member.schema_arrow.field("point").type
+        found = (
+            [point.field(i).name for i in range(point.num_fields)]
+            if hasattr(point, "num_fields")
+            else []
+        )
+        missing = [name for name in POINT_FIELDS if name not in found]
+        if missing:
+            raise ConversionRefused(
+                f"{self.path} has an unrecognised mzPeak point layout: the "
+                f"'point' column of its member '{member.name}' has no "
+                f"{', '.join(repr(name) for name in missing)} field. Fields "
+                f"found: {', '.join(found) or 'none'}."
+            )
+
     def chunk_columns(self) -> List[str]:
         """Children of the ``chunk`` struct of the member that is read."""
         chunk = self.signal().schema_arrow.field("chunk").type
@@ -963,6 +1221,9 @@ class MzPeakArchive:
                 decoded = decode_chunks(batch.column(0), str(self.path))
                 yield decoded.spectrum_index, decoded.mz, decoded.intensity
             return
+        # The metadata extractor walks the points without the reader, so
+        # the fields are checked here too.
+        self.require_point_fields()
         for group in range(data.metadata.num_row_groups):
             table = data.read_row_group(group, columns=["point"])
             if table.num_rows == 0:
@@ -990,10 +1251,7 @@ class MzPeakArchive:
         Returns:
             ``(low, high)``; ``inf`` or ``-inf`` where no such point is held.
         """
-        index = self.spatial_index()
-        batch = rows_per_batch(
-            int(self.signal().metadata.num_rows), int(index.point_counts.sum())
-        )
+        batch = self.spatial_index().batch_rows(int(self.signal().metadata.num_rows))
         low, high = np.inf, -np.inf
         for indices, mzs, _ in self.iter_points(batch):
             mzs = np.asarray(mzs, dtype=np.float64)
@@ -1123,8 +1381,8 @@ class MzPeakArchive:
         )
         self._report_ion_mobility(scans_member)
         source = np.asarray(scans.column("source_index").to_numpy(), dtype=np.int64)
-        xs, has_x = _positions(scans.column(x_column))
-        ys, has_y = _positions(scans.column(y_column))
+        xs, has_x = _positions(self._position_numbers(scans, x_column))
+        ys, has_y = _positions(self._position_numbers(scans, y_column))
 
         # The imaging profile sets both positions of a scan or neither. A
         # scan that belongs to no pixel, a calibration scan for instance, has
@@ -1166,6 +1424,7 @@ class MzPeakArchive:
         )
 
         spectrum_index, counts, levels = self._read_point_counts()
+        member_points = int(counts.sum())
         order = np.argsort(spectrum_index, kind="stable")
         spectrum_index, counts, levels = (
             spectrum_index[order],
@@ -1245,8 +1504,14 @@ class MzPeakArchive:
             z_offset=z_offset,
             scan_rows=scan_row[rows],
             placed_coordinates=placed_raw - np.array(bases, dtype=np.int64),
+            member_points=member_points,
         )
         return self._spatial_index
+
+    def _position_numbers(self, scans: Any, column: str) -> Any:
+        """One position column of the scans as read, as numbers (:func:`_numbers`)."""
+        member = self.parquet("spectrum", "scans")
+        return _numbers(scans.column(column), column, member.name, self.path)
 
     def _placed_scan_column(self, name: str) -> Optional[Any]:
         """One scans column, for the scan of each kept spectrum in order.
@@ -1344,7 +1609,7 @@ class MzPeakArchive:
             ``scans``, or ``None`` when the archive states z nowhere.
         """
         if z_column is not None:
-            return _positions(scans.column(z_column))
+            return _positions(self._position_numbers(scans, z_column))
         member = self.parquet("spectrum", "scans")
         if SCAN_PARAMETERS_COLUMN not in member.schema_arrow.names:
             return None
@@ -1745,11 +2010,13 @@ class MzPeakReader(BaseMSIReader):
         not after the first pass.
 
         Raises:
-            ConversionRefused: If the member has neither layout, or uses a
-                chunk encoding, grid model or intensity transform that is
-                not decoded.
+            ConversionRefused: If the member has neither layout, lacks a
+                field of the point layout, or uses a chunk encoding, grid
+                model or intensity transform that is not decoded.
         """
         assert self._archive is not None
+        if self._archive.layout() == "point":
+            self._archive.require_point_fields()
         self._archive.chunk_encodings()
 
     def _load_spatial_index(self) -> None:
@@ -1843,12 +2110,14 @@ class MzPeakReader(BaseMSIReader):
         lossy = [e for e in self.archive.chunk_encodings() if e in LOSSY_ENCODINGS]
         if lossy:
             # Measured on a centroid image: 331,701 distinct m/z in the
-            # point layout, 48,116,750 under MS-Numpress.
+            # point layout, 48,116,750 under MS-Numpress. The source's own
+            # count is not in the archive, so the warning says what can
+            # happen, not what did.
             logger.warning(
-                "%s stores m/z under %s, which gives one m/z back a little "
+                "%s stores m/z under %s, which can give one m/z back a little "
                 "differently from pixel to pixel. The axis of every distinct "
-                "m/z is therefore far longer than the source's. Convert with "
-                "resampling to avoid that.",
+                "m/z can then grow far longer than the source's. Convert "
+                "with resampling to avoid that.",
                 self.data_path.name,
                 ", ".join(describe_term(e) for e in lossy),
             )
@@ -1891,10 +2160,11 @@ class MzPeakReader(BaseMSIReader):
         return self._common_axis
 
     def _chunk_rows_per_batch(self, data: Any) -> int:
-        """Rows of the chunked member to decode at a time; see :func:`rows_per_batch`."""
-        return rows_per_batch(
-            int(data.metadata.num_rows), int(self._require(self._point_counts).sum())
-        )
+        """Rows of the chunked member to decode at a time.
+
+        See :meth:`MzPeakSpatialIndex.batch_rows`.
+        """
+        return self.archive.spatial_index().batch_rows(int(data.metadata.num_rows))
 
     def _iter_mz_blocks(self, data: Any) -> Generator[NDArray[Any], None, None]:
         """Yield the m/z of the member that is read, in stored order.

@@ -773,3 +773,66 @@ class TestLeftOutSpectra:
             assert any(
                 "non-finite value(s)" in record.getMessage() for record in records
             ), source.suffix
+
+
+class TestMetadataKeysAndEmptyArchives:
+    """What an archive's own metadata or emptiness does to the save (#523)."""
+
+    @pytest.mark.parametrize(
+        ("file_metadata", "index_metadata", "where", "stored"),
+        [
+            (
+                {"run": {"id": "r", "start_time": None, "MS:1000529": "s1"}},
+                None,
+                ("format_specific", "run"),
+                "MS_1000529",
+            ),
+            (None, {"vendor:note": "x"}, ("raw_metadata",), "vendor_note"),
+            (
+                {"imaging": {"coordinate_base": 1, "notes": {"a/b": "k"}}},
+                None,
+                ("raw_metadata", "imaging", "notes"),
+                "a_b",
+            ),
+        ],
+        ids=["colon in run", "colon in index", "slash in imaging"],
+    )
+    def test_a_colon_or_slash_in_a_key_saves(
+        self, tmp_path, file_metadata, index_metadata, where, stored
+    ):
+        """The key is stored under a path-safe name and the store is written."""
+        archive = build_mzpeak(
+            tmp_path / "keys.mzpeak",
+            grid_spectra(3, 2),
+            file_metadata=file_metadata,
+            index_metadata=index_metadata,
+            spectrum_representation="centroid spectrum",
+        )
+        output = tmp_path / "keys.zarr"
+        _convert(archive, output)
+
+        block = _table(output).uns
+        for key in where:
+            block = block[key]
+        assert stored in block
+        assert not Path(str(output) + ".failed").exists()
+
+    def test_an_archive_of_empty_spectra_is_refused(self, tmp_path, thyra_logs):
+        """One ERROR line that says the archive holds no signal, and no store."""
+        spectra = [Spectrum(x, y, [], []) for y in (1, 2) for x in (1, 2)]
+        archive = build_mzpeak(tmp_path / "empty.mzpeak", spectra)
+        output = tmp_path / "empty.zarr"
+
+        with thyra_logs("thyra", logging.ERROR) as records:
+            converted = convert_msi(
+                str(archive),
+                str(output),
+                format_type="spatialdata",
+                dataset_id=DATASET_ID,
+                pixel_size_um=PIXEL_SIZE_UM,
+            )
+
+        assert converted is False
+        assert not output.exists()
+        messages = [record.getMessage() for record in records]
+        assert any("holds no signal" in message for message in messages)
