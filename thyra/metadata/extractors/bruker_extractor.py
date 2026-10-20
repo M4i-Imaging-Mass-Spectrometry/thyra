@@ -233,6 +233,9 @@ class BrukerMetadataExtractor(MetadataExtractor):
         self._region = region
         self._skip_total_peaks = bool(skip_total_peaks)
         self._mis_metadata = dict(mis_metadata or {})
+        # A reader that found a .mis passes its parse, empty or not, so the
+        # file is read once; None leaves the lookup to this extractor.
+        self._mis_given = mis_metadata is not None
         self._spectrum_type = spectrum_type
         self._file_type = file_type
 
@@ -568,7 +571,7 @@ class BrukerMetadataExtractor(MetadataExtractor):
             ConversionRefused: If the ``.mis`` found is a document defusedxml
                 refuses.
         """
-        if self._mis_metadata:
+        if self._mis_given:
             return self._mis_metadata
         from ...readers.bruker.mis_parser import (
             find_mis_file_for_d_folder,

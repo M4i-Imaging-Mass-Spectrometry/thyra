@@ -257,6 +257,34 @@ class TestBrukerMetadataExtractor:
         assert any(f"Unusable Raster {raster!r}" in m for m in messages), messages
         assert any("pixel size is BeamScanSize (15, 15)" in m for m in messages)
 
+    def test_the_readers_parse_is_used_and_the_file_not_read_again(
+        self, tmp_path, thyra_logs
+    ):
+        """#520: the pitch reads the .mis the reader adopted, once.
+
+        The reader found a .mis whose parse came back empty; the file beside
+        the .d says 5,5 but is not re-read, and the warning says the pitch is
+        BeamScanSize.
+        """
+        sample_data = {
+            "essential": (15.0, 15.0, 5.0, 0, 2, 0, 4, 400, 100.0, 1000.0),
+            "comprehensive": [],
+            "laser_info": (15.0, 15.0, 5.0),
+        }
+        d_folder = tmp_path / "run.d"
+        d_folder.mkdir()
+        (tmp_path / "run.mis").write_text(
+            "<ImagingSequence><Raster>5,5</Raster></ImagingSequence>"
+        )
+        extractor = BrukerMetadataExtractor(
+            self.create_mock_connection(sample_data), d_folder, mis_metadata={}
+        )
+        with thyra_logs("thyra", logging.WARNING) as records:
+            essential = extractor.get_essential()
+
+        assert essential.pixel_size == (15.0, 15.0)
+        assert any("BeamScanSize (15, 15)" in r.getMessage() for r in records)
+
     def test_a_refused_mis_reaches_the_caller(self, tmp_path, thyra_logs):
         """The .mis this extractor reads for <Raster> can be refused.
 

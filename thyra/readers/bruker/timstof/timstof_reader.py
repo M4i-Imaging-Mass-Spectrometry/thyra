@@ -1538,7 +1538,9 @@ class BrukerReader(BrukerBaseMSIReader):
             self._calibration_metadata,
             region=region_for_extractor,
             skip_total_peaks=self._metadata_only,
-            mis_metadata=self._mis_metadata,
+            mis_metadata=(
+                self._mis_metadata if getattr(self, "_mis_found", False) else None
+            ),
             spectrum_type=self._delivered_spectrum_type(),
             file_type=self.file_type,
         )
@@ -3434,6 +3436,7 @@ class BrukerReader(BrukerBaseMSIReader):
                 it turned a refused file into "no such region" naming a
                 region list that was empty for a reason nobody was told.
         """
+        self._mis_found = False
         try:
             mis_path = self.get_teaching_points_file()
         except (ValueError, OSError):
@@ -3447,6 +3450,7 @@ class BrukerReader(BrukerBaseMSIReader):
 
         logger.info(f"Found .mis file for optical alignment: {mis_path.name}")
         metadata = parse_mis_file(mis_path)
+        self._mis_found = True
 
         if metadata.get("areas"):
             logger.info(
