@@ -432,6 +432,12 @@ class TestTheDiskCheck:
         assert "3.00 GB" in refusal and "2.00 GB free" in refusal
         assert str(tmp_path) in refusal
 
+    def test_a_relative_output_folder_is_named_in_full(self):
+        """``thyra in.d out.zarr`` puts the files in ``.``, which says nothing."""
+        refusal = disk_refusal(3, Path("."), free_bytes=2)
+
+        assert refusal is not None and str(Path.cwd()) in refusal
+
     def test_past_half_of_it_warns_and_goes_on(self, tmp_path, thyra_logs):
         with thyra_logs("thyra.converters.spatialdata.csc_assembly") as records:
             assert disk_refusal(600, tmp_path, free_bytes=1000) is None

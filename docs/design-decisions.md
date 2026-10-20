@@ -5985,9 +5985,9 @@ used to be.
   The regions are known before their arrays are made, and are checked
   then. The 2D route's tables are known only after the pre-scan, which
   finds the planes, and are checked then, before the matrix is allocated.
-  Every check compares with the free memory read the first time, before
-  the axis, since by the later checks the conversion holds part of what
-  the projection counts.
+  Every check compares with the free memory read the first time: before
+  a resampled axis is built, or once a raw axis is handed over. By the
+  later checks the conversion holds part of what the projection counts.
 - **Free memory is what this process can take.** The smaller of the
   machine's free memory and a limit on the process: a Windows job object
   (per process or per job), a Linux cgroup (v1 or v2, every level up to the

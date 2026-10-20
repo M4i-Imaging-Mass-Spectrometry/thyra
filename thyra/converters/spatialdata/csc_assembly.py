@@ -307,14 +307,17 @@ def disk_refusal(
     folder: Path,
     free_bytes: Optional[int] = None,
     warn: bool = True,
+    what: str = "the matrix files of this conversion",
 ) -> Optional[str]:
     """Why matrix files of ``needed_bytes`` cannot be written in ``folder``, or ``None``.
 
     Refused past :data:`DISK_REFUSE_FRACTION` of the volume's free space,
     warned about past :data:`DISK_WARN_FRACTION` when ``warn`` is set.
     ``free_bytes`` overrides the volume's own answer, for tests; a volume
-    that will not say is never refused.
+    that will not say is never refused. ``what`` names the files in the
+    message.
     """
+    folder = Path(folder).absolute()
     free = free_disk_bytes(folder) if free_bytes is None else int(free_bytes)
     if free is None:
         return None
@@ -322,7 +325,7 @@ def disk_refusal(
     free_gb = free / 1024**3
     if needed_bytes > free * DISK_REFUSE_FRACTION:
         return (
-            f"the matrix files of this conversion need {needed_gb:.2f} GB in "
+            f"{what} need {needed_gb:.2f} GB in "
             f"{folder}, and that drive has {free_gb:.2f} GB free; free some "
             f"space there or write the output to a drive with more room"
         )
@@ -444,7 +447,10 @@ class CscAssembly:
         # are already off the free space where the volume reserves them at
         # once (NTFS), and are counted by that check where it does not.
         refusal = disk_refusal(
-            matrix_file_bytes(self.n_nonzeros, self.n_rows), scratch.parent, warn=False
+            matrix_file_bytes(self.n_nonzeros, self.n_rows),
+            scratch.parent,
+            warn=False,
+            what="the matrix files of one table",
         )
         if refusal is not None:
             raise ConversionRefused(refusal)

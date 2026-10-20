@@ -19,6 +19,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -205,9 +206,21 @@ class TestTheProcessLimitIsWhatIsFree:
         import psutil
 
         monkeypatch.setattr(memory_guard, "process_memory_headroom", lambda: None)
+        monkeypatch.setattr(
+            psutil, "virtual_memory", lambda: SimpleNamespace(available=3 * GIB)
+        )
 
-        free = psutil.virtual_memory().available / GIB
-        assert memory_guard.available_memory_gb() == pytest.approx(free, rel=0.2)
+        assert memory_guard.available_memory_gb() == pytest.approx(3.0)
+
+    def test_the_machine_figure_is_kept_when_the_limit_is_looser(self, monkeypatch):
+        import psutil
+
+        monkeypatch.setattr(memory_guard, "process_memory_headroom", lambda: 9 * GIB)
+        monkeypatch.setattr(
+            psutil, "virtual_memory", lambda: SimpleNamespace(available=3 * GIB)
+        )
+
+        assert memory_guard.available_memory_gb() == pytest.approx(3.0)
 
     def test_a_probe_that_fails_is_no_limit(self, monkeypatch):
         """A probe must never be the thing that stops a conversion."""
@@ -284,6 +297,10 @@ class TestAWindowsJobLimit:
         assert "18,000,000 bins" in refusal and "GB free" in refusal
 
     def test_outside_a_limiting_job_there_is_no_job_headroom(self):
-        """This process may sit in a job (a terminal's), but not one with a cap."""
+        """The probe reads a real job without failing.
+
+        This process may sit in a job (a terminal's or a CI runner's), but
+        not one that caps it near what it already uses.
+        """
         headroom = memory_guard._job_object_headroom()
         assert headroom is None or headroom > 0
