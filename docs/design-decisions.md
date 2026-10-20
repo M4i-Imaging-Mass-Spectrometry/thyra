@@ -5789,3 +5789,104 @@ values. On the plan route, the refusal of an m/z 0 bound names the
 - "Start a source-derived axis at the smallest positive m/z." The planner
   sees only the source's declared range, so this needs every reader to
   report the smallest positive m/z; the refusal names the way through.
+
+## D72. A Cyclic IMS run is read on its own drift axis, and a declared full scan is MS1
+
+**Status:** Implemented (2026-10-19). Amends D7 and D53.
+
+**Decision.** Three rules for Waters runs, each read from the run's own side
+files:
+
+- **Guard.** A run whose header says `$$ Instrument: Cyclic-IMS` and whose
+  `_extern.inf` names `Acquisition Device: WatersADC` has its drift bins
+  read, as a run declaring `Acquisition Algorithm: ADC Mode` does (D53).
+  Both fields are required. A Synapt G2-Si and an MRT also name WatersADC.
+- **Drift axis.** Where a function's section of `_extern.inf` declares
+  `IMS Cycle Start Delay` and `Pushes Per IMS Increment`, bin `i` is stored
+  at `(delay + i * pushes) * period` ms. The period is the step of the
+  library's `getMobility` axis. Both fields count pusher periods; the
+  delay's "(ms)" label is wrong. Functions with different timings, a
+  timing that is not two whole numbers of pushes (one field alone, a
+  fraction, fewer than one push per bin), or uneven library steps record
+  no mobility, with a warning, rather than an axis nobody measured. A
+  function without either field keeps the library axis.
+- **MS level.** A function whose section declares `MSMSMode` as `MS` or
+  `SIM` holds no fragment spectra, whatever precursor its scans report. Any
+  other mode, or none, keeps the D7 rule: a reported precursor means MS/MS.
+
+The store also records what the run declares: `format_specific.
+function_settings` (`msms_mode`, a SIM function's `sim_set_mass_mz`,
+`ccs_calibration`), `format_specific.cyclic_sequence` (sequence name, IMS
+cycle time, each step's vendor function code, array mode and time, from the
+method file `<run>.xml`), `start_delay_pushes` and `pushes_per_bin` in
+`format_specific.ion_mobility`, and `instrument_model` "SELECT SERIES
+Cyclic IMS".
+
+**Why the guard.** Every Cyclic run lacked `Acquisition Algorithm`, so all
+of them were refused. Measured on 25 Cyclic MALDI acquisitions (cell
+images at 5, 10 and 20 um, lipid standards, two HDSIM runs; every
+acquisition in the set but MassLynx's own exports and two empty runs), each
+read in its own process with the guard lifted: on every checked scan (all
+of them, or 3,000 spread evenly over the larger runs) the raw bins summed to
+the profile spectrum with the same m/z points and a largest difference of
+0.0. Nothing crashed, and no file in the source folders changed. Over the
+695 in-house Synapt directories with drift files, the 35 G1 runs carry
+neither field (their header names only a serial); the 659 G2-Si runs
+declare ADC Mode and no Cyclic label.
+
+**Why the axis.** `getMobility` gives 0 to 13.133 ms in 0.06600 ms steps on
+every Cyclic run, one push per bin. MassLynx's own drift-time export of the
+same runs (`*_1_dt.raw`, one scan per bin, retention time = drift ms) gives
+309.002 to 348.403 ms in 0.19799 ms steps. The function declares delay 4682
+and 3 pushes per bin, and `(4682 + 3 i) * 0.0659979` reproduces the export
+on all 200 bins to 1.8e-5 ms (float32 precision), on a full-scan and a SIM
+run. Synapt runs declare neither field in a function section (only `ADC
+Pushes Per IMS Increment 1` under the instrument configuration), so their
+axis is unchanged.
+
+**Why the MS level.** Every Cyclic full scan reports `precursorMz` 500.0,
+which is `Quad.MSFixedMass`; the HDSIM runs report 524.4, the quadrupole set
+mass. Both report MS level 1 and declare `MSMSMode` `MS` and `SIM`. With
+the guard lifted, D7's rule stored the full scan as MS2, CID, target 500.
+No Synapt or Xevo `_extern.inf` among the in-house runs declares `MSMSMode`
+at all, so none of their stores changes.
+
+**No CCS.** Thyra derives CCS from 1/K0 only (`ccs_applies` refuses drift
+time). Every Cyclic run declares `CCS Calibration: No`, recorded as such.
+After several passes an ion outside the targeted mobility window can lap
+the ones inside it, so a multipass arrival time is a drift time only within
+that window.
+
+**What changes in a store.**
+
+- Cyclic IMS runs, which were refused, now convert with
+  `uns["mobility_axis"]` on the declared timing (309.0 to 348.4 ms, bin
+  width 0.198 ms on the runs measured) and `uns["mobility_heatmap"]`. Under
+  `--waters-spectrum profile` the heatmap's `current_ratio` is 1.0000 and
+  the grid marginal 1.0.
+- A Waters function declaring `MSMSMode` `MS` or `SIM` stores
+  `ms_analysis.fragmentation` at MS level 1 with no window and no
+  dissociation, and no `uns["msms_schedule"]`. An excluded such function
+  lists no `precursor_mz`.
+- A run declaring none of these fields stores what it stored before. That
+  is every in-house Synapt and Xevo run read; no MRT run was re-read.
+
+**D7 and D53, amended.** D7's "`precursor_mz` is the field to trust" holds
+where the function declares no `MSMSMode`. D53's "equal steps from exactly
+0 ms" and "no cyclic IMS image was tested" describe Synapt runs only.
+
+**Known limits.**
+
+- A multipass separation's pass count is not a field of the method, so it
+  is not recorded; the sequence steps are kept as the vendor numbers them.
+- A Cyclic run split across functions at the file-size cap (D7) has not
+  been seen: the largest run measured keeps a 2.64 GB `_func001.dat` as
+  one function. On a Synapt the tail of a split raster has a function
+  section of its own, as the public XS image shows. A Cyclic chunk without
+  one would record no mobility, since its timing differs from the first
+  chunk's, and would fall back to D7's precursor rule, so a full scan
+  reporting 500.0 would be stored as MS/MS. Nothing measured has this
+  shape.
+- A Cyclic run whose regions do not share one stage lattice is refused by
+  the raster fit, as any Waters run is. One lipid-standard run with two
+  line scans is.

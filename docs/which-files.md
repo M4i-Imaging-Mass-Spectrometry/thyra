@@ -98,7 +98,7 @@ will need `--pixel-size`.
 - Point Thyra at the `.raw` folder, and copy the folder whole: if any
   `_FUNC` file is missing, Thyra stops.
 - The pixel size comes from the recorded laser positions.
-- Synapt runs with ion mobility on keep their drift times. Older Synapt G1
+- Synapt and Cyclic IMS runs with ion mobility on keep their drift times. Older Synapt G1
   runs with ion mobility on are refused: the Waters library cannot read them
   safely.
 - When a run records low and high collision energy over the same pixels

@@ -119,9 +119,9 @@ tables in full.
 [For tool developers](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/for-tool-developers/)
 lists the rules a tool can rely on, and what may change.
 
-Waters Synapt runs with ion mobility on keep their drift times; older
-Synapt G1 mobility runs are refused. CCS is computed from 1/K0 only, never
-from a drift time.
+Waters Synapt and Cyclic IMS runs with ion mobility on keep their drift
+times; older Synapt G1 mobility runs are refused. CCS is computed from 1/K0
+only, never from a drift time.
 
 ## From Python
 

@@ -507,7 +507,13 @@ conversion streams.
 A file whose converted functions carry a precursor m/z holds fragment
 spectra and reports them through `ms_analysis.fragmentation`, exactly as a
 Bruker MS/MS acquisition does. A reported MS level with no precursor behind
-it does not: that is the chunk artefact above.
+it does not: that is the chunk artefact above. Nor does a precursor on a
+function whose own section of `_extern.inf` declares `MSMSMode` as `MS` or
+`SIM`: a Cyclic IMS reports its fixed quadrupole mass (500.0) on every full
+scan, and the set mass on a SIM scan, with nothing fragmented. Those store
+MS1; `format_specific.function_settings` keeps the mode, a SIM function's
+`sim_set_mass_mz` and the declared `ccs_calibration`. No Synapt run declares
+`MSMSMode`, so theirs read as before (D72).
 
 ### Ion mobility (drift time)
 
@@ -531,15 +537,37 @@ Thyra reads them the way it reads a TIMS frame:
   centroids, and the store's `current_ratio` says by how much;
   `--waters-spectrum profile` makes the two agree.
 
+**SELECT SERIES Cyclic IMS.** A Cyclic run keeps its 200 bins further
+along the IMS cycle. Its function section declares `IMS Cycle Start Delay`
+and `Pushes Per IMS Increment`, both counts of pusher periods (the delay is
+labelled ms but is not), and bin `i` arrives at `(delay + i * pushes)`
+periods. The library's `getMobility` ignores both and reports 0 to 13.13 ms
+in one-push steps; Thyra places the bins on the declared timing, which
+reproduces the drift times MassLynx writes into its own `_dt.raw` export
+(309.002 to 348.403 ms in 0.198 ms steps, to float32 precision).
+`format_specific.ion_mobility` records `start_delay_pushes` and
+`pushes_per_bin`, and `format_specific.cyclic_sequence` the separation
+sequence from the run's method file: its name, the IMS cycle time and each
+step's vendor function code and time. Two limits:
+
+- After several passes round the ring, an ion outside the targeted mobility
+  window can lap the ions inside it. The arrival time is a drift time only
+  within that window.
+- No CCS is derived. A Cyclic run declares `CCS Calibration: No`, and Thyra
+  derives CCS from 1/K0 only.
+
 Two things are not read:
 
 - **The mobility functions of a run that does not declare `Acquisition
-  Algorithm: ADC Mode`** in `_extern.inf`. Over 91 Synapt runs with mobility on, the 56 that declare it
+  Algorithm: ADC Mode`**, and is not a Cyclic IMS run, in `_extern.inf`. Over 91 Synapt runs with mobility on, the 56 that declare it
   read cleanly; the 35 that do not (older Synapt G1 acquisitions) crashed the
   native library with an access violation (32) or returned drift bins that do
   not add up to the spectrum (3). A crash inside the library ends the process
   with no message, so this is decided from the side file before any spectrum
-  is read. Their other functions convert as before; a run with nothing else
+  is read. A Cyclic IMS run declares no algorithm; it is read when its
+  header says `Cyclic-IMS` and `_extern.inf` names `Acquisition Device:
+  WatersADC`. Over 25 Cyclic acquisitions the bins summed exactly to the
+  profile spectrum; no Synapt G1 run carries either field (D72). Their other functions convert as before; a run with nothing else
   is refused, as it was before drift time was read.
 - **A converted mobility function without its `_FUNCnnn.CDT`** drift file:
   the run is refused.

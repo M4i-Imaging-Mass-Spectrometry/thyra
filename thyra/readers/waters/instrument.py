@@ -31,15 +31,26 @@ fallback: no other Waters TOF is configured anywhere near 100,000, so a
 declared resolution above that threshold is taken as MRT when the other two
 fields are missing. The decision and the field it rested on are logged, and
 returned so the metadata extractor can record them in the store.
+
+Two more things are read here because they decide how drift time is read
+(D72). Whether the native library can read drift bins at all
+(:attr:`WatersInstrument.mobility_readable`), and, on a SELECT SERIES
+Cyclic IMS, each function's own section of ``_extern.inf``: its bin
+timing and its ``MSMSMode``. The Cyclic run's method file (``<run>.xml``)
+holds the separation sequence, read by :func:`read_cyclic_sequence`.
 """
 
 from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, List, Mapping, Optional, Tuple
+
+# defusedxml, never xml.etree: see thyra/readers/bruker/mis_parser.py.
+import defusedxml.ElementTree as ET
+from defusedxml.common import DefusedXmlException
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +59,14 @@ logger = logging.getLogger(__name__)
 #: MRT declares ~225,000; a Synapt G2-Si declares 10,000, Xevo-class QTofs
 #: are in the 20,000-40,000 range. Nothing but an MRT reaches six figures.
 MRT_RESOLUTION_THRESHOLD = 100_000.0
+
+#: How ``_extern.inf`` opens each function's own parameter section.
+_FUNCTION_SECTION = "Function Parameters - Function "
+
+#: A Cyclic IMS function's drift bin timing, both in pusher periods
+#: (the delay's "(ms)" is MassLynx's label, not its unit; D72).
+_START_DELAY_FIELD = "IMS Cycle Start Delay (ms)"
+_PUSHES_PER_BIN_FIELD = "Pushes Per IMS Increment"
 
 # Physical constants for the digitiser sample spacing estimate below.
 _ATOMIC_MASS_UNIT_KG = 1.66053906660e-27
@@ -75,6 +94,12 @@ class WatersInstrument:
         acquisition_algorithm: ``Acquisition Algorithm`` from
             ``_extern.inf`` (``ADC Mode`` on a Synapt G2-Si or XS), if
             present. See :attr:`mobility_readable`.
+        acquisition_device: ``Acquisition Device`` from ``_extern.inf``
+            (``WatersADC`` on a Synapt G2-Si, XS and Cyclic IMS), if
+            present.
+        function_parameters: Each function's own section of
+            ``_extern.inf`` (``Function Parameters - Function n``), keyed
+            by 0-based function index. See :func:`parse_function_parameters`.
     """
 
     is_mrt: bool
@@ -86,11 +111,28 @@ class WatersInstrument:
     effective_voltage_v: Optional[float] = None
     adc_sample_frequency_ghz: Optional[float] = None
     acquisition_algorithm: Optional[str] = None
+    acquisition_device: Optional[str] = None
+    function_parameters: Mapping[int, Mapping[str, str]] = field(
+        default_factory=dict, hash=False
+    )
 
     @property
     def name(self) -> str:
         """A short label for logs and stored metadata."""
-        return "SELECT SERIES MRT" if self.is_mrt else "Waters (not MRT)"
+        if self.is_mrt:
+            return "SELECT SERIES MRT"
+        if self.is_cyclic_ims:
+            return "SELECT SERIES Cyclic IMS"
+        return "Waters (not MRT)"
+
+    @property
+    def is_cyclic_ims(self) -> bool:
+        """Whether the run was acquired on a SELECT SERIES Cyclic IMS.
+
+        Read from the header's instrument label, ``Cyclic-IMS`` on every
+        Cyclic run measured; a Synapt writes ``SYNAPT-XS`` or nothing there.
+        """
+        return (self.instrument_label or "").strip().upper().startswith("CYCLIC")
 
     @property
     def mobility_readable(self) -> bool:
@@ -104,8 +146,62 @@ class WatersInstrument:
         returned drift bins that do not sum to the spectrum (3). An access
         violation ends the Python process and cannot be caught, so the
         reader decides from this field before it calls anything.
+
+        A Cyclic IMS run does not write that field. It names its digitiser
+        instead, ``Acquisition Device: WatersADC``, and its header says
+        ``Cyclic-IMS``. Both are required: on every Cyclic run measured the
+        drift bins summed exactly to the profile spectrum, and no Synapt G1
+        run carries either the label or the ADC (D72).
         """
-        return (self.acquisition_algorithm or "").strip().upper() == "ADC MODE"
+        if (self.acquisition_algorithm or "").strip().upper() == "ADC MODE":
+            return True
+        return (
+            self.is_cyclic_ims
+            and (self.acquisition_device or "").strip().upper() == "WATERSADC"
+        )
+
+    def msms_mode(self, function: int) -> Optional[str]:
+        """``MSMSMode`` of one function (0-based), upper-cased, if declared.
+
+        ``MS`` is a full scan and ``SIM`` a quadrupole selection without
+        fragmentation; a Synapt run declares no such field.
+        """
+        value = self.function_parameters.get(function, {}).get("MSMSMode")
+        return value.strip().upper() if value else None
+
+    def drift_bin_timing(self, function: int) -> Optional[Tuple[int, int]]:
+        """Where a function's drift bins start and how wide they are, in pushes.
+
+        ``(IMS Cycle Start Delay, Pushes Per IMS Increment)`` from the
+        function's section of ``_extern.inf``, both counts of pusher
+        periods: the delay is labelled ``(ms)`` but is not. On a Cyclic IMS
+        run (4682 and 3) bin ``i`` arrives at ``(4682 + 3 i)`` pusher
+        periods after the cycle starts, which reproduces the times
+        MassLynx writes into its own drift-time export (309.002 to 348.403
+        ms) where the library's ``getMobility`` reports 0 to 13.13 ms.
+        ``None`` when the function declares neither field, as no Synapt
+        run does.
+
+        Raises:
+            ValueError: When the function declares one field without the
+                other, or a value that is not a whole number of pushes (a
+                negative delay, fewer than one push per bin). A default in
+                its place would put every bin at a time nobody measured.
+        """
+        fields = self.function_parameters.get(function, {})
+        raw_delay = fields.get(_START_DELAY_FIELD)
+        raw_pushes = fields.get(_PUSHES_PER_BIN_FIELD)
+        if raw_delay is None and raw_pushes is None:
+            return None
+        delay = _int_or_none(raw_delay)
+        pushes = _int_or_none(raw_pushes)
+        if delay is None or pushes is None or delay < 0 or pushes < 1:
+            raise ValueError(
+                f"function {function} declares {_START_DELAY_FIELD}={raw_delay!r} "
+                f"and {_PUSHES_PER_BIN_FIELD}={raw_pushes!r}, which do not place "
+                "its drift bins (two whole numbers of pushes are needed)"
+            )
+        return (delay, pushes)
 
     def profile_sample_spacing_da(self, mz: float) -> Optional[float]:
         """Predicted spacing of the profile trace's samples at ``mz``, in Da.
@@ -185,6 +281,34 @@ def parse_header_txt(text: str) -> Dict[str, str]:
     return fields
 
 
+def parse_function_parameters(text: str) -> Dict[int, Dict[str, str]]:
+    """Each ``Function Parameters - Function n`` section of ``_extern.inf``.
+
+    Keyed by 0-based function index (MassLynx numbers the sections from
+    one), first occurrence of a key within a section wins. A section runs to
+    the next section header; the ``[COLLISION ENERGY]`` sub-header inside
+    one carries no tab and is skipped like any other header line.
+    :func:`parse_extern_inf` keeps only the first occurrence of a key in the
+    whole file, which on a multi-function run is the first function's.
+    """
+    sections: Dict[int, Dict[str, str]] = {}
+    current: Optional[Dict[str, str]] = None
+    for line in text.splitlines():
+        if line.startswith(_FUNCTION_SECTION):
+            number = line[len(_FUNCTION_SECTION) :].split(" ", 1)[0]
+            current = (
+                sections.setdefault(int(number) - 1, {}) if number.isdigit() else None
+            )
+            continue
+        if current is None or "\t" not in line:
+            continue
+        key, _, value = line.partition("\t")
+        key, value = key.strip(), value.strip()
+        if key and value and key not in current:
+            current[key] = value
+    return sections
+
+
 def _float_or_none(value: Optional[str]) -> Optional[float]:
     if value is None:
         return None
@@ -192,6 +316,67 @@ def _float_or_none(value: Optional[str]) -> Optional[float]:
         return float(value)
     except ValueError:
         return None
+
+
+def _int_or_none(value: Optional[str]) -> Optional[int]:
+    number = _float_or_none(value)
+    if number is None or not math.isfinite(number) or number != int(number):
+        return None
+    return int(number)
+
+
+def read_cyclic_sequence(raw_path: Path) -> Optional[Dict[str, Any]]:
+    """The Cyclic IMS separation sequence a run was acquired with, as declared.
+
+    A Cyclic run carries its method as ``<run name>.xml`` inside the
+    ``.raw`` directory. Its ``Table Name="CyclicSequence"`` names the
+    sequence file and the IMS cycle time, and holds one row per step:
+    the vendor's function code, array mode and, where the step has one,
+    its time in ms. The steps are kept as the vendor numbered them; the
+    number of passes is not a field of the method, so it is not reported.
+
+    Returns:
+        ``{"sequence_name", "ims_cycle_time_ms", "steps"}`` with the keys
+        that were present, or ``None`` when no method file declares a
+        cyclic sequence.
+    """
+    try:
+        candidates = sorted(raw_path.glob("*.xml"))
+    except OSError:
+        return None
+    for path in candidates:
+        try:
+            root = ET.parse(str(path)).getroot()
+        except (ET.ParseError, DefusedXmlException, OSError):
+            continue
+        table = None if root is None else root.find(".//Table[@Name='CyclicSequence']")
+        if table is None:
+            continue
+        sequence: Dict[str, Any] = {}
+        name = (table.get("Filename") or "").strip()
+        if name:
+            sequence["sequence_name"] = name
+        cycle = _float_or_none(table.get("IMSCycleTime"))
+        if cycle is not None and math.isfinite(cycle):
+            sequence["ims_cycle_time_ms"] = cycle
+        steps: List[Dict[str, Any]] = []
+        for row in table.findall("Row"):
+            settings = {s.get("Name"): s.get("Value") for s in row.findall("Setting")}
+            step: Dict[str, Any] = {}
+            for key, out, convert in (
+                ("CyclicFunction", "function", _int_or_none),
+                ("CyclicArrayMode", "array_mode", _int_or_none),
+                ("Time", "time_ms", _float_or_none),
+            ):
+                value = convert(settings.get(key))
+                if value is not None and math.isfinite(value):
+                    step[out] = value
+            if step:
+                steps.append(step)
+        if steps:
+            sequence["steps"] = steps
+        return sequence
+    return None
 
 
 def identify_waters_instrument(raw_path: Path) -> WatersInstrument:
@@ -206,8 +391,15 @@ def identify_waters_instrument(raw_path: Path) -> WatersInstrument:
         answer, since it keeps the vendor centroid the reader always
         delivered.
     """
-    extern = parse_extern_inf(_read_text(raw_path / "_extern.inf") or "")
-    header = parse_header_txt(_read_text(raw_path / "_header.txt") or "")
+    extern_text = _read_text(raw_path / "_extern.inf") or ""
+    extern = parse_extern_inf(extern_text)
+    # Both spellings: MassLynx writes some side files in capitals, and on a
+    # case-sensitive filesystem the Cyclic label would otherwise be missed.
+    header = parse_header_txt(
+        _read_text(raw_path / "_header.txt")
+        or _read_text(raw_path / "_HEADER.TXT")
+        or ""
+    )
 
     optic_mode = extern.get("OpticMode")
     instrument_label = header.get("Instrument")
@@ -237,6 +429,8 @@ def identify_waters_instrument(raw_path: Path) -> WatersInstrument:
             extern.get("ADC Sample Frequency (GHz)")
         ),
         acquisition_algorithm=extern.get("Acquisition Algorithm"),
+        acquisition_device=extern.get("Acquisition Device"),
+        function_parameters=parse_function_parameters(extern_text),
     )
 
     logger.info(
