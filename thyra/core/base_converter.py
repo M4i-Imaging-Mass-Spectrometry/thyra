@@ -145,17 +145,22 @@ class BaseMSIConverter(ABC):
             ConversionRefused: If ``z_spacing_um`` is given and is not
                 positive, a non-number included.
         """
-        if z_spacing_um is not None and (
-            not isinstance(z_spacing_um, (int, float)) or z_spacing_um <= 0
-        ):
+        # Any real number, numpy's included, but not a bool: np.float32(5)
+        # was refused here as "must be positive, got 5.0", and True was a
+        # 1 um spacing (issue #519).
+        if z_spacing_um is not None and not is_usable_pitch(z_spacing_um):
             raise ConversionRefused(
-                f"z_spacing_um must be positive, got {z_spacing_um}"
+                "z_spacing_um must be a finite positive number, got "
+                f"{type(z_spacing_um).__name__} {z_spacing_um!r}"
             )
 
         self.reader = reader
         self.output_path = Path(output_path)
         self.dataset_id = dataset_id
-        self.pixel_size_um = pixel_size_um
+        #: A float however it was given: ``obs["spatial_x"]`` is
+        #: ``x_idx * pixel_size_um``, which an int pitch made an integer
+        #: column beside a float ``spatial_y`` (issue #519).
+        self.pixel_size_um = float(pixel_size_um)
         #: The pitch along y, in micrometers. A raster is usually square
         #: and then this is :attr:`pixel_size_um`; a DESI method with
         #: ``DesiXStep != DesiYStep`` is not, and until issue #228 only
@@ -385,7 +390,7 @@ class BaseMSIConverter(ABC):
             )
         elif self.pixel_size_source == PixelSizeSource.DEFAULT and pitch:
             old_size = self.pixel_size_um
-            self.pixel_size_um = pitch[0]
+            self.pixel_size_um = float(pitch[0])
             self.pixel_size_y_um = float(pitch[1])
             self.pixel_size_source = PixelSizeSource.AUTO_DETECTED
             logger.info(

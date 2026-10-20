@@ -211,14 +211,18 @@ class RootAttrsBuilder:
         # survive anywhere else.
         if ctx.coordinate_bounds is not None:
             attrs["coordinate_bounds"] = list(ctx.coordinate_bounds)
+        # Only what Thyra computed. A caller's leftover keyword was merged
+        # in after these, so it could overwrite one (``pixel_size_y_um=99``
+        # on a 20 um store), record an option nothing applied, or hold a
+        # value JSON cannot, which failed the save after both passes
+        # (issue #519). handle_3d as a plain bool for the same reason.
         attrs["conversion_options"] = {
-            "handle_3d": self._handle_3d,
+            "handle_3d": bool(self._handle_3d),
             "pixel_size_um": float(px),
             "pixel_size_y_um": float(py),
             "z_spacing_um": ctx.z_spacing_um,
             "z_spacing_source": ctx.z_spacing_source.value,
             "dataset_id": self._dataset_id,
-            **self._conversion_options,
         }
 
         optical = ctx.optical.root_attr()

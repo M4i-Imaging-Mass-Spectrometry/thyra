@@ -927,7 +927,8 @@ has already read.
 
 **Why the keyword is answered instead of being accepted as a no-op.**
 Unknown keyword arguments fall through `**kwargs` into
-`BaseMSIConverter.options` without a word. Dropping `sparse_format` from the signature and stopping
+`BaseMSIConverter.options` without a word (through `convert_msi` they are
+refused since D74). Dropping `sparse_format` from the signature and stopping
 there would mean `sparse_format="csr"` silently producing CSC -- which is
 exactly the failure D9 found and this decision is meant to end. So the
 base converter names it: the message says the keyword is gone, that CSC is
@@ -5960,3 +5961,88 @@ about 3 s to the 46 s parse of the 918,855-spectrum file.
   plan's axis can then reach past the converted spectra; no point is lost.
 - `format_specific.spectrum_count` stays the number of spectra the file
   holds, as on the metadata-only route.
+
+## D74. `convert_msi` refuses every keyword it does not use, and checks its values as the CLI does
+
+**Status:** Implemented (2026-10-20), issue #519. Extends D10, which answered
+only `sparse_format`. Leaves D44's refusal of `region` as it is.
+
+**Decision.** `convert_msi` takes three kinds of argument: its named
+arguments; the converter keywords its docstring lists
+(`write_mobility_table`, `mobility_heatmap`, `mobility_grid`,
+`mobility_bins`, `mobility_min`, `mobility_max`, `msms_table`, and `use_csc`
+for older callers); and, in `reader_options`, only the documented reader
+keys (`intensity_threshold`, `use_recalibrated_state`, `tdf_spectrum`,
+`region`, `use_centroid`, `spectrum_type`, `max_mass_axis_length`,
+`use_appended_calibration`). Anything else is refused before the source is
+opened, in one ERROR line naming each keyword. A reader key given as a
+plain keyword is pointed to `reader_options`.
+
+- **A reader key the format does not use is named, then left out.** One
+  WARNING per key, worded as the CLI words its flags (#260). Both routes
+  read one table, `READER_OPTION_FORMATS` in `thyra/reader_options.py`.
+  The CLI now hands `convert_msi` only the options that reach the detected
+  format, so a plain imzML run logs no "is ignored" line although the CLI
+  always sets `use_recalibrated_state`. `region` stays refused by a reader
+  that cannot select one (D44): dropping it would convert every region.
+- **`conversion_options` holds only values Thyra computed.** A caller's
+  leftover keyword used to be merged in after them, so it could overwrite
+  one, record an option nothing applied, or fail the save after both
+  passes when JSON could not hold it. `handle_3d` is stored as a plain
+  boolean.
+- **The CLI's value checks reach the API.** `normalize_resampling_config`
+  refuses, for a dict and a `ResamplingConfig` alike: a width, reference
+  m/z, m/z bound, gap tolerance or `bins_per_fwhm` that is not a positive
+  number; `min_mz` not below `max_mz`; a negative TOF law term or a law of
+  two zeros; a bin count that is not a whole number of at least 2. A
+  dataclass with a string method or axis type is read as a dict's is.
+  `convert_msi` checks the config before it opens the source.
+- **Numbers and flags.** A pixel size or z spacing is any finite positive
+  real number, numpy scalars included; a bool is refused. `handle_3d` is a
+  bool, numpy's included. The pixel size is a float from the start, so
+  `obs["spatial_x"]` is float64 for `pixel_size_um=20`.
+- **Paths and ids.** `convert_msi` refuses an output path under a regular
+  file, or under a folder it cannot write, before it opens the source, with
+  the CLI's message: the check is one function both call. A dataset id may
+  not start with a dot, may not be a Windows device name (`nul`, `con.2`),
+  and may hold at most 216 characters, so its longest element name (an
+  optical image, 39 more) fits the 255 bytes a folder name holds.
+- **Dead resampling options are named.** Each resampling flag given beside
+  `--no-resample` gets one WARNING. A gap tolerance under
+  `nearest_neighbor` is named as ignored instead of logged as zeroing bins.
+
+**Why.** The 4.3.3 stress test (#427) found ten ways the API and the CLI
+disagreed (F38, F58, F60, F119, F130, F139, F150, F151, F152, F161). A
+caller following the rendered API reference passed `spectrum_type` as a
+keyword: the option did nothing, and the store recorded it as applied. A
+negative width gave a 100-bin axis; a gap tolerance of 0 switched the check
+off while the log said it was in force. An id starting with a dot wrote a
+store SpatialData's reader opens as empty, since it skips names starting
+with a dot. Q6 of the stress report weighed refusing, warning, or only
+dropping the record; refusing was chosen because a misspelt option then
+cannot give a store the caller did not ask for.
+
+**What changes in a store.** Nothing, for calls that pass only documented
+arguments, the CLI's and Ousia's included. A call that passed an unknown
+keyword or reader key, or a value the CLI refuses, now returns `False` and
+writes nothing. `obs["spatial_x"]` is float64 where an int pixel size made
+it an integer column. `conversion_options` no longer carries a caller's
+leftover keywords. The "mass axis resampling" step no longer records a gap
+tolerance when the method is `nearest_neighbor`.
+
+**Alternatives.**
+
+- "Warn once per unused keyword and keep it out of `conversion_options`."
+  Breaks nobody, but a misspelt option still gives a store the caller did
+  not ask for.
+- "Accept in silence and stop recording unused keywords." The store stops
+  contradicting itself, but an option that does nothing passes without a
+  word.
+
+**Known limits.**
+
+- A converter class built directly still takes leftover keywords in
+  `options`; they are no longer written to the store.
+- A Windows device name is refused on every platform, so a store written
+  anywhere can be copied to Windows. An id ending in a dot is not refused;
+  Windows drops the dot from a folder name.

@@ -28,15 +28,13 @@ class TestZeroAcrossGaps:
         mzs = np.array([0.0])
         assert np.array_equal(zero_across_gaps(values, axis, mzs, None), np.ones(5))
 
-    @pytest.mark.parametrize("tolerance", [0.0, -1.0])
-    def test_non_positive_tolerance_is_a_no_op(self, tolerance):
-        """Zero would otherwise mask everything not exactly on a source point."""
+    @pytest.mark.parametrize("tolerance", [0.0, -1.0, float("nan")])
+    def test_non_positive_tolerance_is_refused(self, tolerance):
+        """It used to switch the check off while the log said it was on."""
         values = np.ones(5)
         axis = np.linspace(0.0, 4.0, 5)
-        mzs = np.array([0.0])
-        assert np.array_equal(
-            zero_across_gaps(values, axis, mzs, tolerance), np.ones(5)
-        )
+        with pytest.raises(ValueError, match="above 0"):
+            zero_across_gaps(values, axis, np.array([0.0]), tolerance)
 
     def test_empty_source_is_a_no_op(self):
         values = np.ones(3)

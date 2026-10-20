@@ -249,6 +249,37 @@ class TestDatasetId:
     def test_a_usable_id_passes(self, good):
         assert dataset_id_problem(good) is None
 
+    @pytest.mark.parametrize(
+        "bad, said",
+        [
+            (".hidden", "start with '.'"),
+            (".a.b", "start with '.'"),
+            ("nul", "device"),
+            ("NUL", "device"),
+            ("con.2", "device"),
+            ("com1", "device"),
+            ("lpt¹", "device"),
+            ("a" * 217, "too long"),
+            ("é" * 120, "too long"),
+        ],
+    )
+    def test_an_id_the_reader_or_the_disk_cannot_hold_is_named(self, bad, said):
+        """Issue #519: SpatialData's reader skips a leading dot; folder
+        names stop at 255 bytes; Windows keeps device names."""
+        problem = dataset_id_problem(bad)
+        assert problem is not None and said in problem
+
+    @pytest.mark.parametrize("good", ["a" * 216, "console", "nul_run", "run.nul"])
+    def test_names_close_to_the_rules_pass(self, good):
+        assert dataset_id_problem(good) is None
+
+    def test_the_longest_suffix_is_the_optical_name_budget(self):
+        """The limit restates the optical stem budget; the two move together."""
+        from thyra.convert import _LONGEST_ELEMENT_SUFFIX
+        from thyra.converters.spatialdata.optical_image import NAME_BUDGET
+
+        assert _LONGEST_ELEMENT_SUFFIX == len("_optical_") + NAME_BUDGET
+
     def test_the_cli_refuses_before_any_pass(self):
         with pytest.raises(click.BadParameter) as excinfo:
             _validate_basic_params(None, "has space")

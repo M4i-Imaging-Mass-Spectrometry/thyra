@@ -23,11 +23,15 @@ one (issues #245, #293).
 """
 
 import logging
+import numbers
 import traceback
 import warnings
 from math import isfinite
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from uuid import uuid4
+
+import numpy as np
 
 from .core.base_converter import (
     BaseMSIConverter,
@@ -39,6 +43,7 @@ from .core.base_reader import BaseMSIReader
 from .core.registry import detect_format, get_converter_class, get_reader_class
 from .errors import ConversionRefused
 from .metadata.constants import sample_value_problem
+from .reader_options import READER_OPTION_FORMATS, format_name, reader_option_reaches
 from .resampling.plan import MassAxisPlan
 from .resampling.types import ResamplingConfig
 from .utils.windows_paths import prepare_zarr_output_path
@@ -84,6 +89,25 @@ _ELEMENT_NAME_EXTRA_CHARS = "_-."
 #: importing that package here would load SpatialData with this module.
 _RESERVED_DATASET_IDS = ("acquisition",)
 
+#: The longest suffix any route appends to the dataset id to name an
+#: element: an optical image, ``<id>_optical_`` plus a stem cut to 30
+#: characters (``optical_image.NAME_BUDGET``). Restated rather than
+#: imported for the reason given above ``_RESERVED_DATASET_IDS``.
+_LONGEST_ELEMENT_SUFFIX = len("_optical_") + 30
+
+#: The most bytes one file or folder name may hold: NTFS and ext4 both stop
+#: at 255. Every element is a folder named after it.
+_MAX_NAME_BYTES = 255
+
+#: Names Windows keeps for devices, with or without an extension. Under
+#: ``handle_3d`` the table folder is the bare id, and ``nul`` there failed
+#: at the save after both passes (issue #519). Refused on every platform,
+#: so a store written anywhere can be copied to Windows.
+_WINDOWS_DEVICE_NAMES = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"{port}{n}" for port in ("com", "lpt") for n in "123456789¹²³"}
+)
+
 
 def dataset_id_problem(dataset_id: Any) -> Optional[str]:
     """Why ``dataset_id`` cannot name SpatialData elements, or ``None``.
@@ -95,6 +119,12 @@ def dataset_id_problem(dataset_id: Any) -> Optional[str]:
     after both passes over the source had run (issue #250). The suffixes
     Thyra appends are all legal characters, so an id that passes here
     yields keys that pass there.
+
+    Three more rules come from what reads the store and what holds it on
+    disk rather than from SpatialData's writer (issue #519): a leading
+    dot, which SpatialData's reader skips as a hidden file, so the store
+    opened empty; an id too long for the longest element name built from
+    it; and a Windows device name.
     """
     if not isinstance(dataset_id, str):
         return f"Dataset ID must be a string, not {type(dataset_id).__name__}"
@@ -102,12 +132,31 @@ def dataset_id_problem(dataset_id: Any) -> Optional[str]:
         return "Dataset ID must be a non-empty string"
     if dataset_id in (".", ".."):
         return f"Dataset ID cannot be {dataset_id!r}"
+    if dataset_id.startswith("."):
+        return (
+            f"Dataset ID {dataset_id!r} cannot start with '.': SpatialData "
+            "skips such names when it reads a store, so the store would open "
+            "empty"
+        )
     if dataset_id.startswith("__"):
         return "Dataset ID cannot start with '__'"
     if dataset_id in _RESERVED_DATASET_IDS:
         return (
             f"Dataset ID cannot be {dataset_id!r}: every store writes a "
             "coordinate system of that name"
+        )
+    if dataset_id.split(".", 1)[0].lower() in _WINDOWS_DEVICE_NAMES:
+        return (
+            f"Dataset ID cannot be {dataset_id!r}: Windows keeps that name "
+            "for a device, so no folder can carry it"
+        )
+    longest = len(dataset_id.encode("utf-8")) + _LONGEST_ELEMENT_SUFFIX
+    if longest > _MAX_NAME_BYTES:
+        return (
+            f"Dataset ID is too long ({len(dataset_id)} characters): the "
+            f"longest element name built from it would be {longest} bytes, "
+            f"and a file name holds at most {_MAX_NAME_BYTES}. Use at most "
+            f"{_MAX_NAME_BYTES - _LONGEST_ELEMENT_SUFFIX} characters"
         )
     bad = sorted(
         {c for c in dataset_id if not (c.isalnum() or c in _ELEMENT_NAME_EXTRA_CHARS)}
@@ -145,31 +194,56 @@ def _validate_string_parameters(format_type: str, dataset_id: str) -> bool:
     return True
 
 
+def length_problem(value: Any, label: str) -> Optional[str]:
+    """Why ``value`` is not a length in micrometres, or ``None``.
+
+    Any real number counts, numpy scalars included: ``np.float32(25)``
+    and ``np.int64(25)`` used to be refused as "not a finite positive
+    number" while ``np.float64(25)`` passed, because only the last is a
+    ``float`` (issue #519). A bool does not count, though Python calls it
+    an int: ``True`` became a 1 um z spacing.
+
+    ``<= 0`` is False for NaN and for +infinity, so both used to pass and
+    reach the store as the dataset's pixel size or z spacing (issue #231).
+    """
+    # numpy's bool is no numbers.Real, so only Python's needs naming.
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        return f"{label} must be a number, not {type(value).__name__}"
+    if not isfinite(value) or value <= 0:
+        return f"{label} must be a finite positive number, got {value!r}"
+    return None
+
+
 def _validate_numeric_parameters(
     pixel_size_um: Optional[float], z_spacing_um: Optional[float] = None
 ) -> bool:
-    """Validate numeric parameters."""
-    # `<= 0` is False for NaN and for +infinity, so both used to pass every
-    # one of these guards and reach the store as the dataset's pixel size or
-    # z spacing. The API is validated as well as the CLI because a caller
-    # can hand these in directly (issue #231).
-    if pixel_size_um is not None and (
-        not isinstance(pixel_size_um, (int, float))
-        or not isfinite(pixel_size_um)
-        or pixel_size_um <= 0
-    ):
-        logger.error("Pixel size must be a finite positive number")
-        return False
+    """Validate numeric parameters.
 
-    if z_spacing_um is not None and (
-        not isinstance(z_spacing_um, (int, float))
-        or not isfinite(z_spacing_um)
-        or z_spacing_um <= 0
-    ):
-        logger.error("Z spacing must be a finite positive number")
-        return False
-
+    The API is validated as well as the CLI because a caller can hand
+    these in directly (issue #231).
+    """
+    for value, label in ((pixel_size_um, "Pixel size"), (z_spacing_um, "Z spacing")):
+        problem = None if value is None else length_problem(value, label)
+        if problem is not None:
+            logger.error(problem)
+            return False
     return True
+
+
+def _validate_handle_3d(handle_3d: Any) -> bool:
+    """Accept only a bool, numpy's included.
+
+    Any truthy value used to build a volume: ``handle_3d="no"`` did
+    (issue #519).
+    """
+    if type(handle_3d) in (bool, np.bool_):
+        return True
+    logger.error(
+        "handle_3d must be True or False, not %s %r",
+        type(handle_3d).__name__,
+        handle_3d,
+    )
+    return False
 
 
 def _validate_streaming(streaming: object) -> bool:
@@ -199,6 +273,124 @@ def _validate_streaming(streaming: object) -> bool:
     return False
 
 
+#: The converter keywords ``convert_msi`` documents under ``**kwargs``.
+#: ``use_csc`` is kept for older callers; it selects nothing.
+CONVERTER_KEYWORDS = (
+    "write_mobility_table",
+    "mobility_heatmap",
+    "mobility_grid",
+    "mobility_bins",
+    "mobility_min",
+    "mobility_max",
+    "msms_table",
+    "use_csc",
+)
+
+#: Keywords that were removed, with what a caller should do instead.
+_RETIRED_KEYWORDS = {
+    "sparse_format": (
+        "sparse_format was removed: every converter writes CSC, which is the "
+        "layout an ion image reads down. Drop the argument; for row-wise "
+        "access call X.tocsr() on the matrix you read back"
+    ),
+}
+
+
+def keyword_problems(kwargs: Dict[str, Any], reader_options: Any) -> List[str]:
+    """Each keyword ``convert_msi`` does not use, and why.
+
+    A keyword the converter did not use was ignored but written into the
+    store's ``conversion_options`` as if applied, could overwrite a value
+    Thyra computed, and failed the save after both passes when JSON could
+    not hold it. A misspelt reader option changed nothing in silence
+    (issue #519). Only the documented names pass: a reader option given
+    as a keyword is pointed to ``reader_options``.
+    """
+    problems = [_RETIRED_KEYWORDS[name] for name in kwargs if name in _RETIRED_KEYWORDS]
+    misplaced = [name for name in kwargs if name in READER_OPTION_FORMATS]
+    if misplaced:
+        problems.append(
+            _names(misplaced)
+            + (" is a reader option" if len(misplaced) == 1 else " are reader options")
+            + ": pass "
+            + ("it" if len(misplaced) == 1 else "them")
+            + " in reader_options"
+        )
+    unknown = [
+        name
+        for name in kwargs
+        if name not in CONVERTER_KEYWORDS
+        and name not in _RETIRED_KEYWORDS
+        and name not in READER_OPTION_FORMATS
+    ]
+    if unknown:
+        problems.append(
+            f"convert_msi takes no keyword {_names(unknown)}; its converter "
+            "keywords are " + ", ".join(CONVERTER_KEYWORDS)
+        )
+    if reader_options is None:
+        return problems
+    if not isinstance(reader_options, dict):
+        problems.append(
+            f"reader_options must be a dict, not {type(reader_options).__name__}"
+        )
+        return problems
+    unknown = [key for key in reader_options if key not in READER_OPTION_FORMATS]
+    if unknown:
+        problems.append(
+            f"reader_options holds {_names(unknown)}, which no reader takes. "
+            "Known keys: " + ", ".join(READER_OPTION_FORMATS)
+        )
+    return problems
+
+
+def _names(names: List[str]) -> str:
+    """``'a'``, ``'a' and 'b'``, ``'a', 'b' and 'c'``."""
+    quoted = [repr(name) for name in names]
+    if len(quoted) == 1:
+        return quoted[0]
+    return ", ".join(quoted[:-1]) + " and " + quoted[-1]
+
+
+def _validate_keywords(
+    kwargs: Dict[str, Any], reader_options: Optional[Dict[str, Any]]
+) -> bool:
+    """Refuse, in one line, every keyword ``convert_msi`` does not use."""
+    problems = keyword_problems(kwargs, reader_options)
+    if problems:
+        logger.error("Nothing was converted. %s.", "; ".join(problems))
+        return False
+    return True
+
+
+def _drop_options_the_format_ignores(
+    options: Dict[str, Any], input_format: str
+) -> Dict[str, Any]:
+    """Name each reader option this format does not use, and leave it out.
+
+    The CLI said so for its flags (issue #260); the API said nothing, so a
+    caller could believe a filter applied that did not (issue #519). One
+    WARNING per option, worded as the CLI words it. An option left at
+    ``None`` asks for nothing and is dropped without a word.
+    """
+    kept = {}
+    for key, value in options.items():
+        if reader_option_reaches(key, input_format):
+            kept[key] = value
+            continue
+        if value is None:
+            continue
+        formats = READER_OPTION_FORMATS[key] or ()
+        logger.warning(
+            "reader_options[%r] is ignored on %s input: it only applies to "
+            "%s. The store is written as though it had not been given.",
+            key,
+            format_name(input_format),
+            " or ".join(format_name(f) for f in formats),
+        )
+    return kept
+
+
 def _validate_input_parameters(
     input_path: Union[str, Path],
     output_path: Union[str, Path],
@@ -220,14 +412,94 @@ def _validate_input_parameters(
     )
 
 
+def output_ancestor_problem(output: Path) -> Optional[str]:
+    """Why the store cannot be created at ``output``, or ``None``.
+
+    The existence check alone let an output whose parent is a regular
+    file through: the reader was opened and the mass axis built before
+    the scratch directory's ``mkdir`` failed with a raw ``WinError 183``
+    that named a file the user had not asked about (issue #255). The
+    store is a directory tree, so the deepest ancestor that exists has
+    to be a directory Thyra may write into; the ones above it are
+    created on the way, as they always were.
+
+    Shared by the CLI and :func:`convert_msi`: the check used to live in
+    the CLI only, so the API read the whole source before failing the
+    same way (issue #519).
+    """
+    ancestor = next((p for p in output.parents if p.exists()), None)
+    if ancestor is None:
+        return None
+    if not ancestor.is_dir():
+        return (
+            f"Cannot write {output}: {ancestor} is a file, not a directory. "
+            "The output is a Zarr store, which is a directory tree, so every "
+            "part of its path above it has to be a directory."
+        )
+    return _unwritable_directory_problem(output, ancestor)
+
+
+def _unwritable_directory_problem(output: Path, ancestor: Path) -> Optional[str]:
+    """Why the store cannot be created under ``ancestor``, or ``None``.
+
+    The check is an actual ``mkdir``, not ``os.access(W_OK)``. On Windows
+    ``os.access`` consults the read-only *attribute* and not the ACL, so
+    it answers True for a directory the user has no write permission on
+    -- measured here on a directory denied ``(WD,AD)`` via ``icacls``:
+    ``os.access(W_OK) -> True``, ``st_mode -> 0o40777``, and both
+    ``mkdir`` and ``open(w)`` raise ``PermissionError`` errno 13. So the
+    refusal could never fire on the one platform this project is
+    developed on, and the failure surfaced instead from deep inside the
+    conversion, as "Error during conversion" plus a traceback out of the
+    CSC scratch allocation, after the metadata scan (issue #312).
+
+    ``mkdir`` rather than a temporary file because the thing being
+    refused is a directory tree: the store and its scratch are both
+    directories.
+
+    Not ``tempfile.TemporaryDirectory(dir=ancestor)``, which is what the
+    issue proposed: ``mkdtemp`` retries ``PermissionError`` when
+    ``os.name == 'nt' and os.path.isdir(dir) and os.access(dir, W_OK)``
+    -- gated on the very predicate that is broken here. It would spin
+    ``TMP_MAX`` times (2,147,483,647 on this build, extrapolating to
+    days) and then raise ``FileExistsError``, which is neither the right
+    exception nor a usable wait.
+    """
+    probe = ancestor / f".thyra-write-probe-{uuid4().hex}"
+    try:
+        probe.mkdir()
+    except OSError as e:
+        return f"Cannot write {output}: {ancestor} is not writable ({e.strerror or e})"
+    try:
+        probe.rmdir()
+    except OSError as e:
+        # The directory is writable, which is the whole question, so a
+        # failure to tidy up must not refuse the conversion. It is still
+        # said out loud: an indexer or scanner holding the directory
+        # would otherwise leave one of these behind per invocation with
+        # nobody told.
+        logger.warning(
+            "Left the write probe %s behind (%s); it is an empty directory "
+            "and safe to delete.",
+            probe,
+            e,
+        )
+    return None
+
+
 def _validate_paths(input_path: Path, output_path: Path) -> bool:
-    """Validate that input exists and output doesn't exist."""
+    """Validate that input exists and the store can be created at output."""
     if not input_path.exists():
         logger.error(f"Input path does not exist: {input_path}")
         return False
 
     if output_path.exists():
         logger.error(f"Destination {output_path} already exists.")
+        return False
+
+    problem = output_ancestor_problem(output_path)
+    if problem is not None:
+        logger.error(problem)
         return False
 
     return True
@@ -307,8 +579,7 @@ def _create_reader(
     reader_class = get_reader_class(input_format)
     logger.info(f"Using reader: {reader_class.__name__}")
 
-    # Pass reader options to the reader if provided
-    options = dict(reader_options or {})
+    options = _drop_options_the_format_ignores(dict(reader_options or {}), input_format)
     if lossless_tables:
         _force_scan_sum(input_format, options, lossless_tables)
     return reader_class(input_path, **options), input_format
@@ -341,8 +612,8 @@ def _force_scan_sum(
         return
     if input_format != "bruker":
         # The option reaches no other reader, so nothing about the summed
-        # spectrum changed and there is no mismatch to announce. The CLI
-        # has already said the flag is ignored here (issue #260).
+        # spectrum changed and there is no mismatch to announce. It has
+        # already been named as ignored here (issues #260, #519).
         return
     subject = " and ".join(f"a {name} table" for name in wanted)
     logger.warning(
@@ -482,9 +753,8 @@ def _create_converter(
         "resampling_config": resampling_config,
         "include_optical": include_optical,
         "apply_optical_alignment": apply_optical_alignment,
-        # Explicit, not left to **kwargs: the converter records its
-        # leftover options as conversion_options in the store root, and a
-        # sample name has no business there.
+        # Explicit, not left to **kwargs: a sample name is not a converter
+        # option, and the converter would take it as an unknown one.
         "sample_id": sample_id,
         "sample_name": sample_name,
         **kwargs,
@@ -541,8 +811,11 @@ def convert_msi(
         output_path: Path for output file
         format_type: Output format type (default: "spatialdata")
         dataset_id: Identifier for the dataset
-        pixel_size_um: In-plane pixel size in micrometers (None for auto)
-        handle_3d: Whether to process as 3D data (default: False)
+        pixel_size_um: In-plane pixel size in micrometers (None for auto).
+            Any finite positive real number, numpy's included; a bool is
+            refused.
+        handle_3d: Whether to process as 3D data (default: False). Only
+            True or False is accepted, numpy's bool included.
         z_spacing_um: Distance between consecutive slices in micrometers.
             Only meaningful together with ``handle_3d=True``; ignored
             (with a warning) otherwise. ``None`` (default) means nothing
@@ -556,7 +829,11 @@ def convert_msi(
             :func:`thyra.plan_mass_axis`. With a plan the conversion
             builds the planned axis and refuses (returns ``False``,
             nothing written) when its own axis hashes differently.
-        reader_options: Optional format-specific reader options:
+        reader_options: Optional format-specific reader options. Only the
+            keys below are taken; any other key is refused before the
+            source is opened. A key the detected format does not use is
+            named in one WARNING and left out.
+
             - intensity_threshold: float - Minimum intensity
               to include. Default: None (no filtering).
             - use_recalibrated_state: bool - For Bruker data,
@@ -564,11 +841,34 @@ def convert_msi(
             - tdf_spectrum: "scan_sum" | "vendor_centroid" - For Bruker
               TDF (TIMS) data, how a frame's mobility scans are collapsed
               into one spectrum per pixel (default "scan_sum").
+            - region: the same as the ``region`` argument.
             - use_centroid: bool - For Waters .raw, whether MassLynx
               hands back the vendor centroid (True) or the profile
               trace (False). Default None: the profile trace on a
               SELECT SERIES MRT, the vendor centroid on every other
               Waters instrument. The CLI spells it --waters-spectrum.
+            - spectrum_type: str - For imzML, declare the spectrum
+              representation explicitly: 'profile' or 'centroid'
+              (the full CV names are accepted too). Outranks the
+              file's own MS:1000127/MS:1000128, so it can correct a
+              file that declares the wrong thing; contradicting a
+              declaration is logged as a warning. SCiLS Lab spells
+              this --rep_type (2026b User Guide, p.81). Default:
+              None, meaning detect. **Changes stored values** for
+              files where it disagrees with what detection would
+              have chosen, because the representation feeds
+              instrument and axis-type selection.
+            - max_mass_axis_length: int - For imzML, mzPeak, solariX
+              and Waters sources converted with --no-resample, give up
+              once the raw mass axis exceeds this many unique m/z
+              values. This matters when the peak lists share no m/z
+              values, where the raw axis grows to roughly one column
+              per peak in the whole dataset. Default on imzML:
+              10,000,000, which is the limit SCiLS Lab places on the
+              same quantity (2026b User Guide, p.76); no limit
+              elsewhere. Pass None for no limit.
+            - use_appended_calibration: bool - For PHI data, prefer a
+              recalibration appended to the file (default True).
         **kwargs: Forwarded to the converter. ``write_mobility_table``
             (default True) writes the mobility-resolved sibling table when
             the source shares one set of (m/z, mobility) features across
@@ -593,26 +893,10 @@ def convert_msi(
             sibling table when the source isolates several precursors per
             pixel in disjoint mobility slices (Bruker PASEF); refused with
             a reason, and nothing written, on any other source.
-            - max_mass_axis_length: int - For processed-mode imzML
-              converted with --no-resample, give up once the raw
-              mass axis exceeds this many unique m/z values. This
-              matters when the peak lists share no m/z values,
-              where the raw axis grows to roughly one column per
-              peak in the whole dataset. Default: 10,000,000,
-              which is the limit SCiLS Lab places on the same
-              quantity (2026b User Guide, p.76). Pass None for
-              no limit.
-            - spectrum_type: str - For imzML, declare the spectrum
-              representation explicitly: 'profile' or 'centroid'
-              (the full CV names are accepted too). Outranks the
-              file's own MS:1000127/MS:1000128, so it can correct a
-              file that declares the wrong thing; contradicting a
-              declaration is logged as a warning. SCiLS Lab spells
-              this --rep_type (2026b User Guide, p.81). Default:
-              None, meaning detect. **Changes stored values** for
-              files where it disagrees with what detection would
-              have chosen, because the representation feeds
-              instrument and axis-type selection.
+            ``use_csc`` is accepted for older callers and selects nothing.
+            Any other keyword is refused before the source is opened,
+            with one line naming it; a reader option given here is
+            pointed to ``reader_options``.
         include_optical: Include optical images (default: True)
         apply_optical_alignment: If True (default) and the MSI source
             carries FlexImaging Area metadata, MSI elements are placed
@@ -678,8 +962,30 @@ def convert_msi(
         streaming,
         sample_id,
         sample_name,
+    ) or not (
+        _validate_handle_3d(handle_3d) and _validate_keywords(kwargs, reader_options)
     ):
         return False
+    # Taken as the plain types once, here: an int pitch made an integer
+    # obs["spatial_x"] (issue #519), and a numpy bool is no JSON value.
+    handle_3d = bool(handle_3d)
+    if pixel_size_um is not None:
+        pixel_size_um = float(pixel_size_um)
+    if z_spacing_um is not None:
+        z_spacing_um = float(z_spacing_um)
+
+    # Checked now, as the CLI checks its flags, rather than when the
+    # converter is built after the source is open (issue #519). The
+    # converter normalises the result again, which a ResamplingConfig
+    # passes unchanged and without a second word.
+    if resampling_config is not None:
+        from .resampling.axis_planner import normalize_resampling_config
+
+        try:
+            resampling_config = normalize_resampling_config(resampling_config)
+        except ConversionRefused as e:
+            logger.error("%s", str(e))
+            return False
 
     # A z spacing without --handle-3d changes nothing: the 2D route
     # writes one image per slice and never builds a z axis. Say so rather
