@@ -6005,8 +6005,9 @@ plain keyword is pointed to `reader_options`.
   file, or under a folder it cannot write, before it opens the source, with
   the CLI's message: the check is one function both call. A dataset id may
   not start with a dot, may not be a Windows device name (`nul`, `con.2`),
-  and may hold at most 216 characters, so its longest element name (an
-  optical image, 39 more) fits the 255 bytes a folder name holds.
+  and may hold at most 216 bytes in UTF-8 (216 plain ASCII characters), so
+  its longest element name (an optical image, 39 more) fits the 255 bytes a
+  folder name holds.
 - **Dead resampling options are named.** Each resampling flag given beside
   `--no-resample` gets one WARNING. A gap tolerance under
   `nearest_neighbor` is named as ignored instead of logged as zeroing bins.
@@ -6022,13 +6023,15 @@ with a dot. Q6 of the stress report weighed refusing, warning, or only
 dropping the record; refusing was chosen because a misspelt option then
 cannot give a store the caller did not ask for.
 
-**What changes in a store.** Nothing, for calls that pass only documented
-arguments, the CLI's and Ousia's included. A call that passed an unknown
-keyword or reader key, or a value the CLI refuses, now returns `False` and
-writes nothing. `obs["spatial_x"]` is float64 where an int pixel size made
-it an integer column. `conversion_options` no longer carries a caller's
-leftover keywords. The "mass axis resampling" step no longer records a gap
-tolerance when the method is `nearest_neighbor`.
+**What changes in a store.** A call that passes only documented arguments
+writes the same store, with one exception: the "mass axis resampling" step
+no longer records a gap tolerance when the method is `nearest_neighbor`,
+where it acted on nothing. Ousia's wizard always sends a tolerance, so its
+nearest-neighbour stores lose that key and its log gains the warning. A
+call that passed an unknown keyword or reader key, or a value the CLI
+refuses, now returns `False` and writes nothing. `obs["spatial_x"]` is
+float64 where an int pixel size made it an integer column.
+`conversion_options` no longer carries a caller's leftover keywords.
 
 **Alternatives.**
 

@@ -153,10 +153,11 @@ def dataset_id_problem(dataset_id: Any) -> Optional[str]:
     longest = len(dataset_id.encode("utf-8")) + _LONGEST_ELEMENT_SUFFIX
     if longest > _MAX_NAME_BYTES:
         return (
-            f"Dataset ID is too long ({len(dataset_id)} characters): the "
-            f"longest element name built from it would be {longest} bytes, "
-            f"and a file name holds at most {_MAX_NAME_BYTES}. Use at most "
-            f"{_MAX_NAME_BYTES - _LONGEST_ELEMENT_SUFFIX} characters"
+            f"Dataset ID is too long: the longest element name built from it "
+            f"would be {longest} bytes, and a file name holds at most "
+            f"{_MAX_NAME_BYTES}. Use at most "
+            f"{_MAX_NAME_BYTES - _LONGEST_ELEMENT_SUFFIX} bytes (one per "
+            "letter or digit in plain ASCII)"
         )
     bad = sorted(
         {c for c in dataset_id if not (c.isalnum() or c in _ELEMENT_NAME_EXTRA_CHARS)}

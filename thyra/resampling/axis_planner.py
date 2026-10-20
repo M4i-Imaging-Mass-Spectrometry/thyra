@@ -358,7 +358,8 @@ def _checked_values(config: ResamplingConfig) -> ResamplingConfig:
             "resampling_config sets 'tof_a' and 'tof_b' both to 0, a TOF width "
             "law with no width; give at least one of them a positive value."
         )
-    bins = config.target_bins
+    # Any, not the field's declared int: a caller may hand in anything.
+    bins: Any = config.target_bins
     if bins is None:
         return config
     if not _is_real(bins) or (math.isfinite(bins) and bins != int(bins)):
@@ -371,8 +372,10 @@ def _checked_values(config: ResamplingConfig) -> ResamplingConfig:
             f"resampling_config['target_bins'] is {bins!r}; an axis needs at "
             "least 2 bins."
         )
-    if not math.isfinite(bins) or type(bins) is int:
+    if not isinstance(bins, np.integer):
         return config
+    # A numpy integer becomes an int, so the record can hold it; a whole
+    # float is left as given, as it always was.
     return dataclasses.replace(config, target_bins=int(bins))
 
 
@@ -1213,7 +1216,8 @@ class AxisPlanner:
             return
         if self._method is ResamplingMethod.NEAREST_NEIGHBOR:
             logger.warning(
-                "--resample-gap-tolerance %s Da is ignored: the method is "
+                "The gap tolerance of %s Da (--resample-gap-tolerance, "
+                "gap_tolerance_da) is ignored: the method is "
                 "nearest_neighbor, which never places a value where nothing "
                 "was measured. The store is written as though it had not "
                 "been given.",

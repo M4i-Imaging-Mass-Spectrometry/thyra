@@ -505,7 +505,7 @@ thyra synapt_run.raw output.zarr --waters-spectrum profile
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--dataset-id TEXT` | `msi_dataset` | Dataset identifier used in element keys. Letters, digits, underscores, dots and hyphens only. Not a leading `.` or `__`, not a Windows device name such as `nul`, and at most 216 characters: it names every element in the store and every folder that holds one. Checked before any pass over the source |
+| `--dataset-id TEXT` | `msi_dataset` | Dataset identifier used in element keys. Letters, digits, underscores, dots and hyphens only. Not a leading `.` or `__`, not a Windows device name such as `nul`, and at most 216 plain characters: it names every element in the store and every folder that holds one. Checked before any pass over the source |
 | `--sample-id TEXT` | none | Names the sample in the store's metadata (`msi_metadata.sample.sample_id`). Never read from the file, and not part of any element name. Stored as typed, so never a patient's name. Checked before any pass over the source |
 | `--handle-3d` | off | Process as 3D volume instead of 2D slices |
 | `--z-spacing FLOAT` | in-plane pixel size (x) | Distance between consecutive slices, in um. Only used with `--handle-3d` |
