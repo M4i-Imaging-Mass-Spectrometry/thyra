@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from tests.fixtures.imzml_levels import write_imzml_with_levels
 from tests.fixtures.mzpeak_builder import (
     DELTA,
     GRID,
@@ -703,6 +704,49 @@ class TestLeftOutSpectra:
         table = _table(tmp_path / "zero.zarr")
         np.testing.assert_array_equal(table.var["mz"].to_numpy(), [100.0, 101.0])
         np.testing.assert_array_equal(_dense(table).sum(axis=1), [3.0] * 6)
+
+    @pytest.mark.parametrize("how", ["own", "group"])
+    def test_an_imzml_and_its_archive_leave_out_the_same_spectra(self, tmp_path, how):
+        """MS2 beside MS1 is left out, MS2 alone is kept, by both routes (D70)."""
+        spectra = [
+            Spectrum(1, 1, [100.0, 110.0], [1.0, 2.0]),
+            Spectrum(1, 1, [150.0, 900.0], [1000.0, 7.0]),
+            Spectrum(2, 1, [160.0], [10.0]),
+            Spectrum(3, 1, [120.0], [4.0]),
+            Spectrum(3, 1, [130.0], [400.0]),
+        ]
+        levels = [1, 2, 2, None, 2]
+        imzml = write_imzml_with_levels(
+            tmp_path / "levels.imzML",
+            [(s.x, s.y, 1, s.mzs, s.intensities) for s in spectra],
+            levels,
+            how=how,
+        )
+        archive = _matching_mzpeak(
+            tmp_path / "levels.mzpeak",
+            spectra,
+            ms_levels=[0 if level is None else level for level in levels],
+        )
+        _assert_same_representation(imzml, archive)
+
+        _convert(imzml, tmp_path / "from_imzml.zarr")
+        _convert(archive, tmp_path / "from_mzpeak.zarr")
+
+        reference = _table(tmp_path / "from_imzml.zarr")
+        candidate = _table(tmp_path / "from_mzpeak.zarr")
+        np.testing.assert_array_equal(
+            reference.var["mz"].to_numpy(), [100.0, 110.0, 120.0, 160.0]
+        )
+        np.testing.assert_array_equal(_dense(reference).sum(axis=1), [3.0, 10.0, 4.0])
+        assert candidate.n_obs == reference.n_obs
+        np.testing.assert_array_equal(
+            candidate.var["mz"].to_numpy(), reference.var["mz"].to_numpy()
+        )
+        for column in ("spatial_x", "spatial_y"):
+            np.testing.assert_array_equal(
+                candidate.obs[column].to_numpy(), reference.obs[column].to_numpy()
+            )
+        np.testing.assert_array_equal(_dense(candidate), _dense(reference))
 
     def test_a_nan_m_z_with_an_intensity_is_refused_on_the_raw_axis(
         self, tmp_path, thyra_logs

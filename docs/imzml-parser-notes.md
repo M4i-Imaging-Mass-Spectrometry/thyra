@@ -171,6 +171,15 @@ The `list` mode also matches on the accession alone. pyimzml's
 polarity at all. Thyra's `_pyimzml_compat.ensure_spectrum_term_fix` applies
 the same correction to the per-spectrum values (D55).
 
+The MS level is not asked for through `include_spectra_metadata` at all. The
+pyimzml writer states `MS:1000511` in the `spectrum1` group, as does
+`mzpeak-convert`'s imzML input, so the `list` mode would give `None` for every
+spectrum of such a file. `_pyimzml_compat.ensure_spectrum_check` reads it in
+the same per-spectrum step instead: the spectrum's own term first, then the
+groups it references (the last one listed that states a level, as pyimzml's
+`full` mode resolves them). It costs a loop over the spectrum's direct
+children, one byte per spectrum on the parser, and nothing more (D73).
+
 ---
 
 ## Two more constraints worth not rediscovering

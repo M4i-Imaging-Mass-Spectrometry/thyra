@@ -26,6 +26,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, List, Optional, cast
 
+from ...core.msms import MS_LEVEL_ACCESSION
 from ...utils.imzml_coordinate_base import (
     Z_FROM_GROUP,
     Z_GROUP_ATTRIBUTE,
@@ -33,6 +34,7 @@ from ...utils.imzml_coordinate_base import (
     Z_STATES_ATTRIBUTE,
     Z_UNSTATED,
 )
+from ...utils.ms_levels import MS_LEVELS_ATTRIBUTE
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +148,7 @@ _OFFSET_ACCESSIONS = (
 def ensure_spectrum_check() -> None:
     """Patch pyimzml to record each spectrum's z and to name what it cannot read.
 
-    Two things happen in pyimzml's one pass over the spectra, so neither
+    Three things happen in pyimzml's one pass over the spectra, so none
     costs a second pass over the document:
 
     - Each spectrum's position z is recorded as one byte on the parser
@@ -154,6 +156,10 @@ def ensure_spectrum_check() -> None:
       stated, or stated only in a parameter group the scan references.
       pyimzml itself gives the last two the same stand-in z of 1. The
       reader judges the file from these bytes (D63).
+    - Each spectrum's MS level is recorded as one byte on the parser
+      (``MS_LEVELS_ATTRIBUTE``), read on the spectrum or in a group it
+      references, 0 where neither states one. The reader leaves MSn
+      spectra out per pixel from these bytes (D70, D73).
     - A spectrum pyimzml fails on raises :class:`ConversionRefused` that
       names the spectrum and the cause, instead of the ``TypeError``,
       ``ValueError`` or ``AttributeError`` it raised from deep inside its
@@ -186,6 +192,7 @@ def ensure_spectrum_check() -> None:
     scan_list_tag = prefix + "scanList"
     scan_tag = prefix + "scan"
     cv_param_tag = prefix + "cvParam"
+    group_ref_tag = prefix + "referenceableParamGroupRef"
 
     def process_spectrum(self, elem, include_spectra_metadata):
         # Read the way pyimzml reads z: the first <scan>, its own cvParam.
@@ -209,6 +216,10 @@ def ensure_spectrum_check() -> None:
                     own.setdefault(Z_GROUP_ATTRIBUTE, (len(states), group))
         index = len(states)
         states.append(state)
+        levels = own.get(MS_LEVELS_ATTRIBUTE)
+        if levels is None:
+            levels = own[MS_LEVELS_ATTRIBUTE] = bytearray()
+        levels.append(_spectrum_level(self, elem, cv_param_tag, group_ref_tag))
         try:
             original(self, elem, include_spectra_metadata)
         except ConversionRefused:
@@ -220,6 +231,68 @@ def ensure_spectrum_check() -> None:
     setattr(parser_class, step, process_spectrum)
     _SPECTRUM_CHECK_INSTALLED = True
     logger.debug("Installed the per-spectrum check for pyimzml")
+
+
+def _spectrum_level(
+    parser: Any, elem: Any, cv_param_tag: str, group_ref_tag: str
+) -> int:
+    """The MS level one ``<spectrum>`` states, 0 where it states none.
+
+    The spectrum's own ``MS:1000511`` comes first, then the groups it
+    references, resolved as pyimzml resolves a spectrum's groups: the last
+    one listed that states a level. pyimzml's per-spectrum values never
+    look into a group, and the pyimzml writer and ``mzpeak-convert`` both
+    state the level in one, so the groups are read here. A value that is
+    not a whole number, or is below 0, counts as none; a level above 255 is
+    stored as 255, which is MSn all the same.
+    """
+    refs: List[str] = []
+    for node in elem:
+        tag = node.tag
+        if tag == cv_param_tag:
+            if node.get("accession") == MS_LEVEL_ACCESSION:
+                return _stored_level(node.get("value"))
+        elif tag == group_ref_tag:
+            ref = node.get("ref")
+            if ref is not None:
+                refs.append(ref)
+    if not refs:
+        return 0
+    group_levels = _group_levels(parser)
+    for ref in reversed(refs):
+        if ref in group_levels:
+            return group_levels[ref]
+    return 0
+
+
+def _stored_level(value: Any) -> int:
+    """A level as one byte: 0 for none or not a whole number, 255 at most."""
+    try:
+        level = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return min(max(level, 0), 255)
+
+
+def _group_levels(parser: Any) -> Dict[str, int]:
+    """The MS level each referenceable param group states, by group id.
+
+    Built once per parser, on the first spectrum that references a group.
+    pyimzml has resolved one group's references to another by then.
+    """
+    cached = parser.__dict__.get("_thyra_group_levels")
+    if cached is not None:
+        return cast(Dict[str, int], cached)
+    metadata = getattr(parser, "metadata", None)
+    groups = getattr(metadata, "referenceable_param_groups", None)
+    found: Dict[str, int] = {}
+    if isinstance(groups, dict):
+        for group_id, group in groups.items():
+            by_accession = getattr(group, "param_by_accession", None)
+            if isinstance(by_accession, dict) and MS_LEVEL_ACCESSION in by_accession:
+                found[str(group_id)] = _stored_level(by_accession[MS_LEVEL_ACCESSION])
+    parser.__dict__["_thyra_group_levels"] = found
+    return found
 
 
 def _group_positions(parser: Any) -> Dict[str, FrozenSet[str]]:

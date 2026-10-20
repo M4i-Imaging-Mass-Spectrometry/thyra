@@ -2,7 +2,18 @@
 import io
 import logging
 from pathlib import Path
-from typing import Any, Dict, Generator, List, NamedTuple, Optional, Tuple, Union, cast
+from typing import (
+    Any,
+    Dict,
+    Generator,
+    List,
+    NamedTuple,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+    cast,
+)
 
 # The stdlib XML parser, used to read part of a document pyimzml parses in full
 # with the same stdlib parser -- see _spectrum_list_head, which runs just before
@@ -43,6 +54,7 @@ from ...utils.imzml_coordinate_base import (
     coordinate_bases,
     z_is_stated,
 )
+from ...utils.ms_levels import MS_LEVELS_ATTRIBUTE, imzml_left_out
 from ...utils.pyimzml_direct import read_spectrum_mzs_only
 from ._pyimzml_compat import (
     ensure_lenient_cv_param_values,
@@ -520,6 +532,19 @@ def _refuse_shifted_cache_coordinates(cache_coordinates: object) -> None:
         )
 
 
+def _kept_indices(parser: Any) -> Sequence[int]:
+    """The list positions of the spectra that are converted.
+
+    Every spectrum but the MSn spectra the per-pixel rule leaves out (D73).
+    A left-out spectrum keeps its place in the list, so the positions of
+    the spectra after it do not move.
+    """
+    left_out = imzml_left_out(parser)
+    if left_out is None:
+        return range(len(parser.coordinates))
+    return cast(List[int], np.flatnonzero(~left_out).tolist())
+
+
 @register_reader("imzml")
 class ImzMLReader(BaseMSIReader):
     """Reader for imzML format files with optimizations for performance."""
@@ -802,6 +827,31 @@ class ImzMLReader(BaseMSIReader):
         except Exception:
             self.close()
             raise
+        self._report_left_out_msn(imzml_path)
+
+    def _report_left_out_msn(self, imzml_path: Path) -> None:
+        """Say how many MSn spectra the per-pixel rule leaves out (D73)."""
+        left_out = imzml_left_out(self.parser)
+        if left_out is None:
+            return
+        levels = np.frombuffer(
+            bytes(self.parser.__dict__[MS_LEVELS_ATTRIBUTE]), dtype=np.uint8
+        )
+        other = levels[left_out]
+        logger.warning(
+            "%s places %d MSn spectra (%s) on pixels that hold an MS1 "
+            "spectrum too (level 1, 0 or none stated). They are left out: "
+            "summed into those pixels, they would give spectra the "
+            "instrument never measured. %d MSn spectra on pixels of their "
+            "own are kept.",
+            imzml_path.name,
+            int(other.size),
+            ", ".join(
+                f"level {level}: {count}"
+                for level, count in zip(*np.unique(other, return_counts=True))
+            ),
+            int(((levels >= 2) & ~left_out).sum()),
+        )
 
     def _refuse_a_document_with_no_spectra(self, imzml_path: Path) -> None:
         """Refuse a file whose ``<spectrumList>`` holds nothing, by name.
@@ -1605,7 +1655,7 @@ class ImzMLReader(BaseMSIReader):
                         self._continuous_mzs
                     )
                 else:
-                    spectrum_data = parser.getspectrum(0)
+                    spectrum_data = parser.getspectrum(_kept_indices(parser)[0])
                     if spectrum_data is None or len(spectrum_data) < 1:
                         raise ValueError("Could not get first spectrum")
 
@@ -1662,7 +1712,9 @@ class ImzMLReader(BaseMSIReader):
             "Building common mass axis from all unique m/z values " "(processed mode)"
         )
 
-        total_spectra = len(parser.coordinates)
+        # A spectrum that is not converted adds no m/z to the axis (D73).
+        kept = _kept_indices(parser)
+        total_spectra = len(kept)
         accumulator = MassAxisAccumulator(total_spectra, self.max_mass_axis_length)
 
         with tqdm(
@@ -1670,7 +1722,7 @@ class ImzMLReader(BaseMSIReader):
             desc="Building common mass axis",
             unit="spectrum",
         ) as pbar:
-            for idx in range(total_spectra):
+            for idx in kept:
                 mzs = _read_spectrum_mzs(parser, idx)
                 if mzs is not None:
                     # Deliberately outside the read's try/except: a
@@ -1824,7 +1876,7 @@ class ImzMLReader(BaseMSIReader):
             return None
 
     def _iter_spectra_single(
-        self, parser: ImzMLParser, total_spectra: int, pbar
+        self, parser: ImzMLParser, kept: Sequence[int], pbar
     ) -> Generator[
         Tuple[
             Tuple[int, int, int],
@@ -1835,14 +1887,18 @@ class ImzMLReader(BaseMSIReader):
         None,
         None,
     ]:
-        """Process spectra one at a time, each with its position in the list."""
+        """Process spectra one at a time, each with its position in the list.
+
+        Only the spectra in ``kept`` are read: the MSn spectra the
+        per-pixel rule leaves out are skipped, and keep their positions.
+        """
         tally = DropTally(logger, "spectra that could not be read")
-        for idx in range(total_spectra):
+        for idx in kept:
             result = self._process_single_spectrum(parser, idx, pbar, tally)
             if result is not None:
                 coords, mzs, intensities = result
                 yield coords, idx, mzs, intensities
-        tally.summarise(total_spectra)
+        tally.summarise(len(kept))
 
     def iter_spectra(self) -> Generator[
         Tuple[Tuple[int, int, int], NDArray[np.float64], NDArray[np.float64]],
@@ -1888,7 +1944,9 @@ class ImzMLReader(BaseMSIReader):
         document -- empty ones included -- so it is the mzML ``index`` the
         spectrum was written with. imzML does not say whether a writer
         listed the spectra as they were acquired; the list is the only
-        order the file has, and it is taken as the acquisition order.
+        order the file has, and it is taken as the acquisition order. An
+        MSn spectrum left out beside MS1 (D73) is not yielded, and keeps
+        its position.
         """
         yield from self._iter_spectra_with_order()
 
@@ -1908,7 +1966,8 @@ class ImzMLReader(BaseMSIReader):
         self._ensure_parser_initialized()
 
         parser = cast(ImzMLParser, self.parser)
-        total_spectra = len(parser.coordinates)
+        kept = _kept_indices(parser)
+        total_spectra = len(kept)
         dimensions = self.get_essential_metadata().dimensions
         total_pixels = dimensions[0] * dimensions[1] * dimensions[2]
 
@@ -1927,7 +1986,7 @@ class ImzMLReader(BaseMSIReader):
             # branches read the file one spectrum at a time and returned
             # identical output -- verified on a real fixture before the
             # branch was removed (#309).
-            yield from self._iter_spectra_single(parser, total_spectra, pbar)
+            yield from self._iter_spectra_single(parser, kept, pbar)
 
     def _deduplicated_shared_axis(
         self, mzs: NDArray[np.float64]
@@ -1996,14 +2055,23 @@ class ImzMLReader(BaseMSIReader):
         offsets, lengths, encoded = collect_array_offsets(
             self.imzml_path, self._mobility.group_id, n_spectra
         )
-        missing = int(np.count_nonzero(offsets < 0))
+        # Judged on the spectra that are converted: an MSn spectrum left out
+        # beside MS1 (D73) is never read, so its mobility array is not asked.
+        left_out = imzml_left_out(parser)
+        converted = (
+            np.ones(n_spectra, dtype=bool)
+            if left_out is None or left_out.size != n_spectra
+            else ~left_out
+        )
+        missing = int(np.count_nonzero((offsets < 0) & converted))
         if missing:
             raise ConversionRefused(
-                f"{missing} of {n_spectra} spectra reference no ion mobility array "
-                f"although the file declares one ({self._mobility.group_id})"
+                f"{missing} of {int(converted.sum())} spectra reference no ion "
+                f"mobility array although the file declares one "
+                f"({self._mobility.group_id})"
             )
         mz_lengths = np.fromiter(parser.mzLengths, dtype=np.int64, count=n_spectra)
-        mismatch = np.flatnonzero(lengths != mz_lengths)
+        mismatch = np.flatnonzero((lengths != mz_lengths) & converted)
         if mismatch.size:
             first = int(mismatch[0])
             raise ConversionRefused(
@@ -2036,25 +2104,32 @@ class ImzMLReader(BaseMSIReader):
         Every spectrum must declare the same length, and the arrays of a
         spread of spectra (first, last and up to 64 in between) must be
         byte-identical to the first. Cheap on the feature-list files this
-        exists for, and honest: a mismatch means per-pixel mobility.
+        exists for, and honest: a mismatch means per-pixel mobility. Only
+        the spectra that are converted count: an MSn spectrum left out
+        beside MS1 (D73) cannot make the axis per pixel.
         """
         if self._mobility_uniform is not None:
             return self._mobility_uniform
         offsets, lengths, _ = self._ensure_mobility_offsets()
+        kept = np.asarray(_kept_indices(self.parser), dtype=np.int64)
+        lengths = lengths[kept]
         n = int(lengths.size)
         uniform = bool(n > 0 and np.all(lengths == lengths[0]))
         if uniform:
-            first = self._read_mobility_array(0)
-            probes = np.unique(
-                np.concatenate(
-                    [
-                        np.linspace(0, n - 1, num=min(n, 64), dtype=np.int64),
-                        [n - 1],
-                    ]
+            start = int(kept[0])
+            first = self._read_mobility_array(start)
+            probes = kept[
+                np.unique(
+                    np.concatenate(
+                        [
+                            np.linspace(0, n - 1, num=min(n, 64), dtype=np.int64),
+                            [n - 1],
+                        ]
+                    )
                 )
-            )
+            ]
             for idx in probes.tolist():
-                if idx == 0 or int(offsets[idx]) == int(offsets[0]):
+                if idx == start or int(offsets[idx]) == int(offsets[start]):
                     continue
                 if not np.array_equal(self._read_mobility_array(idx), first):
                     uniform = False
@@ -2122,11 +2197,15 @@ class ImzMLReader(BaseMSIReader):
         return self._mobility_span
 
     def _scan_mobility_span(self) -> Optional[Tuple[float, float]]:
-        """Read every spectrum's mobility array for its finite extremes."""
-        offsets, _, _ = self._ensure_mobility_offsets()
+        """Read every converted spectrum's mobility array for its extremes.
+
+        An MSn spectrum left out beside MS1 (D73) is not read: its values
+        would widen the range the heatmap and the grid bin over.
+        """
+        self._ensure_mobility_offsets()
         lower, upper = np.inf, -np.inf
         for idx in tqdm(
-            range(int(offsets.size)),
+            _kept_indices(self.parser),
             desc="Mobility range",
             unit="spectrum",
             disable=getattr(self, "_quiet_mode", False),
@@ -2156,7 +2235,7 @@ class ImzMLReader(BaseMSIReader):
         if self._continuous_mzs is not None:
             mzs = self._continuous_mzs
         else:
-            mzs = _as_float64(parser.getspectrum(0)[0])
+            mzs = _as_float64(parser.getspectrum(_kept_indices(parser)[0])[0])
             if self._continuous_uniform:
                 self._continuous_mzs = mzs
         mobility = cast(NDArray[np.float64], self._mobility_shared)
@@ -2185,7 +2264,8 @@ class ImzMLReader(BaseMSIReader):
         point whose mobility is not a finite number has no channel to go
         to, so it is left out of the cloud (after the threshold, which
         tests the peak the summed table keeps) and counted once at the end;
-        the summed table still holds it.
+        the summed table still holds it. An MSn spectrum left out beside
+        MS1 (D73) is not read.
         """
         self._ensure_parser_initialized()
         if self._mobility is None:
@@ -2193,7 +2273,8 @@ class ImzMLReader(BaseMSIReader):
                 f"{self.imzml_path} declares no ion mobility array"
             )
         parser = cast(ImzMLParser, self.parser)
-        total_spectra = len(parser.coordinates)
+        kept = _kept_indices(parser)
+        total_spectra = len(kept)
         shared = (
             self._mobility_shared
             if self.is_continuous and self._mobility_axis_is_shared()
@@ -2207,7 +2288,7 @@ class ImzMLReader(BaseMSIReader):
         ) as pbar:
             tally = DropTally(logger, "mobility spectra that could not be read")
             n_unplaced = 0
-            for idx in range(total_spectra):
+            for idx in kept:
                 try:
                     coords = self._get_spectrum_coordinates(parser, idx)
                     mzs, intensities = self._read_spectrum_arrays(parser, idx)
@@ -2330,16 +2411,13 @@ class ImzMLReader(BaseMSIReader):
 
     @property
     def n_spectra(self) -> int:
-        """Return the total number of spectra in the dataset.
+        """Return the number of spectra that are converted.
 
-        Returns:
-            Total number of spectra (efficient implementation using parser)
+        Every spectrum in the file, but the MSn spectra left out beside MS1
+        (D73).
         """
         self._ensure_parser_initialized()
-
-        # Use parser coordinates which is efficient
-        parser = cast(ImzMLParser, self.parser)
-        return len(parser.coordinates)
+        return len(_kept_indices(self.parser))
 
     def get_total_peak_count(self) -> int:
         """Get total number of peaks across all spectra.
@@ -2348,17 +2426,20 @@ class ImzMLReader(BaseMSIReader):
         (``IMS:1000103``, held in ``parser.mzLengths``), so this is a sum
         over an in-memory list. It used to read and decode every binary
         array in the file to count values whose count was already known.
+        An MSn spectrum left out beside MS1 (D73) is not counted.
 
         Returns:
-            Total number of peaks across all spectra
+            Total number of peaks across the spectra that are converted
         """
         self._ensure_parser_initialized()
         parser = cast(ImzMLParser, self.parser)
 
         n = len(parser.mzLengths)
-        total_peaks = int(
-            np.sum(np.fromiter(parser.mzLengths, dtype=np.int64, count=n))
-        )
+        lengths = np.fromiter(parser.mzLengths, dtype=np.int64, count=n)
+        left_out = imzml_left_out(parser)
+        if left_out is not None and left_out.size == n:
+            lengths = lengths[~left_out]
+        total_peaks = int(np.sum(lengths))
         logger.info(f"Total peak count: {total_peaks:,}")
         return total_peaks
 

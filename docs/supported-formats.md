@@ -122,6 +122,12 @@ spectra only. It also refuses one that states z through a parameter group,
 because the parser does not read it there and would sum the planes. A z term
 without a value counts as no z.
 
+**MS levels.** MSn spectra are left out on pixels that hold an MS1 spectrum
+too, by the rule the mzPeak reader uses. The level (`MS:1000511`) is read on
+the spectrum or in a parameter group it references. Level 0 or no level counts
+as MS1. An MSn spectrum on a pixel of its own is kept. A spectrum that is left
+out adds nothing to the mass axis, the mass range or the counts.
+
 **Pixel size.** Read from `IMS:1000046` and `IMS:1000047`, and both have to be
 there. They may sit in a parameter group the scan settings reference; the name
 and unit are then read from the group too. A value with no unit is read as
