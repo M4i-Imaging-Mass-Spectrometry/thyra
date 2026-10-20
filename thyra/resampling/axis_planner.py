@@ -289,18 +289,22 @@ _POSITIVE_CONFIG_FIELDS = (
 def _optional_float(config: Mapping[str, Any], key: str) -> Optional[float]:
     """``config[key]`` as a float, ``None`` when unset.
 
-    A string reached ``float()`` here and left as a ``ValueError`` (issue
-    #519); it is refused as a value the CLI would refuse.
+    A numeric string is read as its number, as it always was. Anything
+    else ``float()`` cannot read left as a ``ValueError`` or ``TypeError``
+    traceback (issue #519); it is refused in one line instead.
     """
     value = config.get(key)
     if value is None:
         return None
-    if not _is_real(value):
+    try:
+        if type(value) in (bool, np.bool_):
+            raise TypeError
+        return float(value)
+    except (TypeError, ValueError):
         raise ConversionRefused(
             f"resampling_config[{key!r}] must be a number, not "
             f"{type(value).__name__} {value!r}."
-        )
-    return float(value)
+        ) from None
 
 
 def _is_real(value: Any) -> bool:

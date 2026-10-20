@@ -426,6 +426,8 @@ class TestResamplingValues:
             ({"target_bins": True}, "whole number"),
             ({"tof_a": -1.0, "tof_b": 1.0}, "'tof_a'"),
             ({"tof_a": 0.0, "tof_b": 0.0}, "no width"),
+            ({"tof_a": "wide", "tof_b": 1.0}, "tof_a.. must be a number"),
+            ({"reference_mz": "x"}, "reference_mz.. must be a number"),
         ],
     )
     @pytest.mark.parametrize("as_dataclass", [False, True])
