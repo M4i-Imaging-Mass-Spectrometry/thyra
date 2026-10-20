@@ -26,6 +26,7 @@ over a 4 x 3 raster -- on a scan large enough to have something outside it.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -127,7 +128,11 @@ def test_a_single_region_conversion_crops_the_alignment_image(
 def test_the_margin_is_a_tenth_of_the_box_on_every_side() -> None:
     """Pinned as arithmetic, so the constant cannot drift from the geometry."""
     crop = OpticalCrop.around(
-        (100.0, 500.0, 200.0, 600.0), SCAN_COLS, SCAN_ROWS, mapping=_mapping()
+        (100.0, 500.0, 200.0, 600.0),
+        SCAN_COLS,
+        SCAN_ROWS,
+        region_id=0,
+        region_name="Area0",
     )
     assert crop is not None
     pad = 400 * CROP_MARGIN_FRACTION
@@ -137,7 +142,11 @@ def test_the_margin_is_a_tenth_of_the_box_on_every_side() -> None:
 
 def test_the_crop_is_clamped_to_the_scan() -> None:
     crop = OpticalCrop.around(
-        (-50.0, 120.0, 650.0, 900.0), SCAN_COLS, SCAN_ROWS, mapping=_mapping()
+        (-50.0, 120.0, 650.0, 900.0),
+        SCAN_COLS,
+        SCAN_ROWS,
+        region_id=0,
+        region_name="Area0",
     )
     assert crop is not None
     assert (crop.x0, crop.y0) == (0, 625)
@@ -366,7 +375,8 @@ def test_a_selected_region_of_a_multi_region_file_is_cropped_to_it(
         (x_lo, x_hi, y_lo, y_hi),
         SCAN_COLS,
         SCAN_ROWS,
-        mapping=optical.alignment.region_mappings[1],
+        region_id=1,
+        region_name="Area1",
     )
     assert crop == expected
     transform = optical.pending["ds_optical_highres"].transformations["global"]
@@ -403,21 +413,64 @@ def test_no_alignment_means_no_crop(tmp_path: Path, scan: Path) -> None:
     )
 
 
-# --- helpers ------------------------------------------------------------------
+# --- The regions converted decide, not the Areas mapped (#520, Q18) -----------
 
 
-def _mapping(region_id: int = 0, name: str = "Area0") -> Any:
-    from thyra.alignment.teaching_points import RegionMapping
+def _two_regions_one_area(scan: Path) -> _StubReader:
+    """Regions 0 and 1 side by side in the positions; the .mis maps Area0 only."""
+    reader = _StubReader([scan], areas=[AREA])
+    reader._positions = [
+        {"region": r, "raster_x": x + N_X * r, "raster_y": y}
+        for r in (0, 1)
+        for y in range(N_Y)
+        for x in range(N_X)
+    ]
+    return reader
 
-    return RegionMapping(
-        region_id=region_id,
-        name=name,
-        raster_min_x=0,
-        raster_max_x=N_X - 1,
-        raster_min_y=0,
-        raster_max_y=N_Y - 1,
-        image_min_x=100,
-        image_max_x=500,
-        image_min_y=200,
-        image_max_y=600,
+
+def test_a_whole_run_with_a_region_without_an_area_keeps_the_whole_scan(
+    tmp_path: Path, scan: Path, thyra_logs
+) -> None:
+    """Cropping to Area0 left region 1's pixels off the stored photo."""
+    with thyra_logs("thyra.converters", logging.WARNING) as records:
+        optical = _aligned(tmp_path, _two_regions_one_area(scan))
+
+    assert len(optical.alignment.region_mappings) == 1
+    assert optical.crop is None
+    pending = optical.pending["ds_optical_highres"]
+    assert pending.source.shape == (3, SCAN_ROWS, SCAN_COLS)
+    assert isinstance(pending.transformations["global"], Identity)
+    warnings = [r.getMessage() for r in records]
+    assert [w for w in warnings if w.startswith("Region 1 has no usable Area")]
+    assert not [w for w in warnings if w.startswith("Region 0 ")]
+
+
+def test_a_selected_region_without_an_area_is_cropped_around_its_cells(
+    tmp_path: Path, scan: Path, thyra_logs
+) -> None:
+    """``region=1`` with no Area1: cropped where the shared affine puts it."""
+    reader = _two_regions_one_area(scan)
+    reader._selected_region = 1
+    reader._header = {"first_raster_x": N_X, "first_raster_y": 0}
+    with thyra_logs("thyra.converters", logging.WARNING) as records:
+        optical = _aligned(tmp_path, reader)
+
+    crop = optical.crop
+    tic = optical.tic_to_image
+    assert crop is not None and tic is not None
+    assert (crop.region_id, crop.region_name) == (1, None)
+    corners = np.array([[0, 0, 1.0], [N_X, N_Y, 1.0]]) @ tic.T
+    (x_lo, y_lo), (x_hi, y_hi) = corners[0, :2], corners[1, :2]
+    expected = OpticalCrop.around(
+        (x_lo, x_hi, y_lo, y_hi),
+        SCAN_COLS,
+        SCAN_ROWS,
+        region_id=1,
+        region_name=None,
     )
+    assert crop == expected
+    assert (
+        optical.root_attr()["elements"]["ds_optical_highres"]["crop"]["region_name"]
+        is None
+    )
+    assert sum(r.getMessage().startswith("Region 1 has no") for r in records) == 1

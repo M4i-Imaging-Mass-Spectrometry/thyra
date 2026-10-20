@@ -2726,7 +2726,9 @@ where its `.d` records 0, and that 1 would again be a value nobody stated.
 
 **Status:** Implemented (2026-10-05), issue #428. Amended by
 [D59](#d59-a-fleximaging-run-that-stopped-early-is-placed-by-its-planned-grid)
-for a run that does not fill its Area.
+for a run that does not fill its Area, and by
+[D75](#d75-the-photo-crop-follows-the-regions-converted-and-one-affine-places-every-region)
+for the fallback, which now places every region by one affine.
 
 **Decision.** A Bruker MALDI run is placed on its FlexImaging photo by one
 affine. The teaching points map the photo to the stage. The spots sit on a
@@ -5547,7 +5549,9 @@ unaligned image.
   either end, and is at most 30 characters. A second file whose name
   cleans to a taken one gets `_1`, `_2` and so on, inside the 30. A second
   file with the same stem (one picture saved as `.tif` and `.jpg`) still
-  replaces the first, with a warning.
+  replaces the first, with a warning, unless the first is the alignment
+  image: then it gets a numbered name
+  ([D75](#d75-the-photo-crop-follows-the-regions-converted-and-one-affine-places-every-region)).
 
 Three related fixes from the same issue. An archive image that cannot be
 copied out (a damaged member, a name the disk refuses) is skipped with a
@@ -5960,3 +5964,103 @@ about 3 s to the 46 s parse of the 918,855-spectrum file.
   plan's axis can then reach past the converted spectra; no point is lost.
 - `format_specific.spectrum_count` stays the number of spectra the file
   holds, as on the metadata-only route.
+
+## D75. The photo crop follows the regions converted, and one affine places every region
+
+**Status:** Implemented (2026-10-20), issue #520. Amends
+[D31](#d31-fleximaging-spots-are-placed-on-their-lattice-not-on-the-drawn-area)
+for the fallback without teaching points, and D69's rule for names.
+
+**Decision.** Six rules for a FlexImaging `.mis` and the optical alignment
+it gives.
+
+- **The crop follows the regions converted.** Whether the alignment photo
+  is cropped, and where, is decided by the regions the conversion converts,
+  counted from the data or `--region`, never by how many Areas the `.mis`
+  maps. One converted region is cropped around its cells as the
+  TIC-to-image affine places them, plus the 10% margin, whether or not it
+  has an Area. Its `crop` then records `region_name` null. A run converted
+  whole with several regions keeps the whole photo.
+- **A region with no Area is placed, and named.** Its pixels, polygons
+  included, are placed by the affine every region shares, and the
+  conversion warns once for each converted region without an Area.
+- **One affine, with or without teaching points.** Without the D31
+  lattice, the raster is stretched over the box of the mapped Areas, with
+  TIC cell 0 at the raster's first position. The TIC image, every polygon
+  and the crop all use that one matrix. Before, each region's polygons used
+  its own Area while the TIC used the box, and a lone region ignored where
+  the raster started.
+- **An Area that cannot be read keeps its place.** It stays in the list
+  with its name and no outline, with a warning, so the Areas after it still
+  pair with their own regions. That covers a point that is not two finite
+  numbers within 1e9, fewer than two points, no width or height, and a
+  polygon whose points lie on one line.
+  A `--region` name that two Areas share is refused, naming the
+  RegionNumbers that carry it.
+- **Teaching points must span the photo.** Three points that repeat or lie
+  on one line fix no affine. The lattice is not fitted from them, and
+  `msi_metadata.alignment.method` is not claimed. A `.mis` number is read
+  as a finite decimal; a Raster or TeachPoint that is not one is left out
+  with a warning naming it. When the `.mis` gives no usable Raster, a
+  warning says the pitch is BeamScanSize.
+- **The alignment image is the exact file.** It is the file the reader
+  resolved from the `.mis` it adopted, not any file with the same stem. A
+  later file never replaces it: a same-stem file gets a numbered name. When
+  the named file is not there by that exact name, the one image of that
+  name, else of that stem, stands in, as before (`scan.tiff` for
+  `scan.tif`); two that match equally are not guessed between. A Rapiflex
+  run reads a `.mis` only from its own folder, as its reader does.
+
+`ImagingArea*IndexPos` values are read as exact integers. An empty or NULL
+value counts as absent, and the frames' own bounds stand in, key by key, in
+the metadata and in the alignment's first raster position alike. A missing
+or empty `MzAcqRange` is a one-line refusal.
+
+**Why.** The 4.3.3 stress test (#427) found sixteen ways a `.mis` or its
+`GlobalMetadata` reached a store unchecked, all on the synthetic timsTOF and
+rapifleX fixtures. Among them: one unreadable Area moved every later Area
+onto the wrong region, so `--region gamma` converted another region's
+spectra. With one Area for three regions, the photo was cropped to that one
+Area, leaving two regions' pixels off the stored photo. Without teaching
+points, a TIC cell and its polygon sat up to 0.63 steps apart, or three
+steps when the raster started before its Area. Three diagonal teaching
+points spread polygons over 1e17 photo pixels. A same-stem `.png` at twice
+the size became the alignment image. Bounds above 2^53 grew a 3x2 raster to
+5x2.
+
+**What changes in a store.** Only stores that met one of those cases.
+
+- A multi-region run converted whole whose `.mis` maps one Area keeps the
+  whole photo and loses `crop`. A region picked with `--region` that has no
+  Area is cropped, with `region_name` null.
+- Without teaching points: polygons, the TIC transform,
+  `raster_to_global_affine` and the crop window, for runs with several
+  mapped regions or whose raster starts before its Area. Regions without an
+  Area get polygons.
+- Which spectra `--region <name>` converts after an unreadable Area. The
+  Area's placeholder, `{"name", "unusable"}` with no outline, is now in
+  the table's `uns["raw_metadata"]["mis_metadata"]` (timsTOF) and in a
+  rapifleX store's `format_specific_metadata.areas`, where the Area was
+  left out before.
+- Which file the alignment element holds, when a same-stem twin or a
+  parent-folder `.mis` was there.
+- `dimensions` and `coordinate_offsets_px` for bounds above 2^53.
+- `msi_metadata.alignment.method` for teaching points on one line.
+- Stores that were tracebacks before.
+
+A single-region run, a run with teaching points, and a run whose Areas all
+read do not change, apart from the cases above.
+
+**Alternatives.**
+
+- "Crop a whole multi-region run to the box of all its regions." Every
+  multi-region store would change, and only the two cases above needed to.
+- "Keep cropping to the mapped Areas, and warn." The regions without an
+  Area would still have no photo under their pixels.
+- "Refuse a `.mis` with an unreadable Area." The other Areas still place
+  their regions, and a placeholder keeps the pairing right.
+
+**Known limits.**
+
+- The solariX reader looks for its `.mis` beside the `.d` only, while
+  optical discovery also looks inside it.

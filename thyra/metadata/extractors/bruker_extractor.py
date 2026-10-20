@@ -59,6 +59,88 @@ def _instrument_calibration(stated: Dict[str, Any]) -> Dict[str, Any]:
     return info
 
 
+#: The ``GlobalMetadata`` keys that state the planned raster, in index units.
+IMAGING_AREA_KEYS = (
+    "ImagingAreaMinXIndexPos",
+    "ImagingAreaMaxXIndexPos",
+    "ImagingAreaMinYIndexPos",
+    "ImagingAreaMaxYIndexPos",
+)
+
+
+def index_value(value: Any) -> Optional[int]:
+    """A ``GlobalMetadata`` raster index as an exact ``int``, or ``None``.
+
+    The values are stored as text. ``int(float(...))`` rounded one above
+    2**53 onto its neighbour, which grew a 3x2 raster to 5x2 (#520), so a
+    whole number is read as one. An empty, blank or NULL value, or one that
+    is not a whole number, is ``None``: the key is treated as absent.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    try:
+        number = float(text)
+    except ValueError:
+        return None
+    if not math.isfinite(number) or not number.is_integer():
+        return None
+    return int(number)
+
+
+def finite_value(value: Any) -> Optional[float]:
+    """A ``GlobalMetadata`` number as a finite float, or ``None``."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(str(value).strip())
+    except ValueError:
+        return None
+    return number if math.isfinite(number) else None
+
+
+#: The ``GlobalMetadata`` keys that state the acquired m/z range.
+MZ_RANGE_KEYS = ("MzAcqRangeLower", "MzAcqRangeUpper")
+
+
+def global_metadata_values(cursor: Any, keys: Tuple[str, ...]) -> Dict[str, Any]:
+    """The raw ``GlobalMetadata`` values of ``keys`` that the database holds."""
+    names = ", ".join(f"'{key}'" for key in keys)
+    cursor.execute(
+        f"SELECT Key, Value FROM GlobalMetadata WHERE Key IN ({names})"  # nosec B608
+    )
+    return {key: value for key, value in cursor.fetchall()}
+
+
+def readable_bounds(values: Dict[str, Any]) -> Dict[str, Any]:
+    """The ImagingArea and m/z range values that can be read, parsed.
+
+    ``ImagingArea*IndexPos`` as exact ints (:func:`index_value`), the m/z
+    range as finite floats. A value that is empty, NULL or not a number is
+    left out, as a key the database does not hold is: the caller falls back
+    to the frame bounds, or refuses for a missing m/z range.
+    """
+    bounds: Dict[str, Any] = {}
+    for key, value in values.items():
+        number = index_value(value) if key in IMAGING_AREA_KEYS else finite_value(value)
+        if number is not None:
+            bounds[key] = number
+    return bounds
+
+
+def imaging_area_bounds(cursor: Any) -> Dict[str, int]:
+    """The ``ImagingArea*IndexPos`` values a ``.d`` states, as exact ints."""
+    return readable_bounds(global_metadata_values(cursor, IMAGING_AREA_KEYS))
+
+
 def analysis_database(data_path: Path) -> Optional[Tuple[str, Path]]:
     """Which analysis database a timsTOF ``.d`` is read from, and its type.
 
@@ -154,16 +236,16 @@ class BrukerMetadataExtractor(MetadataExtractor):
         self._spectrum_type = spectrum_type
         self._file_type = file_type
 
-    def _query_imaging_bounds(self, cursor):
-        """Query imaging area bounds from GlobalMetadata."""
-        imaging_bounds_query = """
-        SELECT Key, Value FROM GlobalMetadata
-        WHERE Key IN ('ImagingAreaMinXIndexPos', 'ImagingAreaMaxXIndexPos',
-                      'ImagingAreaMinYIndexPos', 'ImagingAreaMaxYIndexPos',
-                      'MzAcqRangeLower', 'MzAcqRangeUpper')
+    def _query_imaging_bounds(self, cursor) -> Dict[str, Any]:
+        """Query imaging area bounds and the m/z range from GlobalMetadata.
+
+        Only values that can be read are returned: the ImagingArea keys as
+        exact ints (:func:`index_value`), the m/z range as finite floats. An
+        empty or NULL value is left out, as a missing key is.
         """
-        cursor.execute(imaging_bounds_query)
-        return {row[0]: float(row[1]) for row in cursor.fetchall()}
+        return readable_bounds(
+            global_metadata_values(cursor, IMAGING_AREA_KEYS + MZ_RANGE_KEYS)
+        )
 
     @staticmethod
     def _has_table(cursor, name: str) -> bool:
@@ -295,12 +377,13 @@ class BrukerMetadataExtractor(MetadataExtractor):
                 )
                 if value is None
             ]
-            error_msg = (
-                f"Missing critical mass range bounds in GlobalMetadata: "
-                f"{', '.join(missing_keys)}. Cannot establish mass range."
+            # A refusal, not a traceback (#520): the run cannot be read
+            # without its m/z range, and this line says which key.
+            raise ConversionRefused(
+                f"{self.data_path.name} states no usable "
+                f"{' or '.join(missing_keys)} in its GlobalMetadata (missing, "
+                "empty or not a number), so its m/z range is unknown."
             )
-            logger.error(error_msg)
-            raise ValueError(error_msg)
 
         return min_mass, max_mass
 
@@ -474,6 +557,27 @@ class BrukerMetadataExtractor(MetadataExtractor):
             raw_metadata=raw_metadata,
         )
 
+    def _sequence_metadata(self) -> Optional[Dict[str, Any]]:
+        """The parsed ``.mis`` of this ``.d``, or ``None`` when it has none.
+
+        The one the reader adopted, when it passed it in, so the pitch and
+        the alignment read the same file and its warnings are logged once;
+        else the shared locator's pick (issue #303).
+
+        Raises:
+            ConversionRefused: If the ``.mis`` found is a document defusedxml
+                refuses.
+        """
+        if self._mis_metadata:
+            return self._mis_metadata
+        from ...readers.bruker.mis_parser import (
+            find_mis_file_for_d_folder,
+            parse_mis_file,
+        )
+
+        mis_path = find_mis_file_for_d_folder(self.data_path)
+        return parse_mis_file(mis_path) if mis_path is not None else None
+
     def _resolve_pixel_size_um(
         self,
         beam_x: Optional[float],
@@ -494,15 +598,9 @@ class BrukerMetadataExtractor(MetadataExtractor):
                 above; one that is present and refused is not, so it is
                 not quietly resolved to BeamScanSize.
         """
-        from ...readers.bruker.mis_parser import (
-            find_mis_file_for_d_folder,
-            parse_mis_file,
-        )
-
         raster: Optional[Tuple[float, float]] = None
-        mis_path = find_mis_file_for_d_folder(self.data_path)
-        if mis_path is not None:
-            mis_data = parse_mis_file(mis_path)
+        mis_data = self._sequence_metadata()
+        if mis_data is not None:
             raster_xy = mis_data.get("raster")
             if (
                 isinstance(raster_xy, list)
@@ -528,6 +626,15 @@ class BrukerMetadataExtractor(MetadataExtractor):
                 )
             return raster
 
+        if mis_data is not None and raster is None and beam is not None:
+            # The .mis is there and its step is not (#520): say what the
+            # pitch is taken from instead, rather than switching silently.
+            logger.warning(
+                "The .mis states no usable Raster step, so the pixel size is "
+                "BeamScanSize (%g, %g) um. Pass --pixel-size if that is wrong.",
+                beam[0],
+                beam[1],
+            )
         if raster is not None:
             return raster
         return beam

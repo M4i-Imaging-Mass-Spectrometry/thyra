@@ -336,7 +336,10 @@ The optical image is whichever file the `.mis` `<ImageFile>` element names,
 resolved against the acquisition folder. Rapiflex slides commonly hold several
 images -- a slide overview and one or two more beside the alignment scan -- and
 they are frequently `.jpg` rather than `.tif`; all of them are carried into the
-store, but only the named one gets the teaching points' coordinate space. A
+store, but only the named file gets the teaching points' coordinate space. A
+copy of it in another format, or a file of the same name in the folder above,
+is carried as another image. A Rapiflex run takes its `.mis` only from its own
+folder. A
 smaller copy of it is scaled onto it. The slide overview is not placed: it is
 the photo FlexImaging turned to make the alignment scan, so it keeps a
 coordinate system of its own.
@@ -348,15 +351,18 @@ without the crop a project of many sections would hold as many copies of one
 photo, each right for its own section and centimetres off for the others. When
 a conversion covers exactly one region -- a single-region acquisition, or one
 region of a multi-region timsTOF file selected with `--region` -- the store
-holds only that region's Area box plus a 10% margin, pyramided from the crop's
-size, and
+holds only the box that region's pixels cover plus a 10% margin, pyramided from
+the crop's size, and
 the element carries a translation by the crop's origin in front of the
 transform the whole scan would have had. Nothing on the MSI side changes: the
 raster-to-image affine, the pixel polygons and `coordinate_systems` keep
 describing the whole scan's pixel grid. The `optical_images` root attr records
 the crop's origin and size and the scan's full size under `crop`, so the whole
 slide can be found again without re-reading the `.d`. A multi-region file
-converted whole is embedded whole, as before.
+converted whole is embedded whole, however many Areas the `.mis` maps. What
+counts is the regions converted, not the Areas: a region with no Area is
+cropped around its own pixels, and placed by the alignment the other regions
+share, with a warning that names it.
 
 ## Waters MassLynx
 

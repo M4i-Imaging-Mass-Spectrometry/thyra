@@ -76,7 +76,7 @@ thyra input.imzML output.zarr && python analyse.py output.zarr
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--pixel-size FLOAT` | auto-detect | Pixel size in micrometers, applied to **both** axes. Auto-detection keeps the source's own x and y pitch separately, so an anisotropic raster stays anisotropic; passing this declares it square |
-| `--region TEXT` | all | Convert one region of a timsTOF `.d`, by `.mis` Area Name or by DB RegionNumber. Checked against the dataset's own region list whether it has one region or several; a value that matches no Area Name is read as a RegionNumber, and says so. Every other format refuses it; [`list_regions`](api.md#listing-regions) lists the regions of any input |
+| `--region TEXT` | all | Convert one region of a timsTOF `.d`, by `.mis` Area Name or by DB RegionNumber. Checked against the dataset's own region list whether it has one region or several; a value that matches no Area Name is read as a RegionNumber, and says so. A name two Areas share is refused: pass the RegionNumber. Every other format refuses it; [`list_regions`](api.md#listing-regions) lists the regions of any input |
 | `--resample / --no-resample` | enabled | Mass axis resampling |
 | `--include-optical / --no-optical` | enabled | Include optical images in output |
 | `--mobility-table / --no-mobility-table` | enabled | Also write the mobility-resolved sibling table when the source shares one set of (m/z, ion mobility) features across pixels (see [Output Format](output-format.md#ion-mobility)) |
@@ -114,7 +114,8 @@ thyra data.d output.zarr --no-optical
     `--region` takes a string, and the value is matched against the `.mis`
     Area Names first. Only if nothing matches is it parsed as a DB
     RegionNumber, which starts at 0. Passing something that is neither is an
-    error that lists the area names it did find.
+    error that lists the area names it did find. A name that two Areas share
+    is refused too, with the RegionNumbers that carry it: pass one of those.
 
     The two numbering schemes do not have to agree, which is exactly why area
     `'03'` need not be RegionNumber 3. For a multi-region dataset Thyra logs

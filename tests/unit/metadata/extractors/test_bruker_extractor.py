@@ -232,6 +232,31 @@ class TestBrukerMetadataExtractor:
 
         assert essential.pixel_size == (15.0, 15.0)
 
+    @pytest.mark.parametrize("raster", ["0,0", "12,5,12,5", ""])
+    def test_an_unusable_raster_says_beamscansize_is_used(
+        self, tmp_path, thyra_logs, raster
+    ):
+        """#520 F163: the switch to BeamScanSize used to be silent."""
+        sample_data = {
+            "essential": (15.0, 15.0, 5.0, 0, 2, 0, 4, 400, 100.0, 1000.0),
+            "comprehensive": [],
+            "laser_info": (15.0, 15.0, 5.0),
+        }
+        mock_conn = self.create_mock_connection(sample_data)
+        d_folder = tmp_path / "run.d"
+        d_folder.mkdir()
+        (tmp_path / "run.mis").write_text(
+            f"<ImagingSequence><Raster>{raster}</Raster></ImagingSequence>"
+        )
+
+        with thyra_logs("thyra", logging.WARNING) as records:
+            essential = BrukerMetadataExtractor(mock_conn, d_folder).get_essential()
+
+        assert essential.pixel_size == (15.0, 15.0)
+        messages = [r.getMessage() for r in records]
+        assert any(f"Unusable Raster {raster!r}" in m for m in messages), messages
+        assert any("pixel size is BeamScanSize (15, 15)" in m for m in messages)
+
     def test_a_refused_mis_reaches_the_caller(self, tmp_path, thyra_logs):
         """The .mis this extractor reads for <Raster> can be refused.
 
@@ -854,3 +879,67 @@ class TestBrukerMetadataExtractor:
         # Call debug directly to verify the mock works
         mock_logger.debug("Test debug message")
         mock_logger.debug.assert_called_with("Test debug message")
+
+
+# --- GlobalMetadata values that cannot be read (#520) ------------------------
+
+
+def _global_metadata(rows):
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE GlobalMetadata (Key TEXT, Value TEXT)")
+    conn.executemany("INSERT INTO GlobalMetadata VALUES (?, ?)", rows)
+    return conn
+
+
+_STATED = [
+    ("ImagingAreaMinXIndexPos", "100"),
+    ("ImagingAreaMaxXIndexPos", "102"),
+    ("ImagingAreaMinYIndexPos", "10"),
+    ("ImagingAreaMaxYIndexPos", "11"),
+    ("MzAcqRangeLower", "100.0"),
+    ("MzAcqRangeUpper", "1000.0"),
+]
+
+
+@pytest.mark.parametrize("value", ["", " ", None, "n/a"])
+def test_an_unreadable_imaging_area_value_is_left_out(tmp_path, value):
+    """F144: '' and NULL ended the conversion in a traceback."""
+    rows = [("ImagingAreaMaxXIndexPos", value), *_STATED[:1], *_STATED[2:]]
+    conn = _global_metadata(rows)
+    extractor = BrukerMetadataExtractor(conn, tmp_path / "run.d")
+    bounds = extractor._query_imaging_bounds(conn.cursor())
+    assert "ImagingAreaMaxXIndexPos" not in bounds
+    assert bounds["ImagingAreaMinXIndexPos"] == 100
+    # The frame bound stands in for the missing key.
+    resolved = extractor._resolve_imaging_bounds((100, 102, 10, 11, 6), bounds)
+    assert resolved == (100, 102, 10, 11)
+
+
+def test_imaging_area_bounds_past_two_to_the_53_are_exact(tmp_path):
+    """F133: 2**53 + 1 read as a float came back one below the stated value."""
+    big = 2**53 + 1
+    rows = [
+        ("ImagingAreaMinXIndexPos", str(big)),
+        ("ImagingAreaMaxXIndexPos", str(big + 2)),
+        *_STATED[2:],
+    ]
+    conn = _global_metadata(rows)
+    extractor = BrukerMetadataExtractor(conn, tmp_path / "run.d")
+    bounds = extractor._query_imaging_bounds(conn.cursor())
+    assert (bounds["ImagingAreaMinXIndexPos"], bounds["ImagingAreaMaxXIndexPos"]) == (
+        big,
+        big + 2,
+    )
+
+
+@pytest.mark.parametrize("value", ["", None, "nan", "missing"])
+def test_an_unusable_mz_range_is_a_one_line_refusal(tmp_path, value):
+    """F144: a ValueError or TypeError traceback before."""
+    rows = [r for r in _STATED if r[0] != "MzAcqRangeLower"]
+    if value != "missing":
+        rows.append(("MzAcqRangeLower", value))
+    conn = _global_metadata(rows)
+    extractor = BrukerMetadataExtractor(conn, tmp_path / "run.d")
+    bounds = extractor._query_imaging_bounds(conn.cursor())
+    with pytest.raises(ConversionRefused, match="MzAcqRangeLower"):
+        extractor._validate_mass_range(bounds)

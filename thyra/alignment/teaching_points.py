@@ -23,7 +23,7 @@ The module provides:
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -43,13 +43,13 @@ class TeachingPoint:
         stage_y: Y coordinate in stage units (micrometers)
     """
 
-    image_x: int
-    image_y: int
-    stage_x: int
-    stage_y: int
+    image_x: float
+    image_y: float
+    stage_x: float
+    stage_y: float
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Tuple[int, int]]) -> "TeachingPoint":
+    def from_dict(cls, data: Mapping[str, Sequence[float]]) -> "TeachingPoint":
         """Create from parsed dictionary format.
 
         Args:
@@ -140,10 +140,10 @@ class RegionMapping:
     raster_max_x: int
     raster_min_y: int
     raster_max_y: int
-    image_min_x: int
-    image_max_x: int
-    image_min_y: int
-    image_max_y: int
+    image_min_x: float
+    image_max_x: float
+    image_min_y: float
+    image_max_y: float
 
     def _get_pixel_scale_x(self) -> float:
         """Get the X pixel scale (image pixels per raster step in X).
@@ -753,10 +753,19 @@ def fit_raster_lattice(
         return None
 
     points = [TeachingPoint.from_dict(tp) for tp in teaching_points]
-    image_to_stage = AffineTransform.from_points(
-        [(float(p.image_x), float(p.image_y)) for p in points],
-        [(float(p.stage_x), float(p.stage_y)) for p in points],
-    )
+    try:
+        image_to_stage = AffineTransform.from_points(
+            [(float(p.image_x), float(p.image_y)) for p in points],
+            [(float(p.stage_x), float(p.stage_y)) for p in points],
+        )
+    except ValueError as e:
+        # Points on one line fit a singular affine: no registration (#520).
+        logger.warning(
+            f"The .mis teaching points cannot place the raster: {e}. The "
+            "optical alignment follows the Areas' outlines instead, which can "
+            "be off by up to a raster step."
+        )
+        return None
     if reference_point is not None and not np.all(np.isfinite(reference_point)):
         logger.warning(
             f"ReferencePoint {tuple(reference_point)} is not a finite pixel; "
@@ -889,8 +898,9 @@ class AreaAlignmentResult:
         first_raster_y: First raster Y offset from header
         pos_to_region: Mapping from (raster_x, raster_y) to region_id
         lattice: The teaching-point lattice (D31). ``None`` only when the
-            ``.mis`` lacks what it needs, and then each region is stretched
-            over its Area's bounding box instead, which is approximate.
+            ``.mis`` lacks what it needs, and then the raster is stretched
+            over the Areas' bounding box instead (:meth:`stretch`), which is
+            approximate.
     """
 
     region_mappings: List[RegionMapping]
@@ -898,11 +908,68 @@ class AreaAlignmentResult:
     first_raster_y: int
     pos_to_region: Dict[Tuple[int, int], int] = field(default_factory=dict)
     lattice: Optional[LatticeFit] = None
+    _stretch: Optional[np.ndarray] = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     @property
     def cell_to_image(self) -> Optional[np.ndarray]:
-        """The lattice's TIC-cell-to-image affine, or ``None`` without one."""
-        return self.lattice.cell_to_image if self.lattice is not None else None
+        """The one TIC-cell-to-image affine every pixel is placed by.
+
+        The lattice's (D31), else :meth:`stretch`; ``None`` only when no
+        region has an Area. The TIC image, every pixel polygon -- of a
+        region with an Area or without one -- and the photo crop all use
+        it, so none of them can disagree with another.
+        """
+        if self.lattice is not None:
+            return self.lattice.cell_to_image
+        if self._stretch is None:
+            self._stretch = self.stretch()
+        return self._stretch
+
+    def stretch(self) -> Optional[np.ndarray]:
+        """The raster stretched over the mapped Areas' bounding box.
+
+        Without the teaching-point lattice this is all that places the
+        raster: the box of every mapped region's raster cells onto the box
+        of their Areas, axis by axis, with TIC cell 0 at
+        ``(first_raster_x, first_raster_y)``. One region is the same rule
+        with one box. Before #520 the TIC used this box while each region's
+        polygons used its own Area, and a lone region ignored where the
+        raster started, so the two could sit steps apart.
+
+        Returns:
+            The 3x3 affine, or ``None`` with no mapping or a box of no width
+            or height.
+        """
+        mappings = self.region_mappings
+        if not mappings:
+            return None
+        raster_min_x = min(m.raster_min_x for m in mappings)
+        raster_min_y = min(m.raster_min_y for m in mappings)
+        n_x = max(m.raster_max_x for m in mappings) - raster_min_x + 1
+        n_y = max(m.raster_max_y for m in mappings) - raster_min_y + 1
+        image_min_x = min(m.image_min_x for m in mappings)
+        image_min_y = min(m.image_min_y for m in mappings)
+        width = max(m.image_max_x for m in mappings) - image_min_x
+        height = max(m.image_max_y for m in mappings) - image_min_y
+        scale_x = width / max(1, n_x)
+        scale_y = height / max(1, n_y)
+        if not (scale_x > 0 and scale_y > 0):
+            return None
+        tx = image_min_x + (self.first_raster_x - raster_min_x) * scale_x
+        ty = image_min_y + (self.first_raster_y - raster_min_y) * scale_y
+        return np.array(
+            [[scale_x, 0.0, tx], [0.0, scale_y, ty], [0.0, 0.0, 1.0]],
+            dtype=np.float64,
+        )
+
+    def _measured(self, norm_x: int, norm_y: int) -> bool:
+        """Whether TIC cell ``(norm_x, norm_y)`` holds a measured spot."""
+        return (
+            norm_x + self.first_raster_x,
+            norm_y + self.first_raster_y,
+        ) in self.pos_to_region
 
     def transform_point(
         self, norm_x: int, norm_y: int
@@ -914,62 +981,46 @@ class AreaAlignmentResult:
             norm_y: Normalized (0-based) raster Y coordinate
 
         Returns:
-            Tuple of (image_x, image_y) or None if no mapping exists
+            Tuple of (image_x, image_y), the centre of the cell under
+            :attr:`cell_to_image`, or None if no spot was measured there or
+            no region has an Area
         """
-        # Convert normalized to original raster coords
-        orig_x = norm_x + self.first_raster_x
-        orig_y = norm_y + self.first_raster_y
-
-        # Find which region this belongs to
-        region_id = self.pos_to_region.get((orig_x, orig_y))
-        if region_id is None:
+        matrix = self.cell_to_image
+        if matrix is None or not self._measured(norm_x, norm_y):
             return None
-
-        if self.lattice is not None:
-            return self.lattice.cell_centre(norm_x, norm_y)
-
-        # Find the region mapping
-        for mapping in self.region_mappings:
-            if mapping.region_id == region_id:
-                return mapping.raster_to_image(orig_x, orig_y)
-
-        return None
+        x, y, _ = matrix @ np.array([norm_x + 0.5, norm_y + 0.5, 1.0])
+        return float(x), float(y)
 
     def cell_corners(
         self, norm_x: int, norm_y: int
     ) -> Optional[List[Tuple[float, float]]]:
         """The image-pixel outline of a measured pixel, or ``None``.
 
-        Under the lattice this is the exact cell the TIC image draws, a
-        parallelogram when the photo is rotated against the stage. Without
-        one it is the axis-aligned box of the bounding-box stretch.
+        The exact cell the TIC image draws, through :attr:`cell_to_image`:
+        a parallelogram under a lattice whose photo is rotated against the
+        stage, an axis-aligned box under the bounding-box stretch. A region
+        with no Area of its own is placed by the same matrix.
         """
-        if (norm_x + self.first_raster_x, norm_y + self.first_raster_y) not in (
-            self.pos_to_region
-        ):
+        matrix = self.cell_to_image
+        if matrix is None or not self._measured(norm_x, norm_y):
             return None
-        if self.lattice is not None:
-            return self.lattice.cell_corners(norm_x, norm_y)
-        centre = self.transform_point(norm_x, norm_y)
-        half = self.get_half_pixel_size(norm_x, norm_y)
-        if centre is None or half is None:
-            return None
-        (cx, cy), (hx, hy) = centre, half
-        return [
-            (cx - hx, cy - hy),
-            (cx + hx, cy - hy),
-            (cx + hx, cy + hy),
-            (cx - hx, cy + hy),
-        ]
+        corners = np.array(
+            [
+                [norm_x, norm_y, 1.0],
+                [norm_x + 1, norm_y, 1.0],
+                [norm_x + 1, norm_y + 1, 1.0],
+                [norm_x, norm_y + 1, 1.0],
+            ]
+        )
+        return [(float(x), float(y)) for x, y, _ in corners @ matrix.T]
 
     def get_half_pixel_size(
         self, norm_x: int, norm_y: int
     ) -> Optional[Tuple[float, float]]:
         """Get the half-pixel size for a given position.
 
-        Returns independent X and Y half-sizes to handle non-square
-        aspect ratios. The scale may vary between regions due to
-        Area definitions.
+        Half the length of a cell's two sides under :attr:`cell_to_image`,
+        the same for every pixel.
 
         Args:
             norm_x: Normalized (0-based) raster X coordinate
@@ -979,28 +1030,13 @@ class AreaAlignmentResult:
             Tuple of (half_x, half_y) in image pixels, or None if
             no mapping exists
         """
-        # Convert normalized to original raster coords
-        orig_x = norm_x + self.first_raster_x
-        orig_y = norm_y + self.first_raster_y
-
-        # Find which region this belongs to
-        region_id = self.pos_to_region.get((orig_x, orig_y))
-        if region_id is None:
+        matrix = self.cell_to_image
+        if matrix is None or not self._measured(norm_x, norm_y):
             return None
-
-        if self.lattice is not None:
-            m = self.lattice.cell_to_image
-            return (
-                float(np.hypot(m[0, 0], m[1, 0])) / 2.0,
-                float(np.hypot(m[0, 1], m[1, 1])) / 2.0,
-            )
-
-        # Find the region mapping and get its half-pixel size
-        for mapping in self.region_mappings:
-            if mapping.region_id == region_id:
-                return mapping.get_half_pixel_size()
-
-        return None
+        return (
+            float(np.hypot(matrix[0, 0], matrix[1, 0])) / 2.0,
+            float(np.hypot(matrix[0, 1], matrix[1, 1])) / 2.0,
+        )
 
 
 class TeachingPointAlignment:
@@ -1033,7 +1069,7 @@ class TeachingPointAlignment:
 
     def compute_alignment(
         self,
-        teaching_points: List[Dict[str, Tuple[int, int]]],
+        teaching_points: List[Dict[str, Tuple[float, float]]],
         poslog_positions: Optional[List[Dict[str, Any]]] = None,
         raster_step: Tuple[float, float] = (20.0, 20.0),
         raster_offset: Tuple[int, int] = (0, 0),
@@ -1409,9 +1445,12 @@ class TeachingPointAlignment:
 
         With three teaching points and a raster step, every spot is placed
         on FlexImaging's lattice (:func:`fit_raster_lattice`, D31). Without
-        them, each region is stretched over its Area's bounding box, which
-        is approximate: the outline is drawn by hand and is not the extent
-        of the spots.
+        them, the raster is stretched over the mapped Areas' bounding box
+        (:meth:`AreaAlignmentResult.stretch`), which is approximate: the
+        outline is drawn by hand and is not the extent of the spots. Either
+        way one affine places every region, with an Area or without one.
+        An Area the ``.mis`` parse could not read is skipped, keeping its
+        place in the list.
 
         Args:
             areas: List of Area dictionaries with 'name', 'p1', 'p2' keys
@@ -1467,10 +1506,15 @@ class TeachingPointAlignment:
         for i, area in enumerate(areas):
             if i not in regions:
                 logger.debug(
-                    f"Area '{area['name']}' (index {i}) has no matching "
+                    f"Area '{area.get('name', '')}' (index {i}) has no matching "
                     f"region in data (available regions: "
                     f"{sorted(regions.keys())})"
                 )
+                continue
+            if "p1" not in area or "p2" not in area:
+                # A placeholder for an Area the .mis parse could not read:
+                # it holds this region's place, and the region is placed by
+                # the shared affine like any region without an Area.
                 continue
 
             # Area bounds in image pixels - use min/max of p1 and p2
@@ -1481,7 +1525,7 @@ class TeachingPointAlignment:
 
             mapping = RegionMapping(
                 region_id=i,
-                name=area["name"],
+                name=str(area.get("name", "")),
                 raster_min_x=regions[i]["min_x"],
                 raster_max_x=regions[i]["max_x"],
                 raster_min_y=regions[i]["min_y"],
@@ -1494,7 +1538,7 @@ class TeachingPointAlignment:
             region_mappings.append(mapping)
 
             logger.info(
-                f"Region {i} -> Area '{area['name']}': "
+                f"Region {i} -> Area '{mapping.name}': "
                 f"raster ({mapping.raster_min_x}, {mapping.raster_min_y}) to "
                 f"({mapping.raster_max_x}, {mapping.raster_max_y}), "
                 f"image ({mapping.image_min_x}, {mapping.image_min_y}) to "
@@ -1537,7 +1581,7 @@ class TeachingPointAlignment:
         if not teaching_points or len(teaching_points) < 3:
             logger.warning(
                 "The .mis has fewer than three teaching points; optical "
-                "alignment stretches each region over its Area outline, which "
+                "alignment stretches the raster over the Areas' outlines, which "
                 "can be off by up to a raster step."
             )
             return None
@@ -1550,14 +1594,14 @@ class TeachingPointAlignment:
             logger.warning(
                 f"The measured Areas use different raster steps {sorted(steps)}; "
                 "one lattice cannot place them, so optical alignment stretches "
-                "each region over its Area outline instead."
+                "the raster over the Areas' outlines instead."
             )
             return None
         step = next(iter(steps)) if steps else raster_step
         if step is None:
             logger.warning(
                 "No raster step for the optical alignment lattice; it stretches "
-                "each region over its Area outline instead."
+                "the raster over the Areas' outlines instead."
             )
             return None
         return fit_raster_lattice(
