@@ -566,3 +566,102 @@ class TestTheTimstofSequenceReachesTheDocument:
         (tmp_path / "synthetic_tims.mis").unlink()
 
         assert "alignment" not in read_metadata_document(d_folder)
+
+
+# --- Values that cannot be used (#520) ----------------------------------------
+
+
+def _areas_mis(tmp_path: Path, middle: str) -> Path:
+    areas = (
+        '<Area Type="0" Name="alpha"><Point>10,10</Point><Point>40,40</Point></Area>'
+        f'<Area Type="0" Name="beta">{middle}</Area>'
+        '<Area Type="0" Name="gamma"><Point>100,100</Point><Point>130,130</Point></Area>'
+    )
+    return _write_mis(tmp_path, "areas.mis", area=areas)
+
+
+@pytest.mark.parametrize(
+    "middle",
+    [
+        "<Point>50,50</Point>",
+        "<Point>50.5x,50</Point><Point>80,80</Point>",
+        "<Point>50,50</Point><Point>50,80</Point>",
+        "<Point>50,50</Point><Point>80,50</Point>",
+        "<Point>1" + "0" * 400 + ",50</Point><Point>80,80</Point>",
+        "<Point>0,0</Point><Point>5,5</Point><Point>10,10</Point>",
+    ],
+    ids=["one point", "text", "no width", "no height", "too large", "a line"],
+)
+def test_an_area_that_cannot_be_used_keeps_its_place(
+    tmp_path: Path, middle: str, thyra_logs
+) -> None:
+    """F118: dropping it moved 'gamma' onto region 1."""
+    with thyra_logs("thyra.readers", logging.WARNING) as records:
+        areas = parse_mis_file(_areas_mis(tmp_path, middle))["areas"]
+
+    assert [a["name"] for a in areas] == ["alpha", "beta", "gamma"]
+    assert "p1" not in areas[1] and areas[1]["unusable"]
+    assert areas[2]["p1"] == [100, 100]
+    assert any("Area 1 ('beta')" in r.getMessage() for r in records)
+
+
+def test_a_decimal_area_point_is_read_as_one(tmp_path: Path) -> None:
+    areas = parse_mis_file(
+        _areas_mis(tmp_path, "<Point>50.5,50</Point><Point>80,80</Point>")
+    )["areas"]
+    assert areas[1]["p1"] == [50.5, 50]
+
+
+@pytest.mark.parametrize(
+    "raster, expected",
+    [("20,20", [20, 20]), ("20.0,20.0", [20, 20]), ("12.5,10", [12.5, 10])],
+)
+def test_a_decimal_raster_is_read(tmp_path: Path, raster: str, expected) -> None:
+    """F140: ``int('20.0')`` ended the conversion in a traceback."""
+    assert parse_mis_file(_write_mis(tmp_path, "r.mis", raster=raster))["raster"] == (
+        expected
+    )
+
+
+@pytest.mark.parametrize("raster", ["0,0", "-5,-5", "20,0", "12,5,12,5", "", "a,b"])
+def test_an_unusable_raster_is_named_and_left_out(
+    tmp_path: Path, raster: str, thyra_logs
+) -> None:
+    """F163: it used to be dropped without a word."""
+    with thyra_logs("thyra.readers", logging.WARNING) as records:
+        data = parse_mis_file(_write_mis(tmp_path, "r.mis", raster=raster))
+    assert "raster" not in data
+    assert any(f"Unusable Raster {raster!r}" in r.getMessage() for r in records)
+
+
+def _teach_mis(tmp_path: Path, points) -> Path:
+    body = "".join(f"<TeachPoint>{p}</TeachPoint>" for p in points)
+    return _write_mis(tmp_path, "t.mis", area=body)
+
+
+def test_a_decimal_teaching_point_is_read(tmp_path: Path) -> None:
+    data = parse_mis_file(_teach_mis(tmp_path, ["100,200.5;1000,2000"]))
+    assert data["teaching_points"] == [{"image": [100, 200.5], "stage": [1000, 2000]}]
+
+
+@pytest.mark.parametrize(
+    "bad", ["1,2,9;3,4", "1,2;3", "1,2", "1" + "0" * 400 + ",0;0,0", "nan,1;2,3"]
+)
+def test_an_unreadable_teaching_point_is_left_out_with_a_warning(
+    tmp_path: Path, bad: str, thyra_logs
+) -> None:
+    """F140, F191: these ended in a traceback, in the parser or the fit."""
+    with thyra_logs("thyra.readers", logging.WARNING) as records:
+        data = parse_mis_file(_teach_mis(tmp_path, [bad, "40,0;40,0"]))
+    assert data["teaching_points"] == [{"image": [40, 0], "stage": [40, 0]}]
+    assert any("Unreadable TeachPoint" in r.getMessage() for r in records)
+
+
+def test_the_image_file_is_read_without_the_rest(tmp_path: Path, thyra_logs) -> None:
+    """Optical discovery reads only <ImageFile>, so it repeats no warning."""
+    from thyra.readers.bruker.mis_parser import read_mis_image_file
+
+    mis = _areas_mis(tmp_path, "<Point>50,50</Point>")
+    with thyra_logs("thyra.readers", logging.WARNING) as records:
+        assert read_mis_image_file(mis) == "img.tif"
+    assert not records

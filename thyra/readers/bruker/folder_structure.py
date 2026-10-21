@@ -19,7 +19,7 @@ from pathlib import Path, PureWindowsPath
 from typing import List, Optional, Tuple
 
 from ...errors import ConversionRefused
-from .mis_parser import find_mis_file_for_d_folder, parse_mis_file
+from .mis_parser import find_mis_file_for_d_folder, read_mis_image_file
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +167,7 @@ class BrukerFolderStructure:
 
         # Find teaching points file. Before the optical images, because the
         # .mis is what names the one that matters.
-        teaching_points_file = self._find_teaching_points_file(data_path)
+        teaching_points_file = self._find_teaching_points_file(data_path, fmt)
 
         # Find optical images
         primary_optical = self._find_mis_optical_image(data_path, teaching_points_file)
@@ -314,7 +314,7 @@ class BrukerFolderStructure:
         # __init__ and would raise first, so this is only reachable for a
         # caller that went to the folder structure directly -- and the answer
         # it gives has to be the same one.
-        image_file = parse_mis_file(mis_file).get("ImageFile", "")
+        image_file = read_mis_image_file(mis_file) or ""
         if not image_file:
             return None
 
@@ -379,7 +379,9 @@ class BrukerFolderStructure:
 
         return optical_images + sorted(found)
 
-    def _find_teaching_points_file(self, data_path: Path) -> Optional[Path]:
+    def _find_teaching_points_file(
+        self, data_path: Path, fmt: Optional["BrukerFormat"] = None
+    ) -> Optional[Path]:
         """Find the teaching points / alignment file.
 
         For Rapiflex, this is the .mis file.
@@ -390,12 +392,20 @@ class BrukerFolderStructure:
         folder stem is preferred. This ensures each dataset uses its own
         Area definitions for correct optical alignment.
 
+        A Rapiflex folder is searched alone, as its reader searches it: a
+        run with no .mis of its own must not take another acquisition's
+        alignment image from a slide-level .mis that the reader ignores
+        (#520).
+
         Args:
             data_path: Path to the data folder
+            fmt: The detected format, when known
 
         Returns:
             Path to teaching points file, or None if not found
         """
+        if fmt == BrukerFormat.RAPIFLEX:
+            return find_mis_file_for_d_folder(data_path, search_paths=[data_path])
         # One locator, shared with the pixel-pitch lookup in
         # BrukerMetadataExtractor. They used to be separate and searched
         # different directories, so a .mis inside the .d could give this

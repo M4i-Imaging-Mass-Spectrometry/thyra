@@ -142,8 +142,12 @@ print(f"Offset: ({matrix[0,2]:.0f}, {matrix[1,2]:.0f})")
     that positions it in the optical coordinate space. This comes from the
     teaching points in the `.mis` file (Bruker data): the spots sit on a
     lattice one raster step apart, and a TIC cell's centre lands on its spot.
-    Without enough teaching points, each region is stretched over its Area
+    Without enough teaching points, the raster is stretched over the box of
+    the Areas
     (see [D31](design-decisions.md#d31-fleximaging-spots-are-placed-on-their-lattice-not-on-the-drawn-area)).
+    Either way one affine places the TIC image and every pixel polygon, so
+    the two always line up. A region with no usable Area is placed by that
+    same affine, and the conversion names it in a warning.
 
     An optical image with no alignment in the store is not placed: a photo
     beside a `.d` with no `.mis`, an image whose alignment failed, an
@@ -170,8 +174,8 @@ if optical:
 
 | Field | Meaning |
 |-------|---------|
-| `elements` | One entry per optical element in the store, keyed by element name. `source_file` is the name of the file it was read from (no directory: the acquiring machine's path does not travel with the store), or the archive member it was copied out of. An element cropped to one region also has `crop`: the crop's `origin` and `size` and the whole scan's `full_size`, in image pixels. An element whose file carries an orientation tag from 2 to 8 also has `orientation`: the `tag`, and `applied`, whether the pixels were turned upright by it. |
-| `alignment_element` | The element the `.mis` `<ImageFile>` designates -- the one the teaching points are stated in, so the one the other images are scaled into. An image that is not a resampled copy of it is not placed: it sits in a coordinate system of its own, not in `"global"`. When the alignment could not be built, this element is not placed either, but is still named here. `None` when the source designates none, or when the designated file is not in this store. |
+| `elements` | One entry per optical element in the store, keyed by element name. `source_file` is the name of the file it was read from (no directory: the acquiring machine's path does not travel with the store), or the archive member it was copied out of. An element cropped to one region also has `crop`: the crop's `origin` and `size` and the whole scan's `full_size`, in image pixels, and the region's `region_id` and `region_name` (`None` when the region has no Area). An element whose file carries an orientation tag from 2 to 8 also has `orientation`: the `tag`, and `applied`, whether the pixels were turned upright by it. |
+| `alignment_element` | The element holding the exact file the `.mis` `<ImageFile>` designates, in the `.mis` the reader uses -- the one the teaching points are stated in, so the one the other images are scaled into. A file with the same name in another format is another element, and never replaces it. An image that is not a resampled copy of it is not placed: it sits in a coordinate system of its own, not in `"global"`. When the alignment could not be built, this element is not placed either, but is still named here. `None` when the source designates none, or when the designated file is not in this store. |
 
 The whole section is **absent** when the conversion put no optical image in
 the store, and an image whose pixels could not be read is taken back out of
@@ -1342,7 +1346,7 @@ tsf/tdf, rapiflex or solariX acquisition, and is absent for everything else:
 | Field | Meaning and unit |
 |-------|------------------|
 | `optical_image_file` | File name of the optical image, the `.mis` `<ImageFile>`; never a path |
-| `method` | `"teaching points"` when the `.mis` has the three that register the image |
+| `method` | `"teaching points"` when the `.mis` has three teaching points that register the image: not repeated, and not all on one line |
 | `teaching_points` | One `{image_x_px, image_y_px, stage_x_um, stage_y_um}` per point: a pixel of the image, from its top-left corner, and the stage position of the same feature in micrometres. Stored as a JSON string, like `processing` |
 
 When the store holds that image, `attrs["optical_images"]["alignment_element"]`

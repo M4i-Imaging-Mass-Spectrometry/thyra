@@ -88,7 +88,7 @@ _BLOCK_DEFUSEDXML = _BLOCK_TEMPLATE.format(
     body=(
         "from thyra.readers.bruker import folder_structure\n"
         'print("importing the folder structure SUCCEEDED", '
-        "folder_structure.parse_mis_file)"
+        "folder_structure.read_mis_image_file)"
     ),
 )
 

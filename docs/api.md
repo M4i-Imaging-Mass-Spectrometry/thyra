@@ -60,7 +60,8 @@ success = convert_msi(
 `region` takes either a `.mis` Area Name or a DB RegionNumber. A string is
 matched against the area names first and only parsed as a number if no name
 matches, so the two forms below are not interchangeable -- area `'03'` need not
-be RegionNumber 3.
+be RegionNumber 3. A name that two Areas share is refused; pass the
+RegionNumber instead.
 
 ```python
 # By the name flexImaging gives the area

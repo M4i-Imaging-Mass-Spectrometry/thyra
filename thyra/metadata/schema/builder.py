@@ -119,8 +119,13 @@ def _as_number(value: Any) -> Optional[float]:
             value = float(value.strip())
         except ValueError:
             return None
-    if isinstance(value, (int, float)) and math.isfinite(value):
-        return float(value)
+    if isinstance(value, (int, float)):
+        try:
+            number = float(value)
+        except OverflowError:  # an int too large for any float (#520)
+            return None
+        if math.isfinite(number):
+            return number
     return None
 
 
@@ -620,6 +625,27 @@ _TEACHING_POINTS_METHOD = "teaching points"
 _POINTS_FOR_A_REGISTRATION = 3
 
 
+def _span_plane(points: List[Tuple[float, float]]) -> bool:
+    """Whether three of the points are not on one line.
+
+    The check :func:`thyra.alignment.affine.points_span_plane` makes before
+    a fit, written out here so the metadata document imports nothing that
+    aligns: repeated or collinear points fix no affine, so they register
+    nothing and no method is claimed for them (#520).
+    """
+    if len(points) < 3:
+        return False
+    x0, y0 = points[0]
+    span = max(max(abs(x - x0), abs(y - y0)) for x, y in points)
+    if span == 0:
+        return False
+    return any(
+        abs((x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0)) > 1e-9 * span * span
+        for i, (x1, y1) in enumerate(points[1:], start=1)
+        for x2, y2 in points[i + 1 :]
+    )
+
+
 #: The fields of a point, in the order ``parse_mis_file`` lists its numbers:
 #: the image pair, then the stage pair.
 _TEACHING_POINT_FIELDS = ("image_x_px", "image_y_px", "stage_x_um", "stage_y_um")
@@ -669,7 +695,11 @@ def _build_alignment(raw_metadata: Dict[str, Any]) -> Optional[Alignment]:
     ]
     if points:
         fields["teaching_points"] = points
-    if len(points) >= _POINTS_FOR_A_REGISTRATION:
+    if (
+        len(points) >= _POINTS_FOR_A_REGISTRATION
+        and _span_plane([(p.image_x_px, p.image_y_px) for p in points])
+        and _span_plane([(p.stage_x_um, p.stage_y_um) for p in points])
+    ):
         fields["method"] = _TEACHING_POINTS_METHOD
 
     if not fields:
