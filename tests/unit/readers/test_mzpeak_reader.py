@@ -1225,7 +1225,10 @@ class TestChunkedLayout:
             data = reader.archive.signal()
             low, high = mzpeak_reader.CHUNK_BATCH_ROWS
             assert reader._chunk_rows_per_batch(data) == high
-            reader._point_counts = reader._point_counts * 10**9
+            index = reader.archive.spatial_index()
+            reader.archive._spatial_index = index._replace(
+                member_points=int(index.point_counts.sum()) * 10**9
+            )
             assert reader._chunk_rows_per_batch(data) == low
 
     @pytest.mark.parametrize("encoding", [PLAIN, DELTA, NUMPRESS_LINEAR])

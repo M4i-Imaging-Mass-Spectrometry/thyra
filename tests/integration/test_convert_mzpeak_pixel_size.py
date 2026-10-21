@@ -105,3 +105,31 @@ def test_a_stated_pixel_size_is_used(tmp_path):
     assert _convert(archive, store, pixel_size_um=100.0) is True
 
     assert _stored_pixel_size(store) == pytest.approx((100.0, 100.0))
+
+
+@pytest.mark.parametrize(("count", "extent_mm"), [(1e307, 1e306), (1e305, 1e307)])
+def test_a_grid_that_overflows_asks_for_the_pixel_size(tmp_path, count, extent_mm):
+    """A count and an extent that overflow to infinity confirm nothing.
+
+    inf is close to inf, so 4.3.3 stored a 10000 um pixel here.
+    """
+    parameters = [OLD_PIXEL_SIZE]
+    for accession in ("IMS:1000042", "IMS:1000043"):
+        parameters.append(
+            {"name": "count", "accession": accession, "value": count, "unit": None}
+        )
+    for accession in ("IMS:1000044", "IMS:1000045"):
+        parameters.append(
+            {
+                "name": "extent",
+                "accession": accession,
+                "value": extent_mm,
+                "unit": "UO:0000016",
+            }
+        )
+    archive = _archive(tmp_path, parameters)
+    store = tmp_path / "overflow.zarr"
+
+    assert _convert(archive, store) is False
+
+    assert not store.exists()
