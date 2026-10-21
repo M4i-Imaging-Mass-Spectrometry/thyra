@@ -117,9 +117,10 @@ def test_the_alignment_comes_out_of_the_mis_metadata_alone(tmp_path: Path) -> No
 
     assert optical.alignment is not None
     assert len(optical.alignment.region_mappings) == 1
-    # The .mis names the alignment image; the stem, lowercased, is what
-    # every later "is this the primary?" comparison uses.
-    assert optical.primary_filename == "slidea_0000"
+    # The .mis names the alignment image; the whole name, lowercased, is
+    # what "is this the primary?" compares when the reader resolves no file
+    # (#520: a same-stem file in another format is another file).
+    assert optical.primary_filename == "slidea_0000.tif"
 
 
 def test_the_affine_stretches_the_raster_bounds_onto_the_area(tmp_path: Path) -> None:
@@ -845,3 +846,72 @@ def test_unrecording_a_dropped_image_corrects_the_store_being_written_now(
     assert "optical_images" not in reread.attrs.asdict()
     assert optical.root_attr() is None
     assert not (tmp_path / "before.zarr").exists()
+
+
+# --- The alignment image is the exact file (#520) ----------------------------
+
+
+class _ResolvingReader(_StubReader):
+    """A reader that resolves the .mis <ImageFile> to one file, as Bruker's do."""
+
+    def __init__(self, optical_paths: List[Path], primary: Optional[Path]) -> None:
+        super().__init__(optical_paths, image_file="scan.jpg")
+        self._primary = primary
+
+    def get_primary_optical_image_path(self) -> Optional[Path]:
+        return self._primary
+
+
+def _photo(path: Path, height: int, width: int, value: int) -> Path:
+    from PIL import Image
+
+    Image.fromarray(np.full((height, width, 3), value, np.uint8)).save(path)
+    return path
+
+
+def test_a_same_stem_twin_does_not_replace_the_alignment_image(tmp_path: Path) -> None:
+    """F127: ``scan.png`` at 2x used to become the alignment element."""
+    jpg = _photo(tmp_path / "scan.jpg", 37, 53, 200)
+    png = _photo(tmp_path / "scan.png", 74, 106, 30)
+    optical = _optical(tmp_path, _ResolvingReader([jpg, png], primary=jpg))
+    optical.compute_alignment()
+    optical.build_tic_to_image_affine()
+    optical.add_images({})
+
+    assert optical.alignment_element == "ds_optical_scan"
+    assert optical.sources["ds_optical_scan"] == "scan.jpg"
+    assert optical.sources["ds_optical_scan_1"] == "scan.png"
+    # The twin is a resampled copy at twice the size: scaled onto the jpg.
+    scale = optical.pending["ds_optical_scan_1"].transformations["global"]
+    np.testing.assert_allclose(
+        scale.to_affine_matrix(("x", "y"), ("x", "y"))[:2, :2], np.eye(2) * 0.5
+    )
+
+
+def test_without_the_named_file_two_twins_are_not_guessed_between(
+    tmp_path: Path, thyra_logs
+) -> None:
+    """The .mis names scan.jpg, which is not there; scan.png and scan.tif are."""
+    png = _photo(tmp_path / "scan.png", 74, 106, 30)
+    tif = _second_image(tmp_path, "scan.tif", 37, 53)
+    optical = _optical(tmp_path, _ResolvingReader([png, tif], primary=None))
+    optical.compute_alignment()
+    optical.build_tic_to_image_affine()
+    with thyra_logs("thyra.converters", logging.WARNING) as records:
+        optical.add_images({})
+
+    assert optical.alignment_element is None
+    assert any("2 optical images match" in r.getMessage() for r in records)
+
+
+def test_a_lone_image_spelled_with_another_extension_is_still_the_one(
+    tmp_path: Path,
+) -> None:
+    """The .mis says scan.jpg and the folder holds scan.jpeg alone, as on main."""
+    jpeg = _photo(tmp_path / "scan.jpeg", 37, 53, 200)
+    optical = _optical(tmp_path, _ResolvingReader([jpeg], primary=None))
+    optical.compute_alignment()
+    optical.build_tic_to_image_affine()
+    optical.add_images({})
+
+    assert optical.alignment_element == "ds_optical_scan"

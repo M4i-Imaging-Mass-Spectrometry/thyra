@@ -53,6 +53,7 @@ from ....metadata.constants import SpectrumType
 from ....metadata.extractors.bruker_extractor import (
     BrukerMetadataExtractor,
     analysis_database,
+    imaging_area_bounds,
 )
 from ....utils.bruker_exceptions import DataError, FileFormatError, SDKError
 from ..base_bruker_reader import BrukerBaseMSIReader
@@ -1537,7 +1538,9 @@ class BrukerReader(BrukerBaseMSIReader):
             self._calibration_metadata,
             region=region_for_extractor,
             skip_total_peaks=self._metadata_only,
-            mis_metadata=self._mis_metadata,
+            mis_metadata=(
+                self._mis_metadata if getattr(self, "_mis_found", False) else None
+            ),
             spectrum_type=self._delivered_spectrum_type(),
             file_type=self.file_type,
         )
@@ -1613,8 +1616,16 @@ class BrukerReader(BrukerBaseMSIReader):
 
         request_str = str(self._requested_region)
         name_map = self._get_region_name_map()
-        # Reverse map: name -> region_number (last writer wins; .mis names
-        # are conventionally unique).
+        carriers = sorted(num for num, name in name_map.items() if name == request_str)
+        if len(carriers) > 1:
+            # A name on two Areas says nothing about which region is meant;
+            # the last one used to win, silently (#520).
+            raise ConversionRefused(
+                f"--region {request_str!r} is the .mis Area Name of RegionNumbers "
+                f"{', '.join(str(n) for n in carriers)}, so it does not say which "
+                "region to convert. Pass the RegionNumber instead."
+            )
+        # Reverse map: name -> region_number; names are unique past the check.
         name_to_num = {name: num for num, name in name_map.items() if name}
         if request_str in name_to_num:
             resolved = name_to_num[request_str]
@@ -3425,6 +3436,7 @@ class BrukerReader(BrukerBaseMSIReader):
                 it turned a refused file into "no such region" naming a
                 region list that was empty for a reason nobody was told.
         """
+        self._mis_found = False
         try:
             mis_path = self.get_teaching_points_file()
         except (ValueError, OSError):
@@ -3438,6 +3450,7 @@ class BrukerReader(BrukerBaseMSIReader):
 
         logger.info(f"Found .mis file for optical alignment: {mis_path.name}")
         metadata = parse_mis_file(mis_path)
+        self._mis_found = True
 
         if metadata.get("areas"):
             logger.info(
@@ -3536,18 +3549,14 @@ class BrukerReader(BrukerBaseMSIReader):
         run that did not fill its Area (D59). Whole-run bounds, also when
         one region is selected: they cover every Area.
         """
-        cursor.execute(
-            "SELECT Key, Value FROM GlobalMetadata WHERE Key IN "
-            "('ImagingAreaMinXIndexPos', 'ImagingAreaMaxXIndexPos', "
-            "'ImagingAreaMinYIndexPos', 'ImagingAreaMaxYIndexPos')"
-        )
-        bounds = {key: value for key, value in cursor.fetchall()}
+        # Exact ints, and an empty or NULL value is no value (#520).
+        bounds = imaging_area_bounds(cursor)
         try:
-            min_x = int(float(bounds["ImagingAreaMinXIndexPos"]))
-            max_x = int(float(bounds["ImagingAreaMaxXIndexPos"]))
-            min_y = int(float(bounds["ImagingAreaMinYIndexPos"]))
-            max_y = int(float(bounds["ImagingAreaMaxYIndexPos"]))
-        except (KeyError, TypeError, ValueError, OverflowError):
+            min_x = bounds["ImagingAreaMinXIndexPos"]
+            max_x = bounds["ImagingAreaMaxXIndexPos"]
+            min_y = bounds["ImagingAreaMinYIndexPos"]
+            max_y = bounds["ImagingAreaMaxYIndexPos"]
+        except KeyError:
             return None
         if max_x < min_x or max_y < min_y:
             return None
@@ -3561,7 +3570,10 @@ class BrukerReader(BrukerBaseMSIReader):
         de-normalizes 0-based raster coordinates back to originals.
 
         When a specific region is selected, uses per-region minimums from
-        MaldiFrameInfo. Otherwise uses global ImagingArea from GlobalMetadata.
+        MaldiFrameInfo. Otherwise uses global ImagingArea from GlobalMetadata,
+        key by key, and the smallest frame position for a key that is
+        missing, empty or NULL -- the extractor's rule. Taking (0, 0) for a
+        missing key put every polygon off the raster (#520).
 
         Returns:
             Dictionary with first_raster_x and first_raster_y keys.
@@ -3590,25 +3602,20 @@ class BrukerReader(BrukerBaseMSIReader):
                 else:
                     return {}
             else:
-                # Global: use ImagingArea from GlobalMetadata
+                # Global: ImagingArea from GlobalMetadata, else the frames'.
+                bounds = imaging_area_bounds(cursor)
                 cursor.execute(
-                    "SELECT Value FROM GlobalMetadata "
-                    "WHERE Key = 'ImagingAreaMinXIndexPos'"
+                    "SELECT MIN(XIndexPos), MIN(YIndexPos) FROM MaldiFrameInfo"
                 )
-                result_x = cursor.fetchone()
-                cursor.execute(
-                    "SELECT Value FROM GlobalMetadata "
-                    "WHERE Key = 'ImagingAreaMinYIndexPos'"
-                )
-                result_y = cursor.fetchone()
-
-                if result_x and result_y:
-                    header = {
-                        "first_raster_x": int(float(result_x[0])),
-                        "first_raster_y": int(float(result_y[0])),
-                    }
-                else:
+                frames = cursor.fetchone() or (None, None)
+                first_x = bounds.get("ImagingAreaMinXIndexPos", frames[0])
+                first_y = bounds.get("ImagingAreaMinYIndexPos", frames[1])
+                if first_x is None or first_y is None:
                     return {}
+                header = {
+                    "first_raster_x": int(first_x),
+                    "first_raster_y": int(first_y),
+                }
 
             logger.info(
                 f"Alignment offsets: first_raster=("

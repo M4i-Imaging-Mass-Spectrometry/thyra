@@ -3,6 +3,8 @@
 import json
 from dataclasses import replace
 
+import pytest
+
 from thyra.metadata.schema import build_metadata_document, build_msi_metadata
 from thyra.metadata.types import ComprehensiveMetadata, EssentialMetadata
 
@@ -1201,6 +1203,35 @@ class TestAlignmentSection:
             assert alignment is not None
             assert len(alignment.teaching_points) == 2, bad
             assert alignment.method is None, bad
+
+    @pytest.mark.parametrize(
+        "image",
+        [
+            [[100, 100], [300, 300], [500, 500]],
+            [[100, 100], [100, 100], [100, 700]],
+            [[0, 0], [10, 0], [20, 0]],
+        ],
+        ids=["collinear, diagonal", "two identical", "collinear, along x"],
+    )
+    def test_points_on_one_line_claim_no_method(self, image):
+        """#520 F198: they register nothing, so no method is claimed."""
+        points = [
+            {"image": xy, "stage": [5000 + 2 * xy[0], 6000 + 2 * xy[1]]} for xy in image
+        ]
+        sequence = dict(_SEQUENCE, teaching_points=points)
+        alignment = self._alignment(raw_metadata={"mis_metadata": sequence})
+        assert alignment is not None
+        assert alignment.method is None
+        assert len(alignment.teaching_points) == 3
+
+    def test_a_number_too_large_for_a_float_is_dropped(self):
+        """#520 F191: ``math.isfinite`` raised OverflowError on it."""
+        good = _SEQUENCE["teaching_points"]
+        bad = {"image": [10**400, 784], "stage": [-26352, 26386]}
+        sequence = dict(_SEQUENCE, teaching_points=[bad, *good[1:]])
+        alignment = self._alignment(raw_metadata={"mis_metadata": sequence})
+        assert alignment is not None
+        assert len(alignment.teaching_points) == 2
 
     def test_the_image_is_a_name_even_when_the_vendor_recorded_a_path(self):
         for recorded in ("D:\\Data\\slide_0000.tif", "..\\scans\\slide_0000.tif"):

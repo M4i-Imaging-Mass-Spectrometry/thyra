@@ -312,7 +312,7 @@ a Bruker acquisition:
 
 | Source | `optical_image_file` | `method` | `teaching_points` |
 |--------|----------------------|----------|-------------------|
-| Bruker tsf/tdf, rapiflex, solariX, with a `.mis` | `<ImageFile>`, name only | `"teaching points"` when there are three or more | each `<TeachPoint>` |
+| Bruker tsf/tdf, rapiflex, solariX, with a `.mis` | `<ImageFile>`, name only | `"teaching points"` when three or more, not all on one line | each `<TeachPoint>` |
 | Everything else | -- | -- | -- |
 
 The stage positions are in micrometres, in the frame the teaching was done

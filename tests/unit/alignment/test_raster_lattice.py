@@ -244,7 +244,9 @@ def test_fewer_than_three_teaching_points_fall_back(thyra_logs) -> None:
         )
 
     assert result.lattice is None
-    assert result.cell_to_image is None
+    # The fallback is the stretch over the Areas' box, one matrix for every
+    # region (#520, D75), not one box per region.
+    np.testing.assert_allclose(result.cell_to_image, result.stretch())
     assert any("fewer than three teaching points" in r.getMessage() for r in records)
 
 

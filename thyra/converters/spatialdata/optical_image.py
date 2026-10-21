@@ -104,7 +104,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -139,7 +139,6 @@ from ._chunking import image_chunks
 from .acquisition_frame import AcquisitionOrigin, element_transformations
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from ...alignment.teaching_points import RegionMapping
     from ...core.base_reader import BaseMSIReader, OpticalImageLabel
 
 logger = logging.getLogger(__name__)
@@ -1091,7 +1090,7 @@ class OpticalCrop:
     full_width: int
     full_height: int
     region_id: int
-    region_name: str
+    region_name: Optional[str]
 
     @classmethod
     def around(
@@ -1100,10 +1099,14 @@ class OpticalCrop:
         full_width: int,
         full_height: int,
         *,
-        mapping: "RegionMapping",
+        region_id: int,
+        region_name: Optional[str],
         margin: float = CROP_MARGIN_FRACTION,
     ) -> Optional["OpticalCrop"]:
         """The crop for a region whose pixels land in ``box``, or ``None``.
+
+        ``region_name`` is the region's ``.mis`` Area Name, or ``None`` when
+        the region has no Area (#520).
 
         ``box`` is ``(x_min, x_max, y_min, y_max)`` in full-image pixels --
         where the region's raster lands under the alignment affine. It is
@@ -1135,8 +1138,8 @@ class OpticalCrop:
             height=y1 - y0,
             full_width=full_width,
             full_height=full_height,
-            region_id=mapping.region_id,
-            region_name=mapping.name,
+            region_id=region_id,
+            region_name=region_name,
         )
 
     @property
@@ -1574,6 +1577,11 @@ _NAME_CHARACTERS = frozenset("0123456789abcdefghijklmnopqrstuvwxyz_.")
 NAME_BUDGET = 30
 
 
+def _same_file(a: Path, b: Path) -> bool:
+    """Whether two paths name one file, however each is spelled."""
+    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+
 def _clean_stem(stem: str, budget: int = NAME_BUDGET) -> str:
     """A file stem made fit for an element name.
 
@@ -1702,6 +1710,9 @@ class OpticalImages:
         # .mis to read plants it; the dimensions are only ever derived
         # here, from the primary image's own header.
         self.primary_filename: Optional[str] = None
+        # The file the reader resolved the .mis <ImageFile> to, when it does:
+        # the only file that is the alignment image (#520).
+        self._primary_path: Optional[Path] = None
         self._primary_dims: Optional[Tuple[int, int]] = None  # (width, height)
         # What the store will say about its optical images: which element
         # each file became, and which of those elements is the alignment
@@ -1791,56 +1802,82 @@ class OpticalImages:
         """The window of the alignment image the store holds, or ``None`` for all of it."""
         return self._crop
 
-    def _converted_region_mapping(self) -> Optional["RegionMapping"]:
-        """The one region this conversion covers, or ``None`` if it covers several.
+    def _converted_regions(self) -> List[int]:
+        """The regions this conversion converts, by number, in order.
 
-        A single-region acquisition has one mapping. A multi-region file
-        converted with ``region=`` still maps every Area -- the reader's
-        positions are not filtered -- but the reader says which region it
-        selected, and that region's mapping is the one. A multi-region
-        file converted whole has several, and ``None`` here is what keeps
-        that conversion unchanged.
+        Counted from the data or ``region=``, never from the Areas the
+        ``.mis`` maps (#520, Q18): the region the reader selected, else every
+        region its measured spots belong to. The reader's positions are not
+        filtered by ``region=``, so the selection has to be asked for.
         """
         if self._alignment is None:
-            return None
-        mappings = self._alignment.region_mappings
+            return []
         selected = getattr(self.reader, "_selected_region", None)
         if selected is not None:
-            for mapping in mappings:
-                if mapping.region_id == selected:
-                    return mapping
+            return [int(selected)]
+        return sorted({int(r) for r in self._alignment.pos_to_region.values()})
+
+    def _region_name(self, region: int) -> Optional[str]:
+        """The Area Name a region is mapped to, or ``None`` without an Area."""
+        if self._alignment is None:
             return None
-        if len(mappings) == 1:
-            return mappings[0]
+        for mapping in self._alignment.region_mappings:
+            if mapping.region_id == region:
+                return mapping.name
         return None
+
+    def _warn_regions_without_an_area(self) -> None:
+        """One warning for each converted region the .mis gives no Area.
+
+        Its pixels are still placed, by the affine every region shares (the
+        lattice, or the stretch over the mapped Areas), so they are named
+        rather than dropped (#520, Q18).
+        """
+        if self._alignment is None or self._alignment.cell_to_image is None:
+            return
+        mapped = {m.region_id for m in self._alignment.region_mappings}
+        for region in self._converted_regions():
+            if region not in mapped:
+                logger.warning(
+                    f"Region {region} has no usable Area in the .mis; its "
+                    "pixels are placed on the optical image by the alignment "
+                    "the other regions share"
+                )
 
     def _crop_for_alignment_image(
         self, full_width: int, full_height: int
     ) -> Optional[OpticalCrop]:
         """Where to cut the alignment image, or ``None`` to keep it whole.
 
-        The box is where the converted region's raster actually lands under
+        Cut only when the conversion converts exactly one region, with an
+        Area or without one; a run converted whole with several regions
+        keeps the whole photo, whatever the ``.mis`` maps (Q18). The box is
+        where that region's raster actually lands under
         :attr:`tic_to_image` -- the same affine the TIC and the polygons are
         placed by -- not the Area's own corners, which are only where the
         ``.mis`` drew the outline. It is the extent of the region's cells,
         so the outermost pixels' full footprint is inside the box before
         the margin is, whatever the affine's rotation.
         """
-        mapping = self._converted_region_mapping()
-        if mapping is None or self._alignment is None or self._tic_to_image is None:
+        regions = self._converted_regions()
+        if len(regions) != 1 or self._alignment is None or self._tic_to_image is None:
             return None
-        matrix = self._tic_to_image
+        (region,) = regions
+        alignment = self._alignment
+        spots = [xy for xy, r in alignment.pos_to_region.items() if r == region]
+        if not spots:
+            return None
         # The region's cells in the TIC grid's own coordinates: cell i spans
         # [i, i + 1), so the block runs from the first index to last + 1.
-        rx0 = mapping.raster_min_x - self._alignment.first_raster_x
-        rx1 = mapping.raster_max_x - self._alignment.first_raster_x + 1
-        ry0 = mapping.raster_min_y - self._alignment.first_raster_y
-        ry1 = mapping.raster_max_y - self._alignment.first_raster_y + 1
+        rx0 = min(x for x, _ in spots) - alignment.first_raster_x
+        rx1 = max(x for x, _ in spots) - alignment.first_raster_x + 1
+        ry0 = min(y for _, y in spots) - alignment.first_raster_y
+        ry1 = max(y for _, y in spots) - alignment.first_raster_y + 1
         corners = (
             np.array(
                 [[rx0, ry0, 1.0], [rx1, ry0, 1.0], [rx1, ry1, 1.0], [rx0, ry1, 1.0]]
             )
-            @ np.asarray(matrix, dtype=np.float64).T
+            @ np.asarray(self._tic_to_image, dtype=np.float64).T
         )
         box = (
             float(corners[:, 0].min()),
@@ -1848,7 +1885,13 @@ class OpticalImages:
             float(corners[:, 1].min()),
             float(corners[:, 1].max()),
         )
-        return OpticalCrop.around(box, full_width, full_height, mapping=mapping)
+        return OpticalCrop.around(
+            box,
+            full_width,
+            full_height,
+            region_id=region,
+            region_name=self._region_name(region),
+        )
 
     def compute_alignment(self) -> None:
         """Compute optical-MSI alignment from reader metadata.
@@ -1894,10 +1937,14 @@ class OpticalImages:
         first_raster_x = header.get("first_raster_x", 0)
         first_raster_y = header.get("first_raster_y", 0)
 
-        # Store the primary optical image filename from <ImageFile>
+        # The primary optical image's file name from <ImageFile>, for a
+        # reader that does not resolve it to a file itself; see
+        # _is_primary_optical. The whole name: a same-stem file in another
+        # format is another file (#520).
         image_file = mis_metadata.get("ImageFile", "")
         if image_file:
-            self.primary_filename = Path(image_file).stem.lower()
+            name = PureWindowsPath(str(image_file).strip()).name.lower()
+            self.primary_filename = name or None
             logger.info(f"Primary alignment image from .mis: {image_file}")
 
         raster = mis_metadata.get("raster")
@@ -1929,7 +1976,8 @@ class OpticalImages:
                 f"Computed optical alignment with "
                 f"{len(self._alignment.region_mappings)} region mappings"
             )
-        except (KeyError, TypeError, ValueError) as e:
+            self._warn_regions_without_an_area()
+        except (KeyError, TypeError, ValueError, OverflowError) as e:
             # Thyra arithmetic over Thyra's own parse of the .mis and the
             # poslog (issue #280). What it can legitimately meet is a
             # record those files did not fill: an Area without ``p1``, a
@@ -1946,99 +1994,27 @@ class OpticalImages:
         ``(i, j)`` spans ``[i, i + 1) x [j, j + 1)`` as SpatialData draws
         it, to optical-image pixels. A cell's centre therefore lands on its
         spot, and the polygons, the crop and ``raster_to_global_affine`` use
-        the same matrix.
+        the same matrix: :attr:`AreaAlignmentResult.cell_to_image`.
 
         With the teaching-point lattice (D31) the matrix is the lattice's:
-        exact, one for every region, rotation included. Without it, each
-        region is stretched over its Area's bounding box (one region), or
-        all regions over the box of all Areas, which is approximate.
+        exact, one for every region, rotation included. Without it, the
+        raster is stretched over the box of the mapped Areas, which is
+        approximate; a region without an Area is placed by the same matrix.
         """
         if self._alignment is None:
             return
-        if not self._alignment.region_mappings:
+        matrix = self._alignment.cell_to_image
+        if matrix is None:
             return
-
-        lattice = getattr(self._alignment, "lattice", None)
-        if lattice is not None:
-            self._tic_to_image = np.array(lattice.cell_to_image, dtype=np.float64)
-            logger.info(
-                "Built TIC-to-image affine from the teaching-point lattice: "
-                f"{np.round(self._tic_to_image[:2], 4).tolist()}"
-            )
-            return
-
-        mappings = self._alignment.region_mappings
-
-        if len(mappings) == 1:
-            # Single region: use its mapping directly
-            rm = mappings[0]
-            n_raster_x = rm.raster_max_x - rm.raster_min_x + 1
-            image_width = rm.image_max_x - rm.image_min_x
-            scale_x = image_width / max(1, n_raster_x)
-            n_raster_y = rm.raster_max_y - rm.raster_min_y + 1
-            image_height = rm.image_max_y - rm.image_min_y
-            scale_y = image_height / max(1, n_raster_y)
-            half_x = scale_x / 2.0
-            half_y = scale_y / 2.0
-            tx = rm.image_min_x + half_x
-            ty = rm.image_min_y + half_y
-        else:
-            # Multi-region: compute global affine from overall bounds.
-            # The TIC grid covers the full normalized raster space
-            # (0..n_x-1, 0..n_y-1). We map this to the bounding box
-            # of all region image areas.
-            first_rx = self._alignment.first_raster_x
-            first_ry = self._alignment.first_raster_y
-
-            # Global raster bounds (original coords)
-            global_raster_min_x = min(rm.raster_min_x for rm in mappings)
-            global_raster_max_x = max(rm.raster_max_x for rm in mappings)
-            global_raster_min_y = min(rm.raster_min_y for rm in mappings)
-            global_raster_max_y = max(rm.raster_max_y for rm in mappings)
-
-            # Global image bounds
-            global_img_min_x = min(rm.image_min_x for rm in mappings)
-            global_img_max_x = max(rm.image_max_x for rm in mappings)
-            global_img_min_y = min(rm.image_min_y for rm in mappings)
-            global_img_max_y = max(rm.image_max_y for rm in mappings)
-
-            n_raster_x = global_raster_max_x - global_raster_min_x + 1
-            n_raster_y = global_raster_max_y - global_raster_min_y + 1
-            image_width = global_img_max_x - global_img_min_x
-            image_height = global_img_max_y - global_img_min_y
-
-            scale_x = image_width / max(1, n_raster_x)
-            scale_y = image_height / max(1, n_raster_y)
-            half_x = scale_x / 2.0
-            half_y = scale_y / 2.0
-
-            # The TIC grid index (0,0) corresponds to original raster
-            # position (first_rx, first_ry). We need to account for
-            # any gap between first_rx and global_raster_min_x.
-            offset_raster_x = first_rx - global_raster_min_x
-            offset_raster_y = first_ry - global_raster_min_y
-
-            tx = global_img_min_x + half_x + offset_raster_x * scale_x
-            ty = global_img_min_y + half_y + offset_raster_y * scale_y
-
-        # tx/ty above place a cell's centre for an integer index; the TIC
-        # image puts that centre at index + 0.5, so move back half a cell.
-        tx -= half_x
-        ty -= half_y
-
-        # 3x3 affine: [[sx, 0, tx], [0, sy, ty], [0, 0, 1]]
-        self._tic_to_image = np.array(
-            [
-                [scale_x, 0, tx],
-                [0, scale_y, ty],
-                [0, 0, 1],
-            ],
-            dtype=np.float64,
+        self._tic_to_image = np.array(matrix, dtype=np.float64)
+        source = (
+            "the teaching-point lattice"
+            if self._alignment.lattice is not None
+            else "the Areas' bounding box"
         )
         logger.info(
-            f"Built TIC-to-image affine: "
-            f"scale=({scale_x:.2f}, {scale_y:.2f}), "
-            f"offset=({tx:.1f}, {ty:.1f})"
+            f"Built TIC-to-image affine from {source}: "
+            f"{np.round(self._tic_to_image[:2], 4).tolist()}"
         )
 
     def add_images(self, images: MutableMapping[str, Any]) -> None:
@@ -2061,7 +2037,7 @@ class OpticalImages:
             logger.debug("No optical images found")
             return
 
-        self._adopt_reader_primary_optical()
+        self._adopt_reader_primary_optical(optical_paths)
         logger.info(f"Found {len(optical_paths)} optical image(s)")
 
         # Load primary image first so we know its dimensions for scaling others
@@ -2078,8 +2054,8 @@ class OpticalImages:
                     f"{_reason(e, image_path, shown)}"
                 )
 
-    def _adopt_reader_primary_optical(self) -> None:
-        """Take the .mis alignment image from the reader if nothing else set it.
+    def _adopt_reader_primary_optical(self, optical_paths: Sequence[Path]) -> None:
+        """Settle which one file is the .mis alignment image.
 
         :meth:`compute_alignment` normally records it while it is
         reading the .mis, but it returns early whenever there is nothing to
@@ -2095,27 +2071,55 @@ class OpticalImages:
         method is optional and arrived after those readers were written, so
         not having it has to mean "no designated image", not a crash in the
         middle of a conversion.
+
+        The file the reader resolved wins (#520). A reader that resolves
+        none -- the named file is not there by that exact name, or a reader
+        that does not resolve at all -- leaves :attr:`primary_filename`,
+        the ``<ImageFile>`` name: the one image of that name, else the one
+        image of that stem, so ``scan.tiff`` is still the image a ``.mis``
+        calls ``scan.tif``. Two images that match equally are not guessed
+        between, and neither is the alignment image.
         """
-        if self.primary_filename:
-            return
         resolve: Optional[Callable[[], Optional[Path]]] = getattr(
             self.reader, "get_primary_optical_image_path", None
         )
         primary = resolve() if callable(resolve) else None
         if primary is not None:
-            self.primary_filename = Path(primary).stem.lower()
+            self._primary_path = Path(primary)
+            self.primary_filename = Path(primary).name.lower()
             logger.info(f"Primary alignment image named by the reader: {primary.name}")
+            return
+        named = (self.primary_filename or "").lower()
+        if not named:
+            return
+        for matches in (
+            [p for p in optical_paths if p.name.lower() == named],
+            [p for p in optical_paths if p.stem.lower() == Path(named).stem],
+        ):
+            if len(matches) == 1:
+                self._primary_path = Path(matches[0])
+                return
+            if len(matches) > 1:
+                logger.warning(
+                    f"{len(matches)} optical images match the .mis image "
+                    f"'{named}' ({', '.join(p.name for p in matches)}); none is "
+                    "taken for the alignment image"
+                )
+                return
 
     def _is_primary_optical(self, image_path: Path) -> bool:
         """Check if an image file is the primary alignment image from .mis.
 
-        Matched on the stem, not the whole filename: what the .mis names and
-        what is on disk agree on the name but not always on the spelling of
-        the extension, and a folder does not hold the same stem twice.
+        One file, exactly, as :meth:`_adopt_reader_primary_optical` settled
+        it: the same picture saved in another format, or a same-named file
+        in the folder above, is another file, and it is not the one the
+        teaching points describe (#520). Matching every file of the stem
+        let a 2x ``.png`` export take the place of the ``.jpg`` the ``.mis``
+        names.
         """
-        if not self.primary_filename:
+        if self._primary_path is None:
             return False
-        return image_path.stem.lower() == self.primary_filename
+        return _same_file(image_path, self._primary_path)
 
     def _scale_transform(self, x_size: int, y_size: int) -> Optional[Any]:
         """Compute a Scale transform for a non-primary optical image.
@@ -2424,8 +2428,9 @@ class OpticalImages:
             else SequenceTransform([shift, transform])
         )
         self._crop = crop
+        area = f"'{crop.region_name}'" if crop.region_name is not None else "no Area"
         logger.info(
-            f"  Cropped to region {crop.region_id} ('{crop.region_name}'): "
+            f"  Cropped to region {crop.region_id} ({area}): "
             f"{crop.width}x{crop.height} at ({crop.x0}, {crop.y0}) of "
             f"{crop.full_width}x{crop.full_height}"
         )
@@ -2484,18 +2489,21 @@ class OpticalImages:
         """The element name for ``suffix``, numbered when another file holds it.
 
         A name already held by a file with the same stem is returned as it
-        is, and that file is replaced (the same picture exported twice).
-        A name held by a file with another stem -- two stems that differ
-        only past the 30-character cut, or by characters the cleaning
-        turns into ``_`` -- gets ``_1``, ``_2`` and so on, inside the same
-        budget. Names are compared ignoring case, as spatialdata does.
+        is, and that file is replaced (the same picture exported twice) --
+        unless it holds the alignment image, which no later file replaces
+        (#520). A name held by a file with another stem -- two stems that
+        differ only past the 30-character cut, or by characters the
+        cleaning turns into ``_`` -- gets ``_1``, ``_2`` and so on, inside
+        the same budget. Names are compared ignoring case, as spatialdata
+        does.
         """
         number = 0
         candidate = suffix
         while True:
             name = f"{self.dataset_id}_optical_{candidate}"
             holder = self._name_owners.get(name.lower())
-            if holder is None or holder == owner:
+            replaceable = holder == owner and name != self._alignment_element
+            if holder is None or replaceable:
                 return name
             number += 1
             candidate = _numbered(suffix, number)

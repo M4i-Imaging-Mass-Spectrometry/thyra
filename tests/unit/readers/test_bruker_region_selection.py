@@ -221,3 +221,15 @@ class TestASingleRegionSetStillChecksTheRequest:
     def test_no_request_with_no_region_information_still_converts(self) -> None:
         h = _harness([], [], None)
         assert h._select_region() == (None, None)
+
+
+def test_a_name_two_areas_share_is_refused() -> None:
+    """#520 F153: the last Area of the name used to win, silently."""
+    h = _harness(["A", "B", "A"], [(0, 10), (1, 20), (2, 30)], "A")
+    with pytest.raises(ConversionRefused, match=r"RegionNumbers 0, 2"):
+        h._resolve_requested_region()
+
+
+def test_a_number_still_selects_a_region_whose_name_is_shared() -> None:
+    h = _harness(["A", "B", "A"], [(0, 10), (1, 20), (2, 30)], "2")
+    assert h._resolve_requested_region() == 2
