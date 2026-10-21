@@ -142,3 +142,65 @@ def test_extension_is_normalised(tmp_path):
     path = generate_example_imzml(tmp_path / "noext.imzML", n_x=4, n_y=4, n_mz_bins=100)
     assert path.suffix == ".imzML"
     assert path.with_suffix(".ibd").exists()
+
+
+class TestBadSizesAreRefusedBeforeAnythingIsWritten:
+    """Issue #529: a size of 0 left a 0-byte .imzML and a 16-byte .ibd,
+    replacing a good pair; a negative size or seed ended in a traceback.
+    """
+
+    @pytest.mark.parametrize(
+        "option, value, message",
+        [
+            ("--pixels-x", "0", "must be at least 1"),
+            ("--pixels-y", "-3", "must be at least 1"),
+            ("--mz-bins", "0", "must be at least 1"),
+            ("--seed", "-1", "must be at least 0"),
+            ("--pixel-size", "0", "must be above 0"),
+            ("--pixel-size", "nan", "must be above 0"),
+        ],
+    )
+    def test_the_command_exits_2_naming_the_option(
+        self, tmp_path, monkeypatch, capsys, option, value, message
+    ):
+        from thyra.tools.make_example_data import main
+
+        out = tmp_path / "bad.imzML"
+        monkeypatch.setattr("sys.argv", ["thyra-example-data", str(out), option, value])
+        with pytest.raises(SystemExit) as exit_info:
+            main()
+
+        assert exit_info.value.code == 2
+        stderr = capsys.readouterr().err
+        assert option in stderr and message in stderr
+        assert "Traceback" not in stderr
+        assert not out.exists() and not out.with_suffix(".ibd").exists()
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"n_x": 0},
+            {"n_y": -3},
+            {"n_mz_bins": 0},
+            {"seed": -1},
+            {"pixel_size_um": 0.0},
+            {"mz_min": 500.0, "mz_max": 500.0},
+        ],
+    )
+    def test_an_existing_pair_is_left_untouched(self, tmp_path, kwargs):
+        good = generate_example_imzml(
+            tmp_path / "good.imzML", n_x=4, n_y=3, n_mz_bins=50
+        )
+        before = (good.read_bytes(), good.with_suffix(".ibd").read_bytes())
+
+        with pytest.raises(ValueError):
+            generate_example_imzml(good, **kwargs)
+
+        assert (good.read_bytes(), good.with_suffix(".ibd").read_bytes()) == before
+
+    def test_the_smallest_valid_dataset_is_written(self, tmp_path):
+        path = generate_example_imzml(
+            tmp_path / "one.imzML", n_x=1, n_y=1, n_mz_bins=1, seed=0
+        )
+        assert path.stat().st_size > 0
+        assert path.with_suffix(".ibd").stat().st_size > 16

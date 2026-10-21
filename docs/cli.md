@@ -681,11 +681,11 @@ thyra-example-data [OUTPUT] [OPTIONS]
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--pixels-x INTEGER` | `48` | Grid width in pixels |
-| `--pixels-y INTEGER` | `36` | Grid height in pixels |
-| `--pixel-size FLOAT` | `25.0` | Pixel size in micrometers written to the metadata |
-| `--mz-bins INTEGER` | `4000` | Number of points on the m/z axis |
-| `--seed INTEGER` | `0` | Random seed |
+| `--pixels-x INTEGER` | `48` | Grid width in pixels, at least 1 |
+| `--pixels-y INTEGER` | `36` | Grid height in pixels, at least 1 |
+| `--pixel-size FLOAT` | `25.0` | Pixel size in micrometers written to the metadata, above 0 |
+| `--mz-bins INTEGER` | `4000` | Number of points on the m/z axis, at least 1 |
+| `--seed INTEGER` | `0` | Random seed, at least 0 |
 | `--verbose` | off | Verbose output |
 
 ```bash
@@ -715,12 +715,18 @@ Thyra's ontology cache, and reports any it does not recognise.
 thyra-check-ontology INPUT [OPTIONS]
 ```
 
-**INPUT** -- An `.imzML` file, or a directory to check every file in.
+**INPUT** -- An `.imzML` file, or a directory to check every file in,
+subfolders included. A file that cannot be read is named and skipped, and
+the command then exits 1. A path that does not exist exits 2.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--output PATH` | none | Save results as JSON instead of printing them |
-| `--verbose` | off | Verbose output, including the per-file summary |
+| `--output PATH` | none | Save results as JSON. For one file, this replaces the printed summary |
+| `--verbose` | off | Log progress at INFO level to stderr |
+
+For a directory, the command prints the file count, the unknown terms and
+any file it could not read. Each file's own results are only in the
+`--output` file.
 
 ```bash
 # Check one file
