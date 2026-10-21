@@ -1231,7 +1231,14 @@ Waters source (for Bruker also `database_path` and `binary_file`), the
 `ibd_file` of an imzML and the `mis_file` of a solariX acquisition. The
 store's root attributes repeat three of these sections, as
 `format_specific_metadata`, `acquisition_parameters` and
-`instrument_information`, and follow the same rule.
+`instrument_information`, and leave out the same fields.
+
+In `uns`, a key from the source is stored under a name Zarr can hold on every
+platform. Each `/`, `\`, `:`, `*`, `?`, `"`, `<`, `>`, `|` or control
+character, and a dot or space at the end, becomes `_`: `MS:1000529` is stored
+as `MS_1000529`. A key that would then meet another is given a number,
+`MS_1000529_2`. Keys inside a list stored as JSON, and in the root attributes,
+are kept as the source wrote them.
 
 Within these sections, a list that holds anything besides numbers -- imzML
 `cvParams` (a list of objects) is the main case -- is stored as a **JSON

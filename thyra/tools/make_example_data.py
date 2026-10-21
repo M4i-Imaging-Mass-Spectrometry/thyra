@@ -115,6 +115,27 @@ def _add_peaks(
         )
 
 
+def _check_parameters(
+    n_x: int,
+    n_y: int,
+    pixel_size_um: float,
+    mz_min: float,
+    mz_max: float,
+    n_mz_bins: int,
+    seed: int,
+) -> None:
+    """Refuse a dataset that cannot be written, before anything is."""
+    for name, value in (("n_x", n_x), ("n_y", n_y), ("n_mz_bins", n_mz_bins)):
+        if value < 1:
+            raise ValueError(f"{name} must be at least 1, got {value}")
+    if seed < 0:
+        raise ValueError(f"seed must be at least 0, got {seed}")
+    if not (np.isfinite(pixel_size_um) and pixel_size_um > 0):
+        raise ValueError(f"pixel_size_um must be above 0, got {pixel_size_um}")
+    if not (np.isfinite(mz_min) and np.isfinite(mz_max) and mz_min < mz_max):
+        raise ValueError(f"mz_min must be below mz_max, got {mz_min} and {mz_max}")
+
+
 def generate_example_imzml(
     output_path: Path,
     n_x: int = 48,
@@ -141,7 +162,15 @@ def generate_example_imzml(
 
     Returns:
         The path to the written .imzML file.
+
+    Raises:
+        ValueError: A size below 1, a negative seed, a pixel size that is
+            not a positive number, or an empty m/z range. Checked before
+            anything is written, so an existing pair is never replaced by
+            a broken one: a size of 0 used to leave a 0-byte .imzML and a
+            16-byte .ibd (issue #529).
     """
+    _check_parameters(n_x, n_y, pixel_size_um, mz_min, mz_max, n_mz_bins, seed)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -236,6 +265,36 @@ def _inject_pixel_size(imzml_path: Path, pixel_size_um: float) -> None:
     )
 
 
+def _int_at_least(minimum: int):
+    """An argparse type: an integer no smaller than ``minimum``.
+
+    argparse turns the ``ArgumentTypeError`` into a usage error at exit 2
+    that names the option, before any file is touched.
+    """
+
+    def parse(text: str) -> int:
+        try:
+            value = int(text)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"invalid integer: {text!r}") from None
+        if value < minimum:
+            raise argparse.ArgumentTypeError(f"must be at least {minimum}, got {value}")
+        return value
+
+    return parse
+
+
+def _positive_float(text: str) -> float:
+    """An argparse type: a finite number above 0."""
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid number: {text!r}") from None
+    if not (np.isfinite(value) and value > 0):
+        raise argparse.ArgumentTypeError(f"must be above 0, got {text}")
+    return value
+
+
 def _create_parser() -> argparse.ArgumentParser:
     """Create command line argument parser."""
     parser = argparse.ArgumentParser(
@@ -251,24 +310,35 @@ def _create_parser() -> argparse.ArgumentParser:
         help=("Output .imzML path " "(default: example_data/synthetic_brain.imzML)"),
     )
     parser.add_argument(
-        "--pixels-x", type=int, default=48, help="Grid width in pixels (default: 48)"
+        "--pixels-x",
+        type=_int_at_least(1),
+        default=48,
+        help="Grid width in pixels, at least 1 (default: 48)",
     )
     parser.add_argument(
-        "--pixels-y", type=int, default=36, help="Grid height in pixels (default: 36)"
+        "--pixels-y",
+        type=_int_at_least(1),
+        default=36,
+        help="Grid height in pixels, at least 1 (default: 36)",
     )
     parser.add_argument(
         "--pixel-size",
-        type=float,
+        type=_positive_float,
         default=25.0,
         help="Pixel size in micrometers written to metadata (default: 25)",
     )
     parser.add_argument(
         "--mz-bins",
-        type=int,
+        type=_int_at_least(1),
         default=4000,
-        help="Number of points on the m/z axis (default: 4000)",
+        help="Number of points on the m/z axis, at least 1 (default: 4000)",
     )
-    parser.add_argument("--seed", type=int, default=0, help="Random seed (default: 0)")
+    parser.add_argument(
+        "--seed",
+        type=_int_at_least(0),
+        default=0,
+        help="Random seed, at least 0 (default: 0)",
+    )
     parser.add_argument("--verbose", action="store_true", help="Verbose output")
     return parser
 
