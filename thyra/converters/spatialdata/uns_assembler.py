@@ -38,6 +38,7 @@ every CSC scratch memmap the finalize path's frames still hold (issue
 import json
 import logging
 import numbers
+import re
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
@@ -132,20 +133,76 @@ def _jsonify_string_lists(obj: Any) -> Any:
     return obj
 
 
-def serialize_for_zarr(obj: Any) -> Any:
+#: Characters a Zarr node name cannot hold on every platform. A slash, or
+#: a backslash, which Zarr reads as one, splits the name into a path. The
+#: rest are not legal in a Windows file name, and a colon is the one CV
+#: accessions carry. Control characters are not legal there either.
+_UNSAFE_KEY_CHARACTERS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+#: A trailing dot or space: Windows drops it from a file name, and a name
+#: of dots alone is no node at all.
+_UNSAFE_KEY_END = re.compile(r"[. ]+$")
+
+
+def zarr_safe_key(key: Any) -> str:
+    """A dict key as a name Zarr can store on every platform.
+
+    Each character in :data:`_UNSAFE_KEY_CHARACTERS`, and each dot or
+    space at the end, becomes ``_``. ``"MS:1000529"`` becomes
+    ``"MS_1000529"``, the spelling the mzPeak and imzML columns use for an
+    accession.
+    """
+    safe = _UNSAFE_KEY_CHARACTERS.sub("_", str(key))
+    safe = _UNSAFE_KEY_END.sub(lambda end: "_" * len(end.group()), safe)
+    return safe or "_"
+
+
+def _safe_keys(obj: Dict[Any, Any]) -> Dict[str, Any]:
+    """``obj`` with every key made safe, its values serialised.
+
+    A key that is safe already keeps its name. A key that becomes the
+    name of another is told apart by a number, so no value is lost.
+    """
+    taken = {str(key) for key in obj if zarr_safe_key(key) == str(key)}
+    names: List[str] = []
+    for key in obj:
+        name = zarr_safe_key(key)
+        if name != str(key):
+            if name in taken:
+                number = 2
+                while f"{name}_{number}" in taken:
+                    number += 1
+                name = f"{name}_{number}"
+            taken.add(name)
+            logger.debug("Metadata key %r is stored as %r", key, name)
+        names.append(name)
+    return {name: serialize_for_zarr(value) for name, value in zip(names, obj.values())}
+
+
+def serialize_for_zarr(obj: Any, *, _in_list: bool = False) -> Any:
     """Recursively convert tuples to lists for Zarr serialization.
 
     Dict keys are coerced to strings: Zarr group members must be named,
     and a non-string key otherwise fails at write time, after the whole
-    conversion has already been done.
+    conversion has already been done. They are made path-safe as well
+    (:func:`zarr_safe_key`): a key with a colon failed the save on
+    Windows, and a key with a slash nested its value a level deeper.
+
+    A dict inside a list keeps its keys as they are. Such a list is
+    stored as one JSON string (:func:`_jsonify_string_lists`), where any
+    key is legal.
     """
     if isinstance(obj, dict):
-        return {str(k): serialize_for_zarr(v) for k, v in obj.items()}
+        if _in_list:
+            return {
+                str(k): serialize_for_zarr(v, _in_list=True) for k, v in obj.items()
+            }
+        return _safe_keys(obj)
     elif isinstance(obj, (list, tuple)):
-        return [serialize_for_zarr(item) for item in obj]
+        return [serialize_for_zarr(item, _in_list=True) for item in obj]
     elif hasattr(obj, "__dict__"):
         # Convert dataclass/object to dict
-        return serialize_for_zarr(vars(obj))
+        return serialize_for_zarr(vars(obj), _in_list=_in_list)
     else:
         return obj
 
