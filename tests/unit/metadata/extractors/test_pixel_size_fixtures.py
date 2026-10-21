@@ -340,3 +340,53 @@ class TestMzPeakPathSaysWhy:
         assert "AREA" in logged
         assert "2500" in logged
         assert "50 um" in logged
+
+
+#: The old name of IMS:1000046 as files spell it: case and blanks vary.
+OLD_NAME_SPELLINGS = ["Pixel Size", " pixel size ", "PIXEL SIZE"]
+
+
+@pytest.mark.parametrize("spelling", OLD_NAME_SPELLINGS)
+class TestTheOldNameIsFolded:
+    """Case and blanks do not hide the old name, on either path.
+
+    An area of 2500 under the old name beside an IMS:1000047 of 2500 would be
+    a declared pair of 2500 um if the name were matched exactly.
+    """
+
+    def test_the_imzml_path_refuses_it(self, tmp_path, spelling):
+        """The imzML path refuses the old name, whatever its spelling."""
+        text = _path("unit_absent").read_text("utf-8")
+        text = text.replace(
+            'name="pixel size x" value="50"', f'name="{spelling}" value="2500"'
+        )
+        text = text.replace(
+            'name="pixel size y" value="50"', 'name="pixel size y" value="2500"'
+        )
+        (tmp_path / "a.imzML").write_text(text, "utf-8")
+        (tmp_path / "a.ibd").write_bytes(_path("unit_absent", "ibd").read_bytes())
+
+        reader = ImzMLReader(tmp_path / "a.imzML")
+        try:
+            assert reader.get_essential_metadata().pixel_size is None
+        finally:
+            reader.close()
+
+    def test_the_mzpeak_path_tests_it_as_an_area(self, tmp_path, spelling):
+        """The archive's grid shows 2500 to be the area of a 50 um pixel."""
+        parameters = [
+            {"name": spelling, "accession": "IMS:1000046", "value": 2500, "unit": None},
+            {
+                "name": "pixel size y",
+                "accession": "IMS:1000047",
+                "value": 2500,
+                "unit": None,
+            },
+            *(
+                p
+                for p in _archive_parameters("unit_absent")
+                if p["accession"] < "IMS:1000046"
+            ),
+        ]
+
+        assert _mzpeak_pixel_size(tmp_path, parameters) == pytest.approx(TRUE_SIZE)

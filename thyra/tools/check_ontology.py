@@ -4,7 +4,9 @@
 import argparse
 import json
 import logging
+import sys
 from pathlib import Path
+from typing import List, Optional
 
 from ..metadata.ontology.cache import ONTOLOGY
 
@@ -14,7 +16,9 @@ def _create_parser():
     parser = argparse.ArgumentParser(description="Check ontology terms in imzML files")
     parser.add_argument("input", help="imzML file or directory to check")
     parser.add_argument("--output", help="Save results to JSON file")
-    parser.add_argument("--verbose", action="store_true", help="Verbose output")
+    parser.add_argument(
+        "--verbose", action="store_true", help="Log progress at INFO level to stderr"
+    )
     return parser
 
 
@@ -52,41 +56,73 @@ def _print_file_results(results: dict, args, unknown_list: list):
 
 
 def _print_directory_results(results: dict):
-    """Print results for directory validation."""
+    """Print results for directory validation.
+
+    ``all_unknown_terms`` comes most often seen first, so the list under
+    "Most common" is that, in the same order on every run. It used to be
+    a set, printed in hash order (issue #529).
+    """
     print(f"Checked {results['files_checked']} files")
     print(f"Found {len(results['all_unknown_terms'])} unique unknown terms")
 
     if results["all_unknown_terms"]:
+        counts = results.get("unknown_term_counts", {})
         print("\nMost common unknown terms:")
-        for term in list(results["all_unknown_terms"])[:20]:
-            print(f"  - {term}")
+        for term in results["all_unknown_terms"][:20]:
+            seen = f" (seen {counts[term]} times)" if term in counts else ""
+            print(f"  - {term}{seen}")
+        print()
+
+    unreadable = results.get("unreadable_files", {})
+    if unreadable:
+        print(f"Could not read {len(unreadable)} files:")
+        for path, reason in unreadable.items():
+            print(f"  - {path}: {reason}")
         print()
 
 
 def _save_results_if_requested(results: dict, output_path: str):
     """Save results to JSON file if requested."""
     if output_path:
-        with open(output_path, "w") as f:
-            json.dump(results, f, indent=2, default=str)
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(results, f, indent=2)
         print(f"Results saved to {output_path}")
         print(ONTOLOGY.report_unknown_terms())
     else:
         print(ONTOLOGY.report_unknown_terms())
 
 
-def main():
-    """Main entry point for ontology validation tool."""
+def main(argv: Optional[List[str]] = None) -> int:
+    """Main entry point for ontology validation tool.
+
+    Returns:
+        0 when every file was read, 1 when a file could not be read, and
+        2 when the input does not exist. A path that does not exist used
+        to be searched as an empty folder: "Checked 0 files", exit 0.
+    """
     parser = _create_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    input_path = Path(args.input)
+    if not input_path.exists():
+        print(f"Error: path {input_path} does not exist.", file=sys.stderr)
+        return 2
     _setup_logging(args.verbose)
 
-    from ..metadata.validator import ImzMLOntologyValidator
+    from ..metadata.validator import (
+        UNREADABLE_ERRORS,
+        ImzMLOntologyValidator,
+        describe_unreadable,
+    )
 
     validator = ImzMLOntologyValidator()
-    input_path = Path(args.input)
 
     if input_path.is_file():
-        results = validator.validate_file(input_path)
+        try:
+            results = validator.validate_file(input_path)
+        except UNREADABLE_ERRORS as error:
+            reason = describe_unreadable(error)
+            print(f"Error: cannot read {input_path}: {reason}", file=sys.stderr)
+            return 1
         # validate_file reports `unknown_terms` as a count; the terms
         # themselves are in `unknown_list`.
         unknown_list = results.get("unknown_list", [])
@@ -96,7 +132,8 @@ def main():
         _print_directory_results(results)
 
     _save_results_if_requested(results, args.output)
+    return 1 if results.get("unreadable_files") else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

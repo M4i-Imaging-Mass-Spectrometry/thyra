@@ -2,6 +2,8 @@ import json
 import sys
 from unittest.mock import patch
 
+import pytest
+
 from thyra.tools.check_ontology import main
 
 
@@ -305,3 +307,140 @@ class TestTheSummaryReachesTheUser:
         summary = out.split("Found 1 unknown terms:")[0]
         assert "Unknown Terms:" in summary
         assert "IMS:9999999" in summary
+
+
+def _imzml(*terms):
+    """A minimal imzML document holding ``(accession, times)`` cvParams."""
+    params = "".join(
+        f'<cvParam cvRef="IMS" accession="{accession}" name="term" value="x"/>' * times
+        for accession, times in terms
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<mzML xmlns="http://psi.hupo.org/ms/mzml"><fileDescription>'
+        f"<fileContent>{params}</fileContent></fileDescription></mzML>\n"
+    ).encode()
+
+
+GOOD = _imzml(("IMS:1000042", 1), ("IMS:9999999", 1))
+
+
+class TestBadInput:
+    """Issue #529: a missing path or one unreadable file."""
+
+    def test_a_path_that_does_not_exist_exits_2(self, tmp_path, capsys):
+        """It used to be searched as an empty folder: "Checked 0 files", 0."""
+        report = tmp_path / "report.json"
+        code = main([str(tmp_path / "smaple.imzML"), "--output", str(report)])
+
+        captured = capsys.readouterr()
+        assert code == 2
+        assert captured.err.strip().endswith("does not exist.")
+        assert len(captured.err.strip().splitlines()) == 1
+        assert captured.out == ""
+        assert not report.exists()
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            pytest.param(b"", id="empty"),
+            pytest.param(GOOD[: len(GOOD) // 2], id="cut-short"),
+            pytest.param(GOOD.replace(b'value="x"', b'value="5 \xb5m"'), id="latin-1"),
+        ],
+    )
+    def test_one_unreadable_file_alone_is_one_line_and_exit_1(
+        self, tmp_path, capsys, bad
+    ):
+        path = tmp_path / "bad.imzML"
+        path.write_bytes(bad)
+
+        code = main([str(path)])
+
+        captured = capsys.readouterr()
+        assert code == 1
+        assert "Traceback" not in captured.err
+        assert captured.err.startswith(f"Error: cannot read {path}:")
+        assert len(captured.err.strip().splitlines()) == 1
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            pytest.param(b"", id="empty"),
+            pytest.param(GOOD[: len(GOOD) // 2], id="cut-short"),
+            pytest.param(GOOD.replace(b'value="x"', b'value="5 \xb5m"'), id="latin-1"),
+        ],
+    )
+    def test_in_a_folder_the_bad_file_is_reported_and_the_rest_checked(
+        self, tmp_path, capsys, bad
+    ):
+        (tmp_path / "a_good.imzML").write_bytes(GOOD)
+        (tmp_path / "b_good.imzML").write_bytes(GOOD)
+        (tmp_path / "z_bad.imzML").write_bytes(bad)
+        report = tmp_path / "report.json"
+
+        code = main([str(tmp_path), "--output", str(report)])
+
+        out = capsys.readouterr().out
+        assert code == 1
+        assert "Checked 2 files" in out
+        assert "Could not read 1 files:" in out
+        assert "z_bad.imzML" in out
+        saved = json.loads(report.read_text(encoding="utf-8"))
+        assert len(saved["per_file_results"]) == 2
+        assert list(saved["unreadable_files"]) == [str(tmp_path / "z_bad.imzML")]
+
+    def test_the_suffix_is_matched_in_any_letter_case(self, tmp_path, capsys):
+        """``sample.imzml`` was checked on Windows and missed on Linux."""
+        (tmp_path / "lower.imzml").write_bytes(GOOD)
+        (tmp_path / "upper.IMZML").write_bytes(GOOD)
+
+        assert main([str(tmp_path)]) == 0
+        assert "Checked 2 files" in capsys.readouterr().out
+
+    def test_a_folder_named_like_an_imzml_is_not_a_file(self, tmp_path, capsys):
+        (tmp_path / "a_good.imzML").write_bytes(GOOD)
+        (tmp_path / "z_bad.imzML").mkdir()
+
+        code = main([str(tmp_path)])
+
+        assert code == 0
+        assert "Checked 1 files" in capsys.readouterr().out
+
+
+class TestUnknownTermsAreAListInAFixedOrder:
+    """Issue #529: ``all_unknown_terms`` was saved as the text of a Python
+    set, and printed in hash order."""
+
+    def _folder(self, tmp_path):
+        tmp_path.mkdir(exist_ok=True)
+        (tmp_path / "a.imzML").write_bytes(_imzml(("IMS:9999997", 1)))
+        (tmp_path / "b.imzML").write_bytes(_imzml(("IMS:9999998", 3)))
+        (tmp_path / "c.imzML").write_bytes(_imzml(("IMS:9999999", 1)))
+        return tmp_path
+
+    def test_the_json_holds_a_list_most_often_seen_first(self, tmp_path):
+        report = tmp_path / "report.json"
+        main([str(self._folder(tmp_path / "in")), "--output", str(report)])
+
+        saved = json.loads(report.read_text(encoding="utf-8"))
+        assert saved["all_unknown_terms"] == [
+            "IMS:9999998",
+            "IMS:9999997",
+            "IMS:9999999",
+        ]
+        assert saved["unknown_term_counts"] == {
+            "IMS:9999998": 3,
+            "IMS:9999997": 1,
+            "IMS:9999999": 1,
+        }
+
+    def test_the_printed_list_has_the_same_order(self, tmp_path, capsys):
+        main([str(self._folder(tmp_path))])
+
+        listed = capsys.readouterr().out.split("Most common unknown terms:")[1]
+        lines = [line for line in listed.splitlines() if line.startswith("  - ")]
+        assert lines[:3] == [
+            "  - IMS:9999998 (seen 3 times)",
+            "  - IMS:9999997 (seen 1 times)",
+            "  - IMS:9999999 (seen 1 times)",
+        ]

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from ...core.base_extractor import MetadataExtractor
+from ...errors import ConversionRefused
 from ..constants import (
     MIXED_POLARITY,
     POLARITY_OF_ACCESSION,
@@ -65,16 +66,23 @@ AXIS_COUNT_AND_EXTENT = (
 )
 
 #: Relative tolerance of that test. The two readings of a value differ by
-#: its square root, so both can pass only when the value is within 2% of 1,
-#: where they give the same side. Every public file that could be tested
-#: meets the area reading exactly; the margin is for an extent that was
-#: rounded when written.
+#: its square root, so both can pass only for a value from (1 - tol)^4 to
+#: (1 - tol)^-4, 0.9606 to 1.0410 at 1%. The length is then taken, and
+#: the two sides can differ by about 2%. Every public file that could be
+#: tested meets the area reading exactly; the margin is for an extent that
+#: was rounded when written.
 EXTENT_TOLERANCE = 0.01
 
 #: Spectrum metadata column giving each spectrum's polarity, and what its
 #: values state. Any other value states nothing.
 SCAN_POLARITY_COLUMN = "scan_polarity"
 SCAN_POLARITY_VALUES = {1: "positive", -1: "negative"}
+
+#: Spectrum metadata column giving each spectrum's representation.
+REPRESENTATION_COLUMN = "spectrum_representation"
+
+#: Spectrum metadata columns giving each spectrum's observed m/z bounds.
+OBSERVED_BOUND_COLUMNS = ("lowest_observed_mz", "highest_observed_mz")
 
 
 class MzPeakMetadataExtractor(MetadataExtractor):
@@ -173,14 +181,26 @@ class MzPeakMetadataExtractor(MetadataExtractor):
         MS1, or one held only in the member that is not read, adds nothing.
         A converted spectrum whose bound is null or not finite has that
         bound taken from its own points, which costs a pass over the
-        member and is done only then.
+        member and is done only then. So is a bound whose column the
+        member does not have: it states no bound for any spectrum.
+
+        Raises:
+            ConversionRefused: If no converted spectrum has a point with a
+                finite m/z: the archive holds no signal.
         """
-        table = self.archive.parquet("spectrum", "metadata").read(
-            columns=["index", "lowest_observed_mz", "highest_observed_mz"]
-        )
-        low = np.asarray(table.column("lowest_observed_mz").to_numpy(), dtype=float)
-        high = np.asarray(table.column("highest_observed_mz").to_numpy(), dtype=float)
+        member = self.archive.parquet("spectrum", "metadata")
+        names = member.schema_arrow.names
+        bounds = [column for column in OBSERVED_BOUND_COLUMNS if column in names]
+        table = member.read(columns=["index", *bounds])
         rows = np.asarray(table.column("index").to_numpy(), dtype=np.int64)
+        low, high = (
+            (
+                np.asarray(table.column(column).to_numpy(), dtype=float)
+                if column in bounds
+                else np.full(rows.size, np.nan)
+            )
+            for column in OBSERVED_BOUND_COLUMNS
+        )
         index = self.archive.spatial_index()
         counted = index.point_counts > 0
         # A count column with no value at all states nothing; the spectra
@@ -200,9 +220,12 @@ class MzPeakMetadataExtractor(MetadataExtractor):
             lowest = min(lowest, from_points[0])
             highest = max(highest, from_points[1])
         if not (np.isfinite(lowest) and np.isfinite(highest)):
-            raise ValueError(
-                f"{self.data_path} declares no observed m/z range in its "
-                f"spectrum metadata."
+            # Neither the metadata nor the points gave a bound, so no
+            # spectrum on a pixel holds a point with a finite m/z.
+            raise ConversionRefused(
+                f"{self.data_path} holds no signal: none of its "
+                f"{index.spectrum_indices.size} spectra on a pixel has a "
+                f"point with a finite m/z."
             )
         return (lowest, highest)
 
@@ -239,6 +262,7 @@ class MzPeakMetadataExtractor(MetadataExtractor):
         for imzML.
         """
         parameters = self._first_by_accession()
+        self._warn_on_several_blocks()
         x = parameters.get(ImzMLAccessions.PIXEL_SIZE_X)
         y = parameters.get(ImzMLAccessions.PIXEL_SIZE_Y)
         if x is None and y is None:
@@ -252,6 +276,30 @@ class MzPeakMetadataExtractor(MetadataExtractor):
         if x is not None and y is not None and not self._has_old_name(x):
             return self._declared_pair(x, y)
         return self._tested_pixel_size(parameters)
+
+    def _warn_on_several_blocks(self) -> None:
+        """Warn when the archive has several scan-settings blocks.
+
+        Each term is taken from the first block that states it, as the
+        imzML route takes it, so the pixel size and the pixel counts may
+        come from different blocks. The imzML route warns of it in the
+        same words.
+        """
+        settings = self.archive.file_level_metadata().get("scan_settings_list")
+        blocks = (
+            sum(isinstance(block, dict) for block in settings)
+            if isinstance(settings, list)
+            else 0
+        )
+        if blocks > 1:
+            logger.warning(
+                "%s declares %d scan-settings blocks. Each term is read from "
+                "the first block that states it, so the pixel size and pixel "
+                "counts Thyra reads may come from different blocks and "
+                "describe no single region.",
+                self.data_path.name,
+                blocks,
+            )
 
     def _first_by_accession(self) -> Dict[str, dict]:
         """The first scan-settings parameter of each accession."""
@@ -365,7 +413,9 @@ class MzPeakMetadataExtractor(MetadataExtractor):
             extent_um = self._to_micrometres(extent, extent_term)
             if pixels is None or extent_um is None:
                 continue
-            if pixels[0] > 0 and extent_um > 0:
+            # A number that overflows to infinity tests nothing: inf is
+            # close to inf whatever the pixel size.
+            if _finite_positive(pixels[0]) and _finite_positive(extent_um):
                 axes.append((pixels[0], extent_um))
         return axes
 
@@ -394,7 +444,8 @@ class MzPeakMetadataExtractor(MetadataExtractor):
         )
         for kind, side in candidates:
             if all(
-                math.isclose(side * count, extent, rel_tol=EXTENT_TOLERANCE)
+                _finite_positive(side * count)
+                and math.isclose(side * count, extent, rel_tol=EXTENT_TOLERANCE)
                 for count, extent in axes
             ):
                 return (kind, side)
@@ -423,9 +474,24 @@ class MzPeakMetadataExtractor(MetadataExtractor):
             )
             return None
 
+        try:
+            number = float(value)
+        except OverflowError:
+            number = math.inf
+        if not math.isfinite(number):
+            # A whole number too large for a float, or a JSON Infinity or
+            # NaN, is no size and tests nothing.
+            logger.warning(
+                "%s in %s has value %r, which is not a finite number; " "ignoring it",
+                accession,
+                self.data_path.name,
+                value,
+            )
+            return None
+
         unit = parameter.get("unit")
         if unit is None:
-            return (float(value), 1.0)
+            return (number, 1.0)
         if unit not in UM_PER_UNIT:
             logger.warning(
                 "%s in %s declares unsupported unit %r; ignoring the value "
@@ -435,7 +501,7 @@ class MzPeakMetadataExtractor(MetadataExtractor):
                 unit,
             )
             return None
-        return (float(value), UM_PER_UNIT[unit])
+        return (number, UM_PER_UNIT[unit])
 
     def _to_micrometres(self, parameter: dict, accession: str) -> Optional[float]:
         """Convert one length parameter to micrometres.
@@ -486,15 +552,14 @@ class MzPeakMetadataExtractor(MetadataExtractor):
                 if accession == ImzMLAccessions.PROFILE_SPECTRUM:
                     return SpectrumType.PROFILE
 
-        try:
-            table = self.archive.parquet("spectrum", "metadata").read(
-                columns=["spectrum_representation"]
-            )
-        except (KeyError, ValueError):
+        member = self.archive.parquet("spectrum", "metadata")
+        if REPRESENTATION_COLUMN not in member.schema_arrow.names:
+            # A column that is absent states nothing, as one that is empty.
             return None
+        table = member.read(columns=[REPRESENTATION_COLUMN])
         values = {
             str(value).strip().lower()
-            for value in table.column("spectrum_representation").to_pylist()
+            for value in table.column(REPRESENTATION_COLUMN).to_pylist()
             if value
         }
         if values & {SpectrumType.CENTROID, ImzMLAccessions.CENTROID_SPECTRUM.lower()}:
@@ -687,6 +752,11 @@ class MzPeakMetadataExtractor(MetadataExtractor):
             }
         )
         return info
+
+
+def _finite_positive(value: float) -> bool:
+    """Whether a number is finite and above zero."""
+    return math.isfinite(value) and value > 0
 
 
 def _as_parsed_parameters(parameters: Any) -> SimpleNamespace:

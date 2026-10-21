@@ -931,3 +931,42 @@ def region_parameter(number):
             "unit": None,
         }
     ]
+
+
+def rewrite_member(path: Path, member: str, edit: Any) -> Path:
+    """Rewrite one member of an archive in place, the ZIP itself intact.
+
+    Args:
+        path: The archive.
+        member: Name of the member to change.
+        edit: Function from the member's bytes to its new bytes.
+
+    Returns:
+        ``path``.
+    """
+    with zipfile.ZipFile(path) as archive:
+        parts = [(info, archive.read(info.filename)) for info in archive.infolist()]
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as archive:
+        for info, data in parts:
+            archive.writestr(info, edit(data) if info.filename == member else data)
+    return path
+
+
+def rewrite_table(path: Path, member: str, edit: Any) -> Path:
+    """Rewrite one Parquet member through a function on its table.
+
+    Args:
+        path: The archive.
+        member: Name of the Parquet member to change.
+        edit: Function from the member's ``pyarrow.Table`` to a new one.
+
+    Returns:
+        ``path``.
+    """
+
+    def through_table(data: bytes) -> bytes:
+        sink = pa.BufferOutputStream()
+        pq.write_table(edit(pq.read_table(pa.BufferReader(data))), sink)
+        return sink.getvalue().to_pybytes()
+
+    return rewrite_member(path, member, through_table)

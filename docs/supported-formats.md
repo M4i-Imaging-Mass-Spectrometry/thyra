@@ -692,12 +692,13 @@ The store names the encodings it was read from, in
 Two things follow from a lossy encoding:
 
 - **Convert with resampling**, which is the default. Without it the mass axis
-  holds every distinct m/z. A lossy encoding returns one m/z a little
-  differently from pixel to pixel, so that axis grows far beyond the point
+  holds every distinct m/z. A lossy encoding can return one m/z a little
+  differently from pixel to pixel, so that axis can grow far beyond the point
   layout's: 48 million values against 332 thousand, on one centroid image.
-  The log warns of it.
+  The log warns that it can.
 - **A few points land in the neighbouring bin.** On a centroid image of 60
-  million points, 287 did. The total ion current of every pixel was the same.
+  million points, 6 did, each by one bin. The total ion current of every pixel
+  was the same.
 
 MS-Numpress decodes at about 2 million points per second, delta encoding at
 about 19 million. See
@@ -714,7 +715,8 @@ separate members. Thyra reads one of them per archive:
 
 The member counts as empty when it has no rows or is not in the archive. The
 reference converter writes both members every time and leaves one with no
-rows.
+rows. A centroid member that cannot be opened beside a profile member with
+rows is passed over with a warning, since it is not read.
 
 When both hold rows, the two are never added together, and the log says that
 the centroid member was left unread. A spectrum stored only in the centroid
@@ -746,7 +748,14 @@ These are refused rather than guessed at, before any spectrum is read:
 - **Spectra on more than one plane.** Thyra reads one plane of an mzPeak
   archive. So position z (`IMS:1000052`) may take one value, and is stated
   for every spectrum on a pixel or for none.
-- **Unrecognised layouts** fail with the schema they actually carry.
+- **Unrecognised layouts** fail with the schema they actually carry. So does a
+  `point` column without its `spectrum_index`, `mz` or `intensity` field.
+- **A damaged member, or a missing column the reader needs.** The message
+  names the archive and the member or column. A member cut short, an empty
+  one, or a bad checksum are damage.
+- **A position that is not a whole number.** Whole numbers stored as text are
+  read as positions.
+- **An archive whose every spectrum is empty.** It holds no signal.
 
 Two behaviours worth knowing:
 
@@ -787,8 +796,13 @@ converter copies the term into the archive unchanged. So Thyra reads:
 | `IMS:1000047` alone | none: pass `--pixel-size` |
 
 The pixel count is `IMS:1000042`/`IMS:1000043` and the extent is
-`IMS:1000044`/`IMS:1000045`. The two sides may differ by 1%. The log says at
+`IMS:1000044`/`IMS:1000045`. The two sides may differ by 1%. A count or
+extent that is not a finite number above zero tests nothing. The log says at
 WARNING when a value was read as an area and when no pixel size was taken.
+
+An archive may hold several scan-settings blocks. Each term is read from the
+first block that states it, as on the imzML path. The log warns that the
+terms may then describe no single region.
 
 A value with no unit is read as micrometres. Millimetre, micrometre and
 nanometre are converted. Any other unit is refused, centimetre included: the

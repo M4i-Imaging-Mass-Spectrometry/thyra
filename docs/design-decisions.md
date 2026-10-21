@@ -2415,7 +2415,10 @@ is in one number read two ways, and that is what the test covers.
   such a file fails the test and the conversion asks for `--pixel-size`.
 - A pixel that is not square cannot be recovered from an area. Its two axes
   disagree in the test, and no pixel size is taken.
-- A value within 2% of 1 passes both readings. They give the same side.
+- A value from 0.9606 to 1.0410, that is (1 - 1%)^4 to (1 - 1%)^-4, can pass
+  both readings. The length is taken then, and the two sides differ by up to
+  about 2%. (Corrected 2026-10-20, #523: this line said "within 2% of 1" and
+  "the same side".)
 - The pixel size of MTBLS12204 is 1.0 with no unit, and is stored as 1 um on
   both paths. Nothing in the file says whether that is a size or a
   placeholder.
@@ -2551,12 +2554,16 @@ The stores, converted with the command line's defaults:
 |---|---|---|
 | profile image | delta | every array the same |
 | synthetic centroid | grid | every array the same |
-| centroid image | MS-Numpress | 287 of 60,149,625 entries in a neighbouring bin |
+| centroid image | MS-Numpress | 6 of 60,149,625 entries in a neighbouring bin, each one bin away |
 | profile image | MS-Numpress | one entry more among 24,267,357 |
 
 In the two MS-Numpress stores the total ion current image was the same in
 every pixel. The average spectrum differed in 10 of 460,495 channels and
 in 34 of 708,847.
+
+(Corrected 2026-10-20, #523: the centroid row said 287 entries. 287 counts
+the positions at which the stored `indices` arrays differ; 6 entries moved,
+each by one bin.)
 
 Three archives in the point layout convert to the same stores as before
 this change.
@@ -2584,7 +2591,9 @@ measured is 0.005 ppm, and the store says which encoding it came from.
   point twin's. The centroid image has 331,701 distinct m/z in the point
   layout and 48,116,750 under MS-Numpress. The profile image has 1,122,721,
   against 1,147,161 under delta encoding and 18,731,686 under MS-Numpress.
-  The reader warns of it. Resampling, the default, is not affected.
+  The reader warns that it can happen: the archive does not say how many m/z
+  its source held, so the growth itself is not measured. Resampling, the
+  default, is not affected.
 - The square root model and the encoding without compression were read from
   constructed archives only. The converter wrote neither for these inputs.
 - A writer may give the edges of the interval it cut at as the bounds of a
@@ -2626,7 +2635,10 @@ from, Thyra reads it the way it reads that file. Five facts:
 
 **Why.** The eight public example archives were converted beside their
 source imzML files, and one archive from a Bruker TSF run beside the `.d`.
-The spectra agreed; the stores did not.
+The spectra agreed; the stores did not. (Corrected 2026-10-20, #523: for the
+Bruker TSF archive, positions, peak counts and intensities agree, but its m/z
+sit several ppm off the `.d`'s in either calibration state. D33's known limits
+give the measurement.)
 
 | Example | Before | After, and from its source |
 |---|---|---|
@@ -5961,6 +5973,70 @@ about 3 s to the 46 s parse of the 918,855-spectrum file.
   plan's axis can then reach past the converted spectra; no point is lost.
 - `format_specific.spectrum_count` stays the number of spectra the file
   holds, as on the metadata-only route.
+
+## D74. Source keys in `uns` are stored under path-safe names, and an overflowing grid confirms no pixel size
+
+**Status:** Implemented (2026-10-20), issue #523. Amends D27.
+
+**Decision.** Two rules, both about values a source states that Thyra
+cannot store or test as written.
+
+- **Keys.** Every dict key that becomes a node of `uns` is stored under a
+  name Zarr can hold on every platform. Each `/`, `\`, `:`, `*`, `?`, `"`,
+  `<`, `>`, `|` or control character, and each dot or space at the end of a
+  key, becomes `_`. A key that is safe already keeps its name; one that
+  would meet it is given a number, `MS_1000529_2`. Keys inside a list that is
+  stored as one JSON string are kept as written: any key is legal there.
+  The rule holds for every format, since every reader's metadata reaches
+  `uns` through one function.
+- **Pixel size.** A declared pixel count or extent is used to test a lone
+  `IMS:1000046` only when it is a finite number above zero, and so is the
+  product of the side and the count. A value that is not a finite number,
+  a whole number too large for a float or a JSON `Infinity` for one, is
+  ignored with a warning, as a value that is not a number already was.
+
+**Why.** The 4.3.3 stress test (#427) found both.
+
+| Input | Before | After |
+|---|---|---|
+| mzPeak `run` block with a key `MS:1000529`, on Windows | save fails after the conversion, exit 1, `.failed` left | stored as `MS_1000529` |
+| index metadata key `vendor:note` | the same | `vendor_note` |
+| `imaging.notes` key `a/b` | save fails: Zarr refuses a `/` in a key | `a_b` |
+| old-name `IMS:1000046` 10000, count 1e307, extent 1e306 mm | 10000 um pixel, logged as confirmed | no pixel size: `--pixel-size` asked for |
+| the same, count 1e305, extent 1e307 mm | 10000 um pixel | no pixel size |
+
+A key with a colon is legal on Linux, so the same archive converted there,
+and its store kept the colon. The extent of 1e306 mm is infinite in
+micrometres, and `isclose(inf, inf)` is true whatever the pixel size, so
+the test confirmed a reading it could not have made.
+
+**What changes in a store.** Key names, in `uns` only, for a source whose
+metadata keys hold one of those characters. The root attributes keep the
+keys as the source wrote them; there they are JSON keys, legal everywhere.
+The metadata of 14 local datasets was read and walked as the store writes
+it: five imzML, four timsTOF (TSF and TDF, one with MS/MS), three Waters
+(one Cyclic IMS), a PHI ToF-SIMS run and a rapifleX run. No key was
+renamed. No solariX acquisition or published mzPeak archive was at hand.
+The pixel size changes only for an mzPeak archive whose declared grid
+overflows, or that states a pixel size as a JSON `Infinity` or `NaN`: such
+a value was taken as an infinite pixel and is now ignored, so the
+conversion asks for `--pixel-size`. No writer is known to produce either.
+
+**Alternatives.**
+
+- "Store the free-form blocks as JSON strings, as lists already are." Every
+  block would change its type in every store, to rescue a few keys.
+- "Refuse a source whose keys are not path-safe." The keys are provenance;
+  losing a conversion over one is the wrong trade.
+- "Drop the unsafe characters instead of replacing them." `a:b` and `ab`
+  would then meet, and the change would be harder to read back.
+
+**Known limits.**
+
+- Two keys that differ only in case are two nodes, which a file system that
+  folds case, as Windows does, puts in one folder. That was so before this
+  rule too. No source with such keys was found.
+- The renamed key is logged at DEBUG only.
 
 ## D76. `convert_msi` refuses every keyword it does not use, and checks its values as the CLI does
 
