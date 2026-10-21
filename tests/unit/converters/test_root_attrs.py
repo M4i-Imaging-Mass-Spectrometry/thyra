@@ -15,6 +15,7 @@ conversion. What is pinned here is the composition.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -104,7 +105,6 @@ def _builder(reader=None, **overrides) -> RootAttrsBuilder:
         dataset_id="stub",
         pixel_size_detection_info=None,
         handle_3d=False,
-        conversion_options={},
     )
     kwargs.update(overrides)
     return RootAttrsBuilder(reader or _StubReader(), **kwargs)
@@ -205,9 +205,7 @@ class TestTheTwoSectionsRescuedFromTheDeadMethod:
         )
 
     def test_the_conversion_options_say_how_it_was_run(self):
-        attrs = _builder(handle_3d=True, conversion_options={"use_csc": True}).build(
-            _context(z_spacing_um=25.0)
-        )
+        attrs = _builder(handle_3d=True).build(_context(z_spacing_um=25.0))
 
         assert attrs["conversion_options"] == {
             "handle_3d": True,
@@ -216,8 +214,13 @@ class TestTheTwoSectionsRescuedFromTheDeadMethod:
             "z_spacing_um": 25.0,
             "z_spacing_source": ZSpacingSource.ASSUMED_ISOTROPIC.value,
             "dataset_id": "stub",
-            "use_csc": True,
         }
+
+    def test_a_numpy_handle_3d_is_stored_as_a_plain_bool(self):
+        attrs = _builder(handle_3d=np.bool_(True)).build(_context())
+
+        assert attrs["conversion_options"]["handle_3d"] is True
+        assert '"handle_3d": true' in json.dumps(attrs["conversion_options"])
 
     def test_handle_3d_records_what_was_asked_not_what_was_written(self):
         # A single-slice source converted with handle_3d=True takes the 2D

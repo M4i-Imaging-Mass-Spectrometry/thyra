@@ -140,7 +140,7 @@ class TestTheProcessingRecord:
 
     def test_a_non_finite_config_value_leaves_the_block(self):
         config = SimpleNamespace(
-            method="nearest_neighbor", gap_tolerance_da=float("nan"), min_mz=100.0
+            method="tic_preserving", gap_tolerance_da=float("nan"), min_mz=100.0
         )
         assembler = UnsAssembler(
             MockMSIReader(_config()),
@@ -163,7 +163,7 @@ class TestTheProcessingRecord:
 
         steps = json.loads(block["processing"])
         resampling = steps[-1]["parameters"]
-        assert resampling == {"method": "nearest_neighbor", "min_mz": 100.0}
+        assert resampling == {"method": "tic_preserving", "min_mz": 100.0}
         assert all(
             math.isfinite(v) for v in resampling.values() if isinstance(v, float)
         )

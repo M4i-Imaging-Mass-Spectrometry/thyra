@@ -95,6 +95,13 @@ writes each table from memory-mapped arrays, so the matrix is never held in
 RAM. The `streaming` keyword older code passes is accepted and selects
 nothing.
 
+### Arguments it does not know
+
+`convert_msi` refuses a keyword it does not use, before it opens the source.
+The error names each one. A reader option passed as a plain keyword is
+pointed to `reader_options`. A reader option the file type does not use is
+named in a warning, as the command line does.
+
 ### Full signature
 
 ::: thyra.convert.convert_msi
@@ -228,7 +235,9 @@ When you pass `resampling_config` to `convert_msi`, the dictionary keys map
 to the fields of `ResamplingConfig`. You can pass a plain dict (as shown in
 the examples above) or construct the dataclass directly. Every number must
 be finite: a NaN or an infinity is refused, as is one given as
-`intensity_threshold`.
+`intensity_threshold`. The values are checked as the command line checks
+its options: widths, tolerances and m/z bounds must be positive, and a bin
+count a whole number of at least 2.
 
 ```python
 from thyra.resampling.types import ResamplingConfig, ResamplingMethod, AxisType

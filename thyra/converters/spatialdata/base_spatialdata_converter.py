@@ -417,7 +417,6 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             dataset_id=self.dataset_id,
             pixel_size_detection_info=self._pixel_size_detection_info,
             handle_3d=self.handle_3d,
-            conversion_options=self.options,
         )
 
     def convert(self) -> bool:

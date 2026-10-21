@@ -28,9 +28,11 @@ disagree about which axis they describe, and a raw union axis was laid by no
 generator, so it has none.
 """
 
+import dataclasses
 import logging
 import math
 import numbers
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
@@ -206,8 +208,26 @@ def normalize_resampling_config(
     if isinstance(config, ResamplingConfig):
         if config.mass_axis_sha256 is not None:
             check_sha256(config.mass_axis_sha256, "mass_axis_sha256")
-        _refuse_dropped_settings(config)
-        return config
+        # The dataclass takes whatever it is given, so a string method
+        # reached the planner and ended in a traceback (issue #519). The
+        # same spellings a dict takes are accepted here.
+        # A config that needs nothing resolved is returned as it came.
+        method = _resolve_config_enum(config.method, METHOD_BY_NAME, "method")
+        axis_type = _resolve_config_enum(
+            config.axis_type, AXIS_TYPE_BY_NAME, "axis_type"
+        )
+        resolved = config
+        if method is not config.method or axis_type is not config.axis_type:
+            resolved = dataclasses.replace(config, method=method, axis_type=axis_type)
+        checked = _checked_values(resolved)
+        _refuse_dropped_settings(checked)
+        return checked
+
+    if not isinstance(config, Mapping):
+        raise ConversionRefused(
+            "resampling_config must be a dict, a ResamplingConfig or a "
+            f"MassAxisPlan, not {type(config).__name__}."
+        )
 
     # A key this function does not read changes nothing, and used to
     # change nothing silently: ``{"target_bin": 4000}`` was accepted and
@@ -230,11 +250,7 @@ def normalize_resampling_config(
     if sha256 is not None:
         check_sha256(sha256, "resampling_config['mass_axis_sha256']")
 
-    reference_mz = config.get("reference_mz")
-
-    def _optional_float(key: str) -> Optional[float]:
-        value = config.get(key)
-        return None if value is None else float(value)
+    reference_mz = _optional_float(config, "reference_mz")
 
     normalised = ResamplingConfig(
         method=_resolve_config_enum(config.get("method"), METHOD_BY_NAME, "method"),
@@ -243,19 +259,145 @@ def normalize_resampling_config(
         ),
         target_bins=config.get("target_bins"),
         mass_width_da=config.get("width_at_mz"),
-        reference_mz=(
-            DEFAULT_REFERENCE_MZ if reference_mz is None else float(reference_mz)
-        ),
+        reference_mz=DEFAULT_REFERENCE_MZ if reference_mz is None else reference_mz,
         min_mz=config.get("min_mz"),
         max_mz=config.get("max_mz"),
         gap_tolerance_da=config.get("gap_tolerance_da"),
-        tof_a=_optional_float("tof_a"),
-        tof_b=_optional_float("tof_b"),
-        bins_per_fwhm=_optional_float("bins_per_fwhm"),
+        tof_a=_optional_float(config, "tof_a"),
+        tof_b=_optional_float(config, "tof_b"),
+        bins_per_fwhm=_optional_float(config, "bins_per_fwhm"),
         mass_axis_sha256=sha256,
     )
+    normalised = _checked_values(normalised)
     _refuse_dropped_settings(normalised)
     return normalised
+
+
+#: The fields that hold a positive quantity, with the dict key a caller
+#: passes for each. ``tof_a`` and ``tof_b`` may be zero, so they are
+#: checked on their own.
+_POSITIVE_CONFIG_FIELDS = (
+    ("mass_width_da", "width_at_mz"),
+    ("reference_mz", "reference_mz"),
+    ("min_mz", "min_mz"),
+    ("max_mz", "max_mz"),
+    ("gap_tolerance_da", "gap_tolerance_da"),
+    ("bins_per_fwhm", "bins_per_fwhm"),
+)
+
+
+def _optional_float(config: Mapping[str, Any], key: str) -> Optional[float]:
+    """``config[key]`` as a float, ``None`` when unset.
+
+    A numeric string is read as its number, as it always was. Anything
+    else ``float()`` cannot read left as a ``ValueError`` or ``TypeError``
+    traceback (issue #519); it is refused in one line instead.
+    """
+    value = config.get(key)
+    if value is None:
+        return None
+    try:
+        if type(value) in (bool, np.bool_):
+            raise TypeError
+        return float(value)
+    except (TypeError, ValueError):
+        raise ConversionRefused(
+            f"resampling_config[{key!r}] must be a number, not "
+            f"{type(value).__name__} {value!r}."
+        ) from None
+
+
+def _is_real(value: Any) -> bool:
+    """A real number that is not a bool, numpy scalars included."""
+    return isinstance(value, numbers.Real) and not isinstance(value, (bool, np.bool_))
+
+
+def _checked_values(config: ResamplingConfig) -> ResamplingConfig:
+    """Refuse the values the CLI refuses, for a dict and a dataclass alike.
+
+    Only the CLI checked them, so the API took a negative width and laid
+    a 100-bin axis, a negative ``min_mz`` and laid an axis below zero, a
+    gap tolerance of 0 and switched the check off while the log said it
+    was in force, and a width of 0 or a bin count given as a string and
+    ended in a traceback (issue #519). A non-finite number is left to
+    :func:`_refuse_dropped_settings`, which says so in its own words.
+
+    Returns:
+        ``config``, with a numpy bin count stored as an ``int``.
+
+    Raises:
+        ConversionRefused: On the first value the CLI would refuse.
+    """
+    _refuse_non_positive_quantities(config)
+    _refuse_a_bad_tof_law(config)
+    return _checked_bin_count(config)
+
+
+def _refuse_non_positive_quantities(config: ResamplingConfig) -> None:
+    """Widths, bounds, tolerances: numbers above 0, ``min_mz`` below ``max_mz``."""
+    for field_name, key in _POSITIVE_CONFIG_FIELDS:
+        value = getattr(config, field_name)
+        if value is None:
+            continue
+        if not _is_real(value):
+            raise ConversionRefused(
+                f"resampling_config[{key!r}] must be a number, not "
+                f"{type(value).__name__} {value!r}."
+            )
+        if math.isfinite(value) and value <= 0:
+            raise ConversionRefused(
+                f"resampling_config[{key!r}] must be a positive number, got {value!r}."
+            )
+    if (
+        config.min_mz is not None
+        and config.max_mz is not None
+        and config.min_mz >= config.max_mz
+    ):
+        raise ConversionRefused(
+            f"resampling_config['min_mz'] ({config.min_mz!r}) must be below "
+            f"'max_mz' ({config.max_mz!r})."
+        )
+
+
+def _refuse_a_bad_tof_law(config: ResamplingConfig) -> None:
+    """Both terms at least 0, and not both 0, as ``--tof-law`` requires."""
+    for field_name in ("tof_a", "tof_b"):
+        value = getattr(config, field_name)
+        if value is not None and (not _is_real(value) or value < 0):
+            raise ConversionRefused(
+                f"resampling_config[{field_name!r}] must be a number of at least "
+                f"0, got {value!r}."
+            )
+    if config.tof_a == 0 and config.tof_b == 0:
+        raise ConversionRefused(
+            "resampling_config sets 'tof_a' and 'tof_b' both to 0, a TOF width "
+            "law with no width; give at least one of them a positive value."
+        )
+
+
+def _checked_bin_count(config: ResamplingConfig) -> ResamplingConfig:
+    """A whole number of at least 2; a numpy integer becomes an ``int``.
+
+    A whole float is left as given, as it always was, so the record holds
+    what it held before.
+    """
+    # Any, not the field's declared int: a caller may hand in anything.
+    bins: Any = config.target_bins
+    if bins is None:
+        return config
+    if not _is_real(bins) or (math.isfinite(bins) and bins != int(bins)):
+        raise ConversionRefused(
+            "resampling_config['target_bins'] must be a whole number, not "
+            f"{type(bins).__name__} {bins!r}."
+        )
+    if math.isfinite(bins) and bins < 2:
+        raise ConversionRefused(
+            f"resampling_config['target_bins'] is {bins!r}; an axis needs at "
+            "least 2 bins."
+        )
+    if not isinstance(bins, np.integer):
+        return config
+    return dataclasses.replace(config, target_bins=int(bins))
 
 
 # The ResamplingConfig fields that hold a number, checked for finiteness
@@ -1081,9 +1223,30 @@ class AxisPlanner:
 
         logger.info(f"Using resampling method: {self._method}")
 
-        if config.gap_tolerance_da is not None:
+    def _report_gap_tolerance(self) -> None:
+        """Say what the gap tolerance does under the method that will run.
+
+        Only interpolation can invent a bin, so only ``tic_preserving``
+        reads the tolerance. It used to be logged as zeroing bins under
+        ``nearest_neighbor`` too (issue #519). Said once the method is
+        final, after :meth:`_regate_tic_preserving`, which can still move
+        an auto-selected ``tic_preserving`` to ``nearest_neighbor``.
+        """
+        tolerance = self.config.gap_tolerance_da if self.config else None
+        if tolerance is None:
+            return
+        if self._method is ResamplingMethod.NEAREST_NEIGHBOR:
+            logger.warning(
+                "The gap tolerance of %s Da (--resample-gap-tolerance, "
+                "gap_tolerance_da) is ignored: the method is "
+                "nearest_neighbor, which never places a value where nothing "
+                "was measured. The store is written as though it had not "
+                "been given.",
+                tolerance,
+            )
+        else:
             logger.info(
-                f"Interpolation gap tolerance: {config.gap_tolerance_da} Da "
+                f"Interpolation gap tolerance: {tolerance} Da "
                 "(target bins farther than this from any source m/z are zeroed)"
             )
 
@@ -1276,6 +1439,7 @@ class AxisPlanner:
                 self._detected_reference_width = tree.select_reference_width(metadata)
 
         self._regate_tic_preserving(tree, axis_type)
+        self._report_gap_tolerance()
 
         self._settle_width_law(tree, axis_type)
         tof_a = None
