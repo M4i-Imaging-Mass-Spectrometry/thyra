@@ -649,8 +649,8 @@ default; --no-resample disables it), or raise max_mass_axis_length.
 10 million bins is also the limit SCiLS Lab sets on its common mass axis, so a
 store within the cap stays within what that software can load.
 
-The cap is Python-API only, through `reader_options`, and applies to the imzML
-reader:
+The cap is Python-API only, through `reader_options`. It applies to the
+imzML, mzPeak, solariX and Waters readers; only imzML sets one by default:
 
 ```python
 from thyra import convert_msi

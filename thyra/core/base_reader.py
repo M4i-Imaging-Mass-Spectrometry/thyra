@@ -191,6 +191,10 @@ class BaseMSIReader(ABC):
                 ``region`` is refused here: only the timsTOF reader can
                 select a region, and it takes the option as a named
                 parameter, so it never arrives in these kwargs.
+                Any other key is ignored here. ``convert_msi`` refuses a
+                key that is not in :data:`thyra.reader_options.
+                READER_OPTION_FORMATS` before it builds a reader, and
+                leaves out, with a warning, one this format does not use.
 
         Raises:
             ConversionRefused: When ``region`` is given. Dropping it

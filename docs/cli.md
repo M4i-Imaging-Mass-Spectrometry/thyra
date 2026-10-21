@@ -77,7 +77,7 @@ thyra input.imzML output.zarr && python analyse.py output.zarr
 |--------|---------|-------------|
 | `--pixel-size FLOAT` | auto-detect | Pixel size in micrometers, applied to **both** axes. Auto-detection keeps the source's own x and y pitch separately, so an anisotropic raster stays anisotropic; passing this declares it square |
 | `--region TEXT` | all | Convert one region of a timsTOF `.d`, by `.mis` Area Name or by DB RegionNumber. Checked against the dataset's own region list whether it has one region or several; a value that matches no Area Name is read as a RegionNumber, and says so. A name two Areas share is refused: pass the RegionNumber. Every other format refuses it; [`list_regions`](api.md#listing-regions) lists the regions of any input |
-| `--resample / --no-resample` | enabled | Mass axis resampling |
+| `--resample / --no-resample` | enabled | Mass axis resampling. With `--no-resample`, each resampling option given beside it is logged as ignored |
 | `--include-optical / --no-optical` | enabled | Include optical images in output |
 | `--mobility-table / --no-mobility-table` | enabled | Also write the mobility-resolved sibling table when the source shares one set of (m/z, ion mobility) features across pixels (see [Output Format](output-format.md#ion-mobility)) |
 | `--mobility-heatmap / --no-mobility-heatmap` | enabled | When the source has an ion mobility dimension, store the mean mass-mobility frame on the summed table as `uns["mobility_heatmap"]`; on a Bruker TDF it is fed from the summed table's own passes, on other sources (imzML, Waters drift time) it is one extra pass, and a processed imzML first reads its mobility values for the range (see [Output Format](output-format.md#ion-mobility)) |
@@ -234,7 +234,7 @@ the table after this one says when each option is actually needed.
 | `--resample-width-at-mz FLOAT` | auto | Mass width in Da at reference m/z for physics-based binning |
 | `--resample-reference-mz FLOAT` | `1000.0` | Reference m/z for width specification |
 | `--mass-axis-plan FILE` | none | A plan file from `plan_mass_axis`, so several data sets share one mass axis. It fixes the axis, so it cannot be combined with `--no-resample` or the axis options above |
-| `--resample-gap-tolerance FLOAT` | none | `tic_preserving` only: discard target bins farther than this many Da from any measured m/z, instead of interpolating across the gap |
+| `--resample-gap-tolerance FLOAT` | none | `tic_preserving` only: discard target bins farther than this many Da from any measured m/z, instead of interpolating across the gap. Logged as ignored when the method is `nearest_neighbor` |
 
 ### Which of these you actually need
 
@@ -374,7 +374,8 @@ No options: every conversion streams, and every table is CSC.
     a source they do not apply to. Passing one on another format is now
     logged at `WARNING`, naming the option and both formats, so a script that
     has been carrying a dead flag says so on the next run rather than
-    producing a store byte-identical to the plain one in silence.
+    producing a store byte-identical to the plain one in silence. The Python
+    API names a `reader_options` key the same way.
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -519,7 +520,7 @@ thyra synapt_run.raw output.zarr --waters-spectrum profile
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--dataset-id TEXT` | `msi_dataset` | Dataset identifier used in element keys. Letters, digits, underscores, dots and hyphens only, and not `.`, `..` or a leading `__`: it names every element in the store, so SpatialData's naming rule applies to it. Checked before any pass over the source |
+| `--dataset-id TEXT` | `msi_dataset` | Dataset identifier used in element keys. Letters, digits, underscores, dots and hyphens only. Not a leading `.` or `__`, not a Windows device name such as `nul`, and at most 216 plain characters: it names every element in the store and every folder that holds one. Checked before any pass over the source |
 | `--sample-id TEXT` | none | Names the sample in the store's metadata (`msi_metadata.sample.sample_id`). Never read from the file, and not part of any element name. Stored as typed, so never a patient's name. Checked before any pass over the source |
 | `--handle-3d` | off | Process as 3D volume instead of 2D slices |
 | `--z-spacing FLOAT` | in-plane pixel size (x) | Distance between consecutive slices, in um. Only used with `--handle-3d` |

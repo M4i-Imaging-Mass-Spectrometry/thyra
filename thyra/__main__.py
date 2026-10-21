@@ -34,11 +34,15 @@ import warnings  # noqa: E402
 from math import isfinite  # noqa: E402
 from pathlib import Path  # noqa: E402
 from typing import Any, Dict, List, Literal, Optional, Tuple  # noqa: E402
-from uuid import uuid4  # noqa: E402
 
 import click  # noqa: E402
 
 from thyra import __version__  # noqa: E402
+from thyra.reader_options import (  # noqa: E402
+    READER_OPTION_FORMATS,
+    format_name,
+    reader_option_reaches,
+)
 from thyra.resampling.mobility_grid import MOBILITY_CHANNELS  # noqa: E402
 from thyra.utils.logging_config import setup_logging  # noqa: E402
 
@@ -228,79 +232,19 @@ def _validate_input_path(input: Path) -> None:
 def _validate_output_path(output: Path) -> None:
     """Validate output path.
 
-    The existence check alone let an output whose parent is a regular
-    file through: the reader was opened and the mass axis built before
-    the scratch directory's ``mkdir`` failed with a raw ``WinError 183``
-    that named a file the user had not asked about (issue #255). The
-    store is a directory tree, so the deepest ancestor that exists has
-    to be a directory Thyra may write into; the ones above it are
-    created on the way, as they always were.
+    Beyond existence, the deepest existing ancestor must be a directory
+    Thyra may write into (issues #255, #312). That check is
+    :func:`thyra.convert.output_ancestor_problem`, shared with
+    ``convert_msi`` so the two routes refuse the same paths (issue #519).
     """
     if output.exists():
         raise click.BadParameter(f"Output path already exists: {output}")
 
-    ancestor = next((p for p in output.parents if p.exists()), None)
-    if ancestor is None:
-        return
-    if not ancestor.is_dir():
-        raise click.BadParameter(
-            f"Cannot write {output}: {ancestor} is a file, not a directory. "
-            "The output is a Zarr store, which is a directory tree, so every "
-            "part of its path above it has to be a directory."
-        )
-    _refuse_an_unwritable_directory(output, ancestor)
+    from thyra.convert import output_ancestor_problem
 
-
-def _refuse_an_unwritable_directory(output: Path, ancestor: Path) -> None:
-    """Refuse now if the store cannot be created under ``ancestor``.
-
-    The check is an actual ``mkdir``, not ``os.access(W_OK)``. On Windows
-    ``os.access`` consults the read-only *attribute* and not the ACL, so
-    it answers True for a directory the user has no write permission on
-    -- measured here on a directory denied ``(WD,AD)`` via ``icacls``:
-    ``os.access(W_OK) -> True``, ``st_mode -> 0o40777``, and both
-    ``mkdir`` and ``open(w)`` raise ``PermissionError`` errno 13. So the
-    refusal could never fire on the one platform this project is
-    developed on, and the failure surfaced instead from deep inside the
-    conversion, as "Error during conversion" plus a traceback out of the
-    CSC scratch allocation, after the metadata scan (issue #312).
-
-    ``mkdir`` rather than a temporary file because the thing being
-    refused is a directory tree: the store and its scratch are both
-    directories.
-
-    Not ``tempfile.TemporaryDirectory(dir=ancestor)``, which is what the
-    issue proposed: ``mkdtemp`` retries ``PermissionError`` when
-    ``os.name == 'nt' and os.path.isdir(dir) and os.access(dir, W_OK)``
-    -- gated on the very predicate that is broken here. It would spin
-    ``TMP_MAX`` times (2,147,483,647 on this build, extrapolating to
-    days) and then raise ``FileExistsError``, which is neither the right
-    exception nor a usable wait.
-
-    Raises:
-        click.BadParameter: When the directory cannot be written.
-    """
-    probe = ancestor / f".thyra-write-probe-{uuid4().hex}"
-    try:
-        probe.mkdir()
-    except OSError as e:
-        raise click.BadParameter(
-            f"Cannot write {output}: {ancestor} is not writable " f"({e.strerror or e})"
-        ) from e
-    try:
-        probe.rmdir()
-    except OSError as e:
-        # The directory is writable, which is the whole question, so a
-        # failure to tidy up must not refuse the conversion. It is still
-        # said out loud: an indexer or scanner holding the directory
-        # would otherwise leave one of these behind per invocation with
-        # nobody told.
-        logger.warning(
-            "Left the write probe %s behind (%s); it is an empty directory "
-            "and safe to delete.",
-            probe,
-            e,
-        )
+    problem = output_ancestor_problem(output)
+    if problem is not None:
+        raise click.BadParameter(problem)
 
 
 def _display_calibration_info(input: Path, use_recalibrated: bool) -> None:
@@ -549,18 +493,13 @@ def _build_reader_options(
     return options
 
 
-#: How each detected format is spelled in a message. ``detect_format``
-#: returns a registry key, and "a imzml source" is not what anyone calls
-#: the file they handed over.
-FORMAT_NAMES = {
-    "imzml": "imzML",
-    "mzpeak": "mzPeak",
-    "bruker": "Bruker timsTOF (.d)",
-    "solarix": "Bruker solariX (.d)",
-    "rapiflex": "Bruker Rapiflex",
-    "waters": "Waters .raw",
-    "phi": "PHI SmartSoft-TOF",
-}
+def _reader_formats(key: str) -> Tuple[str, ...]:
+    """The formats whose reader uses ``key``, from the shared table."""
+    formats = READER_OPTION_FORMATS[key]
+    if formats is None:
+        raise KeyError(f"{key} reaches every format, so it is never ignored")
+    return formats
+
 
 #: Options that only reach one family of sources, and the detected
 #: formats each does reach. docs/cli.md has always said the vendor groups
@@ -571,12 +510,18 @@ FORMAT_NAMES = {
 #: set the precedent of saying it out loud; these follow. ``--region`` is
 #: not here: the reader refuses it on every other format (issue #448), and
 #: an "ignored" line before that refusal said the opposite.
+#: The reader options take their formats from ``READER_OPTION_FORMATS``,
+#: the table ``convert_msi`` warns from, so both routes name the same
+#: options as ignored (issue #519).
 IGNORED_ELSEWHERE: dict[str, Tuple[str, Tuple[str, ...]]] = {
-    "tdf_spectrum": ("--tdf-spectrum", ("bruker",)),
-    "waters_spectrum": ("--waters-spectrum", ("waters",)),
-    "use_recalibrated": ("--use-recalibrated/--no-recalibrated", ("bruker",)),
+    "tdf_spectrum": ("--tdf-spectrum", _reader_formats("tdf_spectrum")),
+    "waters_spectrum": ("--waters-spectrum", _reader_formats("use_centroid")),
+    "use_recalibrated": (
+        "--use-recalibrated/--no-recalibrated",
+        _reader_formats("use_recalibrated_state"),
+    ),
     "interactive_calibration": ("--interactive-calibration", ("bruker", "solarix")),
-    "spectrum_type": ("--spectrum-type", ("imzml",)),
+    "spectrum_type": ("--spectrum-type", _reader_formats("spectrum_type")),
     "mobility_grid": (
         "--mobility-grid/--no-mobility-grid",
         ("bruker", "imzml", "waters"),
@@ -589,11 +534,6 @@ IGNORED_ELSEWHERE: dict[str, Tuple[str, Tuple[str, ...]]] = {
 #: The three options that size the grid ``--mobility-grid`` builds. They
 #: do nothing without it, which docs/cli.md says and nothing else did.
 GRID_SIZING_FLAGS = ("mobility_bins", "mobility_min", "mobility_max")
-
-
-def _format_name(input_format: str) -> str:
-    """How to spell a detected format in a message."""
-    return FORMAT_NAMES.get(input_format, input_format)
 
 
 def _given_on_the_command_line(ctx: Optional[click.Context], name: str) -> bool:
@@ -624,7 +564,7 @@ def _warn_ignored_flags(
     """
     if ctx is None:
         return
-    source_name = _format_name(input_format)
+    source_name = format_name(input_format)
     for name, (spelling, formats) in IGNORED_ELSEWHERE.items():
         if input_format in formats or not _given_on_the_command_line(ctx, name):
             continue
@@ -633,7 +573,7 @@ def _warn_ignored_flags(
             "written as though it had not been given.",
             spelling,
             source_name,
-            " or ".join(_format_name(f) for f in formats),
+            " or ".join(format_name(f) for f in formats),
         )
 
     if mobility_grid:
@@ -647,6 +587,43 @@ def _warn_ignored_flags(
             "grid, and no grid table is being written.",
             spelling,
         )
+
+
+#: The options that shape the resampled axis or how spectra are placed on
+#: it, by parameter name. ``--no-resample`` builds no such axis, so each one
+#: given beside it does nothing.
+RESAMPLING_FLAGS = {
+    "resample_method": "--resample-method",
+    "mass_axis_type": "--mass-axis-type",
+    "resample_bins": "--resample-bins",
+    "resample_min_mz": "--resample-min-mz",
+    "resample_max_mz": "--resample-max-mz",
+    "resample_width_at_mz": "--resample-width-at-mz",
+    "resample_reference_mz": "--resample-reference-mz",
+    "resample_gap_tolerance": "--resample-gap-tolerance",
+    "tof_law": "--tof-law",
+}
+
+
+def _warn_resampling_flags_without_resampling(
+    ctx: Optional[click.Context], resample: bool
+) -> None:
+    """Name every resampling option ``--no-resample`` makes dead.
+
+    They were dropped in silence: ``--resample-min-mz 300
+    --resample-max-mz 400`` beside it stored the full range and exited 0
+    (issue #519). One WARNING per option, as for the vendor options
+    (issue #260).
+    """
+    if resample or ctx is None:
+        return
+    for name, spelling in RESAMPLING_FLAGS.items():
+        if _given_on_the_command_line(ctx, name):
+            logger.warning(
+                "%s is ignored with --no-resample: no resampled axis is "
+                "built. The store is written as though it had not been given.",
+                spelling,
+            )
 
 
 def _parse_streaming_option(streaming: str) -> bool | Literal["auto"]:
@@ -1265,6 +1242,9 @@ def main(
         _warn_ignored_flags(
             click.get_current_context(silent=True), detected_format, mobility_grid
         )
+    _warn_resampling_flags_without_resampling(
+        click.get_current_context(silent=True), resample
+    )
 
     # Display calibration info if requested (Bruker datasets only)
     if interactive_calibration and input.is_dir() and input.suffix.lower() == ".d":
@@ -1295,6 +1275,16 @@ def main(
         tdf_spectrum,
         waters_spectrum,
     )
+    # Only the options that reach this source: the ones that do not were
+    # named above, with the flag's own spelling, and convert_msi would name
+    # them again. use_recalibrated_state is always set, so without this an
+    # imzML run with no vendor flag got a line about one (issue #519).
+    if detected_format:
+        reader_options = {
+            key: value
+            for key, value in reader_options.items()
+            if reader_option_reaches(key, detected_format)
+        }
 
     msms_table_option: Dict[str, Any] = (
         {} if msms_table is None else {"msms_table": msms_table}

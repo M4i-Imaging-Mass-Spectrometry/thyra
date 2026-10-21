@@ -23,8 +23,10 @@ import pytest
 from thyra.__main__ import (
     GRID_SIZING_FLAGS,
     IGNORED_ELSEWHERE,
+    RESAMPLING_FLAGS,
     _validate_mobility_grid_params,
     _warn_ignored_flags,
+    _warn_resampling_flags_without_resampling,
 )
 
 PROCESSED = (
@@ -179,3 +181,113 @@ class TestGridNumbers:
 
     def test_the_defaults_pass(self):
         _validate_mobility_grid_params(256, None, None)
+
+
+class TestResamplingFlagsWithoutResampling:
+    """``--no-resample`` dropped every resampling option in silence (#519)."""
+
+    @pytest.mark.parametrize("name", sorted(RESAMPLING_FLAGS))
+    def test_each_flag_given_beside_it_warns(self, name, warnings):
+        _warn_resampling_flags_without_resampling(_Ctx(name), resample=False)
+
+        assert len(warnings.records) == 1
+        message = warnings.records[0].getMessage()
+        assert RESAMPLING_FLAGS[name] in message and "--no-resample" in message
+
+    def test_one_line_per_flag(self, warnings):
+        _warn_resampling_flags_without_resampling(
+            _Ctx("resample_min_mz", "resample_max_mz", "resample_bins"),
+            resample=False,
+        )
+        assert len(warnings.records) == 3
+
+    def test_quiet_when_resampling(self, warnings):
+        _warn_resampling_flags_without_resampling(
+            _Ctx(*RESAMPLING_FLAGS), resample=True
+        )
+        assert not warnings.records
+
+    def test_quiet_when_no_flag_was_given(self, warnings):
+        _warn_resampling_flags_without_resampling(_Ctx(), resample=False)
+        assert not warnings.records
+
+
+class TestOneTableForBothRoutes:
+    """The CLI's reader-option entries come from the API's table (#519)."""
+
+    @pytest.mark.parametrize(
+        "cli_name, reader_key",
+        [
+            ("tdf_spectrum", "tdf_spectrum"),
+            ("waters_spectrum", "use_centroid"),
+            ("use_recalibrated", "use_recalibrated_state"),
+            ("spectrum_type", "spectrum_type"),
+        ],
+    )
+    def test_the_formats_are_the_reader_tables(self, cli_name, reader_key):
+        from thyra.reader_options import READER_OPTION_FORMATS
+
+        assert IGNORED_ELSEWHERE[cli_name][1] == READER_OPTION_FORMATS[reader_key]
+
+
+class TestOnlyTheOptionsThatReachTheSource:
+    """The CLI hands convert_msi only what the detected format uses (#519).
+
+    ``use_recalibrated_state`` is always set, so convert_msi would otherwise
+    name it as ignored on every imzML run.
+    """
+
+    def test_an_imzml_run_without_vendor_flags_says_nothing_is_ignored(
+        self, tmp_path, monkeypatch, thyra_logs
+    ):
+        from click.testing import CliRunner
+
+        import thyra.convert
+        from thyra.__main__ import main
+
+        seen = {}
+
+        def fake_convert(*args, **kwargs):
+            seen.update(kwargs)
+            return True
+
+        monkeypatch.setattr(thyra.convert, "convert_msi", fake_convert)
+        with thyra_logs("thyra.cli", logging.WARNING) as records:
+            result = CliRunner().invoke(
+                main, [str(PROCESSED), str(tmp_path / "out.zarr"), "--pixel-size", "10"]
+            )
+        assert result.exit_code == 0, result.output
+        assert not [r for r in records if "is ignored" in r.getMessage()]
+        assert "use_recalibrated_state" not in seen["reader_options"]
+
+    def test_a_given_vendor_flag_is_named_once_and_not_forwarded(
+        self, tmp_path, monkeypatch, thyra_logs
+    ):
+        from click.testing import CliRunner
+
+        import thyra.convert
+        from thyra.__main__ import main
+
+        seen = {}
+
+        def fake_convert(*args, **kwargs):
+            seen.update(kwargs)
+            return True
+
+        monkeypatch.setattr(thyra.convert, "convert_msi", fake_convert)
+        with thyra_logs("thyra.cli", logging.WARNING) as records:
+            result = CliRunner().invoke(
+                main,
+                [
+                    str(PROCESSED),
+                    str(tmp_path / "out.zarr"),
+                    "--pixel-size",
+                    "10",
+                    "--tdf-spectrum",
+                    "vendor_centroid",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        ignored = [r.getMessage() for r in records if "is ignored" in r.getMessage()]
+        assert len(ignored) == 1 and "--tdf-spectrum" in ignored[0]
+        assert "tdf_spectrum" not in seen["reader_options"]

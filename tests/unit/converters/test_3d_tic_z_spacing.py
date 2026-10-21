@@ -465,7 +465,9 @@ class TestRejectedInput:
     def test_a_non_positive_spacing_is_rejected(self, tmp_path):
         """Caught in the constructor, before anything is read or written."""
         for bad in (0.0, -1.0, -0.5):
-            with pytest.raises(ValueError, match="z_spacing_um must be positive"):
+            with pytest.raises(
+                ValueError, match="z_spacing_um must be a finite positive"
+            ):
                 SpatialDataConverter(
                     _VolumeProbeReader((_N_X, _N_Y, _N_Z)),
                     tmp_path / "rejected.zarr",

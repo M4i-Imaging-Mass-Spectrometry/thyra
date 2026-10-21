@@ -71,3 +71,23 @@ def test_a_width_law_off_a_tof_axis_is_not_recorded(source, tmp_path):
 
     assert step["axis_type"] == "constant"
     assert not {"tof_a", "tof_b", "bins_per_fwhm"} & set(step)
+
+
+@pytest.mark.parametrize(
+    "method, recorded",
+    [("nearest_neighbor", False), ("tic_preserving", True)],
+)
+def test_a_gap_tolerance_is_recorded_only_where_it_acts(
+    source, tmp_path, method, recorded
+):
+    """Only interpolation reads it (issue #519)."""
+    config = {
+        "method": method,
+        "axis_type": "constant",
+        "target_bins": 100,
+        "gap_tolerance_da": 0.5,
+    }
+
+    step = _step(source, tmp_path / f"{method}.zarr", config)
+
+    assert ("gap_tolerance_da" in step) is recorded

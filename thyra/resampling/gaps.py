@@ -58,12 +58,22 @@ def zero_across_gaps(
         mzs: Source m/z values, ascending.
         tolerance: Maximum distance in Da from a target bin to the nearest
             source m/z. ``None`` disables the check and returns ``resampled``
-            untouched, as does a non-positive tolerance.
+            untouched.
 
     Returns:
         ``resampled``, with unsupported bins set to zero.
+
+    Raises:
+        ValueError: When ``tolerance`` is not above 0. Such a tolerance
+            used to switch the check off while the log said it was in
+            force (issue #519); ``normalize_resampling_config`` refuses it
+            first, so reaching this is a bug.
     """
-    if tolerance is None or tolerance <= 0.0 or mzs.size == 0:
+    if tolerance is None:
+        return resampled
+    if not tolerance > 0.0:
+        raise ValueError(f"gap tolerance must be above 0 Da, got {tolerance!r}")
+    if mzs.size == 0:
         return resampled
 
     # Distance from each target bin to the nearest source m/z. searchsorted
