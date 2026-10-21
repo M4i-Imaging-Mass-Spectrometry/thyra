@@ -599,6 +599,11 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             unit.plane: unit for unit in units if unit.plane is not None
         }
         n_cols = len(self._common_mass_axis)
+        # Each region adds to what a bin costs; asked again with them before
+        # their arrays and the sibling sinks exist (issue #528).
+        n_regions = len(set((self._region_map or {}).values()))
+        if n_regions >= 2:
+            self._refuse_wide_mass_axis(n_cols, max(len(units), 1), n_regions)
         if units:
             logger.info(
                 "Streaming CSC: %s grid positions x %s m/z bins in %d table(s)",
@@ -794,6 +799,15 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # second time: a conversion with no row has nothing left to do
         # and no store to write (#242).
         self._refuse_an_empty_conversion(state)
+        # The pre-scan has met every plane, so the tables are known now;
+        # then the counted matrix files against the drive (issue #528).
+        if len(units) > 1:
+            self._refuse_wide_mass_axis(
+                units[0].assembly.span,
+                len(units),
+                len(set((self._region_map or {}).values())),
+            )
+        self.siblings.refuse_a_full_disk((unit.assembly for unit in units), passes)
         self._finish_region_averages(state)
 
         for unit in units:

@@ -12,11 +12,15 @@ import numpy as np
 import pytest
 from scipy import sparse
 
+from thyra.converters.spatialdata import csc_assembly
 from thyra.converters.spatialdata.csc_assembly import (
     MAX_COUNT_BYTES,
     CscAssembly,
     count_refusal,
+    disk_refusal,
+    free_disk_bytes,
     index_dtype,
+    matrix_file_bytes,
     remove_scratch,
     sort_csc_columns,
 )
@@ -255,6 +259,19 @@ class TestTheGuards:
         with pytest.raises(MemoryError):
             CscAssembly(MAX_COUNT_BYTES // 4 + 1, 1)
 
+    def test_past_the_ceiling_is_a_refusal_not_a_crash(self):
+        """Shown as one line, not a traceback; still a ``MemoryError`` to catch.
+
+        The callers that leave a sibling table out catch ``MemoryError``;
+        anything that reaches the person must be a refusal (issue #528).
+        """
+        with pytest.raises(ConversionRefused, match="--resample-bins"):
+            CscAssembly(MAX_COUNT_BYTES // 4 + 1, 1)
+
+    def test_a_caller_names_its_own_levers(self):
+        refusal = count_refusal(MAX_COUNT_BYTES // 4 + 1, levers="do something else")
+        assert refusal is not None and refusal.endswith("do something else")
+
     def test_the_index_dtype_is_scipys_rule(self):
         assert index_dtype(10, 10) is np.int32
         assert index_dtype(2**31, 10) is np.int64
@@ -393,3 +410,64 @@ class TestTheChunkedSort:
 
         np.testing.assert_array_equal(np.asarray(indices), expected.indices)
         np.testing.assert_array_equal(np.asarray(data), expected.data)
+
+
+class TestTheDiskCheck:
+    """A matrix bigger than the drive is refused before its files exist (issue #528)."""
+
+    def test_the_bytes_are_value_and_index_per_entry(self):
+        assert matrix_file_bytes(10, 5) == 10 * (8 + 4)
+        assert matrix_file_bytes(2**31, 5) == 2**31 * (8 + 8)
+        assert matrix_file_bytes(0, 5) == 12  # a file of one entry is still made
+
+    def test_a_folder_not_made_yet_asks_its_parent(self, tmp_path):
+        free = free_disk_bytes(tmp_path / "not" / "made" / "yet")
+        assert free is not None and free > 0
+        assert not (tmp_path / "not").exists()
+
+    def test_more_than_is_free_is_refused_naming_both(self, tmp_path):
+        refusal = disk_refusal(3 * 1024**3, tmp_path, free_bytes=2 * 1024**3)
+
+        assert refusal is not None
+        assert "3.00 GB" in refusal and "2.00 GB free" in refusal
+        assert str(tmp_path) in refusal
+
+    def test_a_relative_output_folder_is_named_in_full(self):
+        """``thyra in.d out.zarr`` puts the files in ``.``, which says nothing."""
+        refusal = disk_refusal(3, Path("."), free_bytes=2)
+
+        assert refusal is not None and str(Path.cwd()) in refusal
+
+    def test_past_half_of_it_warns_and_goes_on(self, tmp_path, thyra_logs):
+        with thyra_logs("thyra.converters.spatialdata.csc_assembly") as records:
+            assert disk_refusal(600, tmp_path, free_bytes=1000) is None
+
+        assert any("the store is written there too" in r.getMessage() for r in records)
+
+    def test_below_half_says_nothing(self, tmp_path, thyra_logs):
+        with thyra_logs("thyra.converters.spatialdata.csc_assembly") as records:
+            assert disk_refusal(400, tmp_path, free_bytes=1000) is None
+
+        assert not records
+
+    def test_a_drive_that_will_not_say_is_never_refused(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(csc_assembly, "free_disk_bytes", lambda folder: None)
+        assert disk_refusal(10**18, tmp_path) is None
+
+    def test_allocate_refuses_before_making_a_file(self, tmp_path, monkeypatch):
+        """The backstop for a matrix nothing upstream compared with the drive."""
+        rows = _rows(np.random.default_rng(3), 4)
+        assembly = CscAssembly(SPAN, 4)
+        for row, keys, _values in rows:
+            assembly.count(row, keys)
+        assembly.finish_counting()
+        monkeypatch.setattr(csc_assembly, "free_disk_bytes", lambda folder: 100)
+
+        with pytest.raises(ConversionRefused, match="matrix files"):
+            assembly.allocate(tmp_path / "scratch")
+
+        assert not (tmp_path / "scratch").exists()
+        # Nothing was taken apart, so the matrix can still be allocated.
+        monkeypatch.setattr(csc_assembly, "free_disk_bytes", lambda folder: 10**12)
+        assembly.allocate(tmp_path / "scratch")
+        assembly.release()

@@ -69,20 +69,35 @@ from ...resampling.memory_guard import (  # noqa: F401 (re-exported)
     AXIS_BYTES_PER_BIN,
     AXIS_REFUSE_FRACTION,
     AXIS_WARN_FRACTION,
+    MAX_COUNT_BYTES,
+    MAX_COUNT_KEYS,
+    REGION_BYTES_PER_BIN,
+    TABLE_BYTES_PER_BIN,
     available_memory_gb,
+    axis_bytes_per_bin,
     mass_axis_refusal,
     projected_axis_gb,
 )
 
 logger = logging.getLogger(__name__)
 
-#: Bytes the per-key count array of pass 1 may take. It is ``span * 4``
-#: with ``span`` the key space -- ``mass axis bins x mobility channels``
-#: for the grid, which on a default-resampled timsTOF axis is 35.5M pairs
-#: and 142 MB. A raw, unresampled axis of several million bins would push
-#: it into gigabytes, and that is a source to resample rather than a
-#: table to build: the same axis would also blow the feature ceiling.
-MAX_COUNT_BYTES = 1 << 30
+#: Fractions of the free disk the matrix files of a conversion may take
+#: before it warns, and before it refuses. The store is written to the
+#: same volume while those files still exist, so past half of the free
+#: space it may not fit; it is compressed, often to a fraction of the
+#: matrix, so that is a warning and not a refusal (issue #528, F149).
+DISK_WARN_FRACTION = 0.5
+DISK_REFUSE_FRACTION = 1.0
+
+
+class CountCeilingExceeded(ConversionRefused, MemoryError):
+    """A key space too wide for the first pass to count.
+
+    A refusal, so it reaches the person as one line; still a
+    ``MemoryError``, which is what the callers that leave a sibling table
+    out instead catch.
+    """
+
 
 #: Entries loaded at once when a column chunk has to be sorted after the
 #: scatter (a source read out of raster order). Bounds that pass to a few
@@ -247,16 +262,84 @@ def count_bytes(span: int) -> int:
     return int(span) * int(np.dtype(_COUNT_DTYPE).itemsize)
 
 
-def count_refusal(span: int) -> Optional[str]:
-    """Why a key space this wide cannot be counted, or ``None``."""
+def count_refusal(span: int, levers: Optional[str] = None) -> Optional[str]:
+    """Why a key space this wide cannot be counted, or ``None``.
+
+    ``levers`` replaces the closing advice, which by default names
+    ``--resample-bins``.
+    """
     needed = count_bytes(span)
     if needed <= MAX_COUNT_BYTES:
         return None
+    if levers is None:
+        levers = "resample to fewer mass bins (--resample-bins)"
     return (
         f"the feature space spans {int(span):,} keys and counting them needs "
         f"{needed / 1024**3:.1f} GB, above the {MAX_COUNT_BYTES / 1024**3:.0f} GB "
-        f"this pass allows; resample to fewer mass bins (--resample-bins)"
+        f"this pass allows; {levers}"
     )
+
+
+def matrix_file_bytes(n_nonzeros: int, n_rows: int) -> int:
+    """What :meth:`CscAssembly.allocate` writes to disk for this many entries."""
+    size = max(int(n_nonzeros), 1)
+    return size * (int(np.dtype(index_dtype(n_nonzeros, n_rows)).itemsize) + 8)
+
+
+def free_disk_bytes(folder: Path) -> Optional[int]:
+    """Free space on the volume ``folder`` is (or will be) on, or ``None``.
+
+    The folder need not exist yet: the nearest existing parent is asked.
+    """
+    path = Path(folder).absolute()
+    for candidate in (path, *path.parents):
+        if candidate.exists():
+            try:
+                return int(shutil.disk_usage(candidate).free)
+            except OSError as e:
+                logger.debug("Could not read free disk at %s: %s", candidate, e)
+                return None
+    return None
+
+
+def disk_refusal(
+    needed_bytes: int,
+    folder: Path,
+    free_bytes: Optional[int] = None,
+    warn: bool = True,
+    what: str = "the matrix files of this conversion",
+) -> Optional[str]:
+    """Why matrix files of ``needed_bytes`` cannot be written in ``folder``, or ``None``.
+
+    Refused past :data:`DISK_REFUSE_FRACTION` of the volume's free space,
+    warned about past :data:`DISK_WARN_FRACTION` when ``warn`` is set.
+    ``free_bytes`` overrides the volume's own answer, for tests; a volume
+    that will not say is never refused. ``what`` names the files in the
+    message.
+    """
+    folder = Path(folder).absolute()
+    free = free_disk_bytes(folder) if free_bytes is None else int(free_bytes)
+    if free is None:
+        return None
+    needed_gb = needed_bytes / 1024**3
+    free_gb = free / 1024**3
+    if needed_bytes > free * DISK_REFUSE_FRACTION:
+        return (
+            f"{what} need {needed_gb:.2f} GB in "
+            f"{folder}, and that drive has {free_gb:.2f} GB free; free some "
+            f"space there or write the output to a drive with more room"
+        )
+    if warn and needed_bytes > free * DISK_WARN_FRACTION:
+        logger.warning(
+            "The matrix files of this conversion need %.2f GB of the %.2f GB "
+            "free in %s, and the store is written there too. It will be "
+            "attempted; if the drive fills, write the output to a drive with "
+            "more room.",
+            needed_gb,
+            free_gb,
+            folder,
+        )
+    return None
 
 
 class CscAssembly:
@@ -294,7 +377,7 @@ class CscAssembly:
         """Allocate the count array; refuses a span too wide to count."""
         refusal = count_refusal(span)
         if refusal is not None:
-            raise MemoryError(refusal)
+            raise CountCeilingExceeded(refusal)
         self.span = int(span)
         self.n_rows = int(n_rows)
         self._keep_empty = bool(keep_empty_columns)
@@ -356,6 +439,21 @@ class CscAssembly:
         """Size the CSC arrays from the counts and back them with files."""
         if self._counts is None or self.unique_keys is None:
             raise RuntimeError("allocate() needs finish_counting() first")
+        scratch = Path(scratch)
+        # The backstop for a matrix the converter's own check before pass 2
+        # did not see (a sibling table counted on its own, an API caller):
+        # a full disk used to end in ``[Errno 28]`` and a traceback (issue
+        # #528). Only this matrix is compared: files allocated before it
+        # are already off the free space where the volume reserves them at
+        # once (NTFS), and are counted by that check where it does not.
+        refusal = disk_refusal(
+            matrix_file_bytes(self.n_nonzeros, self.n_rows),
+            scratch.parent,
+            warn=False,
+            what="the matrix files of one table",
+        )
+        if refusal is not None:
+            raise ConversionRefused(refusal)
         counts = self._counts
         n_cols = int(self.unique_keys.size)
         self._index_dtype = index_dtype(self.n_nonzeros, self.n_rows)
@@ -374,7 +472,6 @@ class CscAssembly:
             self._column_of_key = counts
         self._counts = None
         size = max(self.n_nonzeros, 1)
-        scratch = Path(scratch)
         scratch.mkdir(parents=True, exist_ok=True)
         self._indices = np.memmap(
             scratch / "csc_indices.bin",

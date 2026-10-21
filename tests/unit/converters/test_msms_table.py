@@ -20,10 +20,13 @@ import pytest
 
 pytest.importorskip("spatialdata")
 
+from thyra.converters.spatialdata import msms_table  # noqa: E402
 from thyra.converters.spatialdata.msms_table import (  # noqa: E402
     build_msms_table,
     demultiplex_refusal,
+    msms_ceiling_refusal,
     msms_table_key,
+    new_msms_accumulator,
 )
 from thyra.core.msms import FragmentationSchedule, IsolationWindow  # noqa: E402
 
@@ -338,6 +341,54 @@ class TestRefusals:
 
     def test_a_separable_schedule_is_not_refused(self):
         assert demultiplex_refusal(SCHEDULE) is None
+
+
+class TestTheCountCeiling:
+    """Precursors x bins past what a table can count leave the table out (issue #528).
+
+    It used to raise a bare ``MemoryError`` out of the count array and stop
+    the whole conversion, where the grid in the same case is left out with
+    a warning. The ceiling is lowered here rather than the axis widened, so
+    nothing large is allocated.
+    """
+
+    def test_within_the_ceiling_there_is_nothing_to_say(self):
+        assert msms_ceiling_refusal(SCHEDULE, AXIS.size) is None
+
+    def test_past_it_the_reason_names_both_levers(self, monkeypatch):
+        monkeypatch.setattr(msms_table, "MAX_COUNT_KEYS", AXIS.size)
+
+        refusal = msms_ceiling_refusal(SCHEDULE, AXIS.size)
+
+        assert refusal is not None
+        assert "2 precursors x 5 m/z bins are 10 keys" in refusal
+        assert "--no-msms-table" in refusal and "--resample-bins" in refusal
+
+    def test_the_standalone_route_writes_no_table_and_warns(
+        self, monkeypatch, thyra_logs
+    ):
+        monkeypatch.setattr(msms_table, "MAX_COUNT_KEYS", AXIS.size)
+
+        with thyra_logs("thyra.converters.spatialdata.msms_table") as records:
+            assert _build() is None
+
+        assert any(
+            r.levelname == "WARNING" and "--no-msms-table" in r.getMessage()
+            for r in records
+        )
+
+    def test_the_fused_route_gets_no_accumulator(self, monkeypatch, thyra_logs):
+        monkeypatch.setattr(msms_table, "MAX_COUNT_KEYS", AXIS.size)
+
+        with thyra_logs("thyra.converters.spatialdata.msms_table") as records:
+            assert new_msms_accumulator(_reader(), AXIS, 2) is None
+
+        assert any("--no-msms-table" in r.getMessage() for r in records)
+
+    def test_one_key_under_it_is_still_built(self, monkeypatch):
+        monkeypatch.setattr(msms_table, "MAX_COUNT_KEYS", 2 * AXIS.size)
+
+        assert _build() is not None
 
 
 class TestIsomerPrecursors:

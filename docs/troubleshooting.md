@@ -148,6 +148,11 @@ stays in memory. Use fewer bins:
 thyra large.d output.zarr --resample-bins 20000
 ```
 
+### The drive is too full
+
+If the work files will not fit on the drive, Thyra stops and says how much
+space they need. Free some space, or use another drive.
+
 ## Opening the result
 
 ### Windows: a result looks incomplete in another program { #windows-long-paths }

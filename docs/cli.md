@@ -196,8 +196,8 @@ thyra tims_data.d output.zarr --mobility-grid --mobility-bins 512     --mobility
     around 140,000 bins; 200 frames of one measured acquisition filled 3.9
     million of the resulting pairs, and a whole 26,000-pixel acquisition
     occupies 21 million. The table is refused when the `var` frame those
-    pairs make is projected to take more than half of the machine's free
-    memory (about 338 bytes per pair, measured), and warned about past a
+    pairs make is projected to take more than half of the free memory (see
+    below) (about 338 bytes per pair, measured), and warned about past a
     quarter. Reach for `--resample-bins` when the whole image is wanted
     resolved on a smaller machine.
 
@@ -281,14 +281,28 @@ default), so there is no separate flag for that quantity.
 !!! warning "A very fine axis is refused before it is built"
     Everything a conversion holds per m/z bin -- the axis, the `var` frame
     with its index, the running intensity totals, the pre-scan's count array
-    and anndata's copies during the write -- comes to about 200 bytes,
-    measured. So the bin count is checked against the machine's free memory
-    before the axis is materialised: past half of it the conversion is
-    refused with the projection and the free memory printed, and past a
-    quarter it is attempted with a `WARNING`. With 8 GB of memory free, the
-    refusal starts at around 21 million bins. `--resample-bins` and a small
-    `--resample-width-at-mz` are the two ways to ask for more than that; a
-    wide-range source at a fine width reaches it without either.
+    and anndata's copies during the write -- comes to about 200 bytes for
+    one table, measured. Each further table (one per plane on the 2D route)
+    adds about 36 bytes per bin, and each region about 20 when a source has
+    two or more. The bin count is checked before the axis is materialised,
+    and again once the regions and the planes are known. It is compared with
+    the memory this process can still take: the machine's free memory, or a
+    job, container or cgroup limit when that is lower. Past half of it the
+    conversion is refused with the projection and the free memory printed;
+    past a quarter it is attempted with a `WARNING`. With 8 GB free, a
+    one-table conversion is refused from around 21 million bins. No table
+    can count more than 268,435,456 bins, so a wider axis is refused however
+    much memory is free. `--resample-bins` and a small
+    `--resample-width-at-mz` are the two ways to ask for a fine axis; a
+    wide-range source at a fine width reaches the limit without either.
+
+!!! note "Free disk is checked after the pre-scan"
+    The matrix is written to temporary files next to the output while the
+    store is built: 12 bytes per stored value, 16 for a matrix of more than
+    two billion values. After the pre-scan their size is known exactly. A
+    conversion whose files need more than the drive's free space is refused,
+    with both sizes printed. Past half of it a `WARNING` says the store,
+    which is written to the same drive, may not fit.
 
 !!! info "Choosing a mass axis type"
     The axis type determines how bin widths scale with m/z:

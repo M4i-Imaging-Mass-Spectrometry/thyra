@@ -729,26 +729,42 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             return None
         return {"sha256": mass_axis_sha256(axis), "n_bins": int(len(axis))}
 
-    def _refuse_wide_mass_axis(self, n_bins: int) -> None:
+    def _refuse_wide_mass_axis(
+        self, n_bins: int, n_tables: int = 1, n_regions: int = 0
+    ) -> None:
         """Refuse a mass axis whose per-bin cost will not fit in memory.
 
-        Raises:
-            ConversionRefused: When the projection exceeds the fraction of
-                free memory a conversion may take.
-        """
-        from ...resampling.memory_guard import mass_axis_refusal
+        Asked first before the axis is built, with one table and no
+        regions, and again once the conversion knows its regions and its
+        tables (issue #528). The free memory read the first time is the
+        one every later check compares with: by then the conversion has
+        started to take what the projection counts.
 
+        Raises:
+            ConversionRefused: When the axis is wider than a table can
+                count, or the projection exceeds the fraction of free
+                memory a conversion may take.
+        """
+        from ...resampling.memory_guard import available_memory_gb, mass_axis_refusal
+
+        free = getattr(self, "_axis_free_memory_gb", None)
+        if free is None:
+            free = available_memory_gb()
+            self._axis_free_memory_gb = free
         config = self._resampling_config
+        levers = None
         if config is not None and config.mass_axis_sha256 is not None:
-            refusal = mass_axis_refusal(
-                int(n_bins),
-                levers=(
-                    "plan a coarser axis (a wider width_at_mz or fewer "
-                    "bins_per_fwhm) or a narrower range"
-                ),
+            levers = (
+                "plan a coarser axis (a wider width_at_mz or fewer "
+                "bins_per_fwhm) or a narrower range"
             )
-        else:
-            refusal = mass_axis_refusal(int(n_bins))
+        refusal = mass_axis_refusal(
+            int(n_bins),
+            available_gb=free,
+            levers=levers,
+            n_tables=n_tables,
+            n_regions=n_regions,
+        )
         if refusal is not None:
             raise ConversionRefused(refusal)
 

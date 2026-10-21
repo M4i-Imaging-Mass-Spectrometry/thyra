@@ -52,6 +52,7 @@ from ...core.msms import FragmentationSchedule, windows_overlap
 from ...resampling.binning import nn_map_to_bins
 from ...resampling.types import AxisLinearisation
 from .csc_assembly import (
+    MAX_COUNT_KEYS,
     CscAssembly,
     release_when_collected,
     remove_scratch,
@@ -135,6 +136,32 @@ def demultiplex_refusal(schedule: Optional[FragmentationSchedule]) -> Optional[s
             "so they cannot be separated by scan number alone"
         )
     return None
+
+
+def msms_ceiling_refusal(
+    schedule: Optional[FragmentationSchedule], n_bins: int
+) -> Optional[str]:
+    """Why the MS/MS table of this schedule over ``n_bins`` m/z bins is too wide to count.
+
+    Its keys are ``precursors x bins``, and one table can count
+    :data:`~thyra.resampling.memory_guard.MAX_COUNT_KEYS` of them. Past
+    that the count array used to raise a bare ``MemoryError`` and stop
+    the whole conversion, where the grid in the same case is left out with
+    a warning (issue #528, F154). So it is asked when the table is
+    planned, and the table is left out instead.
+    """
+    if schedule is None or not schedule.windows:
+        return None
+    n_windows = len(schedule.windows)
+    n_keys = n_windows * int(n_bins)
+    if n_keys <= MAX_COUNT_KEYS:
+        return None
+    return (
+        f"{n_windows:,} precursors x {int(n_bins):,} m/z bins are "
+        f"{n_keys:,} keys, more than the {MAX_COUNT_KEYS:,} a table can count; "
+        "resample to fewer mass bins (--resample-bins) to keep it, or pass "
+        "--no-msms-table to leave it out without this warning"
+    )
 
 
 def _window_mobility(reader: BaseMSIReader) -> Callable[[Any], float]:
@@ -500,6 +527,10 @@ def new_msms_accumulator(
     axis = np.asarray(common_mass_axis, dtype=np.float64)
     if axis.size == 0:
         return None
+    ceiling = msms_ceiling_refusal(schedule, int(axis.size))
+    if ceiling is not None:
+        logger.warning("No demultiplexed MS/MS table: %s", ceiling)
+        return None
     _mz, _mobility, window_rank = _precursor_axis(schedule, _window_mobility(reader))
     return MsmsAccumulator(axis, window_rank, n_rows, linearisation, kept_range)
 
@@ -554,8 +585,9 @@ def build_msms_table(
 
     Returns:
         A ``TableModel``-parsed AnnData, or ``None`` when the acquisition
-        must not be demultiplexed (logged at info level with the reason)
-        or nothing was accumulated.
+        must not be demultiplexed (logged at info level with the reason),
+        when its keys are more than a table can count (logged as a
+        warning), or when nothing was accumulated.
     """
     schedule = reader.get_fragmentation()
     refusal = demultiplex_refusal(schedule)
@@ -565,6 +597,11 @@ def build_msms_table(
     axis = np.asarray(common_mass_axis, dtype=np.float64)
     if axis.size == 0:
         return None
+    if accumulator is None:
+        ceiling = msms_ceiling_refusal(schedule, int(axis.size))
+        if ceiling is not None:
+            logger.warning("No demultiplexed MS/MS table: %s", ceiling)
+            return None
 
     precursor_mz, precursor_mobility, window_rank = _precursor_axis(
         schedule, _window_mobility(reader)

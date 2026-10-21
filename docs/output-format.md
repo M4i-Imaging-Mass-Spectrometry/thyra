@@ -829,6 +829,12 @@ holds 14,952 distinct windows, each in one to eight frames, overlapping on
 the ramp -- and the varying schedule is the design while the overlap is
 only its consequence.
 
+One more condition is said as a `WARNING`, because the table was asked for
+and the source could give it: precursors x mass bins past 268,435,456, more
+keys than one table can count. The table is left out and the summed table
+is written. Fewer mass bins (`--resample-bins`) keep it; `--no-msms-table`
+leaves it out without the warning.
+
 A refusal writes no sibling table, is never an exception and never touches
 the summed table. Bruker TDF is the only source that reports what the
 split needs today.
@@ -865,8 +871,8 @@ ion current, one bounded pass over each.
       precursor spectra -- count the occupied `(precursor, bin)` pairs,
       then scatter into memmapped CSC arrays in a scratch directory next to
       the output (`.thyra_msms_*`) -- so memory is the count array
-      (`4 bytes x precursors x mass bins`) plus one frame, whatever the
-      pixel count. Those are the summed table's own two passes, fed from
+      (`4 bytes x precursors x mass bins`, at most 1 GB) plus one frame,
+      whatever the pixel count. Those are the summed table's own two passes, fed from
       the same frame read, so the split adds no read of the source. The largest acquisition this has run on is still 713
       pixels with 15 precursors; `var` grows with the occupied pairs.
     - **Two acquired schedules have been tested, from one instrument.** 15
