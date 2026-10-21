@@ -293,6 +293,40 @@ class TestBrukerFolderStructure:
         assert info.teaching_points_file is not None
         assert info.teaching_points_file.name == "sample.mis"
 
+    def test_a_rapiflex_run_does_not_take_a_parent_folders_mis(self, tmp_path):
+        """#520 F128: the reader ignores it, so the alignment image must too.
+
+        Another acquisition's .mis one folder up named its own scan, which
+        then became this run's alignment element.
+        """
+        data_dir = _rapiflex_folder(tmp_path, "runA")
+        (data_dir / "runA_scan.png").touch()
+        _write_mis(tmp_path / "otherB.mis", image_file="otherB_scan.png")
+        (tmp_path / "otherB_scan.png").touch()
+
+        info = BrukerFolderStructure(data_dir).analyze()
+
+        assert info.teaching_points_file is None
+        assert info.primary_optical_image is None
+        # Both images are still carried; neither is the alignment image.
+        assert sorted(p.name for p in info.optical_images) == [
+            "otherB_scan.png",
+            "runA_scan.png",
+        ]
+
+    def test_a_timstof_d_still_finds_the_mis_beside_it(self, tmp_path):
+        """The narrowing is Rapiflex's: a .d's .mis sits next to it."""
+        d_folder = tmp_path / "run.d"
+        d_folder.mkdir()
+        (d_folder / "analysis.tsf").touch()
+        _write_mis(tmp_path / "run.mis", image_file="scan.png")
+        (tmp_path / "scan.png").touch()
+
+        info = BrukerFolderStructure(d_folder).analyze()
+
+        assert info.teaching_points_file == tmp_path / "run.mis"
+        assert info.primary_optical_image == tmp_path / "scan.png"
+
     def test_find_metadata_files_rapiflex(self, tmp_path):
         """Test finding Rapiflex metadata files."""
         data_dir = tmp_path / "data"

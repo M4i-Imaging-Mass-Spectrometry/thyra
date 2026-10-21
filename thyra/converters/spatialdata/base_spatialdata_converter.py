@@ -1127,17 +1127,18 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 rm = alignment.region_mappings[0]
                 default_half_pixel = rm.get_half_pixel_size()
 
-            # Under the teaching-point lattice (D31) a pixel's polygon is the
-            # exact cell the TIC image draws, through the same matrix, so the
-            # two cannot disagree; it is a parallelogram when the photo is
-            # rotated against the stage.
+            # A pixel's polygon is the exact cell the TIC image draws, through
+            # the same matrix, so the two cannot disagree: the lattice's
+            # (D31), a parallelogram when the photo is rotated against the
+            # stage, or the stretch over the Areas' box. A region with no
+            # Area is placed by that matrix too (#520).
             cell_corners = getattr(alignment, "cell_corners", None)
-            lattice = getattr(alignment, "lattice", None)
+            matrix = getattr(alignment, "cell_to_image", None)
 
             valid_indices = []
             for i in range(len(adata)):
                 rx, ry = int(raster_x[i]), int(raster_y[i])
-                if lattice is not None and cell_corners is not None:
+                if matrix is not None and cell_corners is not None:
                     corners = cell_corners(rx, ry)
                     if corners is not None:
                         geometries.append(Polygon(corners))

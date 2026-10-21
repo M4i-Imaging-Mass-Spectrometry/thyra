@@ -11,7 +11,7 @@ import below for why there is no stdlib fallback.
 import logging
 import math
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Union
 
 # defusedxml, unconditionally, and never xml.etree here. The stdlib parser
 # expands entity declarations -- measured on a .mis carrying
@@ -34,6 +34,49 @@ if TYPE_CHECKING:
     from xml.etree.ElementTree import Element  # nosec B405 - type hint only
 
 logger = logging.getLogger(__name__)
+
+#: The largest coordinate a ``.mis`` number may hold, in image pixels or
+#: stage micrometres. A metre of stage, or a photo a million pixels wide, is
+#: far beyond any slide; a value past this is a damaged file, and one past
+#: what a float holds ended in an OverflowError inside the alignment.
+MAX_COORDINATE = 1e9
+
+
+def _number(text: str) -> Optional[float]:
+    """``text`` as a finite number within :data:`MAX_COORDINATE`, or ``None``."""
+    try:
+        value = float(text.strip())
+    except (ValueError, OverflowError):
+        return None
+    if not math.isfinite(value) or abs(value) > MAX_COORDINATE:
+        return None
+    return value
+
+
+def _whole(value: float) -> Union[int, float]:
+    """A whole number as an ``int``, so ``20`` stays ``20`` in the store."""
+    return int(value) if value.is_integer() else value
+
+
+def _pair(text: Optional[str]) -> Optional[List[Union[int, float]]]:
+    """``"x,y"`` as two checked numbers, or ``None`` when it is not that."""
+    parts = (text or "").split(",")
+    if len(parts) != 2:
+        return None
+    values = [_number(part) for part in parts]
+    if any(value is None for value in values):
+        return None
+    return [_whole(value) for value in values if value is not None]
+
+
+def area_is_usable(area: Dict[str, Any]) -> bool:
+    """Whether a parsed Area has an outline, or is a placeholder.
+
+    An Area that cannot be read keeps its place in the list, so the Areas
+    after it still pair with their own regions (region ``N`` is Area ``N``),
+    but it has no ``p1``/``p2``: its region has no Area to be placed by.
+    """
+    return "p1" in area and "p2" in area
 
 
 def find_mis_file_for_d_folder(
@@ -191,20 +234,50 @@ def parse_mis_file(path: Path) -> Dict[str, Any]:
             discovery is ever asked for the optical images.
     """
     metadata: Dict[str, Any] = {}
+    root = _parse_root(path)
+    if root is None:
+        return metadata
+    _extract_basic_elements(root, metadata)
+    _extract_teaching_points(root, metadata, path.name)
+    _extract_reference_point(root, metadata)
+    _extract_raster_info(root, metadata, path.name)
+    _extract_areas(root, metadata, path.name)
+    return metadata
 
+
+def read_mis_image_file(path: Path) -> Optional[str]:
+    """The ``<ImageFile>`` a ``.mis`` names, read without the rest of it.
+
+    Optical discovery needs only this, and a whole parse would log every
+    warning about the file's Areas and points a second time: the reader
+    that adopted the file has already parsed and reported it.
+
+    Raises:
+        ConversionRefused: As :func:`parse_mis_file` does.
+    """
+    root = _parse_root(path)
+    if root is None:
+        return None
+    metadata: Dict[str, Any] = {}
+    _extract_basic_elements(root, metadata)
+    image_file = metadata.get("ImageFile")
+    return str(image_file) if image_file is not None else None
+
+
+def _parse_root(path: Path) -> Optional["Element"]:
+    """The document's root, or ``None`` (with a warning) when it is not XML.
+
+    Raises:
+        ConversionRefused: If the document declares XML entities or reaches
+            for an external reference; see :func:`parse_mis_file`.
+    """
     try:
         tree = ET.parse(path)  # nosec B314
-        root = tree.getroot()
+        root: Optional["Element"] = tree.getroot()
         if root is None:
             # A completed parse always has a root; read like a parse error.
             logger.warning(f"Failed to parse .mis file: {path} has no root element")
-            return metadata
-
-        _extract_basic_elements(root, metadata)
-        _extract_teaching_points(root, metadata)
-        _extract_reference_point(root, metadata)
-        _extract_raster_info(root, metadata)
-        _extract_areas(root, metadata)
+        return root
 
     # DefusedXmlException is a ValueError, ET.ParseError a SyntaxError, so
     # the two clauses are disjoint and their order is presentation only.
@@ -224,8 +297,7 @@ def parse_mis_file(path: Path) -> Dict[str, Any]:
 
     except ET.ParseError as e:
         logger.warning(f"Failed to parse .mis file: {e}")
-
-    return metadata
+        return None
 
 
 def _extract_basic_elements(root: "Element", metadata: Dict[str, Any]) -> None:
@@ -236,17 +308,32 @@ def _extract_basic_elements(root: "Element", metadata: Dict[str, Any]) -> None:
             metadata[elem_name] = elem.text
 
 
-def _extract_teaching_points(root: "Element", metadata: Dict[str, Any]) -> None:
-    """Extract teaching point calibration data from .mis XML."""
-    teaching_points: List[Dict[str, List[int]]] = []
+def _extract_teaching_points(
+    root: "Element", metadata: Dict[str, Any], source: str = "the .mis"
+) -> None:
+    """Extract teaching point calibration data from .mis XML.
+
+    A point is ``"image x,y;stage x,y"``, each number finite and within
+    :data:`MAX_COORDINATE`; a decimal is read as one. A point that is not
+    that is left out with a warning naming it, and the others are kept: the
+    fit then has one point fewer, which it checks for itself.
+    """
+    teaching_points: List[Dict[str, List[Union[int, float]]]] = []
     for tp in root.findall(".//TeachPoint"):
-        if tp.text and ";" in tp.text:
-            img_coords, stage_coords = tp.text.split(";")
-            img_x, img_y = map(int, img_coords.split(","))
-            stage_x, stage_y = map(int, stage_coords.split(","))
-            teaching_points.append(
-                {"image": [img_x, img_y], "stage": [stage_x, stage_y]}
+        text = (tp.text or "").strip()
+        if not text:
+            continue
+        halves = text.split(";")
+        image = _pair(halves[0]) if len(halves) == 2 else None
+        stage = _pair(halves[1]) if len(halves) == 2 else None
+        if image is None or stage is None:
+            logger.warning(
+                f"Unreadable TeachPoint {text!r} in {source}: left out of the "
+                "optical alignment (expected two finite numbers, a ';', and "
+                "two more)"
             )
+            continue
+        teaching_points.append({"image": image, "stage": stage})
     if teaching_points:
         metadata["teaching_points"] = teaching_points
 
@@ -275,16 +362,61 @@ def _extract_reference_point(root: "Element", metadata: Dict[str, Any]) -> None:
         logger.warning(f"Unreadable ReferencePoint in .mis: {elem.text!r}")
 
 
-def _extract_raster_info(root: "Element", metadata: Dict[str, Any]) -> None:
-    """Extract raster dimensions from .mis XML."""
+def _extract_raster_info(
+    root: "Element", metadata: Dict[str, Any], source: str = "the .mis"
+) -> None:
+    """Extract the raster step, two finite positive numbers, from .mis XML.
+
+    A step that is not that -- zero, negative, one number or three, text --
+    is left out with a warning naming it; the pitch then comes from
+    elsewhere, and the metadata extractor says from where.
+    """
     raster_elem = root.find(".//Raster")
-    if raster_elem is not None and raster_elem.text:
-        parts = raster_elem.text.split(",")
-        if len(parts) == 2:
-            metadata["raster"] = [int(parts[0]), int(parts[1])]
+    if raster_elem is None:
+        return
+    step = _pair(raster_elem.text)
+    if step is not None and all(v > 0 for v in step):
+        metadata["raster"] = step
+        return
+    logger.warning(
+        f"Unusable Raster {(raster_elem.text or '').strip()!r} in {source}: "
+        "a raster step is two numbers above zero, so this one is not used"
+    )
 
 
-def _extract_areas(root: "Element", metadata: Dict[str, Any]) -> None:
+def _area_points(
+    point_elems: List["Element"],
+) -> Optional[List[List[Union[int, float]]]]:
+    """An Area's points, or ``None`` when one of them cannot be read."""
+    points = [_pair(p.text) for p in point_elems]
+    if any(point is None for point in points):
+        return None
+    return [point for point in points if point is not None]
+
+
+def _outline_problem(points: List[List[Union[int, float]]]) -> Optional[str]:
+    """Why an Area's points outline no region, or ``None`` when they do."""
+    if len(points) < 2:
+        return f"{len(points)} point(s), and an Area needs at least two"
+    xs = [x for x, _ in points]
+    ys = [y for _, y in points]
+    if max(xs) == min(xs) or max(ys) == min(ys):
+        return "no width or no height"
+    if len(points) >= 3:
+        # A polygon whose points lie on one line encloses nothing, even
+        # when its bounding box does.
+        twice_area = sum(
+            x0 * y1 - x1 * y0
+            for (x0, y0), (x1, y1) in zip(points, points[1:] + points[:1])
+        )
+        if twice_area == 0:
+            return "its points lie on one line"
+    return None
+
+
+def _extract_areas(
+    root: "Element", metadata: Dict[str, Any], source: str = "the .mis"
+) -> None:
     """Extract Area definitions from .mis XML.
 
     Areas define the image pixel coordinates for each acquisition region.
@@ -294,49 +426,56 @@ def _extract_areas(root: "Element", metadata: Dict[str, Any]) -> None:
     own ``<Raster>`` step as ``raster``: the lattice fit (D31) needs the
     outline to tell which raster node each region starts on.
 
+    Every ``<Area>`` gets an entry, in file order, because region ``N`` is
+    Area ``N``. One that outlines nothing -- a point that is not two finite
+    numbers, fewer than two points, no width or height -- keeps its name
+    and its place but no outline, with a warning naming it (see
+    :func:`area_is_usable`). Dropping it moved every later Area onto the
+    region before it.
+
     Args:
         root: XML root element
         metadata: Dictionary to update with area info
+        source: The file's name, for the warnings
     """
     areas: List[Dict[str, Any]] = []
     for area_elem in root.findall(".//Area"):
         area_name = area_elem.get("Name", "")
-        points = area_elem.findall("Point")
-        if len(points) >= 2:
+        points = _area_points(area_elem.findall("Point"))
+        problem = (
+            "a point that is not two finite numbers"
+            if points is None
+            else _outline_problem(points)
+        )
+        if problem is not None or points is None:
+            logger.warning(
+                f"Area {len(areas)} ('{area_name}') in {source} cannot be used "
+                f"({problem}): region {len(areas)} has no Area to be placed by"
+            )
+            areas.append({"name": area_name, "unusable": problem})
+            continue
+        xs = [x for x, _ in points]
+        ys = [y for _, y in points]
+        area: Dict[str, Any] = {
+            "name": area_name,
+            "p1": [min(xs), min(ys)],
+            "p2": [max(xs), max(ys)],
+            "points": points,
+        }
+        area_type = area_elem.get("Type")
+        if area_type is not None and area_type.strip().isdigit():
+            area["type"] = int(area_type)
+        raster_elem = area_elem.find("Raster")
+        if raster_elem is not None and raster_elem.text:
+            step = raster_elem.text.split(",")
             try:
-                all_x: List[int] = []
-                all_y: List[int] = []
-                for p in points:
-                    p_text = p.text or ""
-                    p_parts = p_text.split(",")
-                    all_x.append(int(p_parts[0]))
-                    all_y.append(int(p_parts[1]))
-
-                area: Dict[str, Any] = {
-                    "name": area_name,
-                    "p1": [min(all_x), min(all_y)],
-                    "p2": [max(all_x), max(all_y)],
-                    "points": [[x, y] for x, y in zip(all_x, all_y)],
-                }
-                area_type = area_elem.get("Type")
-                if area_type is not None and area_type.strip().isdigit():
-                    area["type"] = int(area_type)
-                raster_elem = area_elem.find("Raster")
-                if raster_elem is not None and raster_elem.text:
-                    step = raster_elem.text.split(",")
-                    try:
-                        values = [float(v) for v in step]
-                    except ValueError:
-                        # The outline is still usable without its own step.
-                        values = []
-                    if len(values) == 2 and all(
-                        math.isfinite(v) and v > 0 for v in values
-                    ):
-                        area["raster"] = values
-                areas.append(area)
-            except (ValueError, IndexError) as e:
-                logger.warning(f"Failed to parse Area '{area_name}': {e}")
-                continue
+                values = [float(v) for v in step]
+            except ValueError:
+                # The outline is still usable without its own step.
+                values = []
+            if len(values) == 2 and all(math.isfinite(v) and v > 0 for v in values):
+                area["raster"] = values
+        areas.append(area)
 
     if areas:
         metadata["areas"] = areas

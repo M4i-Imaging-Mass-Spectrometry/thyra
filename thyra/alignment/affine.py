@@ -3,12 +3,37 @@
 
 import logging
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Sequence, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
 
 logger = logging.getLogger(__name__)
+
+
+def points_span_plane(points: Sequence[Sequence[float]]) -> bool:
+    """Whether the points fix an affine: three of them not on one line.
+
+    Repeated points and points on one line, along an axis or a diagonal,
+    leave a direction the fit cannot see. Least squares still returns a
+    matrix, singular or close to it, and its inverse spread three spots
+    over 1e17 photo pixels (#520).
+    """
+    pts = [(float(p[0]), float(p[1])) for p in points]
+    if len(pts) < 3:
+        return False
+    x0, y0 = pts[0]
+    span = max(max(abs(x - x0), abs(y - y0)) for x, y in pts)
+    if span == 0:
+        return False
+    for i, (x1, y1) in enumerate(pts[1:], start=1):
+        for x2, y2 in pts[i + 1 :]:
+            cross = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0)
+            # Twice the triangle's area against the square of the points'
+            # extent: zero for points on a line, whatever their units.
+            if abs(cross) > 1e-9 * span * span:
+                return True
+    return False
 
 
 @dataclass
@@ -59,8 +84,8 @@ class AffineTransform:
     @classmethod
     def from_points(
         cls,
-        src_points: List[Tuple[float, float]],
-        dst_points: List[Tuple[float, float]],
+        src_points: Sequence[Sequence[float]],
+        dst_points: Sequence[Sequence[float]],
     ) -> "AffineTransform":
         """Compute affine transformation from point correspondences.
 
@@ -75,13 +100,22 @@ class AffineTransform:
             AffineTransform instance
 
         Raises:
-            ValueError: If fewer than 3 point pairs provided
+            ValueError: If fewer than 3 point pairs are provided, or the
+                source or destination points do not span the plane (see
+                :func:`points_span_plane`): such a fit is no registration.
         """
         if len(src_points) < 3 or len(dst_points) < 3:
             raise ValueError("At least 3 point pairs required for affine")
 
         if len(src_points) != len(dst_points):
             raise ValueError("Source and destination point counts must match")
+
+        for side, side_points in (("image", src_points), ("stage", dst_points)):
+            if not points_span_plane(side_points):
+                raise ValueError(
+                    f"The {len(side_points)} {side} points are repeated or lie "
+                    "on one line, so they do not fix an affine"
+                )
 
         n = len(src_points)
 
