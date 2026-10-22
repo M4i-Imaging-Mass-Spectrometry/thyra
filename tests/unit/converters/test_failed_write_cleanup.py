@@ -126,6 +126,24 @@ class TestAFailedWrite:
 
         assert _left_beside(tmp_path) == ["out.zarr.failed"]
 
+    def test_an_interrupt_in_the_write_waits_for_them_too(self, tmp_path, monkeypatch):
+        import spatialdata
+
+        from thyra.converters.spatialdata import base_spatialdata_converter as module
+
+        waited = []
+
+        def interrupted(self, *args, **kwargs):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(spatialdata.SpatialData, "write", interrupted)
+        monkeypatch.setattr(
+            module, "_wait_for_pending_store_writes", lambda: waited.append(True)
+        )
+
+        assert _converter(tmp_path / "out.zarr").convert() is False
+        assert waited == [True]
+
     def test_the_chunk_writes_still_running_are_waited_for(self):
         from zarr.core.sync import _get_loop
 

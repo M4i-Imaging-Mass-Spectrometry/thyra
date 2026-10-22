@@ -1352,12 +1352,18 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 incomplete_store_path(self.output_path), self.dataset_id
             )
             self._writing_to = store
-            with _suppress_upstream_warnings(), table_write_config():
-                sdata.write(str(store))
-                # The optical images above are placeholders; their pixels
-                # stream into the store now that it exists.
-                self.optical.stream_pending_pixels()
-                zarr.consolidate_metadata(str(store))
+            try:
+                with _suppress_upstream_warnings(), table_write_config():
+                    sdata.write(str(store))
+                    # The optical images above are placeholders; their pixels
+                    # stream into the store now that it exists.
+                    self.optical.stream_pending_pixels()
+                    zarr.consolidate_metadata(str(store))
+            except KeyboardInterrupt:
+                # The chunk writes zarr still runs hold the scratch and the
+                # store's files open; let them finish so both can be moved.
+                _wait_for_pending_store_writes()
+                raise
             if not self._move_store_into_place(store):
                 return False
             logger.info(f"Successfully saved SpatialData to {self.output_path}")
@@ -1381,7 +1387,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         """Rename the finished store onto the output name; the last step.
 
         The store is complete once the rename lands, so it is marked
-        complete on the next line: past that point an interrupt keeps it
+        complete in the same step: past that point an interrupt keeps it
         (issue #500). A rename that keeps failing fails the run, and the
         error names the temporary folder and says the store in it is
         complete; it is not moved to ``.failed`` (issue #525).
@@ -1389,12 +1395,15 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         output = self.output_path
 
         def rename() -> None:
-            # A POSIX rename replaces an empty directory without a word.
-            if output.exists():
-                raise FileExistsError(errno.EEXIST, "already exists", str(output))
             store.rename(output)
+            self._mark_store_complete()
 
         try:
+            # Checked once, not retried: a POSIX rename replaces an empty
+            # directory without a word, and an output that appeared during
+            # the run does not go away in two seconds.
+            if output.exists():
+                raise FileExistsError(errno.EEXIST, "already exists", str(output))
             retry_on_os_error(rename)
         except OSError as e:
             self._keep_incomplete_name = True
@@ -1407,7 +1416,6 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 e.strerror or str(e) or type(e).__name__,
             )
             return False
-        self._mark_store_complete()
         self._writing_to = None
         return True
 

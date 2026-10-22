@@ -264,10 +264,12 @@ def _validate_log_file(log_file: Optional[Path], output: Path) -> None:
     if log_file is None:
         return
     problem = output_file_problem(log_file)
-    if problem is None and output.resolve() in log_file.resolve().parents:
+    store = output.resolve()
+    log = log_file.resolve()
+    if problem is None and (log == store or store in log.parents):
         problem = (
-            f"Cannot write {log_file}: it lies inside the output store "
-            f"{output}. Write the log file beside the store instead."
+            f"Cannot write {log_file}: it is the output store {output} or "
+            "lies inside it. Write the log file beside the store instead."
         )
     if problem is not None:
         raise click.BadParameter(problem, param_hint="'--log-file'")

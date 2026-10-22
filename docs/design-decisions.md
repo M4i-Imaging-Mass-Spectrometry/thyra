@@ -6403,8 +6403,8 @@ through one helper, `thyra/utils/output_files.py`, that checks the path
 before any work starts. A missing folder is created when the file is
 written, as it is for the store. A path that is an existing folder, or that
 lies under a regular file, is refused with one line and exit 2. A
-`--log-file` inside the output store's own path is refused too, since
-creating its folder would create the output.
+`--log-file` at the output store's path, or inside it, is refused too,
+since writing it would create the output.
 
 **Why.** Each command opened its file without a check and ended in a
 traceback, after the metadata read or the ontology check had already run;

@@ -151,14 +151,15 @@ class TestCheckedBeforeAnyWork:
         assert result.exit_code == 2
         assert str(default) in _text(result)
 
-    def test_a_log_file_inside_the_store_is_refused(self, imzml, tmp_path):
+    @pytest.mark.parametrize("where", ["inside", "at"])
+    def test_a_log_file_at_or_inside_the_store_is_refused(self, imzml, tmp_path, where):
         from thyra.__main__ import main
 
         store = tmp_path / "s.zarr"
+        log = store / "run.log" if where == "inside" else store
         result = _runner().invoke(
             main,
-            [str(imzml), str(store), "--pixel-size", "25"]
-            + ["--log-file", str(store / "run.log")],
+            [str(imzml), str(store), "--pixel-size", "25"] + ["--log-file", str(log)],
         )
 
         assert result.exit_code == 2

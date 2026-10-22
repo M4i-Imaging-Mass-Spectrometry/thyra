@@ -52,8 +52,8 @@ will need `--pixel-size`.
 ## Bruker timsTOF
 
 - Point Thyra at the `.d` folder. You can also point it at the folder above.
-  If that holds one dataset, Thyra converts it. If it holds several, the
-  command asks which one to convert, and Python asks you to name one.
+  If that holds one dataset, Thyra converts it. If it holds several, Thyra
+  asks which one to convert. A script must name one `.d` folder.
 - Keep the `.mis` file from flexImaging next to the `.d` folder, ideally with
   the same name. It gives the pixel size and lines the data up with the
   optical image.
