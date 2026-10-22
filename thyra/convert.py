@@ -540,6 +540,44 @@ def quarantine_partial_output(output: Path) -> None:
     quarantine_partial_store(output, output)
 
 
+def _checked_run(input_path: Path, output_path: Path) -> Optional[Path]:
+    """The run to read, or ``None`` once the reason it cannot be is logged.
+
+    The paths are validated first (:func:`_validate_paths`). Then a folder
+    of runs gives its one run, or a refusal naming them all -- never the
+    first in name order, which converted a run nobody chose (issue #525).
+    Both happen before the output exists, so a refusal writes nothing.
+    """
+    if not _validate_paths(input_path, output_path):
+        return None
+    try:
+        return resolve_run(input_path)
+    except ConversionRefused as e:
+        logger.error("%s", str(e))
+        return None
+
+
+def _report_interrupt(converter: Optional[BaseMSIConverter]) -> None:
+    """Say where an interrupt that reached :func:`convert_msi` landed.
+
+    With no converter yet, it landed before the source was read. Once one
+    exists, the interrupt landed in its cleanup, which it finishes before
+    passing the interrupt on, or in closing the reader after it: that
+    cleanup is finished again here, in case it was the thing interrupted.
+    This said "before it started reading" after both passes had run
+    (issue #525).
+    """
+    if converter is None:
+        logger.error("Conversion interrupted before it started reading.")
+        return
+    finish_cleanup = getattr(converter, "finish_cleanup", None)
+    if callable(finish_cleanup):
+        finish_cleanup()
+    logger.error(
+        "Conversion interrupted while it cleaned up. Nothing usable was written."
+    )
+
+
 def _create_reader(
     input_path: Path,
     reader_options: Optional[Dict[str, Any]] = None,
@@ -1029,17 +1067,10 @@ def convert_msi(
     output_path = Path(output_path).resolve()
     logger.info(f"Processing input file: {input_path}")
 
-    if not _validate_paths(input_path, output_path):
+    run = _checked_run(input_path, output_path)
+    if run is None:
         return False
-
-    # A folder of runs: its one run, or a refusal naming them all. Never
-    # the first in name order, which converted a run nobody chose
-    # (issue #525). Before the output exists, so a refusal writes nothing.
-    try:
-        input_path = resolve_run(input_path)
-    except ConversionRefused as e:
-        logger.error("%s", str(e))
-        return False
+    input_path = run
 
     # A Zarr store's deepest key sits far below the path the caller named,
     # so a legal-looking output path can still blow the Windows 260
@@ -1132,21 +1163,7 @@ def convert_msi(
             succeeded = True
             log_interrupt_after_save(output_path)
             return True
-        if converter is None:
-            logger.error("Conversion interrupted before it started reading.")
-        else:
-            # Its own cleanup may have been the thing interrupted: finish it.
-            finish_cleanup = getattr(converter, "finish_cleanup", None)
-            if callable(finish_cleanup):
-                finish_cleanup()
-            # The converter has run: a Ctrl-C in its cleanup, which it
-            # finishes before passing the interrupt on, or in closing the
-            # reader after it. This said "before it started reading" after
-            # both passes had run (issue #525).
-            logger.error(
-                "Conversion interrupted while it cleaned up. Nothing usable "
-                "was written."
-            )
+        _report_interrupt(converter)
         return False
 
     except Exception as e:
