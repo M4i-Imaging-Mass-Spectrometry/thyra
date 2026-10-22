@@ -987,7 +987,9 @@ Datasets acquired from multi-region slides (e.g., multiple tissue sections on
 one slide) store region information in two places. The timsTOF, solariX,
 Rapiflex and mzPeak readers record regions, one region included: a run with one
 region keeps the number and name its source states, for example region 0 on
-most timsTOF runs. Every other format writes region 1 for each pixel. `thyra.list_regions` gives the same summary from the raw input,
+most timsTOF runs. The Waters reader records the regions a run's method file
+declares, numbered from 1 in the order it lists them. Every other format, and
+a Waters run that declares none, writes region 1 for each pixel. `thyra.list_regions` gives the same summary from the raw input,
 before converting.
 
 ### Per-Pixel Region Number

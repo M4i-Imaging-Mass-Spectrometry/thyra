@@ -46,7 +46,7 @@ import logging
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
 
 # defusedxml, never xml.etree: see thyra/readers/bruker/mis_parser.py.
 import defusedxml.ElementTree as ET
@@ -325,6 +325,125 @@ def _int_or_none(value: Optional[str]) -> Optional[int]:
     return int(number)
 
 
+def _method_roots(raw_path: Path) -> Iterator[Any]:
+    """The parsed method files (``*.xml``) of a ``.raw`` directory.
+
+    The file named after the run comes first, the others follow in name
+    order. A file that cannot be read or parsed, or that the XML parser
+    refuses (entities, DTDs), is skipped.
+    """
+    try:
+        candidates = sorted(raw_path.glob("*.xml"))
+    except OSError:
+        return
+    stem = f"{raw_path.stem}.xml".lower()
+    candidates.sort(key=lambda path: path.name.lower() != stem)
+    for path in candidates:
+        try:
+            root = ET.parse(str(path)).getroot()
+        except (ET.ParseError, DefusedXmlException, OSError):
+            continue
+        if root is not None:
+            yield root
+
+
+@dataclass(frozen=True)
+class DeclaredRegion:
+    """One region of a multi-region method, as the method declares it.
+
+    Attributes:
+        number: 1-based position in the method's ``MultiRegions`` table.
+        x_start_um: Stage x of the region's start corner, in um.
+        y_start_um: Stage y of the region's start corner, in um.
+        x_length_um: Declared extent along x, in um.
+        y_length_um: Declared extent along y, in um.
+    """
+
+    number: int
+    x_start_um: float
+    y_start_um: float
+    x_length_um: float
+    y_length_um: float
+
+
+@dataclass(frozen=True)
+class StagePattern:
+    """The stage pattern a run's method declares.
+
+    Attributes:
+        x_step_um: ``MaldiXStep`` in um, or ``None`` when absent or unusable.
+        y_step_um: ``MaldiYStep`` in um, or ``None`` when absent or unusable.
+        regions: The ``MultiRegions`` table's rows in order; empty when the
+            method has no such table (a single-pattern run).
+    """
+
+    x_step_um: Optional[float]
+    y_step_um: Optional[float]
+    regions: Tuple[DeclaredRegion, ...]
+
+
+_REGION_FIELDS = ("MaldiXStart", "MaldiYStart", "MaldiXLength", "MaldiYLength")
+
+
+def _step_um(root: Any, name: str) -> Optional[float]:
+    """A top-level ``Maldi*Step`` setting in um, ``None`` unless positive."""
+    containers = [root] if root.tag == "Settings" else root.findall("Settings")
+    for container in containers:
+        for setting in container.findall("Setting"):
+            if setting.get("Name") == name:
+                value = _float_or_none(setting.get("Value"))
+                if value is None or not math.isfinite(value) or value <= 0:
+                    return None
+                return value * 1000.0
+    return None
+
+
+def _declared_regions(root: Any) -> Tuple[DeclaredRegion, ...]:
+    """The ``MultiRegions`` rows, or none at all when one row is unusable."""
+    table = root.find(".//Table[@Name='MultiRegions']")
+    if table is None:
+        return ()
+    regions: List[DeclaredRegion] = []
+    for number, row in enumerate(table.findall("Row"), start=1):
+        settings = {s.get("Name"): s.get("Value") for s in row.findall("Setting")}
+        values = [_float_or_none(settings.get(name)) for name in _REGION_FIELDS]
+        if any(v is None or not math.isfinite(v) for v in values):
+            logger.warning(
+                "Row %d of the MultiRegions table has a missing or non-numeric "
+                "%s value; the declared regions are not used.",
+                number,
+                "/".join(_REGION_FIELDS),
+            )
+            return ()
+        x0, y0, dx, dy = (float(v) * 1000.0 for v in values if v is not None)
+        regions.append(DeclaredRegion(number, x0, y0, dx, dy))
+    return tuple(regions)
+
+
+def read_stage_pattern(raw_path: Path) -> Optional[StagePattern]:
+    """The stage pattern a run's method declares, as written.
+
+    The method file (``<run name>.xml`` inside the ``.raw`` directory) may
+    declare the pixel steps (``MaldiXStep``, ``MaldiYStep``, mm) and, for a
+    run acquired over several regions, a ``MultiRegions`` table with one
+    row per region (start corner and length, mm). A single-pattern run has
+    no such table and is not a region: its start and length settings are
+    not read.
+
+    Returns:
+        The declared steps and regions in um, or ``None`` when no method
+        file declares either a step or a region.
+    """
+    for root in _method_roots(raw_path):
+        x_step = _step_um(root, "MaldiXStep")
+        y_step = _step_um(root, "MaldiYStep")
+        regions = _declared_regions(root)
+        if x_step is None and y_step is None and not regions:
+            continue
+        return StagePattern(x_step, y_step, regions)
+    return None
+
+
 def read_cyclic_sequence(raw_path: Path) -> Optional[Dict[str, Any]]:
     """The Cyclic IMS separation sequence a run was acquired with, as declared.
 
@@ -340,16 +459,8 @@ def read_cyclic_sequence(raw_path: Path) -> Optional[Dict[str, Any]]:
         that were present, or ``None`` when no method file declares a
         cyclic sequence.
     """
-    try:
-        candidates = sorted(raw_path.glob("*.xml"))
-    except OSError:
-        return None
-    for path in candidates:
-        try:
-            root = ET.parse(str(path)).getroot()
-        except (ET.ParseError, DefusedXmlException, OSError):
-            continue
-        table = None if root is None else root.find(".//Table[@Name='CyclicSequence']")
+    for root in _method_roots(raw_path):
+        table = root.find(".//Table[@Name='CyclicSequence']")
         if table is None:
             continue
         sequence: Dict[str, Any] = {}

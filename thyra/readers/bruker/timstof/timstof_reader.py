@@ -795,6 +795,8 @@ class BrukerReader(BrukerBaseMSIReader):
     - Compatible with spatialdata_converter.py interface
     """
 
+    selects_regions = True
+
     def __init__(
         self,
         data_path: Path,

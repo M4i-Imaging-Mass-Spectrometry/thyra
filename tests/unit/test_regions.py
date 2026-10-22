@@ -1,6 +1,6 @@
 """The region option and the region listing (issue #448).
 
-Only the timsTOF reader can select a region. Every other reader refuses
+Only the timsTOF and Waters readers can select a region. Every other reader refuses
 ``region`` now, through the API as well as the CLI: solariX, rapifleX,
 imzML, PHI and Waters dropped it in silence, and on mzPeak the CLI logged
 it as ignored just before the reader refused it. :func:`thyra.list_regions`
@@ -35,11 +35,14 @@ _TDF = _FIXTURES / "synthetic_tims.d"
 
 
 class TestTheRegionOptionIsRefused:
-    @pytest.mark.parametrize("format_name", sorted(set(_READER_MODULES) - {"bruker"}))
-    def test_every_reader_but_timstof_refuses_it(self, format_name, tmp_path):
+    @pytest.mark.parametrize(
+        "format_name", sorted(set(_READER_MODULES) - {"bruker", "waters"})
+    )
+    def test_every_reader_that_cannot_select_refuses_it(self, format_name, tmp_path):
         """The refusal comes before any file is opened."""
         reader_class = get_reader_class(format_name)
-        with pytest.raises(ConversionRefused, match="only supported for Bruker"):
+        assert reader_class.selects_regions is False
+        with pytest.raises(ConversionRefused, match=r"region=1.*does not select"):
             reader_class(tmp_path / "missing", region=1)
 
     def test_the_api_returns_false_with_one_error(self, tmp_path, thyra_logs):
@@ -72,6 +75,12 @@ class TestTheRegionOptionIsRefused:
         assert result.exit_code != 0
         assert "only supported for Bruker timsTOF" in result.output
         assert "ignored" not in result.output.lower()
+
+
+class TestWhichReadersSelect:
+    @pytest.mark.parametrize("format_name", ["bruker", "waters"])
+    def test_timstof_and_waters_say_so(self, format_name):
+        assert get_reader_class(format_name).selects_regions is True
 
 
 class TestListRegions:

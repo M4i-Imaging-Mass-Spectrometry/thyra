@@ -18,7 +18,7 @@ from ..constants import SpectrumType
 from ..types import ComprehensiveMetadata, EssentialMetadata
 
 if TYPE_CHECKING:
-    from ...readers.waters.instrument import WatersInstrument
+    from ...readers.waters.instrument import StagePattern, WatersInstrument
     from ...readers.waters.masslynx_lib import MassLynxLib
 
 logger = logging.getLogger(__name__)
@@ -46,6 +46,7 @@ class WatersMetadataExtractor(MetadataExtractor):
         mobility_report: Optional[Dict[str, Any]] = None,
         function_settings: Optional[Dict[str, Dict[str, Any]]] = None,
         cyclic_sequence: Optional[Dict[str, Any]] = None,
+        stage_pattern: Optional["StagePattern"] = None,
     ):
         """Initialize Waters metadata extractor.
 
@@ -81,6 +82,10 @@ class WatersMetadataExtractor(MetadataExtractor):
                 run's method file
                 (:func:`thyra.readers.waters.instrument.read_cyclic_sequence`),
                 reported as ``format_specific["cyclic_sequence"]``.
+            stage_pattern: The stage pattern the run's method declares
+                (:func:`thyra.readers.waters.instrument.read_stage_pattern`).
+                Its steps are recorded next to the grid's pixel size in the
+                raw metadata.
         """
         super().__init__(ml)
         self._ml = ml
@@ -99,6 +104,7 @@ class WatersMetadataExtractor(MetadataExtractor):
         self._cyclic_sequence = (
             dict(cyclic_sequence) if cyclic_sequence is not None else None
         )
+        self._stage_pattern = stage_pattern
 
     def _extract_essential_impl(self) -> EssentialMetadata:
         """Extract essential metadata.
@@ -431,7 +437,43 @@ class WatersMetadataExtractor(MetadataExtractor):
             }
         if self._cyclic_sequence is not None:
             specific["cyclic_sequence"] = dict(self._cyclic_sequence)
+        specific.update(self._grid_provenance())
         return specific
+
+    def _grid_provenance(self) -> Dict[str, Any]:
+        """Where the pixel size came from, and how a region run was placed.
+
+        ``pixel_size_source`` says per axis whether the size was measured
+        from the stage positions or, on a single-position axis, taken from
+        the method's declared step. ``regions`` is present when the grid
+        was built region by region: each region's stage origin, the
+        column and row of its first pixel on the grid, and
+        ``placement_shift_um``: the region's stage origin minus the stage
+        position of the pixel column and row it was placed on, in um
+        (+9.2 when the origin lies 9.2 um beyond that column).
+        """
+        grid = self._imaging_grid
+        provenance: Dict[str, Any] = {}
+        source = getattr(grid, "pixel_size_source", None)
+        if source is not None:
+            provenance["pixel_size_source"] = {"x": source[0], "y": source[1]}
+        if getattr(grid, "regions", ()):
+            provenance["regions"] = [
+                {
+                    "region_number": placement.number,
+                    "stage_origin_um": [
+                        float(placement.x_lattice.origin),
+                        float(placement.y_lattice.origin),
+                    ],
+                    "grid_offset_px": [placement.x_offset, placement.y_offset],
+                    "placement_shift_um": [
+                        float(placement.x_shift_um),
+                        float(placement.y_shift_um),
+                    ],
+                }
+                for placement in grid.regions
+            ]
+        return provenance
 
     def _function_layout(self) -> Dict[str, Any]:
         """The function and grid facts that have always been reported here."""
@@ -560,15 +602,18 @@ class WatersMetadataExtractor(MetadataExtractor):
 
     def _extract_raw_metadata(self) -> Dict[str, Any]:
         """Extract raw metadata dictionary."""
-        return {
-            "data_path": str(self._data_path),
-            "imaging_grid": {
-                "pixel_count_x": self._imaging_grid.pixel_count_x,
-                "pixel_count_y": self._imaging_grid.pixel_count_y,
-                "pixel_size_x_um": self._imaging_grid.pixel_size_x,
-                "pixel_size_y_um": self._imaging_grid.pixel_size_y,
-                "lateral_width_um": self._imaging_grid.lateral_width,
-                "lateral_height_um": self._imaging_grid.lateral_height,
-                "stage_origin_um": self._stage_origin_um(),
-            },
+        imaging_grid: Dict[str, Any] = {
+            "pixel_count_x": self._imaging_grid.pixel_count_x,
+            "pixel_count_y": self._imaging_grid.pixel_count_y,
+            "pixel_size_x_um": self._imaging_grid.pixel_size_x,
+            "pixel_size_y_um": self._imaging_grid.pixel_size_y,
+            "lateral_width_um": self._imaging_grid.lateral_width,
+            "lateral_height_um": self._imaging_grid.lateral_height,
+            "stage_origin_um": self._stage_origin_um(),
         }
+        pattern = self._stage_pattern
+        if pattern is not None and pattern.x_step_um is not None:
+            imaging_grid["declared_step_x_um"] = pattern.x_step_um
+        if pattern is not None and pattern.y_step_um is not None:
+            imaging_grid["declared_step_y_um"] = pattern.y_step_um
+        return {"data_path": str(self._data_path), "imaging_grid": imaging_grid}
