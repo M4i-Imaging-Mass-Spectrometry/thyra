@@ -12,6 +12,7 @@ from thyra.readers.waters.lockmass import (
     find_lmgt,
     measure_lock_mass,
     read_lmgt,
+    survey_reference_scans,
 )
 
 #: The shape the Waters library writes: a version line, reference and
@@ -177,3 +178,104 @@ class TestMeasuringOnACopy:
 
         with pytest.raises(ConversionRefused, match="no lock-mass peak at m/z 526.554"):
             measure_lock_mass(self._library({}, applied=False), raw, 1, 526.5545)
+
+
+# ----------------------------------------------------------------------
+# What an uncorrected run's reference scans show (D82)
+# ----------------------------------------------------------------------
+
+_P = 30.97376163
+_E = 0.00054858
+#: A shared profile grid, 1 mDa apart, as an uncorrected run has.
+_GRID = np.round(np.arange(100.0, 1200.0, 0.001), 5)
+
+
+def _profile(peaks, offset_ppm):
+    """Gaussian peaks (m/z, height) on the grid, every m/z shifted by offset."""
+    intensity = np.zeros_like(_GRID)
+    for mz, height in peaks:
+        centre = mz * (1 + offset_ppm * 1e-6)
+        intensity += height * np.exp(-0.5 * ((_GRID - centre) / 0.004) ** 2)
+    return _GRID.copy(), intensity
+
+
+def _red_phosphorus(negative=True, n_values=range(5, 37, 2)):
+    """The cluster ladder, with P17 the strongest ion as on the D82 run."""
+    sign = 1.0 if negative else -1.0
+    return [(n * _P + sign * _E, 20000.0 if n == 17 else 2000.0) for n in n_values]
+
+
+def _groups(peaks, offsets_ppm, scans_per_group=3, minutes_apart=20.0):
+    scans = []
+    for g, offset in enumerate(offsets_ppm):
+        for s in range(scans_per_group):
+            mz, intensity = _profile(peaks, offset)
+            scans.append((g * minutes_apart + 0.02 * s, mz, intensity))
+    return scans
+
+
+class TestSurveyingReferenceScans:
+    def test_the_drift_of_the_strongest_peak_needs_no_identification(self):
+        survey = survey_reference_scans(
+            _groups([(600.0, 5000.0), (300.0, 100.0)], [10.0, 15.0, 22.0]),
+            negative=True,
+        )
+
+        assert survey is not None
+        assert survey.n_groups == 3
+        assert survey.drift_ppm == pytest.approx(12.0, abs=1.0)
+        assert survey.span_ppm == pytest.approx(12.0, abs=1.0)
+        assert survey.peak_mz == pytest.approx(600.0 * (1 + 15.7e-6), abs=0.005)
+
+    def test_a_red_phosphorus_ladder_is_named_with_its_strongest_ion(self):
+        survey = survey_reference_scans(
+            _groups(_red_phosphorus(), [12.0, 16.0, 20.0]), negative=True
+        )
+
+        assert survey.looks_like == "red phosphorus"
+        assert survey.matched_ions >= 10
+        assert survey.suggested_mz == pytest.approx(17 * _P + _E)
+        assert survey.offset_ppm == pytest.approx(16.0, abs=1.0)
+
+    def test_positive_mode_uses_the_cations(self):
+        survey = survey_reference_scans(
+            _groups(_red_phosphorus(negative=False), [12.0, 16.0]), negative=False
+        )
+
+        assert survey.looks_like == "red phosphorus"
+        assert survey.suggested_mz == pytest.approx(17 * _P - _E)
+
+    def test_leucine_enkephalin_is_named_as_a_single_ion(self):
+        survey = survey_reference_scans(
+            _groups([(556.2766, 8000.0), (278.1, 900.0)], [10.0, 14.0]),
+            negative=False,
+        )
+
+        assert survey.looks_like == "leucine enkephalin"
+        assert survey.matched_ions == 1
+        assert survey.suggested_mz == pytest.approx(556.2766)
+
+    def test_an_unknown_reference_is_named_nothing(self):
+        survey = survey_reference_scans(
+            _groups([(622.0290, 6000.0), (922.0098, 3000.0)], [10.0, 14.0]),
+            negative=False,
+        )
+
+        assert survey.looks_like is None
+        assert survey.suggested_mz is None
+        # The drift is still reported: it needs no identification.
+        assert survey.drift_ppm == pytest.approx(4.0, abs=1.0)
+
+    def test_a_ladder_whose_ions_disagree_is_not_named(self):
+        # Every other ion 20 ppm further out: not one compound drifting.
+        peaks = [
+            (mz * (1 + (20e-6 if i % 2 else 0.0)), h)
+            for i, (mz, h) in enumerate(_red_phosphorus())
+        ]
+        survey = survey_reference_scans(_groups(peaks, [12.0, 16.0]), negative=True)
+
+        assert survey.looks_like is None
+
+    def test_scans_without_signal_give_no_survey(self):
+        empty = (1.0, np.array([]), np.array([]))
+        assert survey_reference_scans([empty], negative=True) is None

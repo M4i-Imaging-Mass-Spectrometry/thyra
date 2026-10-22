@@ -34,7 +34,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -244,3 +244,186 @@ def measure_lock_mass(
                 "enkephalin on an electrospray one."
             )
         return read_lmgt(written, source="computed")
+
+
+# ----------------------------------------------------------------------
+# What an uncorrected run's reference scans say (D82)
+#
+# Thyra does not pick a reference for the user: one that matches the wrong
+# peak would shift every m/z by up to the search window, as badly as no
+# correction and without a sign of it. It does say what the reference scans
+# show, so the warning about an uncorrected run carries facts: how far
+# their strongest peak moved over the run, which needs no identification,
+# and what the scans look like when that is unambiguous.
+# ----------------------------------------------------------------------
+
+#: Monoisotopic mass of phosphorus and of an electron, in Da.
+_PHOSPHORUS = 30.97376163
+_ELECTRON = 0.00054858
+
+#: Leucine enkephalin, the usual electrospray lock-mass reference:
+#: [M-H]- in negative mode (True), [M+H]+ in positive mode (False).
+_LEUCINE_ENKEPHALIN = {False: 556.2766, True: 554.2620}
+
+#: How far from a reference ion an uncorrected peak may sit and still be
+#: that ion. Uncorrected runs measured for D82 were 8 to 28 ppm off.
+_MATCH_PPM = 50.0
+
+#: How tightly the red phosphorus ions must agree with each other to be
+#: named: they drift together, so their offsets spread little.
+_LADDER_SPREAD_PPM = 3.0
+
+#: Red phosphorus is named only on a ladder of at least this many ions.
+_LADDER_MIN_IONS = 5
+
+#: Two lock-mass scans further apart than this (min) are different
+#: measurements of the drift.
+_BLOCK_GAP_MIN = 1.0
+
+_Scan = Tuple[float, NDArray[np.float64], NDArray[np.float64]]
+
+
+@dataclass(frozen=True)
+class LockMassSurvey:
+    """What an uncorrected run's lock-mass scans show.
+
+    Attributes:
+        peak_mz: The strongest peak of the reference scans, as stored.
+        drift_ppm: How far that peak moved from the first group of
+            reference scans to the last, in ppm (last minus first).
+        span_ppm: The full range of its position over the groups, in ppm.
+        n_groups: How many separate groups of reference scans there were.
+        looks_like: ``"red phosphorus"``, ``"leucine enkephalin"``, or
+            ``None`` when the scans match neither unambiguously.
+        suggested_mz: The reference m/z to pass, when ``looks_like`` names one.
+        matched_ions: How many of its ions were found.
+        offset_ppm: How far the stored m/z of those ions sit from their
+            theoretical masses: the size of the uncorrected error *if* the
+            identification is right.
+    """
+
+    peak_mz: float
+    drift_ppm: float
+    span_ppm: float
+    n_groups: int
+    looks_like: Optional[str]
+    suggested_mz: Optional[float]
+    matched_ions: int
+    offset_ppm: Optional[float]
+
+    def report(self) -> Dict[str, Any]:
+        """What the metadata records about the survey."""
+        return {
+            "reference_peak_mz": self.peak_mz,
+            "reference_peak_drift_ppm": self.drift_ppm,
+            "reference_peak_span_ppm": self.span_ppm,
+            "reference_groups": self.n_groups,
+            "looks_like": self.looks_like,
+            "suggested_reference_mz": self.suggested_mz,
+            "matched_ions": self.matched_ions,
+            "offset_from_theory_ppm": self.offset_ppm,
+        }
+
+
+def _summed(scans: Sequence[_Scan]) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """The scans summed point by point (uncorrected scans share one m/z grid)."""
+    mz = np.concatenate([scan[1] for scan in scans])
+    intensity = np.concatenate([scan[2] for scan in scans])
+    grid, where = np.unique(np.round(mz, 5), return_inverse=True)
+    return grid, np.bincount(where, weights=intensity, minlength=grid.size)
+
+
+def _apex_near(
+    mz: NDArray[np.float64],
+    intensity: NDArray[np.float64],
+    target: float,
+    window_ppm: float,
+) -> Optional[Tuple[float, float]]:
+    """Centroid and height of the tallest peak within ``window_ppm`` of target."""
+    half = target * window_ppm * 1e-6
+    lo, hi = np.searchsorted(mz, [target - half, target + half])
+    if hi <= lo or float(intensity[lo:hi].max()) <= 0:
+        return None
+    apex = int(lo + np.argmax(intensity[lo:hi]))
+    a, b = max(apex - 3, 0), min(apex + 4, mz.size)
+    weights = intensity[a:b]
+    return float((mz[a:b] * weights).sum() / weights.sum()), float(intensity[apex])
+
+
+def _recognise(
+    mz: NDArray[np.float64], intensity: NDArray[np.float64], negative: bool
+) -> Tuple[Optional[str], Optional[float], int, Optional[float]]:
+    """Name the reference only when the summed scans leave no doubt."""
+    floor = 0.01 * float(intensity.max())
+    sign = 1.0 if negative else -1.0
+    ladder = []
+    for n in range(3, 61, 2):
+        theory = n * _PHOSPHORUS + sign * _ELECTRON
+        if theory < mz[0] or theory > mz[-1]:
+            continue
+        found = _apex_near(mz, intensity, theory, _MATCH_PPM)
+        if found is not None and found[1] >= floor:
+            ladder.append((theory, (found[0] - theory) / theory * 1e6, found[1]))
+    if len(ladder) >= _LADDER_MIN_IONS:
+        offsets = np.array([ion[1] for ion in ladder])
+        if float(offsets.std()) <= _LADDER_SPREAD_PPM:
+            strongest = max(ladder, key=lambda ion: ion[2])
+            median = float(np.median(offsets))
+            return "red phosphorus", strongest[0], len(ladder), median
+    theory = _LEUCINE_ENKEPHALIN[negative]
+    found = _apex_near(mz, intensity, theory, _MATCH_PPM)
+    if found is not None and found[1] >= 0.5 * float(intensity.max()):
+        offset = (found[0] - theory) / theory * 1e6
+        return "leucine enkephalin", theory, 1, offset
+    return None, None, 0, None
+
+
+def survey_reference_scans(
+    scans: Sequence[_Scan], negative: bool
+) -> Optional[LockMassSurvey]:
+    """What the lock-mass scans of an uncorrected run show.
+
+    Args:
+        scans: ``(retention time in min, m/z, intensity)`` of each reference
+            scan, as stored (uncorrected), in acquisition order.
+        negative: Whether the run was acquired in negative mode.
+
+    Returns:
+        The survey, or ``None`` when the scans hold no signal.
+    """
+    kept = [scan for scan in scans if scan[1].size and float(np.sum(scan[2])) > 0]
+    if not kept:
+        return None
+    mz, intensity = _summed(kept)
+    peak = _apex_near(mz, intensity, float(mz[int(np.argmax(intensity))]), 20.0)
+    if peak is None:
+        return None
+    peak_mz = peak[0]
+
+    groups: List[List[_Scan]] = [[kept[0]]]
+    for previous, scan in zip(kept, kept[1:]):
+        if scan[0] - previous[0] > _BLOCK_GAP_MIN:
+            groups.append([])
+        groups[-1].append(scan)
+    positions = []
+    for group in groups:
+        group_mz, group_intensity = _summed(group)
+        found = _apex_near(group_mz, group_intensity, peak_mz, _MATCH_PPM)
+        if found is not None:
+            positions.append(found[0])
+    drift = span = 0.0
+    if len(positions) > 1:
+        drift = (positions[-1] - positions[0]) / peak_mz * 1e6
+        span = (max(positions) - min(positions)) / peak_mz * 1e6
+
+    looks_like, suggested, matched, offset = _recognise(mz, intensity, negative)
+    return LockMassSurvey(
+        peak_mz=peak_mz,
+        drift_ppm=drift,
+        span_ppm=span,
+        n_groups=len(groups),
+        looks_like=looks_like,
+        suggested_mz=suggested,
+        matched_ions=matched,
+        offset_ppm=offset,
+    )

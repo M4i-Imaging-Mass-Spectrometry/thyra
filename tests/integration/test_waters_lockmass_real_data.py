@@ -103,6 +103,18 @@ class TestLockMassOnARealRun:
         assert report["corrected"] is True
         assert report["source"] == "computed"
 
+    def test_an_uncorrected_run_says_what_its_reference_scans_show(self):
+        reader = _open(None)
+        report = reader.lock_mass_report()
+        reader.close()
+
+        # Measured for D82: P17- the strongest ion, about 11 ppm of drift.
+        scans = report["reference_scans"]
+        assert report["corrected"] is False
+        assert scans["looks_like"] == "red phosphorus"
+        assert scans["suggested_reference_mz"] == pytest.approx(P17)
+        assert abs(scans["reference_peak_drift_ppm"]) > 5.0
+
 
 class TestRepeatedPixelsOnARealRun:
     def test_every_left_out_scan_was_cut_short_by_a_lock_mass_break(self):

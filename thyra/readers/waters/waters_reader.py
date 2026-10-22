@@ -40,7 +40,14 @@ from .instrument import (
     identify_waters_instrument,
     read_cyclic_sequence,
 )
-from .lockmass import LockMassCorrection, find_lmgt, measure_lock_mass, read_lmgt
+from .lockmass import (
+    LockMassCorrection,
+    LockMassSurvey,
+    find_lmgt,
+    measure_lock_mass,
+    read_lmgt,
+    survey_reference_scans,
+)
 from .masslynx_lib import FunctionType, MassLynxLib, ScanInfoData
 
 logger = logging.getLogger(__name__)
@@ -234,6 +241,8 @@ class WatersReader(BaseMSIReader):
         #: A scan's m/z are multiplied by target / applied (D82).
         self._lock_mass_applied: Optional[LockMassCorrection] = None
         self._lock_mass_target: Optional[LockMassCorrection] = None
+        #: What the reference scans of an uncorrected run show (D82).
+        self._lock_mass_survey: Optional[LockMassSurvey] = None
         #: Scans whose spectrum is weighted when its pixel holds more than
         #: one scan of the same function: (function, scan) -> weight, 0.0
         #: for a scan left out (D83). Absent scans weigh 1.
@@ -539,21 +548,75 @@ class WatersReader(BaseMSIReader):
             report["correction_ppm_max"],
         )
 
+    def _survey_reference_scans(self, reference: int) -> Optional[LockMassSurvey]:
+        """Read the reference scans as stored and say what they show (D82).
+
+        Skipped on a run whose mobility functions the library cannot read
+        (an access violation there ends the process), and on any read error:
+        the survey only informs a warning.
+        """
+        ml, handle, grid = self._ml, self._handle, self._imaging_grid
+        if ml is None or grid is None:
+            return None
+        if (
+            reference in self._drift_functions
+            and not self._instrument.mobility_readable
+        ):
+            return None
+        records = sorted(
+            (scan, info) for (f, scan), info in grid.scan_map.items() if f == reference
+        )
+        if not records:
+            return None
+        try:
+            scans = [
+                (info.rt, *ml.read_spectrum(handle, reference, scan))
+                for scan, info in records
+            ]
+        except Exception as error:  # noqa: BLE001 -- a survey never stops a read
+            logger.debug("Lock-mass scans not surveyed: %s", error)
+            return None
+        return survey_reference_scans(scans, negative=records[0][1].polarity < 0)
+
     def _warn_uncorrected(self) -> None:
-        """Say so when reference scans exist and the m/z were not corrected."""
+        """Say so when reference scans exist and the m/z were not corrected.
+
+        The warning carries what the reference scans show, so the user
+        decides with facts: how far their strongest peak moved over the run
+        (no identification needed), and what they look like when that is
+        unambiguous. Thyra never applies a reference it recognised itself.
+        """
         reference = self._reference_function()
         if reference is None or self._imaging_grid is None:
             return
         n_scans = sum(1 for f, _scan in self._imaging_grid.scan_map if f == reference)
+        survey = self._survey_reference_scans(reference)
+        self._lock_mass_survey = survey
+        facts = ""
+        advice = "Pass --waters-lock-mass with the reference ion's m/z to correct it."
+        if survey is not None and survey.n_groups > 1:
+            facts = (
+                f" Their strongest peak, m/z {survey.peak_mz:.4f}, moved by "
+                f"{survey.drift_ppm:+.1f} ppm over the run ({survey.n_groups} "
+                "groups of reference scans)."
+            )
+        if survey is not None and survey.looks_like is not None:
+            facts += (
+                f" They look like {survey.looks_like} ({survey.matched_ions} "
+                f"ion(s) found, stored {survey.offset_ppm:+.1f} ppm from theory)."
+            )
+            advice = (
+                f"If that is the reference, pass --waters-lock-mass "
+                f"{survey.suggested_mz:.4f} to correct against it."
+            )
         logger.warning(
             "%s: the m/z are stored without lock-mass correction, although "
-            "function %d holds %d lock-mass reference scan(s). An "
-            "uncorrected Waters run can drift by 10 ppm or more over the "
-            "acquisition. Pass --waters-lock-mass with the reference ion's "
-            "m/z to correct it.",
+            "function %d holds %d lock-mass reference scan(s).%s %s",
             self.data_path.name,
             reference,
             n_scans,
+            facts,
+            advice,
         )
 
     def _mz_scale(self, rt_min: float) -> float:
@@ -580,6 +643,8 @@ class WatersReader(BaseMSIReader):
             report.update(target.report())
         if applied is not None and applied is not target:
             report["undone"] = applied.report()
+        if target is None and self._lock_mass_survey is not None:
+            report["reference_scans"] = self._lock_mass_survey.report()
         return report
 
     # ------------------------------------------------------------------

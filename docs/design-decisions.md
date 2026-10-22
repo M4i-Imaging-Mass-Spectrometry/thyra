@@ -6591,6 +6591,20 @@ guessed reference that matches the wrong peak would shift every m/z, so
 the reference stays the user's statement, and the run says when one is
 missing.
 
+The warning about an uncorrected run says what its reference scans show,
+and the store records the same under `lock_mass.reference_scans`. First,
+how far their strongest peak moved between the first and the last group of
+reference scans. That needs no identification; on the run above it is
++10.9 ppm over 10 groups, against an 11.3 ppm spread of the library's own
+factors. Second, what the scans look like, named only when that is
+unambiguous: at least five red phosphorus cluster ions of the run's
+polarity within 50 ppm whose offsets spread no more than 3 ppm, or leucine
+enkephalin as the strongest peak. On the run above: red phosphorus, 17
+ions, stored +15.5 ppm from theory, P17- (526.5545) suggested. The
+suggestion is printed, never applied. Recognising references
+automatically, and reading the reference from the acquisition method, are
+left for later.
+
 **What changes in a store.** With a reference m/z, every m/z value. With
 `off` on a run with a saved correction, every m/z value. Omitted, nothing
 (the warning is new). The `lock_mass` block is new.

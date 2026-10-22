@@ -624,6 +624,20 @@ back corrected and stay that way. If it did not, and the run has lock-mass
 scans, Thyra warns that the m/z are uncorrected. `--waters-lock-mass off`
 stores them uncorrected in every case.
 
+The warning says what the lock-mass scans show, so you can decide with facts:
+
+- **How far their strongest peak moved during the run.** This needs no
+  knowledge of the reference, so it is always reported. A few ppm or more
+  means the uncorrected m/z drift by about that much across the image.
+- **What the scans look like**, but only when that leaves no doubt: a ladder
+  of red phosphorus ions that all agree, or leucine enkephalin as the
+  strongest peak. The warning then names the `--waters-lock-mass` value to
+  use.
+
+Thyra never applies a reference it recognised by itself. A wrong reference
+would shift every m/z without any sign of it, so the choice stays yours. The
+same facts are stored in the metadata of an uncorrected store.
+
 Which reference m/z to give depends on what was measured in the lock-mass
 scans. The run itself usually does not say. Common ones are red phosphorus
 cluster anions on MALDI (P17- 526.5545, P23- 712.3971) and leucine
