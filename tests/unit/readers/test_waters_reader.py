@@ -1835,3 +1835,257 @@ class TestWatersReaderMsmsMode:
 
         assert reader._excluded_functions[1]["precursor_mz"] is None
         reader.close()
+
+
+# ----------------------------------------------------------------------
+# Lock mass (D81) and scans one function took on the same pixel (D82)
+# ----------------------------------------------------------------------
+
+
+def _at(info, rt):
+    """``info`` acquired at retention time ``rt`` (minutes)."""
+    return ScanInfoData(**{**info.__dict__, "rt": rt})
+
+
+def _raster_with_reference(
+    image_rts=(1.0, 2.0, 3.0), reference_rts=(0.5, 2.5), repeat=None
+):
+    """Function 0 rasters three pixels; function 1 is a lock-mass spot off it.
+
+    ``repeat`` = (scan, rt) adds one more function-0 scan on the pixel of
+    ``scan``, acquired at ``rt``.
+    """
+    scan_map = {}
+    for scan, rt in enumerate(image_rts):
+        scan_map[(0, scan)] = _at(_make_scan_info(scan / 10.0, 0.05), rt)
+    if repeat is not None:
+        of, rt = repeat
+        scan_map[(0, len(image_rts))] = _at(_make_scan_info(of / 10.0, 0.05), rt)
+    for scan, rt in enumerate(reference_rts):
+        scan_map[(1, scan)] = _at(_make_scan_info(11.0, 4.4), rt)
+    return _grid_from_scan_map(scan_map, functions=[0])
+
+
+def _open_lock_mass_reader(
+    mock_ml_cls, mock_build_grid, raw_dir, grid, lock_mass=None, n_image_scans=3
+):
+    reader, mock_ml = _open_reader(
+        mock_ml_cls,
+        mock_build_grid,
+        raw_dir,
+        grid,
+        2,
+        types={0: FunctionType.MS, 1: FunctionType.LOCKMASS},
+        scans_per_function=n_image_scans,
+    )
+    mock_ml.get_lockmass_function.return_value = 1
+    reader._lock_mass_option = lock_mass
+    return reader, mock_ml
+
+
+def _lmgt(raw_dir, factors=(0.99990, 0.99980), times=(0.5, 2.5)):
+    lines = ["1", "526.5545,0.01"] + [f"{t},{f}" for t, f in zip(times, factors)]
+    (raw_dir / "lmgt.inf").write_text("\n".join(lines) + "\n")
+
+
+def _stored_mz(reader):
+    return {coords[0]: mzs for coords, mzs, _ in reader.iter_spectra()}
+
+
+class TestWatersLockMass:
+    """Which correction the stored m/z carry, and that it reaches every read."""
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_a_saved_correction_is_kept_as_the_library_applied_it(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        _lmgt(mock_waters_data)
+        reader, _ = _open_lock_mass_reader(
+            mock_ml_cls, mock_build_grid, mock_waters_data, _raster_with_reference()
+        )
+
+        stored = _stored_mz(reader)
+
+        # The library already applied it: nothing more is done.
+        assert stored[0].tolist() == [100.0, 200.0]
+        report = reader.lock_mass_report()
+        assert report["corrected"] is True
+        assert report["source"] == "lmgt.inf"
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_off_undoes_a_saved_correction(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        _lmgt(mock_waters_data)
+        reader, _ = _open_lock_mass_reader(
+            mock_ml_cls,
+            mock_build_grid,
+            mock_waters_data,
+            _raster_with_reference(),
+            lock_mass="off",
+        )
+
+        stored = _stored_mz(reader)
+
+        # Scan 0 at 1.0 min: the library multiplied by 0.999875 (interpolated).
+        assert stored[0] == pytest.approx(np.array([100.0, 200.0]) / 0.999875)
+        report = reader.lock_mass_report()
+        assert report["corrected"] is False
+        assert report["undone"]["source"] == "lmgt.inf"
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.measure_lock_mass")
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_a_reference_mz_corrects_every_scan_by_its_own_factor(
+        self, mock_build_grid, mock_ml_cls, mock_measure, mock_waters_data
+    ):
+        from thyra.readers.waters.lockmass import LockMassCorrection
+
+        mock_measure.return_value = LockMassCorrection(
+            reference_mz=526.5545,
+            tolerance_da=0.01,
+            times_min=np.array([0.5, 2.5]),
+            factors=np.array([0.99990, 0.99980]),
+            source="computed",
+        )
+        reader, _ = _open_lock_mass_reader(
+            mock_ml_cls,
+            mock_build_grid,
+            mock_waters_data,
+            _raster_with_reference(),
+            lock_mass=526.5545,
+        )
+
+        stored = _stored_mz(reader)
+
+        assert mock_measure.call_args.args[2:] == (1, 526.5545)
+        assert stored[0] == pytest.approx(np.array([100.0, 200.0]) * 0.999875)
+        assert stored[2] == pytest.approx(np.array([100.0, 200.0]) * 0.99980)
+        # The shared axis is built from the same corrected values.
+        axis = reader.get_common_mass_axis()
+        assert axis.min() == pytest.approx(100.0 * 0.99980)
+        assert reader.lock_mass_report()["source"] == "computed"
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_a_reference_mz_without_reference_scans_is_refused(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        # Function 1 is the tail of a split raster, not a reference spot.
+        scan_map = {(0, s): _make_scan_info(s / 10.0, 0.05) for s in range(3)}
+        scan_map.update(
+            {(1, s): _make_scan_info((3 + s) / 10.0, 0.05) for s in range(3)}
+        )
+        grid = _grid_from_scan_map(scan_map, functions=[0])
+        reader, _ = _open_lock_mass_reader(
+            mock_ml_cls, mock_build_grid, mock_waters_data, grid, lock_mass=526.5545
+        )
+        reader._use_centroid = False  # the tail is converted on a profile read
+
+        with pytest.raises(ConversionRefused, match="no lock-mass function holding"):
+            reader._ensure_initialized()
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_an_uncorrected_run_with_reference_scans_is_warned_about(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data, thyra_logs
+    ):
+        reader, _ = _open_lock_mass_reader(
+            mock_ml_cls, mock_build_grid, mock_waters_data, _raster_with_reference()
+        )
+
+        with thyra_logs("thyra.readers", logging.WARNING) as records:
+            reader._ensure_initialized()
+
+        assert "without lock-mass correction" in records.text
+        assert "--waters-lock-mass" in records.text
+        reader.close()
+
+    def test_a_bad_value_is_refused_at_construction(self, mock_waters_data):
+        with pytest.raises(ConversionRefused, match="positive m/z"):
+            WatersReader(mock_waters_data, lock_mass=-5.0)
+        with pytest.raises(ConversionRefused, match="reference m/z or 'off'"):
+            WatersReader(mock_waters_data, lock_mass="auto")
+
+
+class TestWatersRepeatedPixels:
+    """A pixel one function acquired twice (D82)."""
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_a_scan_cut_short_by_a_lock_mass_acquisition_is_left_out(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        # Scan 1 at 2.0 min, a lock-mass scan at 2.5, scan 3 on scan 1's
+        # pixel at 3.5: scan 1 was cut short and acquired again.
+        grid = _raster_with_reference(
+            image_rts=(1.0, 2.0, 4.0), reference_rts=(2.5,), repeat=(1, 3.5)
+        )
+        reader, mock_ml = _open_lock_mass_reader(
+            mock_ml_cls, mock_build_grid, mock_waters_data, grid, n_image_scans=4
+        )
+
+        spectra = list(reader.iter_spectra())
+
+        assert len(spectra) == 3
+        read = [call.args[1:3] for call in mock_ml.read_spectrum.call_args_list]
+        assert (0, 1) not in read
+        assert all(ints.tolist() == [1.0, 2.0] for _, _, ints in spectra)
+        report = reader.repeated_pixels_report()
+        assert report["interrupted_scans_left_out"] == [
+            {"function": 0, "scan": 1, "pixel": (1, 0)}
+        ]
+        assert report["pixels_averaged"] == []
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_two_complete_scans_of_one_pixel_store_their_mean(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        # No lock-mass scan between scan 1 (2.0 min) and its repeat (2.1).
+        grid = _raster_with_reference(
+            image_rts=(1.0, 2.0, 4.0), reference_rts=(0.5,), repeat=(1, 2.1)
+        )
+        reader, _ = _open_lock_mass_reader(
+            mock_ml_cls, mock_build_grid, mock_waters_data, grid, n_image_scans=4
+        )
+
+        spectra = list(reader.iter_spectra())
+
+        on_pixel_1 = [ints for coords, _, ints in spectra if coords[0] == 1]
+        assert [ints.tolist() for ints in on_pixel_1] == [[0.5, 1.0], [0.5, 1.0]]
+        # Summed by the converter, they make the mean of the two scans.
+        assert np.sum(on_pixel_1, axis=0).tolist() == [1.0, 2.0]
+        report = reader.repeated_pixels_report()
+        assert report["pixels_averaged"] == [
+            {"function": 0, "scans": [1, 3], "pixel": (1, 0)}
+        ]
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_the_metadata_records_both_decisions(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        _lmgt(mock_waters_data)
+        grid = _raster_with_reference(
+            image_rts=(1.0, 2.0, 4.0), reference_rts=(2.5,), repeat=(1, 3.5)
+        )
+        reader, _ = _open_lock_mass_reader(
+            mock_ml_cls, mock_build_grid, mock_waters_data, grid, n_image_scans=4
+        )
+        reader._ensure_initialized()
+
+        specific = reader._create_metadata_extractor()._extract_waters_specific()
+
+        assert specific["lock_mass"]["corrected"] is True
+        assert specific["lock_mass"]["source"] == "lmgt.inf"
+        assert len(specific["repeated_pixels"]["interrupted_scans_left_out"]) == 1
+        reader.close()

@@ -7,7 +7,7 @@ files using the MassLynx native library and pre-built imaging grid.
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -46,6 +46,10 @@ class WatersMetadataExtractor(MetadataExtractor):
         mobility_report: Optional[Dict[str, Any]] = None,
         function_settings: Optional[Dict[str, Dict[str, Any]]] = None,
         cyclic_sequence: Optional[Dict[str, Any]] = None,
+        lock_mass: Optional[Dict[str, Any]] = None,
+        repeated_pixels: Optional[Dict[str, Any]] = None,
+        mz_scale: Optional[Callable[[float], float]] = None,
+        scan_weights: Optional[Dict[Tuple[int, int], float]] = None,
     ):
         """Initialize Waters metadata extractor.
 
@@ -81,6 +85,21 @@ class WatersMetadataExtractor(MetadataExtractor):
                 run's method file
                 (:func:`thyra.readers.waters.instrument.read_cyclic_sequence`),
                 reported as ``format_specific["cyclic_sequence"]``.
+            lock_mass: The lock-mass correction the stored m/z carry
+                (``WatersReader.lock_mass_report``, D81), reported as
+                ``format_specific["lock_mass"]``. Its ``corrected`` replaces
+                the library's ``isLockmassCorrected``, which describes the
+                run folder and not the store. ``None`` reports the library's
+                answer, as before.
+            repeated_pixels: How scans one function took on the same pixel
+                were combined (``WatersReader.repeated_pixels_report``,
+                D82), reported as ``format_specific["repeated_pixels"]``
+                when any pixel was.
+            mz_scale: A scan's m/z multiplier from its retention time, the
+                one the reader applies, so the observed mass range is that
+                of the stored m/z. ``None`` multiplies by 1.
+            scan_weights: The reader's scan weights; a scan weighing 0 is
+                not stored and is not counted here either.
         """
         super().__init__(ml)
         self._ml = ml
@@ -99,6 +118,10 @@ class WatersMetadataExtractor(MetadataExtractor):
         self._cyclic_sequence = (
             dict(cyclic_sequence) if cyclic_sequence is not None else None
         )
+        self._lock_mass = dict(lock_mass) if lock_mass is not None else None
+        self._repeated_pixels = dict(repeated_pixels or {})
+        self._mz_scale = mz_scale
+        self._scan_weights = dict(scan_weights or {})
 
     def _extract_essential_impl(self) -> EssentialMetadata:
         """Extract essential metadata.
@@ -266,6 +289,8 @@ class WatersMetadataExtractor(MetadataExtractor):
         coords = self._imaging_grid.get_coordinates(scan_info)
         if coords is None:
             return None
+        if self._scan_weights.get((func, scan), 1.0) == 0.0:
+            return None
 
         try:
             mzs, _ = self._ml.read_spectrum(self._handle, func, scan)
@@ -273,6 +298,8 @@ class WatersMetadataExtractor(MetadataExtractor):
             logger.debug(f"Failed to read spectrum func={func} scan={scan}: {e}")
             return None
 
+        if self._mz_scale is not None and len(mzs) > 0:
+            mzs = mzs * self._mz_scale(scan_info.rt)
         return mzs if len(mzs) > 0 else None
 
     def _update_scan_stats(
@@ -431,6 +458,10 @@ class WatersMetadataExtractor(MetadataExtractor):
             }
         if self._cyclic_sequence is not None:
             specific["cyclic_sequence"] = dict(self._cyclic_sequence)
+        if self._lock_mass is not None:
+            specific["lock_mass"] = dict(self._lock_mass)
+        if any(self._repeated_pixels.values()):
+            specific["repeated_pixels"] = dict(self._repeated_pixels)
         return specific
 
     def _function_layout(self) -> Dict[str, Any]:
@@ -474,8 +505,14 @@ class WatersMetadataExtractor(MetadataExtractor):
                 params[f"function_{func}_acq_range_start"] = acq_range[0]
                 params[f"function_{func}_acq_range_end"] = acq_range[1]
 
-        # Lock mass info
-        params["is_lockmass_corrected"] = self._ml.is_lockmass_corrected(self._handle)
+        # Lock mass info: what the store carries when the reader said (D81),
+        # else the library's answer about the run folder.
+        if self._lock_mass is not None:
+            params["is_lockmass_corrected"] = bool(self._lock_mass["corrected"])
+        else:
+            params["is_lockmass_corrected"] = self._ml.is_lockmass_corrected(
+                self._handle
+            )
         lm_func = self._ml.get_lockmass_function(self._handle)
         params["lockmass_function"] = lm_func if lm_func >= 0 else None
 

@@ -928,6 +928,14 @@ def convert_msi(
               trace (False). Default None: the profile trace on a
               SELECT SERIES MRT, the vendor centroid on every other
               Waters instrument. The CLI spells it --waters-spectrum.
+            - lock_mass: float | "off" - For Waters .raw, the lock-mass
+              correction of the stored m/z (D81). A reference m/z has
+              the Waters library measure the run's lock-mass scans
+              against it, on a throwaway copy of the run, and corrects
+              every scan by the result; "off" stores the m/z
+              uncorrected. Default None keeps what the run carries (an
+              lmgt.inf correction, or none). The CLI spells it
+              --waters-lock-mass.
             - spectrum_type: str - For imzML, declare the spectrum
               representation explicitly: 'profile' or 'centroid'
               (the full CV names are accepted too). Outranks the

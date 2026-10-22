@@ -207,9 +207,24 @@ class TestSentinelOnTheRaster:
 
 
 class TestSharedPixels:
-    """Two scans on one pixel are summed; that was silent."""
+    """Scans of different functions on one pixel are summed; that was silent.
 
-    def test_a_repeated_stage_position_is_reported(self, thyra_logs):
+    A pixel one function acquired twice is the reader's to combine (D82),
+    so the grid no longer calls it a sum.
+    """
+
+    def test_two_functions_on_one_pixel_are_reported(self, thyra_logs):
+        scan_map = _raster(4, 3, 30.0)
+        # A second function with one scan at the position of scan 0.
+        scan_map[(1, 0)] = _scan(0.0, 0.0)
+
+        with thyra_logs("thyra.readers", logging.WARNING) as records:
+            _grid_from_scan_map(scan_map)
+
+        assert "carry the SUM of those functions' scans" in records.text
+        assert "(0, 0)" in records.text
+
+    def test_one_function_repeating_a_position_is_left_to_the_reader(self, thyra_logs):
         scan_map = _raster(4, 3, 30.0)
         # The stage stopped: one more scan at the position of scan 0.
         scan_map[(0, 500)] = _scan(0.0, 0.0)
@@ -217,14 +232,13 @@ class TestSharedPixels:
         with thyra_logs("thyra.readers", logging.WARNING) as records:
             _grid_from_scan_map(scan_map)
 
-        assert "carry the SUM of every scan on them" in records.text
-        assert "(0, 0)" in records.text
+        assert "SUM" not in records.text
 
     def test_a_clean_raster_stays_quiet(self, thyra_logs):
         with thyra_logs("thyra.readers", logging.WARNING) as records:
             _grid_from_scan_map(_raster(4, 3, 30.0))
 
-        assert "SUM of every scan" not in records.text
+        assert "SUM" not in records.text
 
 
 class TestGridFromConvertedFunctionsOnly:
