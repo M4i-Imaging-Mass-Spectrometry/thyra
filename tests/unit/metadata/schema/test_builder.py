@@ -65,6 +65,19 @@ class TestBuildMsiMetadata:
         assert analysis.analyzer is None
         assert analysis.instrument_model is None
 
+    def test_a_stated_solvent_reaches_the_preparation(self):
+        meta = build_msi_metadata(
+            _comprehensive(acquisition_params={"solvent": "methanol"}),
+            pixel_size_um=(20.0, 20.0),
+        )
+        assert meta.preparation.solvent == "methanol"
+        assert meta.to_uns_dict()["preparation"] == {"solvent": "methanol"}
+
+    def test_an_unstated_solvent_leaves_no_preparation(self):
+        meta = build_msi_metadata(_comprehensive(), pixel_size_um=(20.0, 20.0))
+        assert meta.preparation.solvent is None
+        assert "preparation" not in meta.to_uns_dict()
+
     def test_phi_polarity_and_format_facts(self):
         # PHI reports polarity in acquisition_params; SIMS/TOF follow
         # from the format itself.

@@ -79,6 +79,15 @@ class TestToMetaspace:
         assert document["Sample_Preparation"]["MALDI_Matrix_Application"] == "none"
         assert not any("MALDI_Matrix" in w for w in warnings)
 
+    def test_an_unstated_solvent_is_empty_and_warned_not_invented(self):
+        """A DESI source sprays a solvent, so "none" would be a fabrication."""
+        meta = _full_meta().model_copy(deep=True)
+        meta.preparation.solvent = None
+        meta.ms_analysis.ionisation_source = "DESI"
+        document, warnings = to_metaspace(meta)
+        assert document["Sample_Preparation"]["Solvent"] == ""
+        assert any("Sample_Preparation.Solvent" in w for w in warnings)
+
     def test_missing_matrix_on_maldi_is_warned_not_invented(self):
         meta = _full_meta().model_copy(deep=True)
         meta.preparation.matrix = None

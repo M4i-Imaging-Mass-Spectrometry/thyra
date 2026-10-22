@@ -212,15 +212,19 @@ class RootAttrsBuilder:
         # (``pixel_size_y_um=99`` on a 20 um store), record an option
         # nothing applied, or hold a value JSON cannot, which failed the
         # save after both passes (issue #519). handle_3d as a plain bool
-        # for the same reason.
-        attrs["conversion_options"] = {
+        # for the same reason. The z spacing only on a volume of more than
+        # one plane, as in coordinate_systems: anywhere else nothing applied
+        # it, and the log says it is not recorded (D78).
+        options: Dict[str, Any] = {
             "handle_3d": bool(self._handle_3d),
             "pixel_size_um": float(px),
             "pixel_size_y_um": float(py),
-            "z_spacing_um": ctx.z_spacing_um,
-            "z_spacing_source": ctx.z_spacing_source.value,
-            "dataset_id": self._dataset_id,
         }
+        if ctx.is_volume:
+            options["z_spacing_um"] = ctx.z_spacing_um
+            options["z_spacing_source"] = ctx.z_spacing_source.value
+        options["dataset_id"] = self._dataset_id
+        attrs["conversion_options"] = options
 
         optical = ctx.optical.root_attr()
         if optical is not None:

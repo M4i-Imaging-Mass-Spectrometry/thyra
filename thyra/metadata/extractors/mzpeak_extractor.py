@@ -13,7 +13,7 @@ import logging
 import math
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
@@ -24,7 +24,10 @@ from ..constants import (
     POLARITY_OF_ACCESSION,
     ImzMLAccessions,
     SpectrumType,
+    StatedSpectrumType,
     agreed_polarity,
+    polarity_accession,
+    spectrum_type_from_statements,
 )
 from ..ontology.cache import ONTOLOGY
 from ..types import ComprehensiveMetadata, EssentialMetadata
@@ -32,6 +35,7 @@ from .imzml_extractor import (
     UM_PER_UNIT,
     has_old_pixel_size_name,
     instrument_info_from_configurations,
+    solvent_from_configurations,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -78,8 +82,11 @@ EXTENT_TOLERANCE = 0.01
 SCAN_POLARITY_COLUMN = "scan_polarity"
 SCAN_POLARITY_VALUES = {1: "positive", -1: "negative"}
 
-#: Spectrum metadata column giving each spectrum's representation.
+#: Spectrum metadata column giving each spectrum's representation, and the
+#: values (lower-cased) that state each type: the accession or the CV name.
 REPRESENTATION_COLUMN = "spectrum_representation"
+_CENTROID_LABELS = {SpectrumType.CENTROID, ImzMLAccessions.CENTROID_SPECTRUM.lower()}
+_PROFILE_LABELS = {SpectrumType.PROFILE, ImzMLAccessions.PROFILE_SPECTRUM.lower()}
 
 #: Spectrum metadata columns giving each spectrum's observed m/z bounds.
 OBSERVED_BOUND_COLUMNS = ("lowest_observed_mz", "highest_observed_mz")
@@ -516,57 +523,83 @@ class MzPeakMetadataExtractor(MetadataExtractor):
         return value * factor
 
     def _spectrum_type(self) -> Optional[str]:
-        """Spectrum representation of the signal member that is read.
+        """Spectrum representation of the spectra that are converted.
 
         The member decides where it can. mzPeak puts every centroid
         spectrum in the peaks member, so an archive read from there is
         centroid. An archive that fills both members is read from the
         profile one, so it is profile.
 
-        Otherwise the file's own declaration is used; see
-        :meth:`_declared_spectrum_type`.
+        Otherwise the type is the one the converted spectra state in their
+        ``spectrum_representation`` column, by the rule the imzML route
+        applies (D78); see :meth:`_stated_spectrum_type`.
         """
         if self.archive.signal_kind() == "peaks":
             return SpectrumType.CENTROID
         if self.archive.holds_both_representations():
             return SpectrumType.PROFILE
-        return self._declared_spectrum_type()
+        stated = self._stated_spectrum_type()
+        if stated.warning is not None:
+            logger.warning(stated.warning)
+        return stated.spectrum_type
 
-    def _declared_spectrum_type(self) -> Optional[str]:
-        """Spectrum representation as the archive declares it.
+    def _stated_spectrum_type(self) -> StatedSpectrumType:
+        """What the converted spectra state, else what the archive declares.
 
-        ``file_description.contents`` carries MS:1000127/MS:1000128 for the
-        run as a whole. When it does not, the per-spectrum
-        ``spectrum_representation`` column is consulted. The reference
-        converter fills that column with the accession, and the CV name is
-        accepted too.
+        The per-spectrum ``spectrum_representation`` column is read for the
+        spectra that are converted: on a pixel, and not an MSn spectrum
+        left out beside MS1. The reference converter fills it with the
+        accession, and the CV name is accepted too. Spectra stating both
+        types leave the type unset. ``file_description.contents``, which
+        carries MS:1000127/MS:1000128 for the run as a whole, counts only
+        when no converted spectrum states a type, and only if it names one
+        (:func:`spectrum_type_from_statements`).
         """
-        description = self.archive.file_level_metadata().get("file_description")
-        if isinstance(description, dict):
-            for parameter in description.get("contents", []) or []:
-                if not isinstance(parameter, dict):
-                    continue
-                accession = parameter.get("accession")
-                if accession == ImzMLAccessions.CENTROID_SPECTRUM:
-                    return SpectrumType.CENTROID
-                if accession == ImzMLAccessions.PROFILE_SPECTRUM:
-                    return SpectrumType.PROFILE
+        centroid, profile = self._stated_representation_counts()
+        return spectrum_type_from_statements(
+            centroid, profile, self._declared_spectrum_types(), self.data_path.name
+        )
 
+    def _declared_spectrum_types(self) -> Set[str]:
+        """The representations ``file_description.contents`` names, as CV names."""
+        declared: Set[str] = set()
+        description = self.archive.file_level_metadata().get("file_description")
+        if not isinstance(description, dict):
+            return declared
+        for parameter in description.get("contents", []) or []:
+            if not isinstance(parameter, dict):
+                continue
+            accession = parameter.get("accession")
+            if accession == ImzMLAccessions.CENTROID_SPECTRUM:
+                declared.add(SpectrumType.CENTROID)
+            # "positive scan" under the profile term's accession states a
+            # polarity, not a representation (D55).
+            elif accession == ImzMLAccessions.PROFILE_SPECTRUM and (
+                polarity_accession(accession, parameter.get("name")) is None
+            ):
+                declared.add(SpectrumType.PROFILE)
+        return declared
+
+    def _stated_representation_counts(self) -> Tuple[int, int]:
+        """How many converted spectra state centroid, and how many profile."""
         member = self.archive.parquet("spectrum", "metadata")
         if REPRESENTATION_COLUMN not in member.schema_arrow.names:
             # A column that is absent states nothing, as one that is empty.
-            return None
-        table = member.read(columns=[REPRESENTATION_COLUMN])
-        values = {
-            str(value).strip().lower()
-            for value in table.column(REPRESENTATION_COLUMN).to_pylist()
-            if value
-        }
-        if values & {SpectrumType.CENTROID, ImzMLAccessions.CENTROID_SPECTRUM.lower()}:
-            return SpectrumType.CENTROID
-        if values & {SpectrumType.PROFILE, ImzMLAccessions.PROFILE_SPECTRUM.lower()}:
-            return SpectrumType.PROFILE
-        return None
+            return 0, 0
+        table = member.read(columns=["index", REPRESENTATION_COLUMN])
+        rows = np.asarray(table.column("index").to_numpy(), dtype=np.int64)
+        kept = np.isin(rows, self.archive.spatial_index().spectrum_indices)
+        centroid = profile = 0
+        values = table.column(REPRESENTATION_COLUMN).to_pylist()
+        for value, converted in zip(values, kept):
+            if not converted or not value:
+                continue
+            value = str(value).strip().lower()
+            if value in _CENTROID_LABELS:
+                centroid += 1
+            elif value in _PROFILE_LABELS:
+                profile += 1
+        return centroid, profile
 
     def _total_peaks(self) -> int:
         """Points that actually carry a value, in the member that is read.
@@ -688,7 +721,50 @@ class MzPeakMetadataExtractor(MetadataExtractor):
         polarity = self._polarity()
         if polarity is not None:
             params["polarity"] = polarity
+        # IMS:1001211 on the configuration the spectra use, as on imzML.
+        solvent = solvent_from_configurations(
+            _as_parsed_configurations(
+                self._used_configurations(
+                    self.archive.file_level_metadata().get(
+                        "instrument_configuration_list"
+                    )
+                )
+            )
+        )
+        if solvent is not None:
+            params["solvent"] = solvent
         return params
+
+    def _used_configurations(self, configurations: Any) -> List[Any]:
+        """The configurations the converted spectra use, in listed order.
+
+        A spectrum uses the configuration its scan names in
+        ``instrument_configuration_id``, else ``run.default_instrument_id``;
+        an id the list does not hold counts as none, as on imzML (D78).
+        When nothing names a listed configuration, every one is used.
+        """
+        listed = [
+            configuration
+            for configuration in (
+                configurations if isinstance(configurations, list) else []
+            )
+            if isinstance(configuration, dict)
+        ]
+        ids = [_configuration_key(c.get("id")) for c in listed]
+        run = self.archive.file_level_metadata().get("run")
+        default = _configuration_key(
+            run.get("default_instrument_id") if isinstance(run, dict) else None
+        )
+        named = self.archive.scan_configuration_ids()
+        used = set()
+        for ref in {_configuration_key(r) for r in named} if named else {None}:
+            if ref is not None and ref in ids:
+                used.add(ref)
+            elif default is not None and default in ids:
+                used.add(default)
+        if not used:
+            return listed
+        return [c for c, key in zip(listed, ids) if key in used]
 
     def _polarity(self) -> Optional[str]:
         """The polarity every statement in the archive agrees on (D35).
@@ -733,14 +809,14 @@ class MzPeakMetadataExtractor(MetadataExtractor):
         """The instrument as the imzML route reads it, and the raw lists.
 
         Model, serial number, analyzer and family are resolved by the
-        function the imzML extractor uses, so an archive converts on the
-        same mass axis as the imzML it was made from. The family is what
-        picks the axis: without it an Orbitrap archive was binned as an
-        unknown instrument.
+        function the imzML extractor uses, from the configurations the
+        converted spectra use, so an archive converts on the same mass axis
+        as the imzML it was made from. The family is what picks the axis:
+        without it an Orbitrap archive was binned as an unknown instrument.
         """
         configurations = metadata.get("instrument_configuration_list")
         info = instrument_info_from_configurations(
-            _as_parsed_configurations(configurations)
+            _as_parsed_configurations(self._used_configurations(configurations))
         )
         info.update(
             {
@@ -752,6 +828,13 @@ class MzPeakMetadataExtractor(MetadataExtractor):
             }
         )
         return info
+
+
+def _configuration_key(value: Any) -> Optional[str]:
+    """A configuration id as text, so an int id matches its string."""
+    if value is None or isinstance(value, bool):
+        return None
+    return str(value)
 
 
 def _finite_positive(value: float) -> bool:
