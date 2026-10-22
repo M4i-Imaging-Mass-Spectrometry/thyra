@@ -285,7 +285,7 @@ class BaseMSIConverter(ABC):
             )
             return False
         except Exception as e:
-            logger.error(f"Error during conversion: {e}")
+            logger.error("Error during conversion: %s", str(e) or type(e).__name__)
             import traceback
 
             logger.error(f"Detailed traceback:\n{traceback.format_exc()}")

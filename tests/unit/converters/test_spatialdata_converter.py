@@ -2,6 +2,7 @@
 Tests for the SpatialData converter.
 """
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -337,6 +338,9 @@ class TestSpatialDataConverter:
                 self.metadata = {}
 
             def write(self, path):
+                # The store's folder, which the converter renames onto the
+                # output name once the write is done (issue #525).
+                Path(path).mkdir()
                 return True
 
         # Set up our mock to use the custom class
@@ -360,6 +364,7 @@ class TestSpatialDataConverter:
 
         # Check results
         assert result is True  # The method should return True
+        assert output_path.is_dir()
 
         # Don't test the specifics of the mocks, just that the general flow
         # works
@@ -410,6 +415,8 @@ class TestSpatialDataConverter:
 
         # Set up mocks
         mock_sdata = MagicMock()
+        # The store's folder, renamed onto the output name last (issue #525).
+        mock_sdata.write.side_effect = lambda path: Path(path).mkdir()
         mock_spatial_data.return_value = mock_sdata
 
         # Initialize converter

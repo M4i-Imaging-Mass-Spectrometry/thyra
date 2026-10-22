@@ -551,6 +551,22 @@ def detect_format(input_path: Path) -> str:
     return _registry.detect_format(input_path)
 
 
+def resolve_run(input_path: Path) -> Path:
+    """The run an input names: itself, or the one run its folder holds.
+
+    A folder holding several runs (``.d`` folders Thyra reads) is refused
+    with one line naming every run, rather than detected as its first
+    run in name order (issue #525). Here so the API, the preview and the
+    metadata document reach it without importing the Bruker package.
+
+    Raises:
+        ConversionRefused: When the folder holds more than one run.
+    """
+    BrukerFolderStructure, _ = _get_bruker_folder_structure()
+    run: Path = BrukerFolderStructure.resolve_run(Path(input_path))
+    return run
+
+
 def get_reader_class(format_name: str) -> Type[BaseMSIReader]:
     """Get reader class for format.
 

@@ -43,6 +43,20 @@ def _identity(path: Path) -> str:
     return os.path.normcase(os.path.abspath(path))
 
 
+def several_runs_message(folder: Path, runs: List[Path], then: str = "") -> str:
+    """The one line that refuses a folder holding several runs.
+
+    ``then`` is what else the caller can do, appended to the sentence
+    that says what to pass; the CLI adds that the run's number can be
+    piped in.
+    """
+    names = ", ".join(run.name for run in runs)
+    return (
+        f"{folder} holds {len(runs)} runs ({names}) and Thyra converts one "
+        f"at a time: pass one run's path, for example {runs[0]}{then}."
+    )
+
+
 class BrukerFormat(Enum):
     """Bruker MSI data formats."""
 
@@ -468,6 +482,49 @@ class BrukerFolderStructure:
         analyzer = cls(path)
         fmt, _ = analyzer._detect_format()
         return fmt
+
+    @classmethod
+    def runs_in(cls, path: Path) -> List[Path]:
+        """The runs a folder holds, in name order.
+
+        A run is a ``.d`` folder Thyra reads, timsTOF or solariX; other
+        ``.d`` folders beside it do not count. Empty for a path that is a
+        run itself, a rapifleX folder, or anything that is not a folder,
+        because none of those is a folder of runs.
+        """
+        if not path.is_dir() or path.suffix.lower() == ".d":
+            return []
+        analyzer = cls(path)
+        if analyzer._is_rapiflex_folder(path):
+            return []
+        return [
+            d_folder
+            for d_folder in sorted(path.glob("*.d"))
+            if analyzer._is_timstof_folder(d_folder)
+            or analyzer._is_solarix_folder(d_folder)
+        ]
+
+    @classmethod
+    def resolve_run(cls, path: Path) -> Path:
+        """The run ``path`` names: itself, or the one run its folder holds.
+
+        A folder that holds one run is read as that run by every entry
+        point. A folder that holds several is refused with one line naming
+        every run, never converted by guess: the library cannot ask which
+        one, and it used to take the first in name order with only an
+        INFO line, so a folder of three runs gave a store of a run nobody
+        chose (issue #525). Any other path comes back unchanged.
+
+        Raises:
+            ConversionRefused: When the folder holds more than one run.
+        """
+        runs = cls.runs_in(path)
+        if len(runs) > 1:
+            raise ConversionRefused(several_runs_message(path, runs))
+        if len(runs) == 1:
+            logger.info("%s holds one run; reading %s", path, runs[0].name)
+            return runs[0]
+        return path
 
     @classmethod
     def is_bruker_data(cls, path: Path) -> bool:

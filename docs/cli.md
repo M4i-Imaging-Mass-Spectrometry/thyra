@@ -9,7 +9,10 @@ thyra [OPTIONS] INPUT OUTPUT
 ```
 
 **INPUT** -- Path to input MSI file or directory (`.imzML`, `.d`, `.raw`, a
-Rapiflex acquisition folder, or `.mzpeak`)
+Rapiflex acquisition folder, or `.mzpeak`). A folder that holds one `.d` run
+is read as that run. A folder that holds several is asked about: type the
+run's number, or pipe it in. With no answer to read, the run ends with one
+line naming the runs, and exit `1`.
 
 **OUTPUT** -- Path for output `.zarr` directory
 
@@ -54,9 +57,15 @@ message names which of those happened. A multi-slice source with *some*
 empty planes is not affected: those planes are dropped with a warning and
 the rest of the store is written.
 
-A failed conversion renames any partially written store to
-`<output>.zarr.failed`, so the output path stays free for a retry and an
-incomplete store is never left where a finished one is expected. An
+The store is written under a temporary name beside the output,
+`<output>.zarr.incomplete-<8 hex>`, and renamed to the output name as the
+last step. So the output name holds a finished store or nothing, however the
+run ends. A failed conversion renames the partial store to
+`<output>.zarr.failed`, so the output path stays free for a retry. A run that
+is killed outright (an out-of-memory kill, a crash) leaves only the
+`.incomplete-` folder and its scratch; delete them, or run the same command
+again at once. If the final rename fails, the run exits `1` and its error
+names the temporary folder, whose store is complete. An
 interrupted conversion is a failed one: `Ctrl-C` exits `1` and takes the
 same path, so the partial store is moved aside and the scratch directories
 the conversion built (`.thyra_summed_*` and its siblings, next to the
@@ -132,7 +141,7 @@ thyra data.d output.zarr --no-optical
 | Option | Default | Description |
 |--------|---------|-------------|
 | `-v, --log-level LEVEL` | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
-| `--log-file PATH` | none | Write logs to file |
+| `--log-file PATH` | none | Write logs to file. A missing folder is created; a path that is a folder, or lies under a file, is refused with exit `2` before any work |
 
 ### Examples
 
@@ -598,7 +607,7 @@ reads every scan: it takes a while, and needs Windows or Linux.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--merge PATH` | none | JSON file overlaid onto the metadata before validation |
-| `-o, --output PATH` | stdout | Output file; `-` is stdout too |
+| `-o, --output PATH` | stdout | Output file; `-` is stdout too. A missing folder is created; a path that is a folder, or lies under a file, is refused with exit `2` before the source is read |
 
 Exit status is `0` when the document conforms (warnings allowed), `1`
 when it does not, `2` for usage errors. The document is written either
@@ -652,6 +661,12 @@ Exit status follows the conversion command's convention: `0` when every
 document conforms (warnings allowed), `1` otherwise, `2` for usage
 errors -- so `thyra validate` can gate a CI pipeline.
 
+A store with no metadata block was either written by a version without
+the schema or left by a conversion that stopped before it finished; the
+message names both. A folder named `<name>.incomplete-<8 hex>` is the
+temporary folder of a conversion that did not finish, and the message says
+so.
+
 ```bash
 thyra validate output.zarr
 thyra validate output.zarr --merge sample.json
@@ -673,7 +688,7 @@ supply them with `--merge` or fill them on the submission form.
 |--------|---------|-------------|
 | `--merge PATH` | none | JSON file overlaid onto the metadata before export |
 | `--table NAME` | the only one | Table to export when the store has several |
-| `-o, --output PATH` | `<input>.metaspace.json` | Output file; `-` for stdout |
+| `-o, --output PATH` | `<input>.metaspace.json` | Output file; `-` for stdout. A missing folder is created; a path that is a folder, or lies under a file, is refused with exit `2` |
 
 ```bash
 thyra export-metaspace output.zarr --merge sample.json
@@ -740,7 +755,7 @@ the command then exits 1. A path that does not exist exits 2.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--output PATH` | none | Save results as JSON. For one file, this replaces the printed summary |
+| `--output PATH` | none | Save results as JSON. For one file, this replaces the printed summary. A missing folder is created; a path that is a folder, or lies under a file, is refused with exit `2` before the check runs |
 | `--verbose` | off | Log progress at INFO level to stderr |
 
 For a directory, the command prints the file count, the unknown terms and

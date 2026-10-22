@@ -110,6 +110,15 @@ When a conversion fails, Thyra renames the unfinished result, for example to
 command again straight away. The `.failed` folder is only useful for working
 out what went wrong: delete it when you no longer need it.
 
+??? advanced "Advanced: A folder ending in `.incomplete-`"
+    Thyra writes the result under a temporary name, such as
+    `brain.zarr.incomplete-3f9a01c2`, and gives it its real name only when it
+    is finished. A run that was stopped hard, for example by running out of
+    memory, leaves this folder behind. You can still run the same command
+    again straight away. Delete the folder when no conversion is running.
+    If the error says the result is complete but could not be renamed, the
+    temporary folder holds the finished result: rename it yourself.
+
 ### A timsTOF folder "cannot be written"
 
 Bruker's library writes small temporary files into the `.d` folder while it

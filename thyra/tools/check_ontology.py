@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from ..metadata.ontology.cache import ONTOLOGY
+from ..utils.output_files import make_parent_folder, output_file_problem
 
 
 def _create_parser():
@@ -84,6 +85,7 @@ def _print_directory_results(results: dict):
 def _save_results_if_requested(results: dict, output_path: str):
     """Save results to JSON file if requested."""
     if output_path:
+        make_parent_folder(Path(output_path))
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2)
         print(f"Results saved to {output_path}")
@@ -97,8 +99,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     Returns:
         0 when every file was read, 1 when a file could not be read, and
-        2 when the input does not exist. A path that does not exist used
-        to be searched as an empty folder: "Checked 0 files", exit 0.
+        2 when the input does not exist or ``--output`` is a folder or lies
+        under a file. A path that does not exist used to be searched as an
+        empty folder: "Checked 0 files", exit 0.
     """
     parser = _create_parser()
     args = parser.parse_args(argv)
@@ -106,6 +109,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not input_path.exists():
         print(f"Error: path {input_path} does not exist.", file=sys.stderr)
         return 2
+    # Before the check runs, so a path no folder creation can fix does not
+    # throw a long folder check away at the end (issue #525).
+    if args.output:
+        problem = output_file_problem(Path(args.output))
+        if problem is not None:
+            print(f"Error: {problem}", file=sys.stderr)
+            return 2
     _setup_logging(args.verbose)
 
     from ..metadata.validator import (
