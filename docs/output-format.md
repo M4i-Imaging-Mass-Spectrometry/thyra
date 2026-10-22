@@ -1207,7 +1207,8 @@ the data actually sits on, read `msi_table.var["mz"]`.
 
 `spectrum_type` is the representation the reader delivered. It is also in
 `msi_metadata` as `ms_analysis.spectrum_representation` (see below), except
-when Thyra only guessed it.
+when Thyra only guessed it. It is unset when the converted spectra state both
+types.
 
 Beside it, when the source format provides them:
 

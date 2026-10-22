@@ -4,9 +4,9 @@ The metadata-only counterpart to :class:`ImzMLMetadataExtractor`, used by
 ``preview_msi`` (issue #360).  It subclasses it rather than restating it:
 of the twenty-odd things that extractor reads, only three come from the
 spectrum list -- the grid, the spectrum count and the mass range -- and
-everything else (pixel size and its unit, the instrument configuration
+everything else (pixel size and its unit, the instrument configurations
 the axis-type guess matches on, the declared mobility array, the UUID,
-the spectrum representation) is read from ``parser.metadata``, which
+the declared representation) is read from ``parser.metadata``, which
 :class:`~thyra.readers.imzml.header.ImzMLHeaderParser` provides in full.
 
 So this class overrides exactly the methods that would have reached for a
@@ -32,13 +32,17 @@ What it reports differently, and why that is not a drift:
   here for a 3D acquisition that the coordinate path would report as 3D.
   Nothing in the preview reads it (the card shows x and y), and nothing
   on the conversion path reaches this class.
+- The spectrum type and the instrument configuration follow what the
+  first spectrum states, where a conversion follows every converted
+  spectrum (D81). They differ only for a file whose later spectra say
+  otherwise, as for polarity (D35).
 """
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Optional, Set, Tuple, cast
+from typing import Any, Optional, Sequence, Set, Tuple, cast
 
 from ...readers.imzml.header import ImzMLHeaderParser, scan_observed_mz_range
 from ..types import EssentialMetadata
@@ -158,6 +162,16 @@ class ImzMLHeaderExtractor(ImzMLMetadataExtractor):
         spectra state the other polarity (D35).
         """
         return set(cast(ImzMLHeaderParser, self.parser).first_spectrum_polarity)
+
+    def _converted_spectra(self) -> Optional[Sequence[int]]:
+        """Every spectrum the head recorded, which is the first one.
+
+        The spectrum type and the instrument configuration follow the
+        first spectrum here; a conversion follows every converted
+        spectrum, so the two differ only for a file whose later spectra
+        say otherwise (D81, as D35 for polarity).
+        """
+        return None
 
 
 def head_shortfall(parser: ImzMLHeaderParser) -> Optional[str]:

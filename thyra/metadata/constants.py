@@ -15,7 +15,7 @@ module re-exports every name here, so both spellings keep working;
 ``Thresholds``, the one genuine resampling number in it, stayed there.
 """
 
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Dict, Iterable, NamedTuple, Optional, Tuple
 
 from ..errors import ConversionRefused
 
@@ -158,6 +158,79 @@ def agreed_polarity(stated: Iterable[str]) -> Optional[str]:
     if len(values) > 1:
         return MIXED_POLARITY
     return next(iter(values))
+
+
+#: One byte per spectrum for the representation it states: none, centroid,
+#: profile, or both (a spectrum whose own terms or groups name both).
+REPRESENTATION_UNSTATED = 0
+REPRESENTATION_CENTROID = 1
+REPRESENTATION_PROFILE = 2
+REPRESENTATION_BOTH = REPRESENTATION_CENTROID | REPRESENTATION_PROFILE
+
+
+class StatedSpectrumType(NamedTuple):
+    """What a source's statements give for its spectrum type.
+
+    Attributes:
+        spectrum_type: :attr:`SpectrumType.CENTROID`,
+            :attr:`SpectrumType.PROFILE`, or ``None``.
+        stated: Whether anything was stated. ``False`` only when neither
+            the spectra nor the file name a type, which is the one case a
+            reader may still guess.
+        warning: The one line to log, or ``None``.
+    """
+
+    spectrum_type: Optional[str]
+    stated: bool
+    warning: Optional[str]
+
+
+def spectrum_type_from_statements(
+    centroid: int, profile: int, declared: Iterable[str], source: str
+) -> StatedSpectrumType:
+    """The spectrum type of a source, by the one rule both routes apply.
+
+    The type is the one every converted spectrum states. ``centroid`` and
+    ``profile`` count the converted spectra stating each; a spectrum that
+    states both counts in both. When the spectra state both types, no
+    type is recorded. The file-level declaration (``declared``, the CV
+    names it lists) counts only when no spectrum states a type, and only
+    if it names exactly one. The spectra win over a declaration naming
+    only the other type, with a warning.
+
+    Args:
+        centroid: Converted spectra stating centroid.
+        profile: Converted spectra stating profile.
+        declared: The types the file-level declaration names.
+        source: The source's name, for the warning.
+    """
+    named = set(declared) & {SpectrumType.CENTROID, SpectrumType.PROFILE}
+    if centroid and profile:
+        return StatedSpectrumType(
+            None,
+            True,
+            f"{source}: the converted spectra state both types ({centroid} "
+            f"centroid, {profile} profile); no spectrum type is recorded.",
+        )
+    if centroid or profile:
+        spectra = SpectrumType.CENTROID if centroid else SpectrumType.PROFILE
+        warning = None
+        if named and spectra not in named:
+            warning = (
+                f"{source}: the file declares {next(iter(named))!r} but the "
+                f"converted spectra state {spectra!r}; recording {spectra!r}."
+            )
+        return StatedSpectrumType(spectra, True, warning)
+    if len(named) == 1:
+        return StatedSpectrumType(next(iter(named)), True, None)
+    if named:
+        return StatedSpectrumType(
+            None,
+            True,
+            f"{source}: the file declares both centroid and profile spectra "
+            "and no spectrum states its own; no spectrum type is recorded.",
+        )
+    return StatedSpectrumType(None, False, None)
 
 
 class BinaryDataType:

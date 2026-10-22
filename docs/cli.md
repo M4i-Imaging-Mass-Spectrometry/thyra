@@ -390,10 +390,13 @@ No options: every conversion streams, and every table is CSC.
 |--------|---------|-------------|
 | `--spectrum-type TYPE` | `auto` | `auto`, `profile`, or `centroid` -- declare the spectrum representation instead of detecting it. imzML only |
 
-By default Thyra reads the representation the file declares (`MS:1000127`
-centroid / `MS:1000128` profile), wherever in the document it is written, and
-only guesses when the file declares neither. `--spectrum-type` overrides all of
-that.
+By default Thyra records the representation every converted spectrum states
+(`MS:1000127` centroid / `MS:1000128` profile). A spectrum states it itself or
+in a parameter group it references. A group no spectrum references counts for
+nothing. When the spectra state both, no type is recorded and a warning gives
+the counts. The `fileContent` declaration counts only when no spectrum states
+a type, and only if it names one. Thyra guesses only when nothing is stated.
+`--spectrum-type` overrides all of that.
 
 SCiLS Lab exposes the same control as `--rep_type PROFILE|CENTROID` (2026b User
 Guide, p.81).
@@ -405,8 +408,8 @@ Guide, p.81).
     written to the store. It changes nothing for anyone who does not pass it.
 
     Use it when a file declares the wrong thing -- that does happen. When the
-    override contradicts an explicit declaration Thyra logs a warning naming
-    both values; it is in the normal output, so check it and the result.
+    override contradicts the type the spectra state Thyra logs a warning
+    naming both values; it is in the normal output, so check it and the result.
 
 ### Examples
 

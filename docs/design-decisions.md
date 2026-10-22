@@ -2610,7 +2610,10 @@ measured is 0.005 ppm, and the store says which encoding it came from.
 
 **Status:** Implemented (2026-09-30), issue #422. Amended by D69
 (2026-10-19): an embedded image with no alignment sits only in a
-coordinate system of its own. Amended by D70.
+coordinate system of its own. Amended by D70. Amended by D81 (2026-10-22):
+the instrument comes from the configuration the converted spectra use, and
+the spectrum type follows the converted spectra on both routes, which lifts
+the chilli known limit below.
 
 **Decision.** Where an archive states the same fact as the file it was made
 from, Thyra reads it the way it reads that file. Five facts:
@@ -6413,3 +6416,102 @@ Creating rather than refusing keeps one rule for every output; the cost is
 that a typo makes a stray folder, as it already does for the store.
 
 **What changes in a store.** Nothing.
+
+---
+
+## D81. The spectrum type and the instrument follow the spectra that are converted
+
+**Status:** Implemented (2026-10-22), issue #526. Amends D29 (the
+instrument, and its chilli known limit); relates to D45.
+
+**Decision.** What a store records about its spectra is read from the
+spectra it holds, not from the file's summary or from list order.
+
+- **The spectrum type** is the one every converted spectrum states. On
+  imzML a spectrum states it through its own terms and the parameter
+  groups it references; a group no spectrum references counts for
+  nothing. On mzPeak it is the `spectrum_representation` column of the
+  spectra kept: on a pixel, and not an MSn spectrum left out beside MS1
+  (D70, D73). An archive read from its peaks member stays centroid, and one
+  that fills both members stays profile, as the member decides. When the
+  converted spectra state both types, no type is recorded and one warning
+  gives the counts; the axis is then chosen as for an unknown type. When
+  the spectra state one type and the file-level declaration (`fileContent`,
+  `file_description.contents`) names only the other, the spectra win, with
+  a warning. The declaration counts only when no spectrum states a type,
+  and only if it names exactly one; naming both leaves the type unset. The
+  processed-mode guess runs only when nothing is stated anywhere.
+  `--spectrum-type` still overrides, and its contradiction warning compares
+  with the type the spectra give. One function applies the rule on both
+  routes.
+- **The instrument** (model, serial number, analyzer, axis family) comes
+  from the configuration the converted spectra use: on imzML the one each
+  spectrum's first scan names, else the run's default; on mzPeak the scans'
+  `instrument_configuration_id`, else `run.default_instrument_id`. A name
+  the list does not hold counts as none, so the default decides for it
+  (the pyimzml writer names one that does not exist). Each configuration
+  is resolved alone. A fact the used configurations state differently is
+  left unset, with a warning; a configuration that states a TOF counts
+  against another's Orbitrap family.
+- **A serial number** written as a JSON number is kept as text.
+- **The solvent** (`IMS:1001211`) on the used configuration or one of its
+  components is written to `preparation.solvent`. `export-metaspace` writes
+  an unstated solvent as `""` with a warning, not `"none"`: a DESI source
+  sprays one.
+- **The z spacing** is written to `conversion_options` only on a volume of
+  more than one plane, as in `coordinate_systems`. Elsewhere nothing
+  applied it, and the log already said it is not recorded.
+
+**Why.** The 4.3.3 stress test (#427) found five rules answering one
+question: the imzML file description (centroid first), the imzML document
+order (any group, used or not), the mzPeak contents order, the mzPeak
+column (any one centroid label wins), and both members filled (profile).
+An imzML and its own archive could be binned on different axes at exit 0,
+and so could a file with an unused group or a left-out MS2 spectrum. The
+type picks the axis, so this changed `var` and `X`.
+
+| Finding | Before | After |
+|---|---|---|
+| F176: unused centroid group, 30 profile spectra | centroid, 219,722 bins (group first) | profile, 120,000 bins |
+| F178: `fileContent` lists both, spectra profile | imzML centroid, archive first-listed | profile on both routes, either order |
+| F179: 8 profile labels and 1 centroid | centroid, 1,988 bins | unset with a warning, 999 bins |
+| F179: centroid MS2 left out | centroid | profile, 999 bins |
+| F175: two configurations, spectra use rapifleX | model of the first listed | rapifleX in either order |
+| F216: serial as a JSON number | dropped | `'1877407.00228'` |
+| F72: DESI file states methanol | `Solvent: "none"` | `Solvent: "methanol"` |
+| F62: one plane, `--handle-3d --z-spacing 5` | `z_spacing_um: 5` in `conversion_options` | not written |
+
+The report measured the public chilli imzML: `fileContent` declares
+profile while all 4,166 spectra state centroid. It was stored as profile on
+396,849 bins and its archive as centroid on 978,495. Following the spectra
+gives both the archive's axis, which lifts D29's chilli known limit. Two
+options lost. Leaving the type unset whenever both are declared would strip
+the type from files whose spectra all agree. Recording profile would bin an
+all-centroid file on the profile axis.
+
+**What changes.** The recorded type and axis of files whose spectra
+disagree with their summary or with each other; the instrument of files
+whose spectra do not use the first-listed configuration; `preparation` on
+sources that state a solvent; and the two z keys leave `conversion_options`
+on every store that is not a multi-plane volume. Every store with one
+configuration and spectra that agree with `fileContent` keeps its type,
+axis and instrument.
+
+**Known limits.**
+
+- The metadata-only route (`thyra metadata`, preview, `plan_mass_axis`)
+  reads the head and the first spectrum, so it follows the first
+  spectrum's type and configuration. It differs from a conversion only for
+  a file whose later spectra say otherwise, as for polarity (D35).
+- The chilli imzML and the other public example files were not converted
+  for this entry; the before and after above come from the stress report
+  and constructed files.
+- Laser parameters (`imzmldict`) are still taken from the first
+  configuration that states them, and the polarity rule still reads every
+  parameter group, used or not.
+- No real file with two instrument configurations has been seen. The rule
+  is tested on constructed imzML files and archives.
+- A pyimzml parser a caller builds without Thyra's reader records nothing
+  per spectrum. `ImzMLMetadataExtractor` over it falls back to `fileContent`
+  and every configuration, as it does for polarity and MS levels, so it can
+  report another type or instrument than a conversion of the same file.

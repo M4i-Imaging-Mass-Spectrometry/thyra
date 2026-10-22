@@ -27,12 +27,23 @@ from pathlib import Path
 from typing import Any, Dict, FrozenSet, List, Optional, cast
 
 from ...core.msms import MS_LEVEL_ACCESSION
+from ...metadata.constants import (
+    REPRESENTATION_CENTROID,
+    REPRESENTATION_PROFILE,
+    REPRESENTATION_UNSTATED,
+    ImzMLAccessions,
+    polarity_accession,
+)
 from ...utils.imzml_coordinate_base import (
     Z_FROM_GROUP,
     Z_GROUP_ATTRIBUTE,
     Z_STATED,
     Z_STATES_ATTRIBUTE,
     Z_UNSTATED,
+)
+from ...utils.imzml_spectrum_terms import (
+    REPRESENTATIONS_ATTRIBUTE,
+    record_configuration,
 )
 from ...utils.ms_levels import MS_LEVELS_ATTRIBUTE
 
@@ -160,6 +171,11 @@ def ensure_spectrum_check() -> None:
       (``MS_LEVELS_ATTRIBUTE``), read on the spectrum or in a group it
       references, 0 where neither states one. The reader leaves MSn
       spectra out per pixel from these bytes (D70, D73).
+    - Each spectrum's representation (centroid, profile, both or none)
+      and the instrument configuration its scan names are recorded as one
+      byte each (:mod:`thyra.utils.imzml_spectrum_terms`). The spectrum
+      type and the instrument follow the converted spectra from these
+      (D81).
     - A spectrum pyimzml fails on raises :class:`ConversionRefused` that
       names the spectrum and the cause, instead of the ``TypeError``,
       ``ValueError`` or ``AttributeError`` it raised from deep inside its
@@ -220,6 +236,15 @@ def ensure_spectrum_check() -> None:
         if levels is None:
             levels = own[MS_LEVELS_ATTRIBUTE] = bytearray()
         levels.append(_spectrum_level(self, elem, cv_param_tag, group_ref_tag))
+        representations = own.get(REPRESENTATIONS_ATTRIBUTE)
+        if representations is None:
+            representations = own[REPRESENTATIONS_ATTRIBUTE] = bytearray()
+        representations.append(
+            spectrum_representation(self, elem, cv_param_tag, group_ref_tag)
+        )
+        record_configuration(
+            own, scan.get("instrumentConfigurationRef") if scan is not None else None
+        )
         try:
             original(self, elem, include_spectra_metadata)
         except ConversionRefused:
@@ -263,6 +288,67 @@ def _spectrum_level(
         if ref in group_levels:
             return group_levels[ref]
     return 0
+
+
+def spectrum_representation(
+    parser: Any, elem: Any, cv_param_tag: str, group_ref_tag: str
+) -> int:
+    """The representation one ``<spectrum>`` states, as one byte.
+
+    Its own ``MS:1000127`` / ``MS:1000128`` terms and those of every group
+    it references, together: a spectrum whose terms name both states both.
+    ``MS:1000128`` named "positive scan" states a polarity, not a
+    representation (D55); pyimzml corrects that pair in the groups itself.
+    A group no spectrum references states nothing about any spectrum
+    (D81).
+    """
+    stated = REPRESENTATION_UNSTATED
+    refs: List[str] = []
+    for node in elem:
+        tag = node.tag
+        if tag == cv_param_tag:
+            accession = node.get("accession")
+            if accession == ImzMLAccessions.CENTROID_SPECTRUM:
+                stated |= REPRESENTATION_CENTROID
+            elif accession == ImzMLAccessions.PROFILE_SPECTRUM and (
+                polarity_accession(accession, node.get("name")) is None
+            ):
+                stated |= REPRESENTATION_PROFILE
+        elif tag == group_ref_tag:
+            ref = node.get("ref")
+            if ref is not None:
+                refs.append(ref)
+    if refs:
+        groups = _group_representations(parser)
+        for ref in refs:
+            stated |= groups.get(ref, REPRESENTATION_UNSTATED)
+    return stated
+
+
+def _group_representations(parser: Any) -> Dict[str, int]:
+    """The representation each referenceable param group states, by group id.
+
+    Built once per parser, as :func:`_group_levels` is.
+    """
+    cached = parser.__dict__.get("_thyra_group_representations")
+    if cached is not None:
+        return cast(Dict[str, int], cached)
+    metadata = getattr(parser, "metadata", None)
+    groups = getattr(metadata, "referenceable_param_groups", None)
+    found: Dict[str, int] = {}
+    if isinstance(groups, dict):
+        for group_id, group in groups.items():
+            by_accession = getattr(group, "param_by_accession", None)
+            if not isinstance(by_accession, dict):
+                continue
+            stated = REPRESENTATION_UNSTATED
+            if ImzMLAccessions.CENTROID_SPECTRUM in by_accession:
+                stated |= REPRESENTATION_CENTROID
+            if ImzMLAccessions.PROFILE_SPECTRUM in by_accession:
+                stated |= REPRESENTATION_PROFILE
+            found[str(group_id)] = stated
+    parser.__dict__["_thyra_group_representations"] = found
+    return found
 
 
 def _stored_level(value: Any) -> int:

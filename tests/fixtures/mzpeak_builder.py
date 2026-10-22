@@ -386,7 +386,7 @@ def _metadata_table(
     profile: Sequence[Optional[Spectrum]],
     peaks: Sequence[Optional[Spectrum]],
     null_pair_after: Optional[int],
-    spectrum_representation: str,
+    spectrum_representation: Union[str, Sequence[Optional[str]]],
     count_columns: Sequence[str],
 ) -> pa.Table:
     """Build the one-row-per-spectrum metadata table.
@@ -415,9 +415,15 @@ def _metadata_table(
 
 
 def _summary_table(
-    spectra: Sequence[Optional[Spectrum]], spectrum_representation: str
+    spectra: Sequence[Optional[Spectrum]],
+    spectrum_representation: Union[str, Sequence[Optional[str]]],
 ) -> pa.Table:
     """Build the metadata columns that do not depend on the member."""
+    representations = (
+        [spectrum_representation] * len(spectra)
+        if isinstance(spectrum_representation, str)
+        else list(spectrum_representation)
+    )
     return pa.table(
         {
             "index": pa.array(range(len(spectra)), type=pa.uint64()),
@@ -429,9 +435,7 @@ def _summary_table(
             "time": pa.array(
                 [float(i) for i in range(len(spectra))], type=pa.float64()
             ),
-            "spectrum_representation": pa.array(
-                [spectrum_representation] * len(spectra), type=pa.string()
-            ),
+            "spectrum_representation": pa.array(representations, type=pa.string()),
             "lowest_observed_mz": pa.array(
                 [None if s is None else float(s.mzs.min()) for s in spectra],
                 type=pa.float64(),
@@ -652,7 +656,7 @@ def build_mzpeak(
     column_mapping_key: Optional[str] = "column_mapping",
     index_metadata: Optional[Dict[str, Any]] = None,
     null_pair_after: Optional[int] = None,
-    spectrum_representation: Optional[str] = None,
+    spectrum_representation: Union[None, str, Sequence[Optional[str]]] = None,
     footer_metadata: bool = True,
     signal: str = "profile",
     centroids: Optional[Sequence[Optional[Spectrum]]] = None,
@@ -694,8 +698,10 @@ def build_mzpeak(
         null_pair_after: Insert a null pair after this many points of each
             spectrum. Applies to the data member only: padding marks zero
             runs removed from a profile spectrum.
-        spectrum_representation: Value for the per-spectrum column. Defaults
-            to the CV name matching ``signal``.
+        spectrum_representation: Value for the per-spectrum column, or one
+            value per spectrum. Defaults to the CV name matching ``signal``.
+            The default ``file_contents`` follows a single value, and the
+            CV name matching ``signal`` when one is given per spectrum.
         footer_metadata: Whether to write the file-level JSON blobs into the
             metadata member's Parquet key-value footer. ``False`` leaves the
             index ``metadata`` object as the only source, which is how a
@@ -770,13 +776,16 @@ def build_mzpeak(
             "centroid spectrum" if signal == "centroid" else "profile spectrum"
         )
     if file_contents is None:
+        declared = (
+            spectrum_representation
+            if isinstance(spectrum_representation, str)
+            else ("centroid spectrum" if signal == "centroid" else "profile spectrum")
+        )
         file_contents = [
             {
-                "name": spectrum_representation,
+                "name": declared,
                 "accession": (
-                    "MS:1000127"
-                    if spectrum_representation == "centroid spectrum"
-                    else "MS:1000128"
+                    "MS:1000127" if declared == "centroid spectrum" else "MS:1000128"
                 ),
                 "value": None,
                 "unit": None,
