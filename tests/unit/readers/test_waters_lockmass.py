@@ -1,4 +1,4 @@
-"""Lock-mass correction of Waters m/z without writing to the run (D81)."""
+"""Lock-mass correction of Waters m/z without writing to the run (D82)."""
 
 from pathlib import Path
 from unittest.mock import MagicMock

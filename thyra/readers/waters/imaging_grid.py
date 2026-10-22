@@ -471,7 +471,7 @@ def _warn_on_shared_pixels(
     pixel -- the stage reporting the same position again, as on the
     registry's 100 um MALDI set, whose function 2 holds 1275 positioned
     scans on 1274 distinct pixels (issue #233) -- are the reader's to
-    combine, and it reports what it did with them (D82).
+    combine, and it reports what it did with them (D83).
     """
     wanted = None if functions is None else set(functions)
     functions_on: Dict[Tuple[int, int], Set[int]] = {}

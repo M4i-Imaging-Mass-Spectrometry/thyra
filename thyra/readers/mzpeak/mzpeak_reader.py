@@ -195,6 +195,10 @@ TDF_INTENSITY_NUMERATOR = 100.0
 #: and neither sums a point that is not a measurement (D55, D61).
 SAME_BIN_RELATIVE = SAME_PEAK_RELATIVE
 
+#: Scans column naming the instrument configuration a scan was taken with,
+#: by the ``id`` of an entry in ``instrument_configuration_list``.
+SCAN_CONFIGURATION_COLUMN = "instrument_configuration_id"
+
 #: Metadata column recording how many points each spectrum has in a signal
 #: member. The specification requires the matching column for whichever
 #: member a writer fills.
@@ -1528,6 +1532,18 @@ class MzPeakArchive:
 
         column = scans.read(columns=[name]).column(0).combine_chunks()
         return column.take(pa.array(rows))
+
+    def scan_configuration_ids(self) -> Optional[Set[Any]]:
+        """The instrument configurations the kept spectra's scans name.
+
+        ``None`` when the scans member has no
+        :data:`SCAN_CONFIGURATION_COLUMN`; a null value, a scan that names
+        none, is in the set as ``None``.
+        """
+        column = self._placed_scan_column(SCAN_CONFIGURATION_COLUMN)
+        if column is None:
+            return None
+        return set(column.unique().to_pylist())
 
     def scan_regions(self) -> Optional[NDArray[np.int64]]:
         """The acquisition region each kept spectrum's scan names, or ``None``.

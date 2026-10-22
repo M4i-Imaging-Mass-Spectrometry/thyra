@@ -73,11 +73,12 @@ axis), the **axis type** (how bin widths scale with m/z), and the **bin count**.
 - average peaks per spectrum; above **5000** the data is recorded as high-density profile
 - format flags for Rapiflex, timsTOF, PHI, and Waters
 
-Spectrum type is whatever the file **declares** -- `MS:1000127` or
-`MS:1000128` -- read from the file description first and then from the rest of
-the document. Only when a file declares neither does Thyra fall back to
-guessing centroid from processed storage mode, and it says so in a warning
-when it does. Processed and centroid are independent: processed means each
+Spectrum type is the one every converted spectrum **states** --
+`MS:1000127` or `MS:1000128`, on the spectrum or in a group it references.
+Spectra that state both give no type, and a warning says so. The file
+description counts only when no spectrum states a type. Only when nothing is
+stated does Thyra fall back to guessing centroid from processed storage mode,
+and it says so in a warning when it does. Processed and centroid are independent: processed means each
 spectrum carries its own m/z array, which says nothing about whether its peaks
 are centroided.
 

@@ -36,6 +36,7 @@ from .models import (
     Provenance,
     ResolvingPower,
     SampleInformation,
+    SamplePreparation,
     TeachingPoint,
 )
 from .vocab import (
@@ -565,7 +566,7 @@ def _waters_calibration(acquisition: Dict[str, Any]) -> Dict[str, Any]:
     """The section from a Waters source, or nothing.
 
     ``is_lockmass_corrected`` is whether the stored m/z carry a lock-mass
-    correction: the one Thyra applied or kept (D81), or else the library's
+    correction: the one Thyra applied or kept (D82), or else the library's
     answer for the whole file. Either way False is a statement and not a
     default. ``lockmass_function`` is not used:
     on a raster MassLynx split across functions it names the last chunk
@@ -1208,6 +1209,15 @@ def build_msi_metadata(
             spectrum_type = essential.spectrum_type
             spectrum_type_guessed = getattr(essential, "spectrum_type_guessed", False)
 
+    # Only what the source states: a DESI source's spray solvent
+    # (IMS:1001211). Empty otherwise, which to_uns_dict leaves out.
+    solvent = _first_string(acquisition, ("solvent",))
+    preparation_section: Dict[str, Any] = (
+        {"preparation": SamplePreparation(solvent=solvent)}
+        if solvent is not None
+        else {}
+    )
+
     # Absent unless the user gave one: the model's own default is an empty
     # sample, which to_uns_dict leaves out.
     sample_section: Dict[str, Any] = (
@@ -1249,6 +1259,7 @@ def build_msi_metadata(
             ),
         ),
         **sample_section,
+        **preparation_section,
     )
 
 

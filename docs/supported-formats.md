@@ -769,9 +769,15 @@ separate members. Thyra reads one of them per archive:
 
 | The archive holds | Member read | Spectrum type reported |
 |---|---|---|
-| profile data only | `data_arrays` (`spectra_data.parquet`) | as the archive declares |
+| profile data only | `data_arrays` (`spectra_data.parquet`) | as the converted spectra state it |
 | centroid data only | `peaks` (`spectra_peaks.parquet`) | centroid |
 | both | `data_arrays` | profile |
+
+"As the converted spectra state it" means the `spectrum_representation`
+column of the spectra that are converted. A spectrum left out, such as an MS2
+spectrum beside MS1, takes no part. A column naming both types gives no type,
+with a warning. `file_description.contents` counts only when no converted
+spectrum names a type. The imzML route follows the same rule.
 
 The member counts as empty when it has no rows or is not in the archive. The
 reference converter writes both members every time and leaves one with no
@@ -885,9 +891,11 @@ states, the store comes out as the store of that file. See
   ([D30](design-decisions.md#d30-a-z-the-source-does-not-state-is-recorded-as-0)).
   It is read from a z column (0.16.0) or, failing that, from each scan's
   `parameters` list (0.12.0 and 0.14.0).
-- **The instrument.** The instrument configurations are read as in imzML. An
-  Orbitrap or FT-ICR analyzer or model picks its own mass axis, and a timsTOF
-  model is known by its name.
+- **The instrument.** The instrument configurations are read as in imzML,
+  but only the ones the converted spectra use. A scan names its configuration
+  in `instrument_configuration_id`; else `run.default_instrument_id` applies.
+  An Orbitrap or FT-ICR analyzer or model picks its own mass axis, and a
+  timsTOF model is known by its name.
 - **Regions.** From 0.17, each scan of a Bruker archive names its region,
   and that name is read. An older archive only lists its regions under
   `bruker_maldi.regions`, each with a box of raster indices and a frame

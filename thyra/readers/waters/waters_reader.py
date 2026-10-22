@@ -58,12 +58,12 @@ _DRIFT_STEP_TOLERANCE = 1e-4
 #: and a quadrupole selection (selected ion monitoring).
 _NOT_FRAGMENTED_MODES = frozenset({"MS", "SIM"})
 
-#: The ``lock_mass`` value that stores the m/z uncorrected (D81).
+#: The ``lock_mass`` value that stores the m/z uncorrected (D82).
 LOCK_MASS_OFF = "off"
 
 
 def _interrupted(rt_min: float, next_rt_min: float, interruptions: List[float]) -> bool:
-    """Whether a lock-mass scan was taken strictly between two scans (D82)."""
+    """Whether a lock-mass scan was taken strictly between two scans (D83)."""
     at = bisect.bisect_right(interruptions, rt_min)
     return at < len(interruptions) and interruptions[at] < next_rt_min
 
@@ -162,7 +162,7 @@ class WatersReader(BaseMSIReader):
                 trace resolves, and the vendor centroid on every other
                 Waters instrument. See :mod:`thyra.readers.waters.instrument`.
             intensity_threshold: Minimum intensity value to include.
-            lock_mass: The lock-mass correction of the stored m/z (D81).
+            lock_mass: The lock-mass correction of the stored m/z (D82).
                 ``None`` (the default) keeps what the run carries: the
                 correction an ``lmgt.inf`` in the run folder applies, or
                 none, with a warning when the run has reference scans it
@@ -231,12 +231,12 @@ class WatersReader(BaseMSIReader):
         self._lock_mass_option = _check_lock_mass(lock_mass)
         #: The correction the library applies to every read of this run
         #: (an ``lmgt.inf`` in its folder), and the one the store carries.
-        #: A scan's m/z are multiplied by target / applied (D81).
+        #: A scan's m/z are multiplied by target / applied (D82).
         self._lock_mass_applied: Optional[LockMassCorrection] = None
         self._lock_mass_target: Optional[LockMassCorrection] = None
         #: Scans whose spectrum is weighted when its pixel holds more than
         #: one scan of the same function: (function, scan) -> weight, 0.0
-        #: for a scan left out (D82). Absent scans weigh 1.
+        #: for a scan left out (D83). Absent scans weigh 1.
         self._scan_weights: Dict[Tuple[int, int], float] = {}
         self._repeated_pixels: Dict[str, Any] = {}
         self._closed = False
@@ -439,8 +439,8 @@ class WatersReader(BaseMSIReader):
         # the last point a refusal can be said.
         self._refuse_unreadable_mobility()
 
-        # Which lock-mass correction the stored m/z carry (D81), and how
-        # scans one function took on the same pixel are combined (D82).
+        # Which lock-mass correction the stored m/z carry (D82), and how
+        # scans one function took on the same pixel are combined (D83).
         # Neither reads a spectrum from the run: the first works on a
         # throwaway copy of it, the second on scan records.
         try:
@@ -465,7 +465,7 @@ class WatersReader(BaseMSIReader):
         )
 
     # ------------------------------------------------------------------
-    # Lock mass (D81)
+    # Lock mass (D82)
     #
     # The library applies the correction an lmgt.inf in the run folder
     # holds to every read, so the m/z it hands back are already corrected
@@ -557,7 +557,7 @@ class WatersReader(BaseMSIReader):
         )
 
     def _mz_scale(self, rt_min: float) -> float:
-        """The multiplier for the m/z of a scan at ``rt_min`` (D81)."""
+        """The multiplier for the m/z of a scan at ``rt_min`` (D82)."""
         applied, target = self._lock_mass_applied, self._lock_mass_target
         if target is applied:
             return 1.0
@@ -583,7 +583,7 @@ class WatersReader(BaseMSIReader):
         return report
 
     # ------------------------------------------------------------------
-    # Scans one function took on the same pixel (D82)
+    # Scans one function took on the same pixel (D83)
     # ------------------------------------------------------------------
 
     def _resolve_repeated_pixels(self) -> None:
@@ -594,7 +594,7 @@ class WatersReader(BaseMSIReader):
         * The first scan was cut short: a lock-mass acquisition fell between
           it and the next scan on the same pixel. MassLynx stops the raster
           for the reference, and resumes it by acquiring that pixel again.
-          On the SYNAPT XS run of D82 all nine such first scans hold 0 to 2%
+          On the SYNAPT XS run of D83 all nine such first scans hold 0 to 2%
           of a normal scan's ion current. It is left out, as HDImaging does.
         * Otherwise both are complete acquisitions of the pixel, and it
           stores their mean, so it does not come out brighter than its
@@ -650,20 +650,20 @@ class WatersReader(BaseMSIReader):
             logger.warning(
                 "%s: %d scan(s) were cut short by a lock-mass acquisition and "
                 "acquired again on the same pixel; the cut-short scan is left "
-                "out and the pixel keeps the complete one (D82).",
+                "out and the pixel keeps the complete one (D83).",
                 self.data_path.name,
                 len(dropped),
             )
         if averaged:
             logger.warning(
                 "%s: %d pixel(s) were acquired more than once by the same "
-                "function; each stores the mean of its scans (D82).",
+                "function; each stores the mean of its scans (D83).",
                 self.data_path.name,
                 len(averaged),
             )
 
     def _scan_weight(self, func: int, scan: int) -> float:
-        """How much of a scan's spectrum reaches its pixel (D82)."""
+        """How much of a scan's spectrum reaches its pixel (D83)."""
         return self._scan_weights.get((func, scan), 1.0)
 
     def repeated_pixels_report(self) -> Dict[str, Any]:

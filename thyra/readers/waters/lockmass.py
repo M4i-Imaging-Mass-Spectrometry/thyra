@@ -1,9 +1,9 @@
-"""Lock-mass correction of Waters m/z values, without writing to the run (D81).
+"""Lock-mass correction of Waters m/z values, without writing to the run (D82).
 
 A Waters run can carry a lock-mass function: scans of a reference compound
 taken at intervals during the acquisition. MassLynx corrects the m/z of
 every other scan against them, and an uncorrected run drifts. On the
-SYNAPT XS MALDI image measured for D81 the stored m/z of known brain
+SYNAPT XS MALDI image measured for D82 the stored m/z of known brain
 lipids ran +11.6 ppm high at the start and +20.6 ppm at the end of a
 three-hour raster, while the corrected values stayed within 1 to 3 ppm.
 

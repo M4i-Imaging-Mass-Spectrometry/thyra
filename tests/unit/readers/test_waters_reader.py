@@ -1838,7 +1838,7 @@ class TestWatersReaderMsmsMode:
 
 
 # ----------------------------------------------------------------------
-# Lock mass (D81) and scans one function took on the same pixel (D82)
+# Lock mass (D82) and scans one function took on the same pixel (D83)
 # ----------------------------------------------------------------------
 
 
@@ -2015,7 +2015,7 @@ class TestWatersLockMass:
 
 
 class TestWatersRepeatedPixels:
-    """A pixel one function acquired twice (D82)."""
+    """A pixel one function acquired twice (D83)."""
 
     @patch("thyra.readers.waters.waters_reader.MassLynxLib")
     @patch("thyra.readers.waters.waters_reader.build_imaging_grid")

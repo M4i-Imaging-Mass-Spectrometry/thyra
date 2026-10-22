@@ -580,7 +580,7 @@ class MassLynxLib:
 
         Writes ``lmgt.inf`` into the opened folder when it succeeds, like
         :meth:`apply_custom_lockmass_correction`; never call it on a user's
-        run (D81).
+        run (D82).
         """
         return bool(self._ensure_loaded().applyAutoLockmassCorrection(handle) > 0)
 
@@ -589,7 +589,7 @@ class MassLynxLib:
 
         The library writes the correction to ``lmgt.inf`` in the folder the
         handle was opened on, and every later open of that folder applies
-        it (measured, D81). Never call this on a user's run:
+        it (measured, D82). Never call this on a user's run:
         :func:`thyra.readers.waters.lockmass.measure_lock_mass` calls it on
         a throwaway copy.
         """

@@ -209,7 +209,7 @@ class TestSentinelOnTheRaster:
 class TestSharedPixels:
     """Scans of different functions on one pixel are summed; that was silent.
 
-    A pixel one function acquired twice is the reader's to combine (D82),
+    A pixel one function acquired twice is the reader's to combine (D83),
     so the grid no longer calls it a sum.
     """
 

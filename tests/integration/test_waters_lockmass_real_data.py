@@ -1,4 +1,4 @@
-"""Waters lock-mass correction and repeated pixels against a real run (D81, D82).
+"""Waters lock-mass correction and repeated pixels against a real run (D82, D83).
 
 These tests run only when ``THYRA_WATERS_LOCK_MASS_DATASET`` names the
 MassIVE run MSV000092638 ``20210426_9AA_WTBrain1-1.raw`` (SYNAPT XS, MALDI,
@@ -96,7 +96,7 @@ class TestLockMassOnARealRun:
         report = corrected.lock_mass_report()
         corrected.close()
 
-        # Measured for D81: +12 ppm rising to +21 ppm uncorrected.
+        # Measured for D82: +12 ppm rising to +21 ppm uncorrected.
         assert max(drifting) - min(drifting) > 5.0
         assert max(steady) - min(steady) < 2.0
         assert all(abs(error) < 4.0 for error in steady)

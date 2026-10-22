@@ -205,7 +205,9 @@ class TestTheTwoSectionsRescuedFromTheDeadMethod:
         )
 
     def test_the_conversion_options_say_how_it_was_run(self):
-        attrs = _builder(handle_3d=True).build(_context(z_spacing_um=25.0))
+        attrs = _builder(handle_3d=True).build(
+            _context(z_spacing_um=25.0, is_volume=True)
+        )
 
         assert attrs["conversion_options"] == {
             "handle_3d": True,
@@ -213,6 +215,19 @@ class TestTheTwoSectionsRescuedFromTheDeadMethod:
             "pixel_size_y_um": 50.0,
             "z_spacing_um": 25.0,
             "z_spacing_source": ZSpacingSource.ASSUMED_ISOTROPIC.value,
+            "dataset_id": "stub",
+        }
+
+    def test_a_store_without_a_volume_records_no_z_spacing(self):
+        """Nothing applied it, and the log says it is not recorded (D81)."""
+        attrs = _builder(handle_3d=True).build(
+            _context(z_spacing_um=25.0, is_volume=False)
+        )
+
+        assert attrs["conversion_options"] == {
+            "handle_3d": True,
+            "pixel_size_um": 30.0,
+            "pixel_size_y_um": 50.0,
             "dataset_id": "stub",
         }
 

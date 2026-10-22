@@ -49,11 +49,13 @@ print(block["ms_analysis"]["ionisation_source_term"])
 Seven sections and a processing list. `ms_analysis` and `provenance` are
 written by the converter for every store; `acquisition`, `calibration` and
 `alignment` are each written when the reader reports at least one of their
-facts and are absent otherwise; `sample` and `preparation` describe things no raw file
-records (what the tissue was, how it was prepared) and are supplied by you --
-see [Completing the metadata](#completing-the-metadata). The one exception is
-the sample's id and name, which a conversion writes when it is given them
-(`convert_msi(sample_id=..., sample_name=...)` or `--sample-id`).
+facts and are absent otherwise; `sample` and `preparation` describe things raw files
+rarely record (what the tissue was, how it was prepared) and are supplied by you --
+see [Completing the metadata](#completing-the-metadata). Two exceptions: the
+sample's id and name, which a conversion writes when it is given them
+(`convert_msi(sample_id=..., sample_name=...)` or `--sample-id`), and
+`preparation.solvent`, written when the source states `IMS:1001211` on the
+instrument configuration the spectra use.
 
 | Section | Field | Type | Ontology |
 |---------|-------|------|----------|
@@ -145,21 +147,29 @@ from the format itself.
 | PHI ToF-SIMS | from the header | SIMS | TOF | platform name |
 | Waters `.raw` | -- | -- | -- | `SELECT SERIES MRT` on an MRT, Thyra's own label; otherwise unset |
 
+The instrument model, serial number and analyzer come from the
+instrumentConfiguration the converted spectra use: the one each scan names,
+else the run's default. Configurations no converted spectrum uses are not
+read. When the spectra use configurations that state a fact differently,
+that fact is left unset, with a warning.
+
 `spectrum_representation` is the representation the reader delivers, so
 resampling never changes it:
 
 | Source | spectrum representation |
 |--------|-------------------------|
-| imzML | from the file's declaration (`MS:1000127` / `MS:1000128`), or `--spectrum-type` |
-| mzPeak | `centroid` when read from the peaks member, `profile` when the archive fills both members, else the file's declaration |
+| imzML | what every converted spectrum states (`MS:1000127` / `MS:1000128`, on the spectrum or a group it references), else `fileContent` when it names one; or `--spectrum-type` |
+| mzPeak | `centroid` when read from the peaks member, `profile` when the archive fills both members, else what every converted spectrum's `spectrum_representation` states, else `file_description.contents` when it names one |
 | Bruker timsTOF `.d` | `centroid` for TSF and for TDF read with `vendor_centroid`; `profile` for TDF read with `scan_sum` (the default) |
 | Bruker solariX `.d` | `centroid` |
 | Bruker Rapiflex, PHI ToF-SIMS | `profile` |
 | Waters `.raw` | what the reader returns (`--waters-spectrum`) |
 
-An imzML that declares neither term leaves the field unset. Thyra still
-guesses centroid for a processed-mode file, to pick a resampling method, but
-that guess stays in `uns["essential_metadata"]["spectrum_type"]`.
+Converted spectra that state both types leave the field unset, with a
+warning giving the counts, and so does a file-level declaration naming both.
+An imzML that states neither term anywhere leaves the field unset too. Thyra
+still guesses centroid for a processed-mode file, to pick a resampling
+method, but that guess stays in `uns["essential_metadata"]["spectrum_type"]`.
 
 A timsTOF `.d` also fills `ion_mobility`: `present: true` for a TDF acquisition
 (TIMS engaged), with the acquired 1/K0 range and the ramp length in scans,
@@ -694,9 +704,10 @@ Writes the METASPACE submission metadata JSON (default:
 `<input>.metaspace.json` next to the input; `-o -` for stdout). Required
 fields the store cannot know are written empty, or left out in the case of
 `Detector_Resolving_Power`, and reported as warnings on stderr -- the output
-is a truthful starting point, never a fabricated record. Two values are
+is a truthful starting point, never a fabricated record. One value is
 filled without being stated: matrix-free sources (DESI, SIMS) get
-`MALDI_Matrix: "none"`, and an unset solvent is written as `"none"`.
+`MALDI_Matrix: "none"`. A solvent the source does not state is written empty
+with a warning, since a DESI source does spray one.
 
 ```bash
 thyra export-metaspace output.zarr
