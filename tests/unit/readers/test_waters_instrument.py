@@ -24,6 +24,7 @@ from thyra.readers.waters.instrument import (
     parse_function_parameters,
     parse_header_txt,
     read_cyclic_sequence,
+    read_stage_pattern,
 )
 from thyra.readers.waters.masslynx_lib import FunctionType, ScanInfoData
 from thyra.readers.waters.waters_reader import WatersReader
@@ -553,3 +554,131 @@ class TestCyclicSequence:
         )
 
         assert read_cyclic_sequence(raw) is None
+
+
+def _method_xml(settings="", table=""):
+    return (
+        '<?xml version="1.0"?>\n<MsMethod><Settings>'
+        f"{settings}{table}</Settings></MsMethod>"
+    )
+
+
+def _region_row(x, y, dx, dy):
+    return (
+        "<Row>"
+        f'<Setting Name="MaldiXStart" Value="{x}"/>'
+        f'<Setting Name="MaldiYStart" Value="{y}"/>'
+        f'<Setting Name="MaldiXLength" Value="{dx}"/>'
+        f'<Setting Name="MaldiYLength" Value="{dy}"/>'
+        "</Row>"
+    )
+
+
+STEPS = (
+    '<Setting Name="MaldiXStep" Value="0.0201"/>'
+    '<Setting Name="MaldiYStep" Value="0.0200"/>'
+)
+TWO_REGIONS = (
+    '<Table Name="MultiRegions">'
+    + _region_row("66.5000", "74.1000", "0.5", "0.01")
+    + _region_row("66.6700", "63.9400", "0.5", "0.01")
+    + "</Table>"
+)
+
+
+class TestStagePattern:
+    """The pixel steps and regions a run's method declares."""
+
+    def test_two_regions_and_the_steps_are_read_in_um(self, tmp_path):
+        raw = _raw_dir(tmp_path)
+        (raw / "run.xml").write_text(_method_xml(STEPS, TWO_REGIONS), encoding="utf-8")
+
+        pattern = read_stage_pattern(raw)
+
+        assert pattern.x_step_um == pytest.approx(20.1)
+        assert pattern.y_step_um == pytest.approx(20.0)
+        assert [r.number for r in pattern.regions] == [1, 2]
+        first, second = pattern.regions
+        assert (first.x_start_um, first.y_start_um) == pytest.approx((66500.0, 74100.0))
+        assert (first.x_length_um, first.y_length_um) == pytest.approx((500.0, 10.0))
+        assert (second.x_start_um, second.y_start_um) == pytest.approx(
+            (66670.0, 63940.0)
+        )
+
+    def test_a_single_pattern_run_is_not_a_region(self, tmp_path):
+        """Top-level start and length settings describe one pattern."""
+        raw = _raw_dir(tmp_path)
+        settings = (
+            STEPS
+            + '<Setting Name="MaldiXStart" Value="66.5" '
+            + 'Mapping="Maldi.Stage.Pattern.XStart"/>'
+            + '<Setting Name="MaldiXLength" Value="0.5"/>'
+        )
+        (raw / "run.xml").write_text(_method_xml(settings), encoding="utf-8")
+
+        pattern = read_stage_pattern(raw)
+
+        assert pattern.regions == ()
+        assert pattern.x_step_um == pytest.approx(20.1)
+
+    def test_a_method_with_neither_gives_none(self, tmp_path):
+        raw = _raw_dir(tmp_path)
+        (raw / "run.xml").write_text(_method_xml(), encoding="utf-8")
+
+        assert read_stage_pattern(raw) is None
+
+    def test_no_method_file_gives_none(self, tmp_path):
+        assert read_stage_pattern(_raw_dir(tmp_path)) is None
+
+    def test_a_missing_directory_gives_none(self, tmp_path):
+        assert read_stage_pattern(tmp_path / "gone.raw") is None
+
+    @pytest.mark.parametrize("value", ["0", "-0.02", "nan", "inf", "abc", ""])
+    def test_an_unusable_step_is_none(self, tmp_path, value):
+        raw = _raw_dir(tmp_path)
+        settings = f'<Setting Name="MaldiXStep" Value="{value}"/>'
+        (raw / "run.xml").write_text(
+            _method_xml(settings, TWO_REGIONS), encoding="utf-8"
+        )
+
+        pattern = read_stage_pattern(raw)
+
+        assert pattern.x_step_um is None
+        assert len(pattern.regions) == 2
+
+    def test_one_bad_row_drops_the_whole_table(self, tmp_path, thyra_logs):
+        raw = _raw_dir(tmp_path)
+        table = (
+            '<Table Name="MultiRegions">'
+            + _region_row("66.5", "74.1", "0.5", "0.01")
+            + _region_row("66.67", "oops", "0.5", "0.01")
+            + "</Table>"
+        )
+        (raw / "run.xml").write_text(_method_xml(STEPS, table), encoding="utf-8")
+
+        with thyra_logs("thyra.readers.waters", logging.WARNING) as records:
+            pattern = read_stage_pattern(raw)
+
+        assert pattern.regions == ()
+        assert pattern.x_step_um == pytest.approx(20.1)
+        assert any("Row 2" in r.getMessage() for r in records)
+
+    def test_the_file_named_after_the_run_comes_first(self, tmp_path):
+        raw = _raw_dir(tmp_path)
+        (raw / "a_other.xml").write_text(
+            _method_xml('<Setting Name="MaldiXStep" Value="0.5"/>'), encoding="utf-8"
+        )
+        (raw / "run.xml").write_text(_method_xml(STEPS), encoding="utf-8")
+
+        assert read_stage_pattern(raw).x_step_um == pytest.approx(20.1)
+
+    def test_an_entity_declaration_is_refused_not_expanded(self, tmp_path):
+        raw = _raw_dir(tmp_path)
+        (raw / "run.xml").write_text(
+            '<?xml version="1.0"?><!DOCTYPE m [<!ENTITY n "0.02">]>'
+            '<MsMethod><Settings><Setting Name="MaldiXStep" Value="&n;"/>'
+            "</Settings></MsMethod>",
+            encoding="utf-8",
+        )
+
+        assert read_stage_pattern(raw) is None

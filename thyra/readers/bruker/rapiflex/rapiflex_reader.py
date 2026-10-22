@@ -26,6 +26,7 @@ from numpy.typing import NDArray
 from tqdm import tqdm
 
 from ....core.base_extractor import MetadataExtractor
+from ....core.region_map import summarize_regions
 from ....core.registry import register_reader
 from ....errors import ConversionRefused
 from ....metadata.types import ComprehensiveMetadata, EssentialMetadata
@@ -687,23 +688,10 @@ class RapiflexReader(BrukerBaseMSIReader):
         if not cells:
             return None
         areas = self._mis_metadata.get("areas", [])
-        by_region: Dict[int, List[Tuple[int, int]]] = {}
-        for cell, region in cells.items():
-            by_region.setdefault(region, []).append(cell)
-        info = []
-        for region, members in by_region.items():
-            xs = [x for x, _ in members]
-            ys = [y for _, y in members]
-            entry: Dict[str, Any] = {
-                "region_number": region,
-                "n_spectra": len(members),
-                "bounds": (min(xs), min(ys), max(xs), max(ys)),
-            }
-            if region < len(areas) and areas[region].get("name"):
-                entry["name"] = areas[region]["name"]
-            info.append(entry)
-        info.sort(key=lambda entry: (-entry["n_spectra"], entry["region_number"]))
-        return info
+        names = {i: area["name"] for i, area in enumerate(areas) if area.get("name")}
+        return summarize_regions(
+            ((x, y, region) for (x, y), region in cells.items()), names
+        )
 
     def close(self) -> None:
         """Close the reader and release resources."""

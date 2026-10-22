@@ -27,8 +27,8 @@ The same size is used for both directions.
 
 ## Convert one region
 
-A Bruker timsTOF slide with several regions is converted as one result, with
-every pixel labelled with its region. To convert only one region, add
+A Bruker timsTOF slide or a Waters run with several regions is converted as
+one result, with every pixel labelled with its region. To convert only one region, add
 `--region` and the region's name as flexImaging shows it:
 
 ```bash
@@ -46,7 +46,8 @@ did find.
     one region, Thyra also crops the slide photo to that region, plus a 10%
     margin.
 
-    Other formats refuse `--region`. From Python, `thyra.list_regions` lists
+    A Waters run with regions in its method file takes their number,
+    counted from 1. Other formats refuse `--region`. From Python, `thyra.list_regions` lists
     the regions of any input without converting it.
 
 ## Leave out the optical image

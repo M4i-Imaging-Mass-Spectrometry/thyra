@@ -1835,3 +1835,240 @@ class TestWatersReaderMsmsMode:
 
         assert reader._excluded_functions[1]["precursor_mz"] is None
         reader.close()
+
+
+# ---------------------------------------------------------------------------
+# Declared regions
+# ---------------------------------------------------------------------------
+
+_REGION_METHOD = """<?xml version="1.0"?>
+<MsMethod><Settings>
+  <Setting Name="MaldiXStep" Value="0.0201"/>
+  <Setting Name="MaldiYStep" Value="0.0200"/>
+  <Table Name="MultiRegions">
+    <Row><Setting Name="MaldiXStart" Value="66.5"/>
+         <Setting Name="MaldiYStart" Value="74.1"/>
+         <Setting Name="MaldiXLength" Value="0.5"/>
+         <Setting Name="MaldiYLength" Value="0.01"/></Row>
+    <Row><Setting Name="MaldiXStart" Value="66.67"/>
+         <Setting Name="MaldiYStart" Value="63.94"/>
+         <Setting Name="MaldiXLength" Value="0.5"/>
+         <Setting Name="MaldiYLength" Value="0.01"/></Row>
+  </Table>
+</Settings></MsMethod>
+"""
+
+
+def _two_line_scans():
+    """Region 1: scans 0-24 on one line; region 2: scans 25-49 on another."""
+    scan_map = {}
+    for k in range(25):
+        scan_map[(0, k)] = _make_scan_info((66500.0 + k * 20.1) / 1000.0, 74.1)
+        scan_map[(0, 25 + k)] = _make_scan_info((66670.0 + k * 20.1) / 1000.0, 63.94)
+    return scan_map
+
+
+def _region_reader(mock_ml_cls, mock_build_grid, raw_dir, region=None, method=True):
+    """A reader over the two-line run, its grid fitted by the real code."""
+    if method:
+        (raw_dir / "mock.xml").write_text(_REGION_METHOD, encoding="utf-8")
+    scan_map = _two_line_scans()
+    mock_ml = _fake_library()
+    mock_ml_cls.get_instance.return_value = mock_ml
+    mock_ml.is_imaging_file.return_value = True
+    mock_ml.get_number_of_functions.return_value = 1
+    mock_ml.classify_function.return_value = FunctionType.MS
+    mock_ml.get_number_of_scans_in_function.return_value = 50
+
+    def spectrum(_handle, _func, scan):
+        mzs = [100.0, 200.0] if scan < 25 else [300.0, 400.0]
+        return np.array(mzs), np.array([1.0, 2.0])
+
+    mock_ml.read_spectrum.side_effect = spectrum
+
+    def build(
+        _ml,
+        _handle,
+        _types,
+        include_functions=None,
+        allow_single_position=False,
+        pattern=None,
+        region=None,
+    ):
+        return _grid_from_scan_map(
+            scan_map, include_functions, allow_single_position, pattern, region
+        )
+
+    mock_build_grid.side_effect = build
+    return WatersReader(raw_dir, region=region), mock_ml
+
+
+class TestWatersReaderRegions:
+    """A run whose method declares regions is gridded and mapped by them."""
+
+    def test_the_reader_says_it_selects_regions(self):
+        assert WatersReader.selects_regions is True
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_the_whole_run_maps_both_regions(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        reader, _ = _region_reader(mock_ml_cls, mock_build_grid, mock_waters_data)
+
+        region_map = reader.get_region_map()
+        info = reader.get_region_info()
+
+        assert len(region_map) == 50
+        assert {region_map[(k, 508)] for k in range(25)} == {1}
+        assert {region_map[(8 + k, 0)] for k in range(25)} == {2}
+        assert info == [
+            {"region_number": 1, "n_spectra": 25, "bounds": (0, 508, 24, 508)},
+            {"region_number": 2, "n_spectra": 25, "bounds": (8, 0, 32, 0)},
+        ]
+        assert len(list(reader.iter_spectra())) == 50
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_region_2_alone_is_a_25_by_1_store(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        reader, _ = _region_reader(
+            mock_ml_cls, mock_build_grid, mock_waters_data, region=2
+        )
+
+        spectra = list(reader.iter_spectra())
+
+        assert reader.get_region_info() == [
+            {"region_number": 2, "n_spectra": 25, "bounds": (0, 0, 24, 0)}
+        ]
+        assert set(reader.get_region_map().values()) == {2}
+        assert [coords for coords, _mz, _i in spectra] == [(k, 0, 0) for k in range(25)]
+        kwargs = mock_build_grid.call_args.kwargs
+        assert kwargs["region"] == 2
+        assert [r.number for r in kwargs["pattern"].regions] == [1, 2]
+        reader.close()
+
+    @pytest.mark.parametrize(
+        "region, expected", [(1, [100.0, 200.0]), (2, [300.0, 400.0])]
+    )
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_the_common_axis_holds_only_the_selected_region(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data, region, expected
+    ):
+        reader, _ = _region_reader(
+            mock_ml_cls, mock_build_grid, mock_waters_data, region=region
+        )
+
+        np.testing.assert_array_equal(reader.get_common_mass_axis(), expected)
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_the_whole_run_axis_holds_both(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        reader, _ = _region_reader(mock_ml_cls, mock_build_grid, mock_waters_data)
+
+        np.testing.assert_array_equal(
+            reader.get_common_mass_axis(), [100.0, 200.0, 300.0, 400.0]
+        )
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_a_run_without_a_table_has_no_region_maps(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        reader, _ = _open_reader(
+            mock_ml_cls, mock_build_grid, mock_waters_data, _make_imaging_grid(), 1
+        )
+
+        assert reader.get_region_map() is None
+        assert reader.get_region_info() is None
+        reader.close()
+
+    @pytest.mark.parametrize("value", ["2", 2, np.int64(2)])
+    def test_a_region_number_may_be_any_integer_or_a_decimal_string(
+        self, mock_waters_data, value
+    ):
+        (mock_waters_data / "mock.xml").write_text(_REGION_METHOD, encoding="utf-8")
+
+        reader = WatersReader(mock_waters_data, region=value)
+
+        assert reader._region == 2
+        assert type(reader._region) is int
+
+    @pytest.mark.parametrize("value", [True, 1.0, "one", "1.5", [1]])
+    def test_a_value_that_is_no_region_number_is_refused(self, mock_waters_data, value):
+        with pytest.raises(ConversionRefused, match="region takes a region number"):
+            WatersReader(mock_waters_data, region=value)
+
+    def test_an_undeclared_region_is_refused_before_the_library_opens(
+        self, mock_waters_data
+    ):
+        (mock_waters_data / "mock.xml").write_text(_REGION_METHOD, encoding="utf-8")
+
+        with patch("thyra.readers.waters.waters_reader.MassLynxLib") as ml_cls:
+            with pytest.raises(ConversionRefused, match=r"region=3.*1, 2"):
+                WatersReader(mock_waters_data, region=3)
+
+        ml_cls.get_instance.assert_not_called()
+
+    def test_region_1_is_the_whole_run_without_a_table(self, mock_waters_data):
+        assert WatersReader(mock_waters_data, region=1)._region == 1
+        with pytest.raises(ConversionRefused, match=r"region=2.*region 1"):
+            WatersReader(mock_waters_data, region=2)
+
+
+_THREE_REGION_METHOD = _REGION_METHOD.replace(
+    "  </Table>",
+    """    <Row><Setting Name="MaldiXStart" Value="66.5"/>
+         <Setting Name="MaldiYStart" Value="70.0"/>
+         <Setting Name="MaldiXLength" Value="0.3"/>
+         <Setting Name="MaldiYLength" Value="0.01"/></Row>
+  </Table>""",
+)
+
+
+class TestARegionHeldByAnotherFunction:
+    """The tail chunk of a split raster can hold a whole declared region."""
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_the_function_is_kept_and_its_region_is_placed(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        (mock_waters_data / "mock.xml").write_text(
+            _THREE_REGION_METHOD, encoding="utf-8"
+        )
+        scan_map = _two_line_scans()
+        for k in range(10):
+            scan_map[(1, k)] = _make_scan_info((66500.0 + k * 20.1) / 1000.0, 70.0)
+        types = {0: FunctionType.MS, 1: FunctionType.LOCKMASS}
+        reader, _ = _open_reader(
+            mock_ml_cls,
+            mock_build_grid,
+            mock_waters_data,
+            None,
+            2,
+            types=types,
+            use_centroid=False,
+        )
+        mock_build_grid.side_effect = lambda _ml, _h, _t, **kw: _grid_from_scan_map(
+            scan_map,
+            kw["include_functions"],
+            kw["allow_single_position"],
+            kw["pattern"],
+            kw["region"],
+        )
+
+        reader._ensure_initialized()
+
+        assert reader._ms_functions == [0, 1]
+        assert reader._excluded_functions == {}
+        assert [p.number for p in reader._imaging_grid.regions] == [1, 2, 3]
+        assert {r["region_number"] for r in reader.get_region_info()} == {1, 2, 3}
+        reader.close()

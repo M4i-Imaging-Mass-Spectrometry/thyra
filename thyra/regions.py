@@ -1,7 +1,7 @@
 """List the acquisition regions of an MSI input (issue #448).
 
 A multi-region input converts into one raster that holds every region, and
-only the timsTOF reader can select one region (``region=``). To write one
+only the timsTOF and Waters readers can select one region (``region=``). To write one
 store per region a caller has to know the regions first. :func:`list_regions`
 answers that from the same metadata-only read :func:`thyra.preview_msi`
 does: no spectrum is decoded and no store is written.
@@ -58,7 +58,8 @@ def list_regions(path: Union[str, Path]) -> List[Dict[str, Any]]:
     * ``region_number``: the value the store writes to
       ``obs["region_number"]`` for that region. On a timsTOF ``.d`` it is
       the DB RegionNumber, which ``region=`` accepts, on a single-region
-      run too.
+      run too. On a Waters ``.raw`` it is the region's place in the
+      method file's ``MultiRegions`` table, counted from 1.
     * ``name``: the ``.mis`` Area name of the region, or ``None`` when the
       source names none. The whole-run entry of a format with no regions
       has no name.

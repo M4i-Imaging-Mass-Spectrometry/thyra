@@ -201,3 +201,21 @@ def test_a_closed_reader_refuses(tmp_path):
     reader.close()
     with pytest.raises(RuntimeError, match="closed"):
         reader.get_region_map()
+
+
+def test_region_info_is_ordered_by_count_then_number(tmp_path):
+    """The larger region comes first; equal counts fall back to the number."""
+    cells = {(0, 0): 0, (1, 0): 0, (3, 0): 1, (3, 1): 1, (4, 0): 1}
+    cells.update({(2, 0): 2, (2, 1): 2})
+    reader = RapiflexReader(_write(tmp_path / "rf", cells))
+    try:
+        info = reader.get_region_info()
+    finally:
+        reader.close()
+    assert [(e["region_number"], e["n_spectra"]) for e in info] == [
+        (1, 3),
+        (0, 2),
+        (2, 2),
+    ]
+    assert info[0]["bounds"] == (3, 0, 4, 1)
+    assert isinstance(info[0]["bounds"], tuple)

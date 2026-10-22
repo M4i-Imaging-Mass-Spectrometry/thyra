@@ -68,10 +68,10 @@ actually populate from each.
 
 | | imzML | timsTOF | solariX | Rapiflex | Waters | PHI | mzPeak |
 |---|---|---|---|---|---|---|---|
-| Pixel size from metadata | when declared | yes | yes (`.mis`) | yes (`_info.txt`) | yes | yes | when declared |
+| Pixel size from metadata | when declared | yes | yes (`.mis`) | yes (`_info.txt`) | yes (a line scan's short axis from the method's step) | yes | when declared |
 | Optical image | -- | yes | yes | yes | -- | -- | -- |
 | Optical alignment | -- | yes (`.mis`) | -- | yes (`.mis`) | -- | -- | -- |
-| Multi-region | -- | yes | recorded | recorded | -- | mosaic tiles | recorded |
+| Multi-region | -- | yes | recorded | recorded | yes, when the method declares regions | mosaic tiles | recorded |
 | 3D / multi-slice | yes | -- | -- | -- | -- | -- | -- |
 | Native non-m/z axis kept | -- | -- | -- | -- | -- | flight time, with `--no-resample` | -- |
 
@@ -388,6 +388,24 @@ are refused, naming the axis and how far off the worst reading sits, instead
 of becoming a grid with a pixel per stage wobble. A scan reporting a
 non-finite position is unpositioned; two scans reporting the same position
 are summed into one pixel and the log names it.
+
+**Regions.** A run whose method file (`<run>.xml` inside the `.raw`)
+declares a `MultiRegions` table has regions, numbered 1, 2, ... in table
+order. Each scan belongs to the declared box that holds it, widened by half
+a step. Each region gets its own lattice, so the off-raster refusal above is
+tested inside one region only. All regions sit on one grid at their stage
+positions, as on timsTOF. A region whose origin falls between pixels is
+placed on the nearest one, and `format_specific.regions` records, as
+`placement_shift_um`, how far its stage origin lies from that pixel. `obs["region_number"]`, `uns["regions"]` and
+`thyra.list_regions` work as for Bruker, and `--region N` converts one region
+alone. If a scan lies in no box, or in two, the regions are not used, the
+run is read as one raster with a warning, and `--region` is refused. A run with no table is one
+region, numbered 1.
+
+**Line scans.** An axis with one stage position has no pitch to measure. Its
+pixel size is then the method's `MaldiXStep` or `MaldiYStep`, and
+`format_specific.pixel_size_source` says which axis came from where. Without
+a declared step the conversion still asks for `--pixel-size`.
 
 The fitted origin, the smallest stage reading on each axis in micrometres,
 is where pixel 0 sits. It is stored as `stage_offset_um` and is the
