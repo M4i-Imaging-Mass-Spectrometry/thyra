@@ -1771,6 +1771,26 @@ class TestOneTofBin:
         np.testing.assert_array_equal(out_mz, [bound, neighbour])
         np.testing.assert_array_equal(out_intensity, [4.0, 4.0])
 
+    def test_numpress_copies_of_one_bin_are_summed(self):
+        """F189: each scan's row is decoded on its own MS-Numpress scale (D82).
+
+        A row reaching m/z 1000 stores a value to within 1000 / 2**32, so
+        two scans' copies of a bin at m/z 50 differ by some 5e-9 relative.
+        Tested apart, a peak whose sum passes the threshold was lost.
+        """
+        bin_mz = 50.123456789
+        quantum = 1000.0 / 2**31
+        copies = bin_mz + np.array([-0.5, 0.0, 0.25, 0.5]) * quantum
+        neighbour = bin_mz * (1 + 2e-6)
+        mzs = np.concatenate((copies, [neighbour]))
+        counts = np.array([30.0, 30.0, 30.0, 30.0, 7.0])
+
+        out_mz, out_intensity = _on_tdf_scale(mzs, counts, 100.0)
+
+        assert out_mz.size == 2
+        np.testing.assert_array_equal(out_intensity, [120.0, 7.0])
+        assert out_mz[1] == neighbour
+
 
 class TestOnlyMeasurementsAreSummed:
     """A point that is not a measurement joins no TOF bin (D61)."""

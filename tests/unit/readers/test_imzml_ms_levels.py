@@ -206,6 +206,30 @@ def test_a_continuous_axis_comes_from_the_first_kept_spectrum(tmp_path):
     assert reading["essential"].total_peaks == 4
 
 
+def test_a_left_out_msn_spectrum_on_its_own_block_keeps_the_one_block_read(
+    tmp_path, thyra_logs
+):
+    """The measured block test counts converted spectra only (D73, D82)."""
+    spectra = [
+        (1, 1, 1, [100.0, 101.0], [2.0, 2.0]),
+        (1, 1, 1, [100.0, 101.0], [1.0, 1.0]),
+        (2, 1, 1, [100.0, 101.0], [3.0, 3.0]),
+    ]
+    path = write_imzml_with_levels(
+        tmp_path / "first.imzML", spectra, [2, 1, 1], mode="continuous"
+    )
+    _give_spectrum_0_its_own_mz_block(path, [500.0, 501.0])
+
+    with thyra_logs("thyra.readers.imzml.imzml_reader") as records:
+        with ImzMLReader(path) as reader:
+            assert reader.has_shared_mass_axis is True
+            assert reader._continuous_uniform
+            mass_range = reader.get_essential_metadata().mass_range
+
+    assert mass_range == (100.0, 101.0)
+    assert not any("declares continuous mode" in r.getMessage() for r in records)
+
+
 def _mobility_file_with_a_left_out_msn_spectrum(
     tmp_path, drop_its_array=False, shorten_its_array=False, leave_it_in=False
 ):

@@ -96,7 +96,8 @@ The open interchange format, read through
 [pyimzML](https://github.com/alexandrovteam/pyimzML). Both storage modes work:
 
 - **continuous** -- every spectrum shares one m/z array, so the common mass
-  axis is read once
+  axis is read once. A file that says continuous but writes an m/z array per
+  spectrum is read as processed
 - **processed** -- each spectrum carries its own m/z values, so building the
   common axis requires a pass over every spectrum
 
@@ -164,7 +165,11 @@ Thyra reads it. The MSI table is summed over mobility as always -- a shared
 m/z block that repeats a value where mobility splits a feature collapses to
 one column -- and, for a continuous export (one shared feature list), the
 `(m/z, mobility)` pairs are also written as a mobility-resolved sibling
-table; see [Output Format](output-format.md#ion-mobility). A processed export
+table; see [Output Format](output-format.md#ion-mobility). The list counts as
+shared only when every spectrum has the same m/z block and the same mobility
+array; otherwise the file is read as per pixel. A NaN or infinite mobility
+value withholds the mobility: only the summed table is written, with a
+`WARNING`. A processed export
 (per-pixel point cloud, as TIMSCONVERT writes) gets the summed table and the
 mass-mobility heatmap, and with `--mobility-grid` the mobility-resolved table
 too, binned onto the heatmap's channels as for Bruker TDF. A mobility array
@@ -240,7 +245,8 @@ every point onto the mass axis and no extra read, and
 `--no-mobility-heatmap` skips it. Under `scan_sum` the heatmap summed over mobility is exactly the
 stored mean spectrum; under `vendor_centroid` the two differ by what the
 centroid discards. See [Output Format](output-format.md#ion-mobility). A TSF
-file has no mobility dimension and gets none of this.
+file has no mobility dimension and gets none of this: `--tdf-spectrum` and
+the mobility grid options are ignored on it, and named in the log.
 
 **`--mobility-grid` writes the mobility-resolved table.** A TDF pixel is its
 own point cloud, so there is no feature list shared across pixels to write
@@ -252,7 +258,7 @@ channels over the axis' own value range are the heatmap's, so a box on the
 heatmap indexes the table's channels. It is fed from the summed table's own
 two passes -- one raw read per frame per pass serves
 every table, so the grid adds no read of the source -- and it is a table
-with 1.3 to 4 times the summed table's non-zeros, built out of core, so a
+typically 1.3 to 4 times the summed table's non-zeros (at most the raw points over the summed entries), built out of core, so a
 whole acquisition converts whatever its size. Under the default `--tdf-spectrum scan_sum` the table's
 marginal over channels reproduces the summed table exactly; an explicit
 `vendor_centroid` is accepted with a `WARNING` and the mismatch recorded. The

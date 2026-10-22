@@ -28,6 +28,32 @@ READER_OPTION_FORMATS: Dict[str, Optional[Tuple[str, ...]]] = {
     "use_appended_calibration": ("phi",),
 }
 
+#: Reader options a Bruker timsTOF ``.d`` uses only when it holds a TDF
+#: file. A TSF file has no ion mobility, so they change nothing there, and
+#: "bruker" alone could not say so (issue #517).
+TDF_ONLY_OPTIONS: Tuple[str, ...] = ("tdf_spectrum",)
+
+#: How a TSF file is named when a TDF-only option is ignored on it.
+TSF_NAME = "a Bruker timsTOF TSF file (no ion mobility)"
+
+
+def is_bruker_tsf(input_format: str, input_path: object) -> bool:
+    """Whether a detected ``"bruker"`` source is read from its TSF database.
+
+    The reader's own decider (``bruker_extractor.analysis_database``),
+    imported only when asked, so this module stays import-free for the
+    CLI. ``False`` for any other format, and when neither database exists.
+    """
+    if input_format != "bruker":
+        return False
+    from pathlib import Path
+
+    from .metadata.extractors.bruker_extractor import analysis_database
+
+    found = analysis_database(Path(str(input_path)))
+    return found is not None and found[0] == "tsf"
+
+
 #: How each detected format is spelled in a message. ``detect_format``
 #: returns a registry key, and "a imzml source" is not what anyone calls
 #: the file they handed over.
@@ -47,7 +73,13 @@ def format_name(input_format: str) -> str:
     return FORMAT_NAMES.get(input_format, input_format)
 
 
-def reader_option_reaches(key: str, input_format: str) -> bool:
-    """Whether the reader for ``input_format`` uses the option ``key``."""
+def reader_option_reaches(key: str, input_format: str, tsf: bool = False) -> bool:
+    """Whether the reader for ``input_format`` uses the option ``key``.
+
+    ``tsf`` says a Bruker source holds a TSF file, which no option in
+    :data:`TDF_ONLY_OPTIONS` reaches.
+    """
+    if tsf and key in TDF_ONLY_OPTIONS:
+        return False
     formats = READER_OPTION_FORMATS.get(key)
     return formats is None or input_format in formats

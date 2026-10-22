@@ -113,6 +113,22 @@ class _OffsetArrays(NamedTuple):
     int_lengths: NDArray[np.int64]
 
 
+class _MobilitySurvey(NamedTuple):
+    """What one read of every converted spectrum's mobility array found (D82)."""
+
+    shared: Optional[NDArray[np.float64]]
+    """The one array every spectrum carries, or ``None`` when they differ."""
+
+    span: Optional[Tuple[float, float]]
+    """The smallest and largest finite value, or ``None`` when they span nothing."""
+
+    n_non_finite: int
+    """Points whose mobility is NaN or infinite, over the converted spectra."""
+
+    n_points: int
+    """Points over the converted spectra."""
+
+
 def _offset_arrays(parser: ImzMLParser) -> _OffsetArrays:
     """Materialise pyimzml's four offset/length lists as int64 arrays.
 
@@ -646,12 +662,11 @@ class ImzMLReader(BaseMSIReader):
             Tuple[NDArray[np.int64], NDArray[np.int64], NDArray[np.int64]]
         ] = None
         self._mobility_shared: Optional[NDArray[np.float64]] = None
-        self._mobility_uniform: Optional[bool] = None
-        # The smallest and largest mobility value of a per-pixel export,
-        # found by one pass over the mobility arrays on first demand;
-        # ``_mobility_span_read`` tells "not yet" from "read, spans nothing".
-        self._mobility_span: Optional[Tuple[float, float]] = None
-        self._mobility_span_read = False
+        # What one pass over every converted spectrum's mobility array found:
+        # whether one array describes them all, the smallest and largest
+        # finite value, and how many values are not finite. ``None`` until
+        # first asked; see _survey_mobility.
+        self._mobility_survey: Optional[_MobilitySurvey] = None
 
         # Store path but don't initialize parser yet - wait for first use
         if data_path is not None:
@@ -977,12 +992,25 @@ class ImzMLReader(BaseMSIReader):
         # _read_spectrum_arrays -- measured off the offsets rather than
         # trusted from the declared mode, so a file that declares
         # continuous while writing per-spectrum m/z blocks is read the
-        # slow, correct way instead of being handed spectrum 0's axis.
-        if self.is_continuous and arrays.mz_offsets.size:
+        # slow, correct way instead of being handed spectrum 0's axis. Only
+        # the spectra that are converted count: an MSn spectrum left out
+        # beside MS1 (D73) is never read, so its own block changes nothing.
+        kept = np.asarray(_kept_indices(parser), dtype=np.int64)
+        if self.is_continuous and kept.size:
+            offsets = arrays.mz_offsets[kept]
+            lengths = arrays.mz_lengths[kept]
             self._continuous_uniform = bool(
-                (arrays.mz_offsets == arrays.mz_offsets[0]).all()
-                and (arrays.mz_lengths == arrays.mz_lengths[0]).all()
+                (offsets == offsets[0]).all() and (lengths == lengths[0]).all()
             )
+            if not self._continuous_uniform:
+                logger.warning(
+                    "%s declares continuous mode, but its spectra point at "
+                    "%d different m/z blocks. It is read as a processed "
+                    "file: each spectrum at its own m/z values, and no "
+                    "shared (m/z, mobility) feature list.",
+                    self.imzml_path,
+                    int(np.unique(offsets).size),
+                )
 
         n_scan_settings = len(_parsed_metadata(parser).scan_settings)
         if n_scan_settings != 1:
@@ -1621,16 +1649,25 @@ class ImzMLReader(BaseMSIReader):
     def has_shared_mass_axis(self) -> bool:
         """Check if all spectra share the same m/z axis.
 
-        Returns True for continuous ImzML (all pixels have same m/z values),
-        False for processed ImzML (each pixel has different m/z values).
+        True when every spectrum points at one m/z block, measured from the
+        offsets rather than taken from the declared mode: a file that
+        declares continuous mode but writes a block per spectrum is read as
+        processed (D82).
         """
-        return self.is_continuous
+        self._ensure_parser_initialized()
+        return self._one_mz_block
+
+    @property
+    def _one_mz_block(self) -> bool:
+        """Declared continuous, and every spectrum points at one m/z block."""
+        return self.is_continuous and self._continuous_uniform
 
     def get_common_mass_axis(self) -> NDArray[np.float64]:
         """Return the common mass axis composed of all unique m/z values.
 
-        For continuous mode, returns the m/z values from the first spectrum.
-        For processed mode, collects all unique m/z values across spectra.
+        When every spectrum points at one m/z block, returns that block.
+        Otherwise collects all unique m/z values across spectra, also for a
+        file that declares continuous mode but writes a block per spectrum.
 
         Returns:
             NDArray[np.float64]: Array of m/z values in ascending order
@@ -1644,7 +1681,7 @@ class ImzMLReader(BaseMSIReader):
             # We know parser is not None at this point
             parser = cast(ImzMLParser, self.parser)
 
-            if self.is_continuous:
+            if self._one_mz_block:
                 logger.info("Using m/z values from first spectrum (continuous mode)")
                 if self._continuous_mzs is not None:
                     # Iteration already decoded the shared block; reuse the
@@ -1664,8 +1701,7 @@ class ImzMLReader(BaseMSIReader):
                         raise ConversionRefused("First spectrum contains no m/z values")
 
                     self._common_mass_axis = self._deduplicated_shared_axis(mzs)
-                    if self._continuous_uniform:
-                        self._continuous_mzs = mzs
+                    self._continuous_mzs = mzs
             else:
                 # Widened once here, so the axis and the yielded arrays
                 # share one precision (D36).
@@ -2025,22 +2061,33 @@ class ImzMLReader(BaseMSIReader):
 
     @property
     def has_ion_mobility(self) -> bool:
-        """Whether the file declares a mobility array beside m/z and intensity."""
+        """Whether the file has a mobility array the store can use.
+
+        The file declares one beside m/z and intensity, and every value in
+        it is a finite number. A NaN or infinite mobility has no place on
+        an axis, so such a file is converted without its mobility: no
+        mobility table, heatmap, grid or ``mobility_axis`` (D82). Asking
+        reads every converted spectrum's mobility array once
+        (:meth:`_survey_mobility`); a file without the array reads nothing.
+        """
         self._ensure_parser_initialized()
-        return self._mobility is not None
+        if self._mobility is None:
+            return False
+        return self._survey_mobility().n_non_finite == 0
 
     @property
     def has_shared_mobility_axis(self) -> bool:
         """Whether every spectrum carries the same (m/z, mobility) pairs.
 
-        Requires continuous mode (one m/z block for the file) and a mobility
-        array that is the same for every spectrum -- checked on the array
-        contents, not assumed from the mode, because the writer both TIMS
-        tools use stores a mobility copy per spectrum even in continuous mode.
+        Two checks, both on every converted spectrum (D82): all spectra
+        point at one m/z block, measured from the offsets rather than taken
+        from the declared mode, and every mobility array equals the first.
+        The writer both TIMS tools use stores a mobility copy per spectrum
+        even in continuous mode, so the copies are compared, not assumed.
         """
-        if not self.has_ion_mobility or not self.is_continuous:
+        if not self.has_ion_mobility:
             return False
-        return self._mobility_axis_is_shared()
+        return self._survey_mobility().shared is not None
 
     def _ensure_mobility_offsets(
         self,
@@ -2098,51 +2145,109 @@ class ImzMLReader(BaseMSIReader):
             )
         return values.astype(np.float64, copy=False)
 
-    def _mobility_axis_is_shared(self) -> bool:
-        """Decide once whether one mobility array describes every spectrum.
+    def _survey_mobility(self) -> _MobilitySurvey:
+        """Read every converted spectrum's mobility array once, and remember it.
 
-        Every spectrum must declare the same length, and the arrays of a
-        spread of spectra (first, last and up to 64 in between) must be
-        byte-identical to the first. Cheap on the feature-list files this
-        exists for, and honest: a mismatch means per-pixel mobility. Only
-        the spectra that are converted count: an MSn spectrum left out
-        beside MS1 (D73) cannot make the axis per pixel.
+        One pass answers three questions (D82). Whether one array describes
+        every spectrum: the spectra must point at one m/z block and declare
+        one length, and every array must equal the first, NaN for NaN. An
+        array at the first one's offset is that array and is not re-read,
+        nor is any block twice. The smallest and largest finite value,
+        which the heatmap and the grid bin over (D46). And how many values
+        are not finite: any such value withholds the file's mobility from
+        the store (:attr:`has_ion_mobility`), said once here by name.
+
+        Only the spectra that are converted count: an MSn spectrum left out
+        beside MS1 (D73) is not read. A file whose arrays cannot be read is
+        said once, at ``WARNING``, and has no shared axis and no range, so
+        the heatmap and the grid each decline by name rather than failing
+        the conversion.
         """
-        if self._mobility_uniform is not None:
-            return self._mobility_uniform
+        if self._mobility_survey is not None:
+            return self._mobility_survey
+        # Outside the try: a file that cannot be opened is refused, not
+        # taken for one whose mobility arrays cannot be read.
+        self._ensure_parser_initialized()
+        try:
+            survey = self._read_mobility_survey()
+        except Exception as e:
+            logger.warning("Could not read the ion mobility values: %s", str(e))
+            survey = _MobilitySurvey(None, None, 0, 0)
+        self._mobility_survey = survey
+        self._mobility_shared = survey.shared
+        if survey.n_non_finite:
+            logger.warning(
+                "%s: %d of %d ion mobility values are not finite numbers (NaN "
+                "or infinity). The summed table is written; no mobility "
+                "table, mass-mobility heatmap, mobility grid or mobility axis "
+                "is.",
+                self.imzml_path,
+                survey.n_non_finite,
+                survey.n_points,
+            )
+        return survey
+
+    def _read_mobility_survey(self) -> _MobilitySurvey:
+        """The pass :meth:`_survey_mobility` makes; may raise on a bad read."""
         offsets, lengths, _ = self._ensure_mobility_offsets()
         kept = np.asarray(_kept_indices(self.parser), dtype=np.int64)
-        lengths = lengths[kept]
-        n = int(lengths.size)
-        uniform = bool(n > 0 and np.all(lengths == lengths[0]))
-        if uniform:
-            start = int(kept[0])
-            first = self._read_mobility_array(start)
-            probes = kept[
-                np.unique(
-                    np.concatenate(
-                        [
-                            np.linspace(0, n - 1, num=min(n, 64), dtype=np.int64),
-                            [n - 1],
-                        ]
-                    )
-                )
-            ]
-            for idx in probes.tolist():
-                if idx == start or int(offsets[idx]) == int(offsets[start]):
-                    continue
-                if not np.array_equal(self._read_mobility_array(idx), first):
-                    uniform = False
-                    break
-            if uniform:
-                self._mobility_shared = first
-        self._mobility_uniform = uniform
-        if not uniform:
+        if kept.size == 0:
+            return _MobilitySurvey(None, None, 0, 0)
+        start = int(kept[0])
+        # Each block once, and how many converted spectra point at it. A
+        # block is its offset and its length: two lengths at one offset are
+        # two arrays, read and counted apart.
+        _, first_of_block, n_refs = np.unique(
+            np.column_stack((offsets[kept], lengths[kept])),
+            axis=0,
+            return_index=True,
+            return_counts=True,
+        )
+        blocks = kept[np.asarray(first_of_block).ravel()]
+        n_refs_of = dict(zip(blocks.tolist(), np.asarray(n_refs).ravel().tolist()))
+        # The first spectrum's block leads, so every other is compared to it.
+        order = [start] + [int(i) for i in blocks if int(i) != start]
+        same_lengths = bool(np.all(lengths[kept] == lengths[start]))
+        first = self._read_mobility_array(start)
+        alike = self._one_mz_block and same_lengths
+        lower, upper = np.inf, -np.inf
+        n_non_finite = n_points = 0
+        for idx in tqdm(
+            order,
+            desc="Mobility values",
+            unit="array",
+            disable=getattr(self, "_quiet_mode", False) or len(order) < 2,
+        ):
+            values = first if idx == start else self._read_mobility_array(idx)
+            if alike and idx != start:
+                alike = np.array_equal(values, first, equal_nan=True)
+            refs = int(n_refs_of.get(idx, 1))
+            finite = np.isfinite(values)
+            n_points += refs * int(values.size)
+            n_non_finite += refs * int(values.size - np.count_nonzero(finite))
+            if finite.any():
+                lower = min(lower, float(values[finite].min()))
+                upper = max(upper, float(values[finite].max()))
+        span = value_span(np.array([lower, upper]))
+        if not alike:
             logger.info(
-                "Ion mobility values differ between spectra; the mobility "
-                "dimension is per pixel and no shared feature axis exists"
+                "%s; the mobility dimension is per pixel and no shared "
+                "feature axis exists",
+                (
+                    "Ion mobility values differ between spectra"
+                    if self._one_mz_block and same_lengths
+                    else "The spectra do not share one m/z block and one "
+                    "mobility length"
+                ),
             )
-        return uniform
+        if span is None:
+            logger.info(
+                "The ion mobility values of this imzML span no range "
+                "(no finite value, or a single one)"
+            )
+        else:
+            logger.info("Ion mobility values of this imzML span [%.5f, %.5f]", *span)
+        return _MobilitySurvey(first if alike else None, span, n_non_finite, n_points)
 
     def get_mobility_axis(self) -> Optional[MobilityAxis]:
         """Describe the mobility array, with the shared values when shared."""
@@ -2152,78 +2257,30 @@ class ImzMLReader(BaseMSIReader):
         kind_accession, kind_name = classify_mobility_array(
             spec.array_accession, spec.unit_accession
         )
-        values = None
-        if self.is_continuous and self._mobility_axis_is_shared():
-            values = self._mobility_shared
         return MobilityAxis(
             kind_accession=kind_accession,
             kind_name=kind_name,
             unit_accession=spec.unit_accession,
             unit_name=spec.unit_name,
             array_accession=spec.array_accession,
-            values=values,
+            values=self._survey_mobility().shared,
             source="imzml",
         )
 
     def get_mobility_value_range(self) -> Optional[Tuple[float, float]]:
         """The smallest and largest mobility value in the file, or ``None``.
 
-        A shared axis has them in its values. A per-pixel export (processed
-        mode, as TIMSCONVERT writes) has no shared axis, so the values are
-        read: one pass over every spectrum's mobility array, and only that
-        array, the first time anything asks, cached so every caller gets
-        the same two floats. A range the file might state is not used in
-        their place: only the values are sure to hold every point, and the
-        heatmap and the mobility grid both bin over this range, so a box on
-        the one indexes the other (design decision D46).
-
-        A file whose mobility arrays cannot be read has no range: that is
-        said once, at ``WARNING``, and not retried, so the heatmap and the
-        grid each decline by name rather than failing the conversion.
+        Read off the values, shared or per pixel, by the one pass of
+        :meth:`_survey_mobility`, cached so every caller gets the same two
+        floats. A range the file might state is not used in their place:
+        only the values are sure to hold every point, and the heatmap and
+        the mobility grid both bin over this range, so a box on the one
+        indexes the other (design decision D46). A file whose mobility
+        arrays cannot be read has no range.
         """
         if not self.has_ion_mobility:
             return None
-        if self._mobility_span_read:
-            return self._mobility_span
-        try:
-            if self.is_continuous and self._mobility_axis_is_shared():
-                self._mobility_span = super().get_mobility_value_range()
-            else:
-                self._mobility_span = self._scan_mobility_span()
-        except Exception as e:
-            logger.warning("Could not read the ion mobility values: %s", str(e))
-            self._mobility_span = None
-        self._mobility_span_read = True
-        return self._mobility_span
-
-    def _scan_mobility_span(self) -> Optional[Tuple[float, float]]:
-        """Read every converted spectrum's mobility array for its extremes.
-
-        An MSn spectrum left out beside MS1 (D73) is not read: its values
-        would widen the range the heatmap and the grid bin over.
-        """
-        self._ensure_mobility_offsets()
-        lower, upper = np.inf, -np.inf
-        for idx in tqdm(
-            _kept_indices(self.parser),
-            desc="Mobility range",
-            unit="spectrum",
-            disable=getattr(self, "_quiet_mode", False),
-        ):
-            values = self._read_mobility_array(idx)
-            finite = values[np.isfinite(values)]
-            if finite.size:
-                lower = min(lower, float(finite.min()))
-                upper = max(upper, float(finite.max()))
-        span = value_span(np.array([lower, upper]))
-        if span is None:
-            logger.info(
-                "The ion mobility values of this imzML span no range "
-                "(no finite value, or a single one)"
-            )
-        else:
-            logger.info("Ion mobility values of this imzML span [%.5f, %.5f]", *span)
-        return span
+        return self._survey_mobility().span
 
     def get_shared_mobility_features(
         self,
@@ -2235,9 +2292,9 @@ class ImzMLReader(BaseMSIReader):
         if self._continuous_mzs is not None:
             mzs = self._continuous_mzs
         else:
-            mzs = _as_float64(parser.getspectrum(_kept_indices(parser)[0])[0])
-            if self._continuous_uniform:
-                self._continuous_mzs = mzs
+            mzs = self._continuous_mzs = _as_float64(
+                parser.getspectrum(_kept_indices(parser)[0])[0]
+            )
         mobility = cast(NDArray[np.float64], self._mobility_shared)
         if mzs.size != mobility.size:
             raise ConversionRefused(
@@ -2264,8 +2321,10 @@ class ImzMLReader(BaseMSIReader):
         point whose mobility is not a finite number has no channel to go
         to, so it is left out of the cloud (after the threshold, which
         tests the peak the summed table keeps) and counted once at the end;
-        the summed table still holds it. An MSn spectrum left out beside
-        MS1 (D73) is not read.
+        the summed table still holds it. The converter never asks for these
+        clouds from such a file (:attr:`has_ion_mobility`), so this is the
+        reader's own guard. An MSn spectrum left out beside MS1 (D73) is
+        not read.
         """
         self._ensure_parser_initialized()
         if self._mobility is None:
@@ -2275,11 +2334,9 @@ class ImzMLReader(BaseMSIReader):
         parser = cast(ImzMLParser, self.parser)
         kept = _kept_indices(parser)
         total_spectra = len(kept)
-        shared = (
-            self._mobility_shared
-            if self.is_continuous and self._mobility_axis_is_shared()
-            else None
-        )
+        # Only a file whose spectra share one m/z block can share a mobility
+        # array; any other reads each spectrum's own.
+        shared = self._survey_mobility().shared if self._one_mz_block else None
         with tqdm(
             total=total_spectra,
             desc="Reading mobility spectra",

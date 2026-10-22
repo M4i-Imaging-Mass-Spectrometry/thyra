@@ -208,6 +208,121 @@ class TestResampledSummedTable:
         np.testing.assert_array_equal(_row(mobility, 0, 0), SORTED_ROWS[(0, 0)])
 
 
+class TestTheKeptMassRange:
+    """The shared-axis table keeps the m/z range the summed table keeps (D82)."""
+
+    def test_features_outside_it_are_left_out(self, tmp_path, thyra_logs):
+        """F129: m/z 300 and 600.25 took the edge columns of a 400-500 axis."""
+        config = ResamplingConfig(
+            method=ResamplingMethod.NEAREST_NEIGHBOR,
+            target_bins=50,
+            min_mz=400.0,
+            max_mz=500.0,
+        )
+        with thyra_logs("thyra") as records:
+            _, sdata = _convert(CONTINUOUS, tmp_path, resampling_config=config)
+        summed = sdata.tables["mob_z0"]
+        mobility = sdata.tables["mob_z0_mobility"]
+        np.testing.assert_array_equal(mobility.var["mz"].to_numpy(), [450.5])
+        mz_index = mobility.var["mz_index"].to_numpy()
+        for x, y in SORTED_ROWS:
+            marginal = np.zeros(summed.n_vars)
+            np.add.at(marginal, mz_index, _row(mobility, x, y))
+            np.testing.assert_allclose(marginal, _row(summed, x, y))
+        messages = [r.getMessage() for r in records]
+        assert any(m.startswith("4 of 5 (m/z, mobility) features") for m in messages)
+
+    def test_a_range_holding_every_feature_changes_nothing(self, tmp_path):
+        config = ResamplingConfig(
+            method=ResamplingMethod.NEAREST_NEIGHBOR,
+            target_bins=400,
+            min_mz=250.0,
+            max_mz=650.0,
+        )
+        _, sdata = _convert(CONTINUOUS, tmp_path, resampling_config=config)
+        mobility = sdata.tables["mob_z0_mobility"]
+        np.testing.assert_array_equal(mobility.var["mz"].to_numpy(), SORTED_MZ)
+
+
+def _with_mobility(tmp_path: Path, name: str, mobility, **layout) -> Path:
+    """A 4 x 4 imzML of the three-feature list, one mobility array per spectrum."""
+    from tests.fixtures.imzml_mobility_builder import write_mobility_imzml
+
+    mzs = layout.pop("mzs", [np.array([200.0, 300.0, 400.0])] * len(mobility))
+    return write_mobility_imzml(tmp_path / f"{name}.imzML", mzs, mobility, **layout)
+
+
+class TestNonFiniteMobility:
+    """Q13 (D82): the summed table, and no mobility table, heatmap or axis."""
+
+    @pytest.mark.parametrize(
+        "bad, layout",
+        [
+            (np.inf, {}),
+            (np.nan, {}),
+            (np.nan, {"one_mobility_block": True}),
+            (-np.inf, {"one_mobility_block": True}),
+        ],
+        ids=["inf-copies", "nan-copies", "nan-one-block", "minus-inf-one-block"],
+    )
+    def test_the_store_has_no_mobility_and_validates(
+        self, tmp_path, thyra_logs, bad, layout
+    ):
+        k0 = np.array([0.8, 1.0, bad])
+        source = _with_mobility(tmp_path, "bad", [k0] * 16, **layout)
+        with thyra_logs("thyra") as records:
+            out, sdata = _convert(source, tmp_path, mobility_grid=True)
+        assert set(sdata.tables) == {"mob_z0"}
+        summed = sdata.tables["mob_z0"]
+        assert "mobility_axis" not in summed.uns
+        assert "mobility_heatmap" not in summed.uns
+        expected = sum(6.0 * (i + 1) for i in range(16))
+        assert float(summed.X.sum()) == pytest.approx(expected)
+        said = [
+            r.getMessage()
+            for r in records
+            if "ion mobility values are not finite" in r.getMessage()
+        ]
+        assert len(said) == 1, said
+        assert "bad.imzML" in said[0]
+        assert not any("Traceback" in r.getMessage() for r in records)
+        for issues in check_store_var_conventions(out).values():
+            assert [i for i in issues if i.severity == "error"] == []
+
+    def test_finite_mobility_still_gets_its_table(self, tmp_path):
+        source = _with_mobility(tmp_path, "fine", [np.array([0.8, 1.0, 1.2])] * 16)
+        _, sdata = _convert(source, tmp_path)
+        assert set(sdata.tables) == {"mob_z0", "mob_z0_mobility"}
+        assert "mobility_heatmap" in sdata.tables["mob_z0"].uns
+
+
+class TestAMislabelledContinuousFile:
+    """One m/z block per spectrum under a continuous declaration (Q8, D82)."""
+
+    @pytest.mark.parametrize("threshold", [None, 15.0], ids=["plain", "threshold"])
+    def test_it_is_per_pixel_whatever_the_threshold(self, tmp_path, threshold):
+        """F186: spectrum 9's ions were filed under spectrum 0's m/z, or refused."""
+        base = np.array([150.0, 237.3, 333.33, 412.7])
+        mzs = [base + (2.0 if i == 9 else 0.0) for i in range(16)]
+        k0 = np.array([0.70, 0.95, 1.05, 1.31])
+        source = _with_mobility(
+            tmp_path, "own_mz", [k0] * 16, mzs=mzs, one_mz_block=False
+        )
+        options = {} if threshold is None else {"intensity_threshold": threshold}
+        _, sdata = _convert(
+            source,
+            tmp_path,
+            reader_options=options,
+            resampling_config={"min_mz": 140, "max_mz": 495},
+        )
+        assert set(sdata.tables) == {"mob_z0"}
+        summed = sdata.tables["mob_z0"]
+        axis = summed.var["mz"].to_numpy()
+        row = _row(summed, 9 % 12, 9 // 12)
+        held = axis[row > 0]
+        assert np.all(np.min(np.abs(held[:, None] - (base + 2.0)), axis=1) < 0.5)
+
+
 class TestOptOut:
     def test_no_mobility_table_keeps_the_axis_description(self, tmp_path):
         _, sdata = _convert(CONTINUOUS, tmp_path, write_mobility_table=False)
@@ -428,7 +543,7 @@ class TestAnUnreadableRange:
         def _refuse(self):
             raise ConversionRefused("ion mobility array truncated in the .ibd")
 
-        monkeypatch.setattr(ImzMLReader, "_scan_mobility_span", _refuse)
+        monkeypatch.setattr(ImzMLReader, "_read_mobility_survey", _refuse)
         _, sdata = _convert(PROCESSED, tmp_path, mobility_grid=True)
         assert set(sdata.tables) == {"mob_z0"}
         summed = sdata.tables["mob_z0"]

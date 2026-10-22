@@ -1173,8 +1173,22 @@ class TestRealAcquisition:
         block = grid.uns["mobility_marginal"]
         assert float(block["current_ratio"]) == pytest.approx(1.0, abs=1e-9)
 
+        # A grid cell is one or more raw (m/z, scan) points and a summed
+        # entry one or more cells, so the ratio lies between 1 and the raw
+        # points per summed entry. A fixed floor (1.2) failed a correct grid
+        # from a PASEF run whose summed entries are nearly all one point.
+        from thyra.readers.bruker.vendor_db import open_read_only
+
+        frames = ",".join(str(int(f)) for f in summed.obs["acquisition_order"])
+        with closing(open_read_only(source / "analysis.tdf")) as conn:
+            (raw_points,) = conn.execute(
+                f"SELECT SUM(NumPeaks) FROM Frames WHERE Id IN ({frames})"  # nosec B608
+            ).fetchone()
         ratio = grid.X.nnz / summed.X.nnz
-        assert 1.2 <= ratio <= 5, f"unexpected non-zero ratio {ratio:.2f}"
+        assert 1 <= ratio <= raw_points / summed.X.nnz, (
+            f"non-zero ratio {ratio:.4f} outside [1, "
+            f"{raw_points / summed.X.nnz:.4f}]"
+        )
 
 
 # ----------------------------------------------------------------------

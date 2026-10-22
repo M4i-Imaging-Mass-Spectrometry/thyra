@@ -50,7 +50,14 @@ from .core.registry import (
 )
 from .errors import ConversionRefused
 from .metadata.constants import sample_value_problem
-from .reader_options import READER_OPTION_FORMATS, format_name, reader_option_reaches
+from .reader_options import (
+    READER_OPTION_FORMATS,
+    TDF_ONLY_OPTIONS,
+    TSF_NAME,
+    format_name,
+    is_bruker_tsf,
+    reader_option_reaches,
+)
 from .resampling.plan import MassAxisPlan
 from .resampling.types import ResamplingConfig
 from .utils.store_lifecycle import quarantine_partial_store
@@ -373,21 +380,32 @@ def _validate_keywords(
 
 
 def _drop_options_the_format_ignores(
-    options: Dict[str, Any], input_format: str
+    options: Dict[str, Any], input_format: str, tsf: bool = False
 ) -> Dict[str, Any]:
     """Name each reader option this format does not use, and leave it out.
 
     The CLI said so for its flags (issue #260); the API said nothing, so a
     caller could believe a filter applied that did not (issue #519). One
     WARNING per option, worded as the CLI words it. An option left at
-    ``None`` asks for nothing and is dropped without a word.
+    ``None`` asks for nothing and is dropped without a word. ``tsf`` says
+    a Bruker source holds a TSF file, which a TDF-only option does not
+    reach (issue #517).
     """
     kept = {}
     for key, value in options.items():
-        if reader_option_reaches(key, input_format):
+        if reader_option_reaches(key, input_format, tsf):
             kept[key] = value
             continue
         if value is None:
+            continue
+        if tsf and key in TDF_ONLY_OPTIONS:
+            logger.warning(
+                "reader_options[%r] is ignored on %s: it only applies to a "
+                "TDF file. The store is written as though it had not been "
+                "given.",
+                key,
+                TSF_NAME,
+            )
             continue
         formats = READER_OPTION_FORMATS[key] or ()
         logger.warning(
@@ -601,7 +619,13 @@ def _create_reader(
     reader_class = get_reader_class(input_format)
     logger.info(f"Using reader: {reader_class.__name__}")
 
-    options = _drop_options_the_format_ignores(dict(reader_options or {}), input_format)
+    # A TSF file drops tdf_spectrum here, so _force_scan_sum never warns
+    # about grid or MS/MS tables a source without mobility cannot have.
+    options = _drop_options_the_format_ignores(
+        dict(reader_options or {}),
+        input_format,
+        tsf=is_bruker_tsf(input_format, input_path),
+    )
     if lossless_tables:
         _force_scan_sum(input_format, options, lossless_tables)
     return reader_class(input_path, **options), input_format
@@ -659,7 +683,8 @@ def _lossless_spectrum_for(kwargs: Dict[str, Any]) -> List[str]:
     converter's own.
     """
     wanted = []
-    if kwargs.get("mobility_grid", False):
+    # --no-mobility-table writes no grid either (issue #517).
+    if kwargs.get("mobility_grid", False) and kwargs.get("write_mobility_table", True):
         wanted.append("mobility grid")
     if kwargs.get("msms_table", True):
         wanted.append("demultiplexed MS/MS")

@@ -349,6 +349,7 @@ def _shared_axis_row(
     mzs: NDArray[np.float64],
     mobility: NDArray[np.float64],
     intensities: NDArray[np.float64],
+    column_of: Optional[NDArray[np.int64]] = None,
 ) -> Tuple[NDArray[np.int64], NDArray[np.float64]]:
     """One pixel's ``(column, value)`` entries, collapsed, zeros left out.
 
@@ -367,9 +368,19 @@ def _shared_axis_row(
     it. The kept entries are identical either way -- an m/z always comes
     from the shared block here, so a dropped point cannot be the one that
     fails the on-axis check.
+
+    ``column_of`` maps a feature to its column in a table that leaves out
+    the features outside the kept m/z range, ``-1`` for one left out
+    (:func:`_kept_features`); ``None`` keeps every feature.
     """
     columns = features.columns(coords, mzs, mobility)
     intensities = np.asarray(intensities, dtype=np.float64)
+    if column_of is not None:
+        columns = column_of[columns]
+        inside = columns >= 0
+        if not bool(inside.all()):
+            columns = columns[inside]
+            intensities = intensities[inside]
     usable = usable_intensities(intensities)
     if usable is not None:
         columns = columns[usable]
@@ -381,6 +392,40 @@ def _shared_axis_row(
     return collapse_row(np.asarray(columns, dtype=np.int64), intensities)
 
 
+def _kept_features(
+    features: _SharedFeatureAxis, kept_range: Optional[Tuple[float, float]]
+) -> Optional[NDArray[np.int64]]:
+    """Each feature's column once those outside ``kept_range`` are left out.
+
+    ``-1`` for a feature left out, and ``None`` when every feature is kept.
+    The test is the summed table's own (D52): a feature whose m/z lies in
+    the kept range, the edges included, is kept and later named by
+    ``mz_index`` as the edge column the summed table put it in; one beyond
+    it is dropped there, so it is left out here (D82). Before, it took the
+    nearest edge column, so the ``mz_index`` marginal exceeded that column.
+    """
+    if kept_range is None:
+        return None
+    mz = features.unique_pairs[:, 0]
+    lower, upper = float(kept_range[0]), float(kept_range[1])
+    inside = (mz >= lower) & (mz <= upper)
+    if bool(inside.all()):
+        return None
+    n_out = int(inside.size - np.count_nonzero(inside))
+    logger.warning(
+        "%d of %d (m/z, mobility) features lie outside the kept mass range "
+        "[%.6g, %.6g] and are left out of the mobility-resolved table, as "
+        "the summed table drops their peaks",
+        n_out,
+        int(inside.size),
+        lower,
+        upper,
+    )
+    column_of = np.full(inside.size, -1, dtype=np.int64)
+    column_of[inside] = np.arange(int(np.count_nonzero(inside)), dtype=np.int64)
+    return column_of
+
+
 def _build_from_shared_axis(
     reader: BaseMSIReader,
     row_for: RowLookup,
@@ -390,20 +435,34 @@ def _build_from_shared_axis(
     linearisation: Optional[AxisLinearisation] = None,
     merge_duplicates: bool = False,
     plane: Optional[int] = None,
+    kept_range: Optional[Tuple[float, float]] = None,
 ) -> Optional[Tuple[sparse.csc_matrix, pd.DataFrame, CscAssembly]]:
     """Scatter the source's own feature pairs; ``(matrix, var, assembly)`` or ``None``.
 
     The feature list is the table's ``var``, so its length is known before
     anything is allocated, and the grid route's memory guard applies to it
     as it stands (issue #495). ``plane`` is the table's z plane, or
-    ``None`` for a volume; see :func:`loses_signal`.
+    ``None`` for a volume; see :func:`loses_signal`. ``kept_range`` is the
+    summed table's: a feature outside it is left out, as the summed table
+    drops its peaks (D82). ``None`` keeps every feature.
     """
     listed = reader.get_shared_mobility_features()
     if listed is None or listed[0].size == 0:
         return None
+    features = _SharedFeatureAxis(*listed)
+    column_of = _kept_features(features, kept_range)
+    n_pairs = features.n_features
+    if column_of is not None:
+        n_pairs = int(np.count_nonzero(column_of >= 0))
+        if n_pairs == 0:
+            logger.warning(
+                "No mobility-resolved table: none of the source's %d (m/z, "
+                "mobility) features lies inside the kept mass range",
+                features.n_features,
+            )
+            return None
     # The guard is asked about the var the table would have: the distinct
     # pairs, not the list, which may name a pair twice.
-    n_pairs = int(np.unique(np.column_stack(listed[:2]), axis=0).shape[0])
     refusal = var_ceiling_refusal(
         n_pairs,
         features="the source lists {n} (m/z, mobility) features",
@@ -412,15 +471,14 @@ def _build_from_shared_axis(
     if refusal is not None:
         logger.warning("No mobility-resolved table: %s", refusal)
         return None
-    features = _SharedFeatureAxis(*listed)
     # The source's feature list is the table's var, empty features
     # included: a feature no pixel carries is still a feature the export
     # declared, and a consumer aligning on the list must find it.
-    assembly = CscAssembly(features.n_features, n_obs, keep_empty_columns=True)
+    assembly = CscAssembly(n_pairs, n_obs, keep_empty_columns=True)
     assembly.merge_duplicates = merge_duplicates
     # One spectrum is one row here, so a row reached twice is a repeated
-    # position, whether or not the summed table counted it as one: this
-    # route keeps features the summed table's mass range drops.
+    # position, whether or not the summed table counted it as one: a
+    # spectrum whose every feature the kept range dropped still has a row.
     seen = np.zeros(n_obs, dtype=bool)
     n_skipped = 0
     n_pixels = 0
@@ -433,7 +491,9 @@ def _build_from_shared_axis(
         if seen[row]:
             assembly.merge_duplicates = True
         seen[row] = True
-        keys, _values = _shared_axis_row(features, coords, mzs, mobility, intensities)
+        keys, _values = _shared_axis_row(
+            features, coords, mzs, mobility, intensities, column_of
+        )
         assembly.count(row, keys)
     if n_skipped:
         logger.warning(
@@ -451,12 +511,15 @@ def _build_from_shared_axis(
         row = row_for(coords)
         if row is None:
             continue
-        keys, values = _shared_axis_row(features, coords, mzs, mobility, intensities)
+        keys, values = _shared_axis_row(
+            features, coords, mzs, mobility, intensities, column_of
+        )
         assembly.scatter(row, keys, values)
     matrix = assembly.matrix()
-    var, n_mobility_values = _feature_var(
-        features.unique_pairs, common_mass_axis, linearisation
-    )
+    pairs = features.unique_pairs
+    if column_of is not None:
+        pairs = pairs[column_of >= 0]
+    var, n_mobility_values = _feature_var(pairs, common_mass_axis, linearisation)
     logger.info(
         "Mobility-resolved table: %d pixels x %d (m/z, mobility) features, "
         "%d non-zeros, %d distinct mobility values",
@@ -648,6 +711,31 @@ def grid_cells(
     return unique_keys[nonzero], summed[nonzero]
 
 
+def _inside_grid(
+    grid: MobilityGrid,
+    bins: NDArray[np.int64],
+    mobility: NDArray[np.float64],
+    intensities: NDArray[np.float64],
+) -> Tuple[NDArray[np.int64], NDArray[np.float64], NDArray[np.float64], int]:
+    """One mapped pixel's points the grid keeps, and how many it dropped.
+
+    Every point on a grid over a range read off the values. On a stated
+    range, only the points inside it (:meth:`MobilityGrid.kept`): before,
+    the rest were clipped into the edge channels, so a channel held ion
+    current measured outside its edges at ``current_ratio`` 1.0 (D82).
+    Both passes come here, so they keep the same points.
+    """
+    kept = grid.kept(mobility)
+    if kept is None:
+        return bins, mobility, intensities, 0
+    return (
+        bins[kept],
+        mobility[kept],
+        intensities[kept],
+        int(kept.size - np.count_nonzero(kept)),
+    )
+
+
 class GridDiscovery:
     """Pass 1 of the grid route: which cells are occupied, and by how many rows.
 
@@ -682,6 +770,8 @@ class GridDiscovery:
         self.n_pixels = 0
         self.n_skipped = 0
         self.n_dropped = 0
+        #: Points outside a stated mobility range, dropped (D82).
+        self.n_outside = 0
         self.n_points = 0
         self.n_features: Optional[int] = None
         #: The var ceiling's answer once the count is known.
@@ -731,6 +821,10 @@ class GridDiscovery:
         self._seen[row] = True
         self.n_pixels += 1
         self.n_dropped += int(n_dropped)
+        bins, mobility, intensities, n_outside = _inside_grid(
+            self.grid, bins, mobility, intensities
+        )
+        self.n_outside += n_outside
         self.n_points += int(bins.size)
         keys, _values = grid_cells(
             bins,
@@ -821,6 +915,9 @@ class GridScatter:
         """Scatter one mapped pixel whose row the caller already knows."""
         if row is None:
             return
+        bins, mobility, intensities, _n_outside = _inside_grid(
+            self.grid, bins, mobility, intensities
+        )
         keys, values = grid_cells(
             bins,
             self.grid.assign(mobility).astype(np.int64),
@@ -853,6 +950,23 @@ def _decide_discovery(discovery: GridDiscovery) -> bool:
             "dropped from the mobility-resolved table",
             discovery.n_dropped,
         )
+    if discovery.n_outside:
+        logger.warning(
+            "%d mobility points fell outside the stated mobility range "
+            "[%.5f, %.5f] (--mobility-min/--mobility-max) and were dropped "
+            "from the mobility-resolved table",
+            discovery.n_outside,
+            discovery.grid.lower,
+            discovery.grid.upper,
+        )
+    if discovery.n_pixels and discovery.n_outside and discovery.n_points == 0:
+        logger.warning(
+            "No mobility-resolved table: no point lies inside the stated "
+            "mobility range [%.5f, %.5f]",
+            discovery.grid.lower,
+            discovery.grid.upper,
+        )
+        return False
     if discovery.n_pixels == 0 or discovery.assembly.n_nonzeros == 0:
         logger.warning(
             "No mobility spectra matched the MSI table; no mobility table written"
@@ -993,11 +1107,12 @@ def build_mobility_table(
             one row; this table must too, or it stores the repeated
             ``(row, column)`` entries side by side (issue #241). The
             converter knows from its own count pass and says so.
-        kept_range: The m/z range a point must lie in to be kept on the
-            grid route: the summed table's own, so a point it keeps in an
-            edge bin is kept here too (see :func:`map_points_to_axis`).
-            ``None`` is the axis span. Ignored, as ``linearisation`` is,
-            on the parts of the grid route ``discovery`` already ran.
+        kept_range: The m/z range a point must lie in to be kept: the
+            summed table's own, so a point it keeps in an edge bin is kept
+            here too (see :func:`map_points_to_axis`). On the grid route
+            ``None`` is the axis span; on a shared axis ``None`` keeps
+            every feature (D82). Ignored, as ``linearisation`` is, on the
+            parts of the grid route ``discovery`` already ran.
 
     Returns:
         A ``TableModel``-parsed AnnData, or ``None`` when no table can be
@@ -1025,6 +1140,7 @@ def build_mobility_table(
                 linearisation,
                 merge_duplicates=merge_duplicates,
                 plane=z_value,
+                kept_range=kept_range,
             )
         else:
             refusal = grid_refusal(reader, axis, grid)

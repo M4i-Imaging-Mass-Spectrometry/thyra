@@ -90,7 +90,7 @@ thyra input.imzML output.zarr && python analyse.py output.zarr
 | `--include-optical / --no-optical` | enabled | Include optical images in output |
 | `--mobility-table / --no-mobility-table` | enabled | Also write the mobility-resolved sibling table when the source shares one set of (m/z, ion mobility) features across pixels (see [Output Format](output-format.md#ion-mobility)) |
 | `--mobility-heatmap / --no-mobility-heatmap` | enabled | When the source has an ion mobility dimension, store the mean mass-mobility frame on the summed table as `uns["mobility_heatmap"]`; on a Bruker TDF it is fed from the summed table's own passes, on other sources (imzML, Waters drift time) it is one extra pass, and a processed imzML first reads its mobility values for the range (see [Output Format](output-format.md#ion-mobility)) |
-| `--mobility-grid / --no-mobility-grid` | **disabled** | When the source carries ion mobility per pixel rather than as a shared feature list (Bruker TDF, processed imzML, Waters drift time), bin the point cloud onto a common mobility grid and write the same mobility-resolved sibling table, a much larger table built out of core so any acquisition fits. On a Bruker TDF it is fed from the summed table's own two passes (no extra read of the source) and its marginal reproduces the summed table exactly under the default `--tdf-spectrum scan_sum`; on a processed imzML or a Waters run it takes extra passes, and its marginal is exact when points stay on their nearest mass bin (on Waters, under `--waters-spectrum profile`). Ignored, with a warning, on a continuous imzML, which has a shared feature list (see [Output Format](output-format.md#the-same-table-from-a-common-mobility-grid)) |
+| `--mobility-grid / --no-mobility-grid` | **disabled** | When the source carries ion mobility per pixel rather than as a shared feature list (Bruker TDF, processed imzML, Waters drift time), bin the point cloud onto a common mobility grid and write the same mobility-resolved sibling table, a much larger table built out of core so any acquisition fits. On a Bruker TDF it is fed from the summed table's own two passes (no extra read of the source) and its marginal reproduces the summed table exactly under the default `--tdf-spectrum scan_sum`; on a processed imzML or a Waters run it takes extra passes, and its marginal is exact when points stay on their nearest mass bin (on Waters, under `--waters-spectrum profile`). Ignored, with a warning, on a continuous imzML, which has a shared feature list, and on a Bruker TSF file, which has no ion mobility (see [Output Format](output-format.md#the-same-table-from-a-common-mobility-grid)) |
 | `--msms-table / --no-msms-table` | enabled | When the source isolates several precursors per pixel in disjoint mobility slices (Bruker PASEF), also write them split apart as a demultiplexed sibling table; fed from the summed table's own two passes (no extra read of the source); the split adds back up to the summed table exactly under the default `--tdf-spectrum scan_sum` (see [Output Format](output-format.md#demultiplexed-msms-table)) |
 
 !!! warning "`--format` is deprecated"
@@ -165,13 +165,15 @@ thyra input.imzML output.zarr --log-file conversion.log
 These size the grid `--mobility-grid` bins onto. They do nothing without it,
 and passing one without it is logged at `WARNING`. A continuous imzML
 with a shared feature list needs no grid: there `--mobility-grid` and these
-are ignored, with a `WARNING`.
+are ignored, with a `WARNING`. So are they on a Bruker TSF file, which has no
+ion mobility. With `--no-mobility-table` the grid is cancelled, with a
+`WARNING`. A bound you state drops the points outside it.
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--mobility-bins INTEGER` | the heatmap's channels | Mobility channels the grid divides the range into. At least 1. Unset, the grid takes the heatmap's own channels: 256, or one per drift bin on a Waters run (200 bins measured) |
-| `--mobility-min FLOAT` | axis minimum | Lower edge of the grid, in the axis unit (1/K0 for TIMS, ms for Waters drift time). May be zero or negative -- it is a position on an axis, not a quantity -- but must be below `--mobility-max` |
-| `--mobility-max FLOAT` | axis maximum | Upper edge of the grid |
+| `--mobility-min FLOAT` | axis minimum | Lower edge of the grid, in the axis unit (1/K0 for TIMS, ms for Waters drift time). May be zero or negative -- it is a position on an axis, not a quantity -- but must be below `--mobility-max`. Points below it are dropped and counted in a `WARNING` |
+| `--mobility-max FLOAT` | axis maximum | Upper edge of the grid. Points above it are dropped and counted in a `WARNING` |
 
 ### Examples
 
@@ -180,8 +182,9 @@ are ignored, with a `WARNING`.
 # 256 channels over the range the acquisition actually used
 thyra tims_data.d output.zarr --mobility-grid
 
-# A narrower range at finer resolution, giving up the heatmap alignment
-thyra tims_data.d output.zarr --mobility-grid --mobility-bins 512     --mobility-min 1.05 --mobility-max 1.25
+# A narrower range at finer resolution, giving up the heatmap alignment.
+# The coarser mass axis keeps the 512-channel count array under its cap
+thyra tims_data.d output.zarr --mobility-grid --mobility-bins 512 --resample-bins 100000 --mobility-min 1.05 --mobility-max 1.25
 ```
 
 !!! note "The grid table is built out of core"
@@ -192,7 +195,7 @@ thyra tims_data.d output.zarr --mobility-grid --mobility-bins 512     --mobility
     two passes: each frame is read once per pass and the read serves the
     summed spectrum, the heatmap, the grid and the MS/MS split alike (see
     [Design Decisions](design-decisions.md#d5-one-raw-read-per-frame-per-pass-serves-every-table)). Memory is the count array over the grid's span --
-    142 MB on a default-resampled timsTOF axis -- plus one frame, whatever the
+    4 bytes x bins x channels, capped at 1 GB -- plus one frame, whatever the
     number of pixels; disk is 12 bytes per stored non-zero while the table is
     being built. Measured on a whole 26,087-pixel timsTOF acquisition on a
     40,000-bin axis (7.3M features, 1.59 billion non-zeros, 18 GB of scratch):
@@ -201,8 +204,9 @@ thyra tims_data.d output.zarr --mobility-grid --mobility-bins 512     --mobility
 
 !!! note "A mobility-resolved table wants a coarser mass axis than the default"
     The table's features are `(m/z bin, mobility channel)` pairs, so the mass
-    axis' width is multiplied by the channel count (256 on a timsTOF). A default resampled timsTOF axis is
-    around 140,000 bins; 200 frames of one measured acquisition filled 3.9
+    axis' width is multiplied by the channel count (256 on a timsTOF). A default resampled timsTOF axis
+    grows with the mass range: 599,146 bins on a usual 50 to 1000 m/z run, so
+    256 channels fit but 512 do not. 200 frames of one measured acquisition filled 3.9
     million of the resulting pairs, and a whole 26,000-pixel acquisition
     occupies 21 million. The table is refused when the `var` frame those
     pairs make is projected to take more than half of the free memory (see
@@ -427,7 +431,7 @@ thyra input.imzML output.zarr
 ## Bruker-Specific
 
 Grouped here because this is where they are reached for. All but
-`--intensity-threshold` only apply to Bruker timsTOF `.d` directories, and
+`--intensity-threshold` only apply to Bruker timsTOF `.d` directories (`--tdf-spectrum` to a TDF one), and
 `--interactive-calibration` to solariX ones as well; on any other input they
 are logged as ignored. `--intensity-threshold` is honoured by every reader,
 and is here because continuous-mode Bruker data is what usually needs it.
@@ -437,7 +441,7 @@ and is here because continuous-mode Bruker data is what usually needs it.
 | `--use-recalibrated / --no-recalibrated` | enabled | Apply the newest calibration state in `calibration.sqlite` that maps the acquisition's frames, TSF and TDF alike; off, the analysis database's own calibration. timsTOF only |
 | `--interactive-calibration` | off | Display available calibration states, and the one the conversion applies. timsTOF and solariX |
 | `--intensity-threshold FLOAT` | none | Minimum intensity filter. **Every format** |
-| `--tdf-spectrum {scan_sum,vendor_centroid}` | `scan_sum` | How a TDF (TIMS) frame's mobility scans collapse into one spectrum per pixel. Bruker TDF only |
+| `--tdf-spectrum {scan_sum,vendor_centroid}` | `scan_sum` | How a TDF (TIMS) frame's mobility scans collapse into one spectrum per pixel. Bruker TDF only; ignored, and named, on a TSF file |
 
 ### Examples
 
