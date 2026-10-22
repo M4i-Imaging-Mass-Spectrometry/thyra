@@ -2927,7 +2927,7 @@ can be had exactly.
 
 ## D34. The intensity threshold tests a peak summed over its mobility scans, in every table
 
-**Status:** Implemented (2026-10-07). Amended by D55 (2026-10-16).
+**Status:** Implemented (2026-10-07). Amended by D55 (2026-10-16) and D82 (2026-10-22).
 
 **Decision.** `--intensity-threshold` keeps a peak when its intensity, summed
 over every mobility scan of its pixel, reaches the threshold. Every table
@@ -3684,7 +3684,7 @@ earlier are unchanged and still valid.
 
 ## D46. A processed imzML with mobility gets the heatmap, and the grid when asked
 
-**Status:** Implemented (2026-10-13).
+**Status:** Implemented (2026-10-13). Amended by D82 (2026-10-22).
 
 **Decision.** The range a per-pixel mobility source is binned over is the
 smallest and largest finite mobility value it holds. A reader states it
@@ -4223,7 +4223,7 @@ plan do not change. Nothing released changes: plans are new since 4.4.0.
 
 ## D52. The mobility and MS/MS tables keep the m/z range the summed table keeps
 
-**Status:** Implemented (2026-10-14).
+**Status:** Implemented (2026-10-14). Amended by D82 (2026-10-22).
 
 **Decision.** The mass-mobility heatmap, the mobility grid table and the
 demultiplexed MS/MS table keep a point when its m/z is inside the range the
@@ -6515,3 +6515,125 @@ axis and instrument.
   per spectrum. `ImzMLMetadataExtractor` over it falls back to `fileContent`
   and every configuration, as it does for polarity and MS levels, so it can
   report another type or instrument than a conversion of the same file.
+
+## D82. A mobility table holds only mobility measured inside its edges, on a shared axis proven on every spectrum
+
+**Status:** Implemented (2026-10-22). Amends D34, D46 and D52.
+
+**Decision.** Five rules about what a mobility-resolved table may hold.
+
+- **A stated mobility range drops what lies outside it.** With
+  `--mobility-min` or `--mobility-max`, a point beyond the stated range is
+  left out of the grid table and counted in one `WARNING`. A range that
+  holds no point writes no grid table, and says so. A range read off the
+  values (the default) still clips its overhang into the edge channels, as
+  the heatmap does. This is D13's rule for a stated m/z range, applied to
+  mobility.
+- **The shared-axis table keeps the summed table's m/z range.** A feature
+  whose m/z lies outside the range the summed table keeps (D52) is left out
+  of `var` and of every row, and the count is said at `WARNING`.
+- **A shared (m/z, mobility) feature list is proven on every spectrum.** An
+  imzML gets one only when every converted spectrum points at one m/z
+  block, measured from the offsets, and every mobility array equals the
+  first, NaN for NaN. A copy at the first one's offset is not re-read, nor
+  is any block twice. Otherwise the file is per-pixel mobility and is
+  converted as the same bytes declared processed are: no shared-axis table,
+  no axis `values`, and the heatmap over the values (D46);
+  `--mobility-grid` is the way to a mobility table. The same
+  measured block test decides the extractor's mass range and the reader's
+  common mass axis, so a file that declares continuous mode but writes a
+  block per spectrum is read as processed, with one `WARNING`. The file's
+  `file_mode` metadata still records what it declares.
+- **A non-finite mobility value withholds the mobility.** A NaN or infinite
+  value anywhere in an imzML's converted mobility arrays writes the summed
+  table and no mobility table, heatmap, grid or `uns["mobility_axis"]`. One
+  `WARNING` names the file and the count. `msi_metadata` still records that
+  the file declares a mobility array (`ion_mobility.present`), which it does.
+- **A TDF mzPeak archive's TOF bin is grouped within 1e-7, relative.** Its
+  copies of one bin are summed into one point before the intensity
+  threshold, as the `.d` reader sums them.
+
+When a grid is asked for and not written, the reason is said once: no
+mobility dimension (a Bruker TSF file, a non-finite value), or
+`--no-mobility-table`, naming any sizing option given with it.
+`--tdf-spectrum` and the grid options are named as ignored on a TSF file,
+on the command line and through `reader_options`.
+
+**Why.** The 4.3.3 stress test (#427) found each of these at exit 0.
+
+| Finding | Before | After |
+|---|---|---|
+| F13: `synthetic_tims`, `--mobility-min 1.0 --mobility-max 1.5` | 206 points clipped into edge channels, `current_ratio` 1.0 | dropped and counted, `current_ratio` 0.6417 |
+| F13: the same at 3.0 to 4.0 | all current in one channel | no grid table, with the reason |
+| F129: `mobility_continuous`, m/z 400 to 500 | m/z 300 and 600.25 in the edge columns | left out; the `mz_index` marginal equals the summed table |
+| F121: continuous declared, a block per spectrum | m/z 50 and 2000 dropped | row sums 6, 15, 24 on an axis of 50 to 2000 |
+| F185: 144 spectra, spectrum 71 differs | stored at spectrum 0's mobility | per-pixel mobility |
+| F186: the same, spectrum 9's own m/z | filed under spectrum 0's m/z, or refused with a threshold | per-pixel mobility, either way |
+| F168: an infinity in the shared axis | a store `thyra validate` rejects | summed table only; validates |
+| F205: equal copies holding a NaN | "differ between spectra" | the NaN named and counted |
+
+A clipped point lies at a mobility it was never measured at, and the
+marginal over channels hid it: `current_ratio` stayed 1.0. The drop makes
+the ratio say how much the stated range left out.
+
+The 64-spectrum sample was chosen for cost, but nothing recorded the choice,
+and the property it tests is about every spectrum. The proof reads each
+mobility block once. Measured on a continuous export of 2,000 spectra by
+50,000 features with a copy per spectrum (0.80 GB of mobility, 1.60 GB
+`.ibd`, warm page cache): 0.57 s for the proof against 0.01 s for the
+sample. One pass over the intensities of the same file took 0.22 s, and a
+conversion reads them at least twice. The file was synthetic: no real TIMS
+export with a mobility array was at hand.
+
+MS-Numpress stores each scan's row on its own scale, so one TOF bin's copies
+decode up to the row's largest m/z over 2^31 apart: 7e-8 relative at m/z 20
+in a row reaching 3000. TOF bins lie some 1e-6 apart or more (6.06e-6 the
+closest pair on `synthetic_tims`). At 1e-12 each scan's copy was tested
+alone, and a peak whose sum passes the threshold was lost.
+
+**What changes in a store.**
+
+- Grid tables converted with `--mobility-min` or `--mobility-max` from a
+  source with points beyond them: fewer entries in `X`, no features in the
+  edge channels from those points, and `mobility_marginal.current_ratio`
+  below 1.
+- Shared-axis tables under a resampled range narrower than the features:
+  fewer features in `var` and fewer columns in `X`.
+- An imzML that declares continuous mode but writes a block per spectrum:
+  every peak kept, on a processed axis; `essential_metadata.mass_range`
+  covers every spectrum; with a mobility array, no shared-axis table.
+- A continuous imzML whose mobility copies differ only outside the old
+  sample: per-pixel mobility (no shared-axis table).
+- An imzML with a NaN or infinite mobility: no mobility table, heatmap or
+  `uns["mobility_axis"]`. Before, it got a heatmap and grid without the
+  points that had one (D46), or a store `thyra validate` rejected.
+- Thresholded TDF mzPeak archives under MS-Numpress keep the peaks their
+  `.d` keeps. Other archives already summed their bins and do not change.
+
+Stores converted without stated mobility bounds, from finite imzML files
+whose spectra share one block, and from `.d` folders, do not change.
+
+**Objections considered.**
+
+- *Clip on a stated range too, and warn.* The table would still hold
+  current at a mobility it was not measured at, and a consumer reads the
+  table, not the log.
+- *Refuse a non-finite mobility.* The summed table is right and is most of
+  the store. The m/z rule (D55) drops a non-finite m/z and keeps the rest;
+  a mobility value has no table of its own to drop it from, so the mobility
+  products go instead.
+- *Keep the sample and warn that it is one.* A wrong axis at exit 0 is the
+  failure, and the cost of the proof is one read of the mobility arrays.
+
+**Known limits.**
+
+- The `.d` reader's mobility comes from scan numbers and the Waters
+  reader's from drift bins; neither can be NaN, and neither is checked.
+- A processed-declared file whose spectra all point at one m/z block is
+  still read as processed: the measured test is applied only to a
+  continuous declaration.
+- The metadata-only route (`preview_msi`) still takes a continuous
+  declaration's range from the first spectra when their recorded extrema
+  agree (issue #371).
+- No MS-Numpress archive from `mzpeak-convert` 0.16.0 was converted for
+  this entry; the tolerance rests on the encoding's own error bound.

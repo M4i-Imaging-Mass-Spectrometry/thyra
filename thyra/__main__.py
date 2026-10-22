@@ -40,7 +40,10 @@ import click  # noqa: E402
 from thyra import __version__  # noqa: E402
 from thyra.reader_options import (  # noqa: E402
     READER_OPTION_FORMATS,
+    TDF_ONLY_OPTIONS,
+    TSF_NAME,
     format_name,
+    is_bruker_tsf,
     reader_option_reaches,
 )
 from thyra.resampling.mobility_grid import MOBILITY_CHANNELS  # noqa: E402
@@ -576,6 +579,10 @@ IGNORED_ELSEWHERE: dict[str, Tuple[str, Tuple[str, ...]]] = {
 #: do nothing without it, which docs/cli.md says and nothing else did.
 GRID_SIZING_FLAGS = ("mobility_bins", "mobility_min", "mobility_max")
 
+#: Options a Bruker timsTOF ``.d`` uses only when it holds a TDF file: a
+#: TSF file has no ion mobility to bin or to sum over (issue #517).
+TDF_ONLY_FLAGS = TDF_ONLY_OPTIONS + ("mobility_grid",) + GRID_SIZING_FLAGS
+
 
 def _given_on_the_command_line(ctx: Optional[click.Context], name: str) -> bool:
     """Whether ``name`` was typed, rather than left at its default.
@@ -592,7 +599,10 @@ def _given_on_the_command_line(ctx: Optional[click.Context], name: str) -> bool:
 
 
 def _warn_ignored_flags(
-    ctx: Optional[click.Context], input_format: str, mobility_grid: bool
+    ctx: Optional[click.Context],
+    input_format: str,
+    mobility_grid: bool,
+    tsf: bool = False,
 ) -> None:
     """Name every option given on a source, or in a run, that ignores it.
 
@@ -602,12 +612,24 @@ def _warn_ignored_flags(
         input_format: What ``detect_format`` said the source is.
         mobility_grid: Whether a mobility grid table was asked for, which
             is what the three grid-sizing options size.
+        tsf: Whether a Bruker source holds a TSF file, which none of
+            :data:`TDF_ONLY_FLAGS` reaches.
     """
     if ctx is None:
         return
     source_name = format_name(input_format)
     for name, (spelling, formats) in IGNORED_ELSEWHERE.items():
-        if input_format in formats or not _given_on_the_command_line(ctx, name):
+        if not _given_on_the_command_line(ctx, name):
+            continue
+        if tsf and name in TDF_ONLY_FLAGS:
+            logger.warning(
+                "%s is ignored on %s: it only applies to a TDF file. The "
+                "store is written as though it had not been given.",
+                spelling,
+                TSF_NAME,
+            )
+            continue
+        if input_format in formats:
             continue
         logger.warning(
             "%s is ignored on %s input: it only applies to %s. The store is "
@@ -622,6 +644,8 @@ def _warn_ignored_flags(
     for name in GRID_SIZING_FLAGS:
         spelling, formats = IGNORED_ELSEWHERE[name]
         if input_format not in formats or not _given_on_the_command_line(ctx, name):
+            continue
+        if tsf:
             continue
         logger.warning(
             "%s is ignored without --mobility-grid: it sizes the mobility "
@@ -875,7 +899,8 @@ class GroupedCommand(click.Command):
     default=True,
     help=(
         "When the source shares one set of (m/z, ion mobility) features across "
-        "pixels (an imzML export with a mobility array), also write them as a "
+        "pixels (an imzML export whose spectra share one m/z block and one "
+        "mobility array), also write them as a "
         "mobility-resolved sibling table next to the summed MSI table "
         "(default: enabled)"
     ),
@@ -899,7 +924,8 @@ class GroupedCommand(click.Command):
     help=(
         "When the source carries ion mobility per pixel rather than as a "
         "shared feature list (Bruker TDF, processed imzML, Waters drift "
-        "time), bin the point cloud onto a common mobility grid and write "
+        "time; not a Bruker TSF file, which has none), bin the point cloud "
+        "onto a common mobility grid and write "
         "the same mobility-resolved sibling table (default: disabled; a "
         "much larger table, built out of core so any acquisition fits; fed "
         "from the summed table's own passes on a Bruker TDF, extra passes "
@@ -948,7 +974,8 @@ class GroupedCommand(click.Command):
         "Lower edge of the mobility grid, in the axis unit (1/K0 for TIMS, "
         "ms for Waters drift time). "
         "Default: the smallest value the source's mobility axis holds, which "
-        "is where the heatmap starts"
+        "is where the heatmap starts. A stated edge drops the points beyond "
+        "it, and says how many"
     ),
 )
 @click.option(
@@ -957,7 +984,8 @@ class GroupedCommand(click.Command):
     default=None,
     help=(
         "Upper edge of the mobility grid, in the axis unit. Default: the "
-        "largest value the source's mobility axis holds"
+        "largest value the source's mobility axis holds. A stated edge drops "
+        "the points beyond it, and says how many"
     ),
 )
 # -- Logging --
@@ -1285,10 +1313,21 @@ def main(
         detected_format = detect_format(input)
     except Exception:
         detected_format = ""
+    # A timsTOF .d holding a TSF file has no ion mobility: the TDF-only
+    # options are named as ignored on it (issue #517).
+    tsf = is_bruker_tsf(detected_format, input)
     if detected_format:
         _warn_ignored_flags(
-            click.get_current_context(silent=True), detected_format, mobility_grid
+            click.get_current_context(silent=True),
+            detected_format,
+            mobility_grid,
+            tsf=tsf,
         )
+    if tsf:
+        # Named as ignored just above; dropped so the converter does not
+        # say it a second time.
+        mobility_grid = False
+        mobility_bins = mobility_min = mobility_max = None
     _warn_resampling_flags_without_resampling(
         click.get_current_context(silent=True), resample
     )
@@ -1330,7 +1369,7 @@ def main(
         reader_options = {
             key: value
             for key, value in reader_options.items()
-            if reader_option_reaches(key, detected_format)
+            if reader_option_reaches(key, detected_format, tsf)
         }
 
     msms_table_option: Dict[str, Any] = (

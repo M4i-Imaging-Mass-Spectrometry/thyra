@@ -878,6 +878,131 @@ class TestGridTable:
         assert "mobility_grid" not in sdata.tables["stub_z0"].uns
 
 
+class TestAStatedRange:
+    """Points outside --mobility-min/--mobility-max are dropped, not clipped (D82).
+
+    The stub's clouds hold 1/K0 1.12 and 1.48 at m/z 100, and 1.201 to
+    1.3031 elsewhere. Clipped into the edge channels, the first two
+    were stored at mobility they were never measured at.
+    """
+
+    def test_points_beyond_the_range_are_dropped_and_counted(
+        self, tmp_path, thyra_logs
+    ):
+        with thyra_logs("thyra") as records:
+            sdata = _read(
+                _convert(
+                    GridStubReader(),
+                    tmp_path / "s.zarr",
+                    mobility_grid=True,
+                    mobility_min=1.15,
+                    mobility_max=1.45,
+                )
+            )
+        grid = sdata.tables["stub_z0_mobility"]
+        mobility = grid.var["mobility"].to_numpy()
+        assert mobility.min() > 1.2 and mobility.max() < 1.31
+        # Both m/z 100 points of each pixel lie outside; m/z 100 is gone.
+        assert 0 not in set(grid.var["mz_index"].to_numpy().tolist())
+        messages = [r.getMessage() for r in records]
+        assert any(
+            m.startswith("8 mobility points fell outside the stated mobility range")
+            for m in messages
+        ), messages
+        ratio = float(grid.uns["mobility_marginal"]["current_ratio"])
+        assert ratio < 1.0
+
+    def test_one_stated_bound_drops_only_beyond_it(self, tmp_path):
+        sdata = _read(
+            _convert(
+                GridStubReader(),
+                tmp_path / "s.zarr",
+                mobility_grid=True,
+                mobility_min=1.15,
+            )
+        )
+        grid = sdata.tables["stub_z0_mobility"]
+        # 1.12 goes; 1.48, the largest value, is the measured upper edge.
+        # Clipped, 1.12 was a second m/z 100 feature in the first channel.
+        at_100 = grid.var["mz_index"].to_numpy() == 0
+        assert int(np.count_nonzero(at_100)) == 1
+        assert float(grid.var["mobility"].to_numpy()[at_100][0]) > 1.4
+
+    def test_a_range_that_misses_the_data_writes_no_table(self, tmp_path, thyra_logs):
+        with thyra_logs("thyra") as records:
+            sdata = _read(
+                _convert(
+                    GridStubReader(),
+                    tmp_path / "s.zarr",
+                    mobility_grid=True,
+                    mobility_min=3.0,
+                    mobility_max=4.0,
+                )
+            )
+        assert set(sdata.tables) == {"stub_z0"}
+        messages = [r.getMessage() for r in records]
+        assert any(
+            "no point lies inside the stated mobility range" in m for m in messages
+        )
+        assert not any("No mobility spectra matched" in m for m in messages)
+
+    def test_the_measured_range_still_keeps_every_point(self, tmp_path):
+        grid = MobilityGrid("linear", 1.0, 2.0, 4, np.linspace(1.0, 2.0, 5), clips=True)
+        assert grid.kept(np.array([0.5, 1.5, 2.5])) is None
+        stated = build_mobility_grid(1.0, 2.0, 4, clips=False)
+        np.testing.assert_array_equal(
+            stated.kept(np.array([0.5, 1.0, 2.0, 2.5])), [False, True, True, False]
+        )
+
+
+class TestAGridThatIsNotWritten:
+    """Asked for and not written: the reason is said (issue #517, F98 and F101)."""
+
+    def test_a_source_without_mobility_says_so(self, tmp_path, thyra_logs):
+        with thyra_logs("thyra") as records:
+            _convert(
+                _NoMobilityReader(),
+                tmp_path / "s.zarr",
+                mobility_grid=True,
+                mobility_bins=8,
+            )
+        said = [
+            r.getMessage()
+            for r in records
+            if r.getMessage().startswith("--mobility-grid is ignored")
+        ]
+        assert len(said) == 1, said
+        assert "--mobility-bins" in said[0]
+        assert "no ion mobility dimension" in said[0]
+
+    def test_no_mobility_table_says_the_grid_is_ignored(self, tmp_path, thyra_logs):
+        with thyra_logs("thyra") as records:
+            sdata = _read(
+                _convert(
+                    GridStubReader(),
+                    tmp_path / "s.zarr",
+                    mobility_grid=True,
+                    write_mobility_table=False,
+                    mobility_min=1.0,
+                    mobility_max=1.5,
+                )
+            )
+        assert set(sdata.tables) == {"stub_z0"}
+        said = [
+            r.getMessage()
+            for r in records
+            if r.getMessage().startswith("--mobility-grid is ignored")
+        ]
+        assert len(said) == 1, said
+        assert "--mobility-min, --mobility-max" in said[0]
+        assert "--no-mobility-table" in said[0]
+
+    def test_nothing_is_said_when_no_grid_was_asked_for(self, tmp_path, thyra_logs):
+        with thyra_logs("thyra") as records:
+            _convert(_NoMobilityReader(), tmp_path / "s.zarr")
+        assert not any("--mobility-grid" in r.getMessage() for r in records)
+
+
 class TestAddCcsColumn:
     def _var(self, n):
         mz = np.linspace(200.0, 1800.0, n)

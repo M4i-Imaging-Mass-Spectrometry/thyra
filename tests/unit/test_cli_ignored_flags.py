@@ -24,6 +24,7 @@ from thyra.__main__ import (
     GRID_SIZING_FLAGS,
     IGNORED_ELSEWHERE,
     RESAMPLING_FLAGS,
+    TDF_ONLY_FLAGS,
     _validate_mobility_grid_params,
     _warn_ignored_flags,
     _warn_resampling_flags_without_resampling,
@@ -118,6 +119,38 @@ class TestGridSizingWithoutAGrid:
         assert (
             "is ignored on PHI SmartSoft-TOF input" in warnings.records[0].getMessage()
         )
+
+
+class TestATsfFile:
+    """F98: a timsTOF ``.d`` holding a TSF file has no ion mobility (issue #517).
+
+    The TDF-only options were keyed on any Bruker input, so a TSF never
+    named them as ignored, and ``--tdf-spectrum vendor_centroid`` even
+    warned that a grid table "is written".
+    """
+
+    @pytest.mark.parametrize("name", TDF_ONLY_FLAGS)
+    def test_each_tdf_only_flag_is_named_once(self, name, warnings):
+        _warn_ignored_flags(_Ctx(name), "bruker", mobility_grid=False, tsf=True)
+
+        messages = [r.getMessage() for r in warnings.records]
+        assert len(messages) == 1, messages
+        assert IGNORED_ELSEWHERE[name][0] in messages[0]
+        assert "TSF" in messages[0] and "TDF" in messages[0]
+
+    def test_options_a_tsf_file_does_use_are_quiet(self, warnings):
+        _warn_ignored_flags(
+            _Ctx("use_recalibrated", "interactive_calibration"),
+            "bruker",
+            mobility_grid=False,
+            tsf=True,
+        )
+        assert not warnings.records
+
+    @pytest.mark.parametrize("name", TDF_ONLY_FLAGS)
+    def test_a_tdf_file_is_quiet(self, name, warnings):
+        _warn_ignored_flags(_Ctx(name), "bruker", mobility_grid=True, tsf=False)
+        assert not warnings.records
 
 
 class TestTheGridOnImzML:
