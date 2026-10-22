@@ -40,6 +40,8 @@ hand. pytest's ``caplog`` retains records, and so does Ousia's per-session
 log capture, which is the consumer that met it (issue #249).
 """
 
+import asyncio
+import errno
 import logging
 import warnings
 from abc import ABC, abstractmethod
@@ -69,6 +71,12 @@ from ...resampling.binning import kept_mz_range
 from ...resampling.plan import MassAxisPlan
 from ...resampling.strategies import ResamplingStrategy, build_strategy
 from ...resampling.types import AxisLinearisation, ResamplingConfig
+from ...utils.store_lifecycle import (
+    incomplete_store_path,
+    quarantine_partial_store,
+    retry_on_os_error,
+)
+from ...utils.windows_paths import prepare_zarr_output_path
 from ._chunking import table_write_config
 from .acquisition_frame import (
     ACQUISITION_COORDINATE_SYSTEM,
@@ -82,6 +90,44 @@ from .sibling_tables import SiblingContext, SiblingTables
 from .uns_assembler import UnsAssembler, UnsContext
 
 logger = logging.getLogger(__name__)
+
+
+#: How long a failed store write waits for the chunk writes still running.
+_PENDING_WRITES_TIMEOUT_S = 30.0
+
+
+def _wait_for_pending_store_writes() -> None:
+    """Let the chunk writes still running after a failed write finish.
+
+    zarr writes chunks concurrently on its own event loop, and when one
+    raises, the others keep running: the error reaches this thread while
+    they still hold views of the tables' scratch memmaps. Windows will not
+    delete a mapped file, so the scratch release that follows failed, was
+    tried once, and left the ``.thyra_summed_*`` folder beside the output
+    for good (issue #525). Waiting for those tasks first is what lets the
+    release succeed. Bounded, and a no-op when zarr has no loop running.
+    """
+    try:
+        from zarr.core import sync as zarr_sync
+
+        loop = zarr_sync.loop[0]
+    except Exception:  # nosec B110 - zarr internals moved; nothing to wait for
+        return
+    if loop is None or loop.is_closed() or not loop.is_running():
+        return
+
+    async def settle() -> None:
+        current = asyncio.current_task()
+        pending = [t for t in asyncio.all_tasks() if t is not current]
+        if pending:
+            await asyncio.wait(pending, timeout=_PENDING_WRITES_TIMEOUT_S)
+
+    try:
+        asyncio.run_coroutine_threadsafe(settle(), loop).result(
+            _PENDING_WRITES_TIMEOUT_S + 5.0
+        )
+    except Exception as e:
+        logger.debug("Could not wait for the pending chunk writes: %s", str(e))
 
 
 @contextmanager
@@ -277,6 +323,16 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         )
 
         self._non_empty_pixel_count: int = 0
+        # Where the store is being written while _save_output runs: a
+        # temporary ``<name>.incomplete-<id>`` beside the output, renamed
+        # to the output name as the last step, so the output name holds a
+        # finished store or nothing however the run ends (issue #525).
+        # ``None`` before the write and once the store is in place.
+        self._writing_to: Optional[Path] = None
+        # Set when the store is complete under its temporary name but the
+        # rename onto the output name failed: it is kept there, named in
+        # the error, and not moved to ``.failed``.
+        self._keep_incomplete_name = False
         # The m/z range a peak has to be inside to be kept, as opposed to
         # the span of the axis points themselves. Adopted from the planner
         # in _setup_mass_axis(); ``None`` means "no resampled axis was
@@ -426,11 +482,35 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         KeyboardInterrupt alike: a route that released its temp directory
         on the success path only leaked 79.5 GiB into one user's system
         temp before a manual sweep.
+
+        A store left under its temporary name by a failed run is then
+        moved to ``<name>.failed``, here rather than only in
+        ``convert_msi``, so a caller that builds a converter itself gets
+        the same guarantee (issue #525). Nested, so a second Ctrl-C in the
+        scratch release still reaches it.
         """
         try:
             return super().convert()
         finally:
+            self.finish_cleanup()
+
+    def finish_cleanup(self) -> None:
+        """Release the scratch and set a partial store aside; safe to repeat.
+
+        Called by :meth:`convert` on every exit, and again by
+        ``convert_msi`` when an interrupt cut that call short.
+        """
+        try:
             self.siblings.release_scratch()
+        finally:
+            self._set_aside_partial_store()
+
+    def _set_aside_partial_store(self) -> None:
+        """Move a store the run did not finish to ``<output>.failed``."""
+        partial = self._writing_to
+        if partial is None or self.store_complete or self._keep_incomplete_name:
+            return
+        quarantine_partial_store(partial, self.output_path)
 
     def build_uns_metadata(self) -> Dict[str, Any]:
         """The provenance block every table of this conversion carries.
@@ -541,9 +621,16 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         every table's scratch in its parent, and :class:`OpticalImages`
         streams its pixels into it once the write has returned. What the
         converter does with the path itself -- the write, the consolidate
-        -- reads ``output_path`` directly, at call time, which is the same
-        thing.
+        -- goes through it too.
+
+        While :meth:`_save_output` runs this is the store's temporary
+        ``<name>.incomplete-<id>`` name, beside the output, so every step
+        that touches the store targets the name it is written under
+        (issue #525); the scratch made in its parent lands in the same
+        folder either way.
         """
+        if self._writing_to is not None:
+            return self._writing_to
         return self.output_path
 
     def _add_metadata_to_uns(self, adata) -> None:
@@ -1257,13 +1344,22 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             # zarr arrays lazily inside sdata.write, and that is where the shard
             # budget is read. Without it the table lands in ~1 KB shards -- one
             # file per KB -- and the write dominates conversion wall-clock.
+            #
+            # Written under a temporary name and renamed last (issue #525).
+            # The Windows path budget is measured on that name, which is
+            # the longer of the two.
+            store = prepare_zarr_output_path(
+                incomplete_store_path(self.output_path), self.dataset_id
+            )
+            self._writing_to = store
             with _suppress_upstream_warnings(), table_write_config():
-                sdata.write(str(self.output_path))
+                sdata.write(str(store))
                 # The optical images above are placeholders; their pixels
                 # stream into the store now that it exists.
                 self.optical.stream_pending_pixels()
-                zarr.consolidate_metadata(str(self.output_path))
-                self._mark_store_complete()
+                zarr.consolidate_metadata(str(store))
+            if not self._move_store_into_place(store):
+                return False
             logger.info(f"Successfully saved SpatialData to {self.output_path}")
             # Every table was written from its memmaps; nothing holds them
             # now but this object and the caller's mapping.
@@ -1271,11 +1367,49 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             self.siblings.release_scratch(state.tables)
             return True
         except Exception as e:
-            logger.error(f"Error saving SpatialData: {e}")
+            # The type when the text is empty: a failed allocation raises
+            # a bare MemoryError, and this line read "Error saving
+            # SpatialData: " with nothing after it (issue #525).
+            logger.error("Error saving SpatialData: %s", str(e) or type(e).__name__)
             import traceback
 
             logger.debug(f"Detailed traceback:\n{traceback.format_exc()}")
+            _wait_for_pending_store_writes()
             return False
+
+    def _move_store_into_place(self, store: Path) -> bool:
+        """Rename the finished store onto the output name; the last step.
+
+        The store is complete once the rename lands, so it is marked
+        complete on the next line: past that point an interrupt keeps it
+        (issue #500). A rename that keeps failing fails the run, and the
+        error names the temporary folder and says the store in it is
+        complete; it is not moved to ``.failed`` (issue #525).
+        """
+        output = self.output_path
+
+        def rename() -> None:
+            # A POSIX rename replaces an empty directory without a word.
+            if output.exists():
+                raise FileExistsError(errno.EEXIST, "already exists", str(output))
+            store.rename(output)
+
+        try:
+            retry_on_os_error(rename)
+        except OSError as e:
+            self._keep_incomplete_name = True
+            logger.error(
+                "The store is complete, but it could not be renamed from %s "
+                "to %s (%s). It is kept under the temporary name; rename it "
+                "yourself, or delete it and convert again.",
+                store,
+                output,
+                e.strerror or str(e) or type(e).__name__,
+            )
+            return False
+        self._mark_store_complete()
+        self._writing_to = None
+        return True
 
     def add_metadata(self, metadata: "SpatialData") -> None:
         """Add comprehensive metadata to the SpatialData object.

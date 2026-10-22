@@ -22,6 +22,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import click
 
+from ...utils.output_files import make_parent_folder, output_file_problem
+from ...utils.store_lifecycle import is_incomplete_store_name
 from ...utils.windows_paths import prepare_zarr_read_path
 from .metaspace import to_metaspace
 from .models import MSI_METADATA_UNS_KEY, MSIMetadata
@@ -49,6 +51,19 @@ def _resolve_store_path(path: Path) -> Path:
             f"Path {str(path)!r} does not exist.", param_hint="PATH"
         )
     return prepared
+
+
+def _check_output_file(output_path: Path) -> None:
+    """Refuse an ``-o`` path no folder creation can make writable.
+
+    Before any work, so a refused path costs nothing: the file used to be
+    opened only at the end, and a folder given as ``-o`` ended in a
+    traceback after the whole source had been read (issue #525). A
+    missing folder is created when the file is written.
+    """
+    problem = output_file_problem(output_path)
+    if problem is not None:
+        raise click.BadParameter(problem, param_hint="'-o' / '--output'")
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
@@ -179,14 +194,37 @@ def _load_documents(path: Path) -> Dict[str, Dict[str, Any]]:
     try:
         blocks = read_msi_metadata_blocks(path)
     except ValueError as exc:
+        # A root group with nothing under it is what a conversion stopped
+        # early leaves, not a folder of something else (issue #525).
+        if (path / "zarr.json").is_file() and not (path / "tables").exists():
+            raise click.ClickException(_no_metadata_message(path)) from exc
         raise click.ClickException(str(exc)) from exc
     if not blocks:
-        raise click.ClickException(
-            f"No {MSI_METADATA_UNS_KEY} block found in {path}. Stores "
-            "written by Thyra versions without the metadata schema do not "
-            "carry one; reconvert with a current version."
-        )
+        raise click.ClickException(_no_metadata_message(path))
     return blocks
+
+
+def _no_metadata_message(path: Path) -> str:
+    """Why a store holds no metadata block, as far as the path can tell.
+
+    An old Thyra version was the only cause this named, and a conversion
+    stopped part-way through its write leaves the same thing behind
+    (issue #525). A store written today sits under a temporary
+    ``<name>.incomplete-<id>`` name until it is complete, so a path of
+    that shape is named for what it is.
+    """
+    if is_incomplete_store_name(Path(str(path).rstrip("\\/")).name):
+        return (
+            f"No {MSI_METADATA_UNS_KEY} block found in {path}. It is the "
+            "temporary folder of a conversion that did not finish, and "
+            "safe to delete when no conversion is running."
+        )
+    return (
+        f"No {MSI_METADATA_UNS_KEY} block found in {path}. Either a "
+        "conversion stopped before it finished writing this store, or it "
+        "was written by a Thyra version without the metadata schema; "
+        "convert the source again with a current version."
+    )
 
 
 def _apply_merge(
@@ -358,6 +396,11 @@ def export_metaspace_command(
     on the METASPACE submission form.
     """
     path = _resolve_store_path(path)
+    to_stdout = output_path is not None and str(output_path) == "-"
+    if output_path is None:
+        output_path = path.with_name(path.stem + ".metaspace.json")
+    if not to_stdout:
+        _check_output_file(output_path)
     documents = _apply_merge(_load_documents(path), merge_path)
     label, document = _select_document(documents, table)
     meta = _validated_model(label, document)
@@ -367,12 +410,11 @@ def export_metaspace_command(
         click.echo(f"warning: {warning}", err=True)
 
     rendered = _render_json(metaspace_document)
-    if output_path is not None and str(output_path) == "-":
+    if to_stdout:
         click.echo(rendered)
         return
 
-    if output_path is None:
-        output_path = path.with_name(path.stem + ".metaspace.json")
+    make_parent_folder(output_path)
     output_path.write_text(rendered + "\n", encoding="utf-8")
     click.echo(f"Wrote METASPACE metadata for {label} to {output_path}")
     if warnings:
@@ -425,6 +467,9 @@ def metadata_command(
     # validate` and `thyra export-metaspace` have no use for.
     from ..document import read_metadata_document
 
+    to_stdout = output_path is None or str(output_path) == "-"
+    if output_path is not None and not to_stdout:
+        _check_output_file(output_path)
     try:
         document = read_metadata_document(input)
     except Exception as exc:
@@ -444,9 +489,10 @@ def metadata_command(
             click.echo(f"{input.name}:", err=True)
             _echo_issues(input.name, issues, err=True)
         raise
-    if output_path is None or str(output_path) == "-":
+    if output_path is None or to_stdout:
         click.echo(rendered)
     else:
+        make_parent_folder(output_path)
         output_path.write_text(rendered + "\n", encoding="utf-8")
         click.echo(f"Wrote the metadata of {input.name} to {output_path}", err=True)
 

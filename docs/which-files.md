@@ -51,8 +51,9 @@ will need `--pixel-size`.
 
 ## Bruker timsTOF
 
-- Point Thyra at the `.d` folder. You can also point it at the folder above:
-  if that holds several `.d` folders, Thyra asks which one to convert.
+- Point Thyra at the `.d` folder. You can also point it at the folder above.
+  If that holds one dataset, Thyra converts it. If it holds several, the
+  command asks which one to convert, and Python asks you to name one.
 - Keep the `.mis` file from flexImaging next to the `.d` folder, ideally with
   the same name. It gives the pixel size and lines the data up with the
   optical image.
@@ -77,8 +78,8 @@ will need `--pixel-size`.
 
 ## Bruker solariX
 
-- Point Thyra at the `.d` folder itself. It must hold the files
-  `peaks.sqlite` and `ImagingInfo.xml`.
+- Point Thyra at the `.d` folder, or at a folder that holds only that one
+  `.d`. It must hold the files `peaks.sqlite` and `ImagingInfo.xml`.
 - The pixel size comes from a `.mis` file next to the `.d` folder. Without
   one, give it with `--pixel-size`.
 - A `.d` folder that holds only raw transients, with no `peaks.sqlite`, cannot

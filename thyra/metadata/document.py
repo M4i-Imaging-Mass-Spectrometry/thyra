@@ -31,7 +31,7 @@ import math
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from ..core.registry import detect_format, get_reader_class
+from ..core.registry import detect_format, get_reader_class, resolve_run
 from .schema.builder import build_metadata_document
 
 logger = logging.getLogger(__name__)
@@ -106,7 +106,8 @@ def read_metadata_document(path: Path | str) -> Dict[str, Any]:
             folder still has a card to draw, while a metadata document
             that cannot read one has nothing to write.
     """
-    path = Path(path)
+    # A folder of several runs is refused, naming them (issue #525).
+    path = resolve_run(Path(path))
     source_format = detect_format(path)
     reader_class = get_reader_class(source_format)
 

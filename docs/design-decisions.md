@@ -6316,3 +6316,100 @@ used to be attempted.
   to 1 GiB) are allocated before the passes and are not in the projection.
 - The 2D route's plane tables each hold a count array during the pre-scan,
   4 bytes per bin, before the table count is known.
+
+## D78. A folder that holds several runs is refused, not picked
+
+**Status:** Implemented (2026-10-22), issue #525.
+
+**Decision.** A run is a `.d` folder Thyra reads, timsTOF or solariX; other
+`.d` folders beside it do not count. A folder that holds one run is read as
+that run by every entry point: `convert_msi`, `preview_msi`, `thyra
+metadata` and the CLI, whose `--interactive-calibration` display now shows
+for it. A folder that holds several runs is refused by `convert_msi`,
+`preview_msi`, `thyra metadata` and the timsTOF reader with one line that
+names every run and asks for one run's path. The CLI still asks which run to
+convert, and ends with the same line and exit 1 when it can read no answer,
+where click printed a bare `Aborted!`. Format detection is unchanged: it
+still names the first run's format, and only the entry points refuse.
+
+**Why.** The library converted the first run in name order with one INFO
+line, so a real folder of three runs gave a store of a run nobody chose, at
+exit 0. A library cannot ask, and the `.mis` pick already refuses to guess
+(#303).
+
+**What changes in a store.** Nothing. A call on a folder of several runs
+now writes nothing. A folder holding one solariX run now converts, where
+the solariX reader refused it; its store equals the store of the `.d`
+itself. Stores converted from a `.d`, or from a folder holding one timsTOF
+run, are unchanged.
+
+**Alternatives.**
+
+- "Keep the first run in sorted order, with a warning." A script still gets
+  an unchosen run at exit 0.
+- "Say in the docs that the library takes the first run." The pick stays
+  silent.
+
+## D79. A store appears under its output name only when it is complete
+
+**Status:** Implemented (2026-10-22), issue #525. Extends the `.failed`
+move of #245 and #293.
+
+**Decision.** The converter writes its store under a temporary name in the
+output's folder, `<name>.incomplete-<8 hex>`. Every step that touches the
+store targets that name: the write, the optical pixel streaming and the
+removal of a dropped image, and the metadata consolidation. The store is
+renamed to the output name as the last step, and marked complete only then.
+A failure Python sees moves the temporary store to `<name>.failed`, as
+before; the converter does this itself, so a caller that builds a converter
+directly gets it too. A run that is killed leaves only the temporary folder
+and its `.thyra_*` scratch, and the same command runs again at once. The
+rename is retried for two seconds, as Windows now and then refuses one for
+a moment. If it still fails, the run fails, its error names the temporary
+folder and says the store in it is complete, and nothing is moved to
+`.failed`. The Windows path budget (`prepare_zarr_output_path`) is measured
+on the temporary name, which is 20 characters longer. `thyra validate` on a
+store with no metadata block names an unfinished write as a possible cause,
+and names a `.incomplete-<hex>` folder as the temporary folder of a
+conversion that did not finish.
+
+**Why.** An out-of-memory kill, or a native abort in pyarrow or pandas,
+gives Python no chance to run the move to `.failed`. The partial store
+stayed under the output name, the retry was refused because the output
+existed, and `thyra validate` blamed an old Thyra version.
+
+**What changes in a store.** Nothing in its contents. While a conversion
+runs, its store sits under the temporary name beside the output, and it
+appears under the output name only once it is complete.
+
+**Alternatives.**
+
+- "Keep writing in place and narrow the docs to failures the process
+  survives." The retry after a kill stays blocked.
+- "Mark the store unfinished and let the next run move a marked store
+  aside." The path check gains a rule that moves an existing path.
+
+**Known limits.** A Ctrl-C that lands between the consolidation and the
+rename is a failed run: the complete store goes to `.failed`, because the
+output name does not hold it yet.
+
+## D80. Every output file follows the store path's rule
+
+**Status:** Implemented (2026-10-22), issue #525.
+
+**Decision.** `--log-file`, `thyra metadata -o`, `thyra export-metaspace -o`
+(and its default beside the store) and `thyra-check-ontology --output` go
+through one helper, `thyra/utils/output_files.py`, that checks the path
+before any work starts. A missing folder is created when the file is
+written, as it is for the store. A path that is an existing folder, or that
+lies under a regular file, is refused with one line and exit 2. A
+`--log-file` inside the output store's own path is refused too, since
+creating its folder would create the output.
+
+**Why.** Each command opened its file without a check and ended in a
+traceback, after the metadata read or the ontology check had already run;
+a `--log-file` in a new folder stopped the conversion before it started.
+Creating rather than refusing keeps one rule for every output; the cost is
+that a typo makes a stray folder, as it already does for the store.
+
+**What changes in a store.** Nothing.
