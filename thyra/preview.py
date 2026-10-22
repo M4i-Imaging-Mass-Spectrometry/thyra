@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .core.registry import detect_format, get_reader_class
+from .core.registry import detect_format, get_reader_class, resolve_run
 from .resampling.decision_tree import ResamplingDecisionTree
 from .resampling.types import AxisType, ResamplingMethod
 
@@ -286,6 +286,11 @@ def _build_reader(path: Path) -> tuple[Optional[Any], Optional[str]]:
     every concrete reader takes ``**kwargs``.
     """
     try:
+        # A folder of several runs is refused, naming them (issue #525).
+        path = resolve_run(path)
+    except Exception as exc:
+        return None, str(exc)
+    try:
         format_name = detect_format(path)
     except Exception as exc:  # pragma: no cover - defensive
         return None, f"Format detection failed: {exc}"
@@ -374,7 +379,9 @@ def preview_msi(path: Path) -> MsiPreview:
     Args:
         path: Filesystem path to an ``.imzML`` file or a Bruker ``.d``
             directory.  May or may not exist; nonexistent paths are
-            returned as ``readable=False`` rather than raising.
+            returned as ``readable=False`` rather than raising.  A folder
+            holding one ``.d`` run is previewed as that run; a folder
+            holding several is ``readable=False``, its error naming them.
 
     Returns:
         :class:`MsiPreview` -- always returns; never raises.  Check

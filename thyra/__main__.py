@@ -45,6 +45,10 @@ from thyra.reader_options import (  # noqa: E402
 )
 from thyra.resampling.mobility_grid import MOBILITY_CHANNELS  # noqa: E402
 from thyra.utils.logging_config import setup_logging  # noqa: E402
+from thyra.utils.output_files import (  # noqa: E402
+    make_parent_folder,
+    output_file_problem,
+)
 
 # Not ``__name__``: under ``python -m thyra`` that is "__main__", and
 # setup_logging configures the "thyra" logger with propagate=False, so
@@ -247,6 +251,30 @@ def _validate_output_path(output: Path) -> None:
         raise click.BadParameter(problem)
 
 
+def _validate_log_file(log_file: Optional[Path], output: Path) -> None:
+    """Refuse a ``--log-file`` no folder creation can make writable.
+
+    Checked with the other paths, before any work: a folder given as the
+    log file ended in a traceback before the conversion started
+    (issue #525). The rule is :func:`thyra.utils.output_files.output_file_problem`,
+    the one every file a Thyra command writes goes through. A log file
+    inside the store's path is refused too: creating its folder would
+    create the output, and the store is renamed onto that name at the end.
+    """
+    if log_file is None:
+        return
+    problem = output_file_problem(log_file)
+    store = output.resolve()
+    log = log_file.resolve()
+    if problem is None and (log == store or store in log.parents):
+        problem = (
+            f"Cannot write {log_file}: it is the output store {output} or "
+            "lies inside it. Write the log file beside the store instead."
+        )
+    if problem is not None:
+        raise click.BadParameter(problem, param_hint="'--log-file'")
+
+
 def _display_calibration_info(input: Path, use_recalibrated: bool) -> None:
     """Display calibration information for Bruker datasets.
 
@@ -325,6 +353,13 @@ def _select_bruker_dataset(input_path: Path) -> Path:
     If the input directory contains multiple Bruker .d folders, displays
     them as a numbered list and lets the user pick one interactively.
 
+    Only runs count: ``.d`` folders Thyra reads, timsTOF or solariX. A
+    folder holding one run is that run, so everything after this --
+    the calibration display included -- sees the ``.d`` (issue #525).
+    With no answer to read (nothing on standard input), the run ends
+    with the one-line refusal ``convert_msi`` gives and exit 1, where
+    click printed a bare ``Aborted!``.
+
     Args:
         input_path: The user-provided input path
 
@@ -332,27 +367,33 @@ def _select_bruker_dataset(input_path: Path) -> Path:
         The selected .d folder path, or the original path if no
         selection is needed
     """
-    if input_path.suffix.lower() == ".d":
-        return input_path
-
-    if not input_path.is_dir():
-        return input_path
-
-    d_folders = sorted(
-        f for f in input_path.iterdir() if f.is_dir() and f.suffix.lower() == ".d"
+    from thyra.readers.bruker.folder_structure import (
+        BrukerFolderStructure,
+        several_runs_message,
     )
 
-    if len(d_folders) <= 1:
+    d_folders = BrukerFolderStructure.runs_in(input_path)
+
+    if not d_folders:
         return input_path
+    if len(d_folders) == 1:
+        return d_folders[0]
 
     click.echo(f"\nFound {len(d_folders)} datasets in {input_path.name}:")
     for i, d_folder in enumerate(d_folders, 1):
         click.echo(f"  [{i}] {d_folder.name}")
 
-    choice: int = click.prompt(
-        "\nSelect dataset to convert",
-        type=click.IntRange(1, len(d_folders)),
-    )
+    try:
+        choice: int = click.prompt(
+            "\nSelect dataset to convert",
+            type=click.IntRange(1, len(d_folders)),
+        )
+    except click.Abort:
+        logger.error(
+            "%s",
+            several_runs_message(input_path, d_folders, then=", or pipe its number in"),
+        )
+        raise SystemExit(1) from None
 
     selected: Path = d_folders[choice - 1]
     click.echo(f"  -> {selected.name}\n")
@@ -648,7 +689,9 @@ def _quarantine_partial_output(output: Path) -> None:
     and may extend the output path (``prepare_zarr_output_path``) while
     the CLI still holds the path the user typed. It is idempotent: a
     store already moved aside does not exist here, so this returns
-    immediately.
+    immediately. The converter writes under a temporary name and sets
+    its own partial store aside (issue #525), so on that route there is
+    usually nothing here to move.
     """
     from thyra.convert import quarantine_partial_output
 
@@ -1210,8 +1253,12 @@ def main(
     _validate_mobility_grid_params(mobility_bins, mobility_min, mobility_max)
     _validate_input_path(input)
     _validate_output_path(output)
+    _validate_log_file(log_file, output)
 
-    # Configure logging
+    # Configure logging. The log file's folder is created here, as the
+    # store's is, rather than ending the run in a traceback (issue #525).
+    if log_file is not None:
+        make_parent_folder(log_file)
     setup_logging(log_level=getattr(logging, log_level), log_file=log_file)
 
     # Warn before doing any work: on a multi-hour conversion, telling the user

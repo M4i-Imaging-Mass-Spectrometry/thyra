@@ -55,6 +55,7 @@ import gc
 import logging
 import shutil
 import tempfile
+import time
 import weakref
 from pathlib import Path
 from typing import Any, Optional, Tuple
@@ -624,16 +625,31 @@ def scratch_directory(prefix: str, parent: Optional[Path] = None) -> Path:
     )
 
 
+#: How often, and how far apart, a scratch removal is tried before it warns.
+_REMOVE_ATTEMPTS = 5
+_REMOVE_PAUSE_S = 0.2
+
+
 def remove_scratch(path: Path) -> None:
-    """Remove a scratch directory; say so if a mapping still pins it."""
-    gc.collect()
-    shutil.rmtree(path, ignore_errors=True)
-    if Path(path).exists():
-        logger.warning(
-            "Could not remove the scratch directory %s (a table built on it "
-            "is still referenced); remove it by hand once the store is written",
-            path,
-        )
+    """Remove a scratch directory; say so if a mapping still pins it.
+
+    Tried a few times, not once. On Windows a mapped file cannot be
+    deleted, and a chunk write that is still finishing, or a handle a
+    virus scanner has not let go of yet, held the folder past the single
+    attempt for good (issue #525).
+    """
+    for attempt in range(_REMOVE_ATTEMPTS):
+        gc.collect()
+        shutil.rmtree(path, ignore_errors=True)
+        if not Path(path).exists():
+            return
+        if attempt < _REMOVE_ATTEMPTS - 1:
+            time.sleep(_REMOVE_PAUSE_S)
+    logger.warning(
+        "Could not remove the scratch directory %s (a table built on it is "
+        "still referenced); delete it by hand once Thyra has exited",
+        path,
+    )
 
 
 def release_when_collected(owner: Any, assembly: CscAssembly, scratch: Path) -> None:

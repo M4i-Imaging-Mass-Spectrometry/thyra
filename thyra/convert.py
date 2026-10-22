@@ -14,12 +14,14 @@ store, so it is checked for the characters a store will accept rather than
 discovered to be unusable at write time.
 
 **A failed conversion must not leave something that looks finished.**
-:func:`quarantine_partial_output` renames a partial store to ``.failed``,
-which is what ``docs/cli.md`` promises of any failed run and what frees
-the output path for a retry. This is the counterpart to ``convert()``
-catching ``KeyboardInterrupt``: both exist so that the only thing at the
-output path is either a complete store or something plainly marked as not
-one (issues #245, #293).
+The converter writes the store under a temporary ``<name>.incomplete-<id>``
+name and renames it onto the output path last, so a run killed outright
+leaves nothing at the output path (issue #525). A failure Python sees
+renames the partial store to ``.failed``, which is what ``docs/cli.md``
+promises of any failed run; :func:`quarantine_partial_output` does the
+same for anything at the output path itself. Together with ``convert()``
+catching ``KeyboardInterrupt``, they make the only thing at the output
+path either a complete store or nothing (issues #245, #293).
 """
 
 import logging
@@ -40,12 +42,18 @@ from .core.base_converter import (
     log_interrupt_after_save,
 )
 from .core.base_reader import BaseMSIReader
-from .core.registry import detect_format, get_converter_class, get_reader_class
+from .core.registry import (
+    detect_format,
+    get_converter_class,
+    get_reader_class,
+    resolve_run,
+)
 from .errors import ConversionRefused
 from .metadata.constants import sample_value_problem
 from .reader_options import READER_OPTION_FORMATS, format_name, reader_option_reaches
 from .resampling.plan import MassAxisPlan
 from .resampling.types import ResamplingConfig
+from .utils.store_lifecycle import quarantine_partial_store
 from .utils.windows_paths import prepare_zarr_output_path
 
 logger = logging.getLogger(__name__)
@@ -510,9 +518,9 @@ def quarantine_partial_output(output: Path) -> None:
     """Move a partially written store aside after a failed conversion.
 
     A conversion that fails part-way through writing leaves an
-    incomplete ``.zarr`` at the destination. That store cannot be opened
+    incomplete store behind. That store cannot be opened
     (``spatialdata.read_zarr()`` raises), but it looks like a plausible
-    artifact, and it also blocks a retry because
+    artifact, and at the output path it also blocks a retry because
     :func:`_validate_paths` refuses to write to an existing path -- so
     the run that failed is the run that makes the same command fail
     again, with a message about the destination rather than about what
@@ -520,40 +528,53 @@ def quarantine_partial_output(output: Path) -> None:
     destination is clear while the partial store remains available for
     diagnosis.
 
-    This lives in ``convert_msi`` rather than in the CLI because
-    ``convert_msi`` is the public entry point, and a library caller --
-    Ousia converts through it, not through the CLI -- got no cleanup at
-    all. The CLI's own call is kept and is idempotent, so a store already
-    moved aside here is not moved twice (issue #293).
+    The converter writes under a temporary name and moves its own
+    partial store aside (issue #525), so on that route nothing is at the
+    output path when a run fails. This call stays for anything else that
+    wrote there, and it is idempotent: a store already moved aside does
+    not exist here, so this returns immediately (issue #293).
 
     Only called once the destination has been validated as not existing,
     so anything present is this run's own output and is safe to move.
     """
-    if not output.exists():
-        return
+    quarantine_partial_store(output, output)
 
-    quarantine = output.with_name(f"{output.name}.failed")
-    attempt = 1
-    while quarantine.exists():
-        attempt += 1
-        quarantine = output.with_name(f"{output.name}.failed{attempt}")
 
+def _checked_run(input_path: Path, output_path: Path) -> Optional[Path]:
+    """The run to read, or ``None`` once the reason it cannot be is logged.
+
+    The paths are validated first (:func:`_validate_paths`). Then a folder
+    of runs gives its one run, or a refusal naming them all -- never the
+    first in name order, which converted a run nobody chose (issue #525).
+    Both happen before the output exists, so a refusal writes nothing.
+    """
+    if not _validate_paths(input_path, output_path):
+        return None
     try:
-        output.rename(quarantine)
-    except OSError as e:
-        logger.error(
-            "The incomplete output was left at %s because it could not be "
-            "moved aside (%s). It will not open with "
-            "spatialdata.read_zarr(); delete it before retrying.",
-            output,
-            e,
-        )
-        return
+        return resolve_run(input_path)
+    except ConversionRefused as e:
+        logger.error("%s", str(e))
+        return None
 
+
+def _report_interrupt(converter: Optional[BaseMSIConverter]) -> None:
+    """Say where an interrupt that reached :func:`convert_msi` landed.
+
+    With no converter yet, it landed before the source was read. Once one
+    exists, the interrupt landed in its cleanup, which it finishes before
+    passing the interrupt on, or in closing the reader after it: that
+    cleanup is finished again here, in case it was the thing interrupted.
+    This said "before it started reading" after both passes had run
+    (issue #525).
+    """
+    if converter is None:
+        logger.error("Conversion interrupted before it started reading.")
+        return
+    finish_cleanup = getattr(converter, "finish_cleanup", None)
+    if callable(finish_cleanup):
+        finish_cleanup()
     logger.error(
-        "The incomplete output was moved to %s. It will not open with "
-        "spatialdata.read_zarr(); delete it once you no longer need it.",
-        quarantine,
+        "Conversion interrupted while it cleaned up. Nothing usable was written."
     )
 
 
@@ -997,19 +1018,26 @@ def convert_msi(
         #234), so a caller that wants the exception itself has to use the
         converter classes directly.
 
-        **On failure the destination is cleared.** Anything written to
-        ``output_path`` by this call is renamed to a sibling
+        **The output name holds a finished store or nothing.** The store
+        is written as ``<name>.incomplete-<id>`` beside ``output_path``
+        and renamed onto it as the last step (issue #525). On a failure
+        Python sees, the partial store is renamed to a sibling
         ``<name>.failed`` (``.failed2`` and so on if one is already
         there), so the same call can be retried without the caller
-        deleting a directory first, and a half-written store is not left
-        where a finished one is expected -- it would not open, but it
-        looks like one. When the rename itself fails -- a live handle on
-        the directory is the usual reason on Windows -- the partial store
-        stays put and the failure says so at ``ERROR``, naming the path
-        to delete; a retry is then refused until it is gone. An
-        ``output_path`` that already existed when the call started is
-        refused untouched, never renamed. See
-        :func:`quarantine_partial_output` (issue #293).
+        deleting a directory first. A process that is killed outright
+        leaves only the ``.incomplete-<id>`` folder and its ``.thyra_*``
+        scratch, and the same call can still run again at once. When the
+        move to ``.failed`` itself fails -- a live handle on the directory
+        is the usual reason on Windows -- the partial store stays under
+        its temporary name and the failure says so at ``ERROR``. When the
+        final rename fails, the call returns False and the error names
+        the temporary folder, whose store is complete. An ``output_path``
+        that already existed when the call started is refused untouched,
+        never renamed. See :func:`quarantine_partial_output` (issue #293).
+
+        A folder that holds several runs (``.d`` folders Thyra reads) is
+        refused with one line naming them; a folder holding one run is
+        read as that run (issue #525).
     """
     # Validate input parameters
     if not _validate_input_parameters(
@@ -1039,8 +1067,10 @@ def convert_msi(
     output_path = Path(output_path).resolve()
     logger.info(f"Processing input file: {input_path}")
 
-    if not _validate_paths(input_path, output_path):
+    run = _checked_run(input_path, output_path)
+    if run is None:
         return False
+    input_path = run
 
     # A Zarr store's deepest key sits far below the path the caller named,
     # so a legal-looking output path can still blow the Windows 260
@@ -1133,11 +1163,11 @@ def convert_msi(
             succeeded = True
             log_interrupt_after_save(output_path)
             return True
-        logger.error("Conversion interrupted before it started reading.")
+        _report_interrupt(converter)
         return False
 
     except Exception as e:
-        logger.error(f"Error during conversion: {e}")
+        logger.error("Error during conversion: %s", str(e) or type(e).__name__)
         logger.error(f"Detailed traceback:\n{traceback.format_exc()}")
         return False
 

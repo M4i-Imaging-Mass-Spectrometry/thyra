@@ -60,7 +60,8 @@ Small datasets take seconds. Large ones can take several minutes.
 
 ## Step 3: Check the result
 
-A new folder, `brain_section_1.zarr`, is your converted dataset. Keep the
+A new folder, `brain_section_1.zarr`, is your converted dataset. It
+appears under that name only once it is finished. Keep the
 folder whole: copy or move it like any other folder, but do not take files
 out of it.
 
@@ -85,7 +86,10 @@ Found 3 datasets in slide_folder:
 Select dataset to convert: 3
 ```
 
-Type the number and press Enter.
+Type the number and press Enter. A script cannot answer, so there Thyra
+stops and names the datasets. Give it one `.d` folder instead, or pipe the
+number in, for example `echo 3 | thyra slide_folder out.zarr`. A folder that
+holds only one dataset is converted without a question.
 
 ### Your acquisition has several regions
 
