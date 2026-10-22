@@ -926,6 +926,12 @@ class SiblingTables:
         removes them; dropping the whole list up front left them on disk
         with no warning, under a run that kept its store and exited 0
         (issue #500). Both steps are safe to repeat.
+
+        A Ctrl-C that lands in this loop is held until every directory has
+        been tried, then passed on. The ``finally`` is the last call there
+        is, so a second Ctrl-C landing in it left the rest beside the
+        output for good (issue #525). A directory that could not be
+        removed stays listed, so the next call tries it again.
         """
         from .csc_assembly import remove_scratch
 
@@ -933,12 +939,22 @@ class SiblingTables:
             return
         if tables is not None:
             tables.clear()
-        while self._table_scratch:
-            assembly, path = self._table_scratch[0]
-            if assembly is not None:
-                assembly.release()
-            remove_scratch(path)
-            self._table_scratch.pop(0)
+        interrupted = False
+        pending = list(self._table_scratch)
+        while pending:
+            try:
+                entry = pending[0]
+                assembly, path = entry
+                if assembly is not None:
+                    assembly.release()
+                remove_scratch(path)
+                pending.pop(0)
+                if not Path(path).exists():
+                    self._table_scratch.remove(entry)
+            except KeyboardInterrupt:
+                interrupted = True
+        if interrupted:
+            raise KeyboardInterrupt
 
     # -- Building --------------------------------------------------------
 

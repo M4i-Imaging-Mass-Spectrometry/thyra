@@ -57,7 +57,7 @@ from ....metadata.extractors.bruker_extractor import (
 )
 from ....utils.bruker_exceptions import DataError, FileFormatError, SDKError
 from ..base_bruker_reader import BrukerBaseMSIReader
-from ..folder_structure import BrukerFolderStructure, BrukerFormat
+from ..folder_structure import BrukerFolderStructure, BrukerFormat, several_runs_message
 from ..mis_parser import parse_mis_file
 from ..vendor_db import open_read_only
 from .sdk.dll_manager import DLLManager
@@ -974,7 +974,8 @@ class BrukerReader(BrukerBaseMSIReader):
 
         If the path is not a .d directory, uses BrukerFolderStructure to
         find a .d folder within the given path. This allows users to pass
-        a parent directory containing the .d folder.
+        a parent directory containing the .d folder; a parent holding
+        several runs is refused, naming them (issue #525).
         """
         if not self.data_path.exists():
             raise FileFormatError(f"Data path does not exist: {self.data_path}")
@@ -985,6 +986,13 @@ class BrukerReader(BrukerBaseMSIReader):
         # If already a .d directory, use it directly
         if self.data_path.suffix.lower() == ".d":
             return
+
+        # A folder holding several runs is refused by name, never read as
+        # its first run in name order (issue #525). A refusal, not a
+        # FileFormatError: nothing is wrong with the files.
+        runs = BrukerFolderStructure.runs_in(self.data_path)
+        if len(runs) > 1:
+            raise ConversionRefused(several_runs_message(self.data_path, runs))
 
         # Otherwise, use BrukerFolderStructure to find the .d folder
         try:
