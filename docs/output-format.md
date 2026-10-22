@@ -395,7 +395,9 @@ a mobility dimension (Bruker TDF with TIMS engaged, or an imzML export that
 carries a mobility array), the table's `uns` gains two blocks, and
 `uns["msi_metadata"]["ms_analysis"]["ion_mobility"]` carries the schema-level
 summary. A source without mobility writes none of them, so a consumer can
-tell "summed over mobility" from "never had any".
+tell "summed over mobility" from "never had any". An imzML with a NaN or
+infinite mobility value writes neither block, and the conversion says so at
+`WARNING`.
 
 **`uns["mobility_axis"]`** describes the axis the table was summed over.
 Plain-name keys (never a CV accession: a colon is not a legal zarr key on
@@ -467,7 +469,10 @@ and nothing in them enters `obs` or a coordinate system.
 When every pixel shares one set of `(m/z, mobility)` feature pairs -- a
 continuous imzML export with a mobility array, as TIMSImaging writes --
 Thyra also writes a **mobility-resolved sibling
-table**, `{table}_mobility`, unless `--no-mobility-table` is given. Its
+table**, `{table}_mobility`, unless `--no-mobility-table` is given. The
+feature list is shared only when every spectrum points at one m/z block and
+every mobility array equals the first, checked on every spectrum. Features
+outside the m/z range the summed table keeps are left out. Its
 feature list is checked against free memory first, as the grid's is: past
 half of free memory the table is left out, with a `WARNING`.
 
@@ -540,7 +545,9 @@ an m/z keep the order of their mobility: the larger 1/K0 has the larger CCS.
 A source whose mobility values differ per pixel -- a Bruker TDF, where a
 frame is a point cloud and no two pixels are promised the same `(m/z, 1/K0)`
 pairs, or a processed imzML export with a mobility array, as TIMSCONVERT
-writes it -- has no shared feature axis to read off. `--mobility-grid` fills the
+writes it -- has no shared feature axis to read off. So does an imzML that
+says continuous but writes an m/z block per spectrum, or whose mobility
+differs between spectra: it is read as per pixel. `--mobility-grid` fills the
 **same** `{table}_mobility` element for it by binning: every pixel's points
 go onto one set of mobility channels shared across the conversion, and
 `(m/z bin, channel)` becomes the feature axis.
@@ -570,7 +577,10 @@ Three things are worth knowing before asking for one:
   A processed imzML has no shared axis, so its values are read from every
   pixel, once, before the heatmap's pass
   ([D46](design-decisions.md#d46-a-processed-imzml-with-mobility-gets-the-heatmap-and-the-grid-when-asked)). `--mobility-min` / `--mobility-max` override
-  them, at the cost of the alignment below.
+  them, at the cost of the alignment below. A stated bound drops the points
+  outside it, counted in one `WARNING`, instead of clipping them into the edge
+  channels. A range holding no point writes no grid table. The measured
+  default range still clips its overhang.
 - **The default channels are an alignment anchor, not a tuning knob.** They
   are the heatmap's own channels over the heatmap's own edges (256, or one
   per Waters drift bin), so a box drawn on the heatmap selects grid channels
@@ -596,7 +606,7 @@ bin reproduces that bin's column of the summed table, per pixel. That is what
 | key | value |
 |---|---|
 | `summed_table` | element key of the table the marginal is compared against |
-| `current_ratio` | total ion current of the grid table over the summed table's; exactly `1.0` under `scan_sum` |
+| `current_ratio` | total ion current of the grid table over the summed table's; exactly `1.0` under `scan_sum` without `--mobility-min` or `--mobility-max`, otherwise below 1 by the current the stated range left out |
 | `current_ratio_pixel_min` / `_max` | the same ratio across pixels |
 
 The comparison is per pixel, one bounded pass over each table's memmaps. A
@@ -617,16 +627,18 @@ A grid is refused, at `INFO` or `WARNING` and never as an exception, when:
 
 | refused when | because |
 |---|---|
-| the source has no mobility dimension | there is nothing to bin |
+| the source has no mobility dimension, such as a Bruker TSF file | there is nothing to bin |
+| an imzML holds a NaN or infinite mobility value | the mobility is withheld; the summed table is still written |
+| `--no-mobility-table` was given | the grid is cancelled, with a `WARNING` |
 | `--mobility-grid` was not given | binning is opt in: it costs a pass over the source and a much larger table |
 | the source gives no mobility values to bin over | a Bruker reader opened without its vendor library cannot supply them, and the declared range is not a substitute |
-| the grid spans more pairs than the counting pass can hold (a raw, unresampled axis of millions of bins) | the count array is `4 bytes x bins x channels`, capped at 1 GB; resample to fewer mass bins |
+| the grid spans more pairs than the counting pass can hold (a raw, unresampled axis, or a default axis over a wide mass range: 599,146 bins on a usual 50 to 1000 m/z run) | the count array is `4 bytes x bins x channels`, capped at 1 GB; resample to fewer mass bins |
 | the `var` frame of the occupied `(m/z bin, channel)` pairs is projected to take more than half of the machine's free memory (338 bytes per pair: 330 measured, plus the `ccs` column), or the pairs pass an absolute cap of 100,000,000 | the count, the projection and the free memory are printed; resample to fewer mass bins or ask for fewer channels. A projection past a quarter of free memory is attempted with a `WARNING`. See [Design Decisions](design-decisions.md#d4-the-grids-feature-ceiling-is-a-memory-guard-not-a-format-limit) |
 
 **How it is built, and why its size does not matter.** The table is built
 the way the summed table is built, in two passes over the raw scans. The first pass counts, per `(m/z bin, channel)` cell of the
-grid, how many pixels occupy it -- a dense count over the grid's span, 142 MB
-on a default-resampled timsTOF axis, sized before the first pixel is read and
+grid, how many pixels occupy it -- a dense count over the grid's span, 4 bytes
+x bins x channels (the default timsTOF axis grows with the mass range), sized before the first pixel is read and
 independent of how many pixels there are. The second pass scatters each
 pixel's cells straight into memmapped CSC arrays in a scratch directory next
 to the output (`.thyra_mobility_*`, removed once the table is written), 12
@@ -653,9 +665,9 @@ refusal costs one read and no memory.
 Bruker TDF and processed imzML exports with a mobility array get a grid. A
 continuous imzML export with a mobility array already has a shared feature
 axis and is read off it; `--mobility-grid` is ignored there, with a
-`WARNING`. A point whose mobility value is not a finite number has no
-channel: the heatmap and the grid leave it out, the summed table keeps it,
-and a `WARNING` gives the count.
+`WARNING`. An imzML with a NaN or infinite mobility value writes the summed
+table only: no mobility table, heatmap, grid or `mobility_axis`. One `WARNING`
+names the file and the count.
 
 ### Fragmentation (MS/MS)
 

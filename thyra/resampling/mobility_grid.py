@@ -37,7 +37,7 @@ Mobility is a feature coordinate. Nothing here knows where a pixel is.
 
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
@@ -100,6 +100,13 @@ class MobilityGrid:
     the values written to ``var["mobility"]``. ``law`` names how the edges
     were spaced, and is what a second law would change.
 
+    ``clips`` says what happens to a value beyond the edges. On a range
+    taken from the values themselves (the default) it goes to the edge
+    channel, so an axis that overhangs by a scan keeps every count. On a
+    range the caller stated it is dropped (:meth:`kept`): a channel holds
+    only the mobility its edges name, as D13 drops a peak outside a stated
+    m/z range (D82).
+
     Not to be confused with :class:`thyra.metadata.schema.models.MobilityGrid`,
     which is the pydantic description of this object inside the versioned
     metadata block; :meth:`to_schema_report` produces its input.
@@ -110,6 +117,7 @@ class MobilityGrid:
     upper: float
     n_channels: int
     edges: NDArray[np.float64]
+    clips: bool = True
 
     @property
     def centres(self) -> NDArray[np.float64]:
@@ -141,6 +149,20 @@ class MobilityGrid:
                 self.n_channels - 1,
             )
         return channel.astype(np.int32)
+
+    def kept(self, values: Any) -> Optional[NDArray[np.bool_]]:
+        """Which values the grid keeps, or ``None`` when it keeps them all.
+
+        A clipping grid keeps every value. One over a stated range keeps
+        the values inside ``[lower, upper]``, both edges included, as
+        :func:`linear_channel` puts the upper edge in the last channel.
+        ``None`` for the ordinary pixel, so a caller can skip masking.
+        """
+        if self.clips:
+            return None
+        values = np.asarray(values)
+        inside = (values >= self.lower) & (values <= self.upper)
+        return None if bool(inside.all()) else inside
 
     def to_uns(self) -> Dict[str, Any]:
         """The ``uns["mobility_grid"]`` block: plain-name keys, no colons.
@@ -253,6 +275,7 @@ def build_mobility_grid(
     upper: float,
     n_channels: int = MOBILITY_CHANNELS,
     law: str = DEFAULT_MOBILITY_GRID_LAW,
+    clips: bool = True,
 ) -> MobilityGrid:
     """The common mobility grid of one conversion.
 
@@ -264,6 +287,9 @@ def build_mobility_grid(
             heatmap anchor, which is what makes a heatmap box index the
             grid.
         law: How the edges are spaced; ``"linear"`` is the only law today.
+        clips: Whether a value beyond the edges goes to the edge channel
+            (a range read off the values) or is dropped (a stated range);
+            see :class:`MobilityGrid`.
 
     Raises:
         ValueError: If the range has no extent, the channel count is not
@@ -283,7 +309,9 @@ def build_mobility_grid(
             f"Unknown mobility grid law {law!r}; known laws are "
             f"{sorted(MOBILITY_GRID_GENERATORS)}"
         )
-    return generator.generate(lower, upper, int(n_channels))
+    # What happens beyond the edges is not the law's to decide, so a second
+    # law needs no part in it.
+    return replace(generator.generate(lower, upper, int(n_channels)), clips=clips)
 
 
 def report_channel_width(

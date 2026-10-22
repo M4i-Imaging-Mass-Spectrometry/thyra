@@ -26,7 +26,12 @@ from typing import Iterator, List
 import numpy as np
 import pytest
 
-from thyra.convert import _force_scan_sum, _lossless_spectrum_for
+from thyra.convert import (
+    _drop_options_the_format_ignores,
+    _force_scan_sum,
+    _lossless_spectrum_for,
+)
+from thyra.reader_options import is_bruker_tsf
 
 
 @contextmanager
@@ -72,6 +77,54 @@ class TestWhichTablesNeedTheLosslessSpectrum:
             "mobility grid",
             "demultiplexed MS/MS",
         ]
+
+    def test_no_mobility_table_writes_no_grid(self):
+        """F101: --no-mobility-table cancels the grid, so it is not named."""
+        kwargs = {"mobility_grid": True, "write_mobility_table": False}
+        assert _lossless_spectrum_for(kwargs) == ["demultiplexed MS/MS"]
+
+
+def _timstof(tmp_path, *databases):
+    """A ``.d`` folder holding the named analysis databases, non-empty."""
+    folder = tmp_path / "run.d"
+    folder.mkdir(parents=True)
+    for name in databases:
+        (folder / name).write_bytes(b"SQLite format 3\x00")
+    return folder
+
+
+class TestATsfFile:
+    """F98: the TDF-only options are named as ignored on a TSF file."""
+
+    def test_a_tsf_folder_is_told_apart(self, tmp_path):
+        assert is_bruker_tsf("bruker", _timstof(tmp_path, "analysis.tsf"))
+        assert not is_bruker_tsf("imzml", _timstof(tmp_path / "x", "analysis.tsf"))
+
+    def test_a_tdf_folder_is_not_a_tsf(self, tmp_path):
+        assert not is_bruker_tsf("bruker", _timstof(tmp_path, "analysis.tdf"))
+
+    def test_tdf_spectrum_is_dropped_and_named(self):
+        with _records("thyra.convert", logging.WARNING) as records:
+            kept = _drop_options_the_format_ignores(
+                {"tdf_spectrum": "vendor_centroid", "use_recalibrated_state": True},
+                "bruker",
+                tsf=True,
+            )
+        assert kept == {"use_recalibrated_state": True}
+        assert len(records) == 1
+        message = records[0].getMessage()
+        assert "reader_options['tdf_spectrum'] is ignored" in message
+        assert "TSF" in message
+        # With the option gone, nothing announces a grid or MS/MS table.
+        with _records("thyra.convert", logging.WARNING) as records:
+            _force_scan_sum("bruker", kept, ["mobility grid"])
+        assert not records
+
+    def test_a_tdf_keeps_tdf_spectrum(self):
+        kept = _drop_options_the_format_ignores(
+            {"tdf_spectrum": "vendor_centroid"}, "bruker", tsf=False
+        )
+        assert kept == {"tdf_spectrum": "vendor_centroid"}
 
 
 class TestTheStartupWarning:

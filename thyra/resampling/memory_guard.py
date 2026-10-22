@@ -15,9 +15,10 @@ logger = logging.getLogger(__name__)
 
 #: Bytes the per-key count array of a table's first pass may take. It is
 #: ``span * 4`` with ``span`` the key space -- ``mass axis bins x mobility
-#: channels`` for the grid, which on a default-resampled timsTOF axis is
-#: 35.5M pairs and 142 MB. A raw, unresampled axis of several million bins
-#: would push it into gigabytes, and that is a source to resample rather
+#: channels`` for the grid: 4 bytes x bins x channels. The default timsTOF
+#: axis grows with the mass range (599,146 bins on a usual 50-1000 m/z run),
+#: so 512 channels there need about 1.2 GB. A raw, unresampled axis of
+#: several million bins would push it further, and that is a source to resample rather
 #: than a table to build: the same axis would also blow the feature
 #: ceiling. Kept here rather than in ``csc_assembly`` (which re-exports
 #: it), so :func:`mass_axis_refusal` can apply it before an axis is built.
