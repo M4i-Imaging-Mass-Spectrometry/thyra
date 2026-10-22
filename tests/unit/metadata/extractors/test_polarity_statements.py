@@ -220,11 +220,7 @@ class TestMislabelledPositiveScan:
         assert _conversion_polarity(path) is None
 
     def test_it_is_not_read_as_the_spectrum_type(self, tmp_path):
-        """The XML fallback for a file whose ``fileContent`` states no type."""
-        from pyimzml.ImzMLParser import ImzMLParser
-
-        from thyra.metadata.extractors.imzml_extractor import ImzMLMetadataExtractor
-
+        """On a spectrum, in a file whose ``fileContent`` states no type (D81)."""
         path = _write_imzml(
             tmp_path / "untyped.imzML", spectrum_terms=[MISLABELLED_POSITIVE_TERM] * 6
         )
@@ -241,9 +237,9 @@ class TestMislabelledPositiveScan:
         path.write_text(text)
         assert 'accession="MS:1000128" name="positive scan"' in text
 
-        extractor = ImzMLMetadataExtractor(ImzMLParser(str(path)), path)
-
-        assert extractor._check_xml_for_spectrum_type() is None
+        # Nothing states a type, so the processed-mode guess is all there is.
+        with ImzMLReader(path) as reader:
+            assert reader.get_essential_metadata().spectrum_type_guessed is True
 
 
 class TestMzPeak:

@@ -14,6 +14,12 @@ from ...utils.imzml_coordinate_base import (
     coordinate_bases,
     recorded_offsets,
 )
+from ...utils.imzml_spectrum_terms import (
+    CONFIGURATION_CODES_ATTRIBUTE,
+    REPRESENTATIONS_ATTRIBUTE,
+    configuration_references,
+    stated_representations,
+)
 from ...utils.ms_levels import imzml_left_out
 from ...utils.pyimzml_direct import read_spectrum_mzs_only
 from ..constants import (
@@ -22,9 +28,10 @@ from ..constants import (
     BinaryDataType,
     ImzMLAccessions,
     SpectrumType,
+    StatedSpectrumType,
     agreed_polarity,
     normalize_spectrum_type,
-    polarity_accession,
+    spectrum_type_from_statements,
 )
 from ..ontology.cache import ONTOLOGY
 from ..types import ComprehensiveMetadata, EssentialMetadata
@@ -170,38 +177,118 @@ def _family_from_model_text(text: str) -> Optional[str]:
 def instrument_info_from_configurations(configs: List[Any]) -> Dict[str, Any]:
     """Instrument model, serial number, analyzer and family of a run.
 
-    ``configs`` are instrument configurations shaped as pyimzml parses
-    them: each has ``param_by_accession`` and ``param_by_name`` dicts, a
-    valueless term reads as ``True``, and ``components`` lists objects with
-    a ``type`` and their own ``param_by_accession``. The imzML extractor
-    passes pyimzml's own; the mzPeak extractor builds the same shape from
-    the archive's JSON.
+    ``configs`` are the instrument configurations the converted spectra
+    use, shaped as pyimzml parses them: each has ``param_by_accession``
+    and ``param_by_name`` dicts, a valueless term reads as ``True``, and
+    ``components`` lists objects with a ``type`` and their own
+    ``param_by_accession``. The imzML extractor passes pyimzml's own; the
+    mzPeak extractor builds the same shape from the archive's JSON.
+
+    Each configuration is resolved on its own. A fact the configurations
+    state differently is left unset, with a warning: no one of them
+    describes every spectrum (D81).
 
     Returns:
         ``instrument_model``, ``instrument_serial_number``, ``analyzer`` and
         ``instrument_type``, each only when the configurations state it.
     """
     info: Dict[str, Any] = {}
-    if not configs:
-        return info
+    found = [_one_configuration_info(config) for config in configs]
+    for key in (
+        "instrument_model",
+        "instrument_serial_number",
+        "analyzer",
+        "instrument_type",
+    ):
+        values = {entry[key] for entry in found if key in entry}
+        if len(values) == 1:
+            value = next(iter(values))
+            if value is not None:
+                info[key] = value
+        elif values:
+            logger.warning(
+                "The instrument configurations the spectra use state "
+                "different %s (%s); none is recorded.",
+                key.replace("_", " "),
+                ", ".join(
+                    (
+                        "no family the axis chain tells apart"
+                        if value is None
+                        else repr(value)
+                    )
+                    for value in sorted(values, key=str)
+                ),
+            )
+    return info
+
+
+def _one_configuration_info(config: Any) -> Dict[str, Any]:
+    """Model, serial number, analyzer and family one configuration states."""
+    configs = [config]
+    info: Dict[str, Any] = {}
 
     model = _instrument_model(configs)
     if model:
         info["instrument_model"] = model
 
-    serial = _config_param(configs, "MS:1000529")
-    if isinstance(serial, str) and serial.strip():
-        info["instrument_serial_number"] = serial.strip()
+    serial = _serial_text(_config_param(configs, "MS:1000529"))
+    if serial is not None:
+        info["instrument_serial_number"] = serial
 
     analyzer_accession = _analyzer_accession(configs)
     if analyzer_accession is not None:
         info["analyzer"] = ONTOLOGY.terms[analyzer_accession][0]
 
-    family = _analyzer_family(configs, analyzer_accession, model)
-    if family is not None:
-        info["instrument_type"] = family
+    # A configuration that states a model or an analyzer states its family
+    # even when it is none of those the axis chain tells apart (a TOF), so
+    # it outvotes another configuration's Orbitrap.
+    if model or analyzer_accession is not None:
+        info["instrument_type"] = _analyzer_family(configs, analyzer_accession, model)
 
     return info
+
+
+def _serial_text(value: Any) -> Optional[str]:
+    """A serial number as text: a string, or a number written as one.
+
+    An archive may state the serial as a JSON number. A valueless term
+    reads as ``True`` and states no serial.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+#: IMS:1001211 "solvent": the solvent a DESI or nano-DESI source sprays.
+SOLVENT_ACCESSION = "IMS:1001211"
+
+
+def solvent_from_configurations(configs: List[Any]) -> Optional[str]:
+    """The solvent the used configurations state, on themselves or a component.
+
+    ``None`` when none states one, or when they state different ones.
+    """
+    values = set()
+    for config in configs:
+        for group in [config, *(getattr(config, "components", None) or [])]:
+            params = getattr(group, "param_by_accession", None)
+            if not isinstance(params, dict):
+                continue
+            value = params.get(SOLVENT_ACCESSION)
+            if isinstance(value, str) and value.strip():
+                values.add(value.strip())
+    if len(values) > 1:
+        logger.warning(
+            "The instrument configurations the spectra use state different "
+            "solvents (%s); none is recorded.",
+            ", ".join(repr(value) for value in sorted(values)),
+        )
+        return None
+    return next(iter(values), None)
 
 
 def _config_param(configs: List[Any], accession: str) -> Any:
@@ -1065,6 +1152,12 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         if polarity is not None:
             params["polarity"] = polarity
 
+        # IMS:1001211 on the configuration the spectra use (a DESI source's
+        # spray solvent), for preparation.solvent.
+        solvent = solvent_from_configurations(self._instrument_configurations())
+        if solvent is not None:
+            params["solvent"] = solvent
+
         # Add other acquisition parameters from imzmldict
         if hasattr(self.parser, "imzmldict") and self.parser.imzmldict:
             acquisition_keys = [
@@ -1164,12 +1257,66 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         return instrument_info_from_configurations(self._instrument_configurations())
 
     def _instrument_configurations(self) -> List[Any]:
-        """The parsed instrumentConfiguration ParamGroups, in document order."""
+        """The instrumentConfigurations the converted spectra use, in document order.
+
+        A spectrum uses the configuration its first scan names, else the
+        run's default; a name the list does not hold counts as none, so the
+        default decides for it (the pyimzml writer names one that does not
+        exist). Configurations no converted spectrum uses describe nothing
+        that is stored (D81). When nothing names a listed configuration,
+        every one is used, and the facts they disagree on stay unset.
+        """
         metadata = getattr(self.parser, "metadata", None)
         configs = getattr(metadata, "instrument_configurations", None)
         if not isinstance(configs, dict):
             return []
-        return list(configs.values())
+        default = self._run_default_configuration()
+        refs = self._spectrum_configuration_refs()
+        used = set()
+        for ref in refs if refs is not None else {None}:
+            if ref in configs:
+                used.add(ref)
+            elif default in configs:
+                used.add(default)
+        if not used:
+            return list(configs.values())
+        return [config for key, config in configs.items() if key in used]
+
+    def _spectrum_configuration_refs(self) -> Optional[Set[Optional[str]]]:
+        """The configurations the converted spectra's scans name, as recorded.
+
+        ``None`` for a parser built without the hook.
+        """
+        own = getattr(self.parser, "__dict__", {})
+        if CONFIGURATION_CODES_ATTRIBUTE not in own:
+            return None
+        return configuration_references(self.parser, self._converted_spectra())
+
+    def _run_default_configuration(self) -> Optional[str]:
+        """``<run defaultInstrumentConfigurationRef>``, or ``None``.
+
+        Read off the document root the parser keeps; pyimzml empties the
+        spectrum list but keeps ``<run>`` itself.
+        """
+        root = getattr(self.parser, "__dict__", {}).get("root")
+        find = getattr(root, "find", None)
+        tag = getattr(root, "tag", None)
+        if not callable(find) or not isinstance(tag, str):
+            return None
+        prefix = tag[: tag.index("}") + 1] if tag.startswith("{") else ""
+        run = find(f"{prefix}run")
+        get = getattr(run, "get", None)
+        if not callable(get):
+            return None
+        ref = get("defaultInstrumentConfigurationRef")
+        return ref if isinstance(ref, str) else None
+
+    def _converted_spectra(self) -> Optional[Sequence[int]]:
+        """The spectra whose statements count: the converted ones (D73).
+
+        ``None`` means every spectrum the parser recorded.
+        """
+        return self._kept_indices()
 
     def _extract_raw_metadata(self) -> Dict[str, Any]:
         """Extract raw metadata from imzmldict and spectrum cvParams."""
@@ -1233,14 +1380,19 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             return None
 
     def _detect_centroid_spectrum(self) -> Optional[str]:
-        """Detect spectrum type by looking for MS:1000127 (centroid) or MS:1000128 (profile).
+        """The spectrum type every converted spectrum states (D81).
 
-        An explicit ``spectrum_type`` override wins over everything, so a user
-        can correct a file that declares the wrong thing. Otherwise what the
-        file *declares* wins, wherever it is written, and only when the file
-        declares nothing does Thyra guess -- see
-        :meth:`_guess_spectrum_type_from_storage_mode` for what that guess is
-        worth.
+        An explicit ``spectrum_type`` override wins over everything, so a
+        user can correct a file that states the wrong thing. Otherwise the
+        type is the one the converted spectra state, through their own
+        terms and the parameter groups they reference; a group no spectrum
+        references counts for nothing. Spectra that state both leave the
+        type unset, with a warning giving the counts. ``fileContent``
+        counts only when no spectrum states a type, and only if it names
+        one; the rule is :func:`spectrum_type_from_statements`, which the
+        mzPeak extractor applies too. Only when nothing is stated anywhere
+        does Thyra guess -- see :meth:`_guess_spectrum_type_from_storage_mode`
+        for what that guess is worth.
         """
         self._spectrum_type_guessed = False
         try:
@@ -1249,18 +1401,16 @@ class ImzMLMetadataExtractor(MetadataExtractor):
                 self._report_spectrum_type_override()
                 return self.spectrum_type_override
 
-            # 1. The declaration, from metadata the parser already holds.
-            result = self._check_parser_metadata_for_spectrum_type()
-            if result:
-                return result
+            # 1. What the spectra state, else what the file declares.
+            stated = self._stated_spectrum_type()
+            if stated.warning is not None:
+                logger.warning(stated.warning)
+            if stated.stated:
+                if stated.spectrum_type is not None:
+                    logger.info("Spectrum type: %s", stated.spectrum_type)
+                return stated.spectrum_type
 
-            # 2. The same declaration, wherever else in the document it sits.
-            #    Streams the XML, so it is tried only if step 1 came up empty.
-            result = self._check_xml_for_spectrum_type()
-            if result:
-                return result
-
-            # 3. Nothing declared. Only now is a guess appropriate.
+            # 2. Nothing stated. Only now is a guess appropriate.
             guess = self._guess_spectrum_type_from_storage_mode()
             # Recorded so the store's msi_metadata does not state a guess.
             self._spectrum_type_guessed = guess is not None
@@ -1269,27 +1419,52 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             logger.debug(f"Could not detect spectrum type: {e}")
             return None
 
-    def _report_spectrum_type_override(self) -> None:
-        """Log an override, loudly when it contradicts the file's declaration.
+    def _stated_spectrum_type(self) -> StatedSpectrumType:
+        """The converted spectra's statements and ``fileContent``, by the rule."""
+        centroid, profile = self._stated_representation_counts()
+        return spectrum_type_from_statements(
+            centroid,
+            profile,
+            self._declared_spectrum_types(),
+            Path(self.imzml_path).name,
+        )
 
-        Overriding a declared ``MS:1000127``/``MS:1000128`` is a legitimate
-        thing to want -- files do declare the wrong representation -- and it is
+    def _stated_representation_counts(self) -> Tuple[int, int]:
+        """How many converted spectra state centroid, and how many profile.
+
+        ``(0, 0)`` for a parser built without the hook.
+        """
+        own = getattr(self.parser, "__dict__", {})
+        if REPRESENTATIONS_ATTRIBUTE not in own:
+            return 0, 0
+        counts = stated_representations(self.parser, self._converted_spectra())
+        return counts if counts is not None else (0, 0)
+
+    def _report_spectrum_type_override(self) -> None:
+        """Log an override, loudly when it contradicts the type the file states.
+
+        Overriding a stated ``MS:1000127``/``MS:1000128`` is a legitimate
+        thing to want -- files do state the wrong representation -- and it is
         also a good way to corrupt a conversion silently. So the two cases are
         not logged alike: agreeing with the file, or overriding a file that
-        declares nothing, is INFO; contradicting an explicit declaration is
-        WARNING and names both values.
-
-        This still reads the file's *declarations* (steps 1 and 2) in order to
-        compare, but never its guess -- there is nothing informative about
-        contradicting a guess. That costs at most the same bounded XML scan
-        detection would have done, and only on the opt-in path.
+        states nothing, is INFO; contradicting the type the spectra give
+        (else the one ``fileContent`` declares) is WARNING and names both
+        values. It never compares against a guess -- there is nothing
+        informative about contradicting a guess.
         """
         override = self.spectrum_type_override
-        declared = self._check_parser_metadata_for_spectrum_type()
-        if declared is None:
-            declared = self._check_xml_for_spectrum_type()
+        stated = self._stated_spectrum_type()
+        declared = stated.spectrum_type
 
-        if declared is None:
+        if declared is None and stated.stated:
+            logger.info(
+                "Using spectrum_type override %r; the file states both %s "
+                "(centroid) and %s (profile).",
+                override,
+                ImzMLAccessions.CENTROID_SPECTRUM,
+                ImzMLAccessions.PROFILE_SPECTRUM,
+            )
+        elif declared is None:
             logger.info(
                 "Using spectrum_type override %r; the file declares neither %s "
                 "(centroid) nor %s (profile).",
@@ -1312,64 +1487,6 @@ class ImzMLMetadataExtractor(MetadataExtractor):
                 declared,
             )
 
-    def _check_xml_for_spectrum_type(self) -> Optional[str]:
-        """Check XML for spectrum type markers using streaming parser.
-
-        Looks for PSI-MS controlled vocabulary accession codes:
-        - MS:1000127 = centroid spectrum
-        - MS:1000128 = profile spectrum
-
-        Uses iterparse for memory-efficient streaming - stops as soon as a
-        spectrum type marker is found, avoiding full file load for large datasets.
-        """
-        try:
-            import xml.etree.ElementTree as ET  # nosec B405
-
-            # Use iterparse for streaming - only parses until we find what we need
-            # The spectrum type cvParam is typically in the fileDescription
-            # section near the beginning of the file
-            context = ET.iterparse(str(self.imzml_path), events=("end",))  # nosec B314
-
-            elements_checked = 0
-            max_elements = 10000  # Limit search to first 10k elements
-
-            for event, elem in context:
-                elements_checked += 1
-
-                if elem.tag.endswith("cvParam"):
-                    accession = elem.get("accession", "")
-                    if accession == ImzMLAccessions.CENTROID_SPECTRUM:
-                        logger.info(
-                            f"Detected centroid spectrum from {ImzMLAccessions.CENTROID_SPECTRUM}"
-                        )
-                        del context
-                        return SpectrumType.CENTROID
-                    # "positive scan" under the profile term's accession
-                    # states a polarity, not a representation (D55).
-                    if accession == ImzMLAccessions.PROFILE_SPECTRUM and (
-                        polarity_accession(accession, elem.get("name")) is None
-                    ):
-                        logger.info(
-                            f"Detected profile spectrum from {ImzMLAccessions.PROFILE_SPECTRUM}"
-                        )
-                        del context
-                        return SpectrumType.PROFILE
-
-                # Clear processed elements to save memory
-                elem.clear()
-
-                # Stop after checking enough elements - spectrum type info is at the start
-                if elements_checked >= max_elements:
-                    logger.debug(
-                        f"Spectrum type marker not found in first {max_elements} elements"
-                    )
-                    break
-
-            del context
-        except Exception as e:
-            logger.debug(f"XML streaming parse failed: {e}")
-        return None
-
     def _file_description_params(self) -> Optional[Dict[str, Any]]:
         """Return the fileDescription cvParams the parser already parsed.
 
@@ -1390,33 +1507,24 @@ class ImzMLMetadataExtractor(MetadataExtractor):
 
         return params
 
-    def _check_parser_metadata_for_spectrum_type(self) -> Optional[str]:
-        """Read the declared spectrum representation out of the fileDescription.
+    def _declared_spectrum_types(self) -> Set[str]:
+        """The representations ``fileContent`` declares, as CV names.
 
         Cheap: the parser has already read this, so no XML pass is needed.
         ``SpectrumType.CENTROID`` and ``SpectrumType.PROFILE`` are the CV
         names of ``MS:1000127`` and ``MS:1000128``, which is what
-        ``param_by_name`` is keyed on.
+        ``param_by_name`` is keyed on. A declaration naming both is
+        returned as both, in no order: which one is listed first says
+        nothing (D81).
         """
         params = self._file_description_params()
         if params is None:
-            return None
-
-        if params.get(SpectrumType.CENTROID, False):
-            logger.info(
-                f"Detected centroid spectrum from declared "
-                f"{ImzMLAccessions.CENTROID_SPECTRUM} in fileDescription"
-            )
-            return SpectrumType.CENTROID
-
-        if params.get(SpectrumType.PROFILE, False):
-            logger.info(
-                f"Detected profile spectrum from declared "
-                f"{ImzMLAccessions.PROFILE_SPECTRUM} in fileDescription"
-            )
-            return SpectrumType.PROFILE
-
-        return None
+            return set()
+        return {
+            name
+            for name in (SpectrumType.CENTROID, SpectrumType.PROFILE)
+            if params.get(name, False)
+        }
 
     def _guess_spectrum_type_from_storage_mode(self) -> Optional[str]:
         """Last-resort guess: assume a processed-mode file is centroided.

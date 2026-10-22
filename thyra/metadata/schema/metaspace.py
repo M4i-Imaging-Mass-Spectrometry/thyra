@@ -11,7 +11,8 @@ as empty strings and reported as warnings rather than fabricated --
 the output is a truthful starting point the submitter completes, not
 a pretend-complete record.  The one inference made: a matrix of
 ``"none"`` for matrix-free ionisation (DESI, SIMS), which is a fact of
-the technique, not a guess.
+the technique, not a guess.  The solvent is not inferred: a DESI source
+sprays one, so an unset solvent is required like any other field.
 """
 
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -108,7 +109,9 @@ def to_metaspace(meta: MSIMetadata) -> Tuple[Dict[str, Any], List[str]]:
             "Tissue_Modification": preparation.tissue_modification or "",
             "MALDI_Matrix": matrix,
             "MALDI_Matrix_Application": matrix_application,
-            "Solvent": preparation.solvent or "none",
+            "Solvent": _require(
+                preparation.solvent, "Sample_Preparation.Solvent", warnings
+            ),
         },
         "MS_Analysis": {
             "Polarity": polarity,

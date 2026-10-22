@@ -66,7 +66,11 @@ from typing import (
 from xml.etree import ElementTree as ET  # nosec B405
 
 from ...metadata.constants import polarity_accession
-from ._pyimzml_compat import ensure_lenient_cv_param_values
+from ...utils.imzml_spectrum_terms import (
+    REPRESENTATIONS_ATTRIBUTE,
+    record_configuration,
+)
+from ._pyimzml_compat import ensure_lenient_cv_param_values, spectrum_representation
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +190,40 @@ class ImzMLHeaderParser:
         self.n_spectra = n_spectra
         self.first_position = first_position
         self.first_spectrum_polarity = first_spectrum_polarity
+        # Kept for ``<run defaultInstrumentConfigurationRef>``, as pyimzml
+        # keeps its own root.
+        self.root = root
+        self._record_first_spectrum(root)
+
+    def _record_first_spectrum(self, root: ET.Element) -> None:
+        """Record what the first spectrum states, as the parser hook does.
+
+        The head holds the first spectrum whole, so its representation and
+        its scan's configuration reference are read by the same code a
+        conversion runs over every spectrum. The metadata-only route then
+        follows the first spectrum; a conversion follows all of them, so
+        the two differ only for a file whose later spectra say otherwise
+        (D81, as D35 for polarity).
+        """
+        prefix = root.tag[: root.tag.index("}") + 1] if root.tag.startswith("{") else ""
+        spectrum = root.find(f"{prefix}run/{prefix}spectrumList/{prefix}spectrum")
+        if spectrum is None:
+            return
+        own = self.__dict__
+        own[REPRESENTATIONS_ATTRIBUTE] = bytearray(
+            [
+                spectrum_representation(
+                    self,
+                    spectrum,
+                    prefix + "cvParam",
+                    prefix + "referenceableParamGroupRef",
+                )
+            ]
+        )
+        scan = spectrum.find(f"{prefix}scanList/{prefix}scan")
+        record_configuration(
+            own, scan.get("instrumentConfigurationRef") if scan is not None else None
+        )
 
 
 def read_header(path: Union[str, Path]) -> ImzMLHeaderParser:
