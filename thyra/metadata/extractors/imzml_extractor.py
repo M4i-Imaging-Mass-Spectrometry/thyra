@@ -507,6 +507,23 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         except Exception:
             return False
 
+    def _shares_one_mz_block(self, kept: Sequence[int]) -> bool:
+        """Whether every converted spectrum points at one m/z block of the ``.ibd``.
+
+        The reader's own test (``ImzMLReader._continuous_uniform``): every
+        m/z offset and every m/z length of the spectra in ``kept`` equal to
+        the first. An MSn spectrum left out beside MS1 (D73) does not count.
+        A parser that does not expose them is taken at its declared mode.
+        """
+        offsets = getattr(self.parser, "mzOffsets", None)
+        lengths = getattr(self.parser, "mzLengths", None)
+        if offsets is None or lengths is None or len(kept) == 0:
+            return True
+        index = np.asarray(kept, dtype=np.int64)
+        offsets = np.asarray(offsets, dtype=np.int64)[index]
+        lengths = np.asarray(lengths, dtype=np.int64)[index]
+        return bool(np.all(offsets == offsets[0]) and np.all(lengths == lengths[0]))
+
     def _get_mass_range_complete(self) -> Tuple[Tuple[float, float], int]:
         """Complete mass range extraction.
 
@@ -532,11 +549,11 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             # Only the spectra that are converted shape the range (D73).
             kept = self._kept_indices()
 
-            # Check if continuous mode - all spectra share the same m/z axis
-            # Detection: check file_description.param_by_name for "continuous" key
-            is_continuous = self._is_continuous_mode()
-
-            if is_continuous:
+            # One m/z block for every spectrum: measured from the offsets, not
+            # taken from the declared mode. A file that declares continuous
+            # mode but writes a block per spectrum is scanned in full, so a
+            # peak outside spectrum 0's block is not dropped (D82).
+            if self._is_continuous_mode() and self._shares_one_mz_block(kept):
                 return self._get_mass_range_continuous(kept)
             else:
                 return self._get_mass_range_processed(kept)

@@ -58,8 +58,8 @@ convert:
 thyra my_slide.d my_slide.zarr --mobility-grid
 ```
 
-The result is larger, and the conversion takes longer. Continuous imzML
-files with a mobility array get the table without asking.
+The result is larger and slower to make. Continuous imzML
+files get the table without asking, if all spectra share one mobility array.
 
 ??? advanced "Advanced: how this table is built"
     Every pixel measures mobility at slightly different values. So Thyra puts

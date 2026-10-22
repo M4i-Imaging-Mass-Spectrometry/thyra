@@ -73,7 +73,7 @@ from typing import (
 import numpy as np
 from numpy.typing import NDArray
 
-from ...core.base_reader import SAME_PEAK_RELATIVE, BaseMSIReader, OpticalImageLabel
+from ...core.base_reader import BaseMSIReader, OpticalImageLabel
 from ...core.mass_axis import MassAxisAccumulator
 from ...core.region_map import build_region_map
 from ...core.registry import register_reader
@@ -190,10 +190,16 @@ BRUKER_TDF_FORMAT = "MS:1002817"
 TDF_INTENSITY_NUMERATOR = 100.0
 
 #: Two m/z of one TDF frame this close, relative, are one TOF bin. Bins of a
-#: timsTOF are some 1e-6 apart; one bin's copies differ in the last bit. The
-#: intensity threshold groups a spectrum's points into peaks by the same rule,
-#: and neither sums a point that is not a measurement (D55, D61).
-SAME_BIN_RELATIVE = SAME_PEAK_RELATIVE
+#: timsTOF are some 1e-6 apart or more (6.06e-6 the closest pair on
+#: ``synthetic_tims``). One bin's copies differ in the last bit in a plain
+#: archive, and under MS-Numpress, which stores each scan's row on its own
+#: scale, by up to the row's largest m/z over 2**31: 4.7e-10 times that m/z,
+#: so 7e-8 relative at m/z 20 in a row reaching 3000. This sits between the
+#: two, ten times inside the closest bins. At the threshold's own 1e-12 a
+#: Numpress archive split one bin into a point per scan, and the intensity
+#: threshold tested each alone (D82). No point that is not a measurement is
+#: summed (D55, D61).
+SAME_BIN_RELATIVE = 1e-7
 
 #: Metadata column recording how many points each spectrum has in a signal
 #: member. The specification requires the matching column for whichever
@@ -594,8 +600,9 @@ def _on_tdf_scale(
     points of one bin decode to one m/z, so they are summed here. "One m/z"
     is to within :data:`SAME_BIN_RELATIVE`: a chunk's first or last value is
     the bound the converter states, which can differ from the decoded value
-    of the same bin in the last bit, while neighbouring bins are some 1e-6
-    apart.
+    of the same bin in the last bit, and an MS-Numpress row decodes each
+    scan's copy to within its own scale, while neighbouring bins are some
+    1e-6 apart.
 
     Only measurements are summed (D61): a point whose m/z is not finite, or
     whose count is not finite or is negative, joins no bin. Summed, an

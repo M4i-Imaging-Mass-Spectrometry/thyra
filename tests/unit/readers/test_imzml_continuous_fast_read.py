@@ -98,6 +98,61 @@ def test_continuous_yields_one_shared_mz_object(tmp_path, axis_first):
         reader.close()
 
 
+def _write_mislabelled(path: Path) -> None:
+    """One m/z block per spectrum, under a continuous declaration (F121, F156)."""
+    with ImzMLWriter(str(path), mode="processed") as writer:
+        writer.addSpectrum(
+            np.array([100.0, 200.0, 300.0]), np.array([1.0, 2.0, 3.0]), (1, 1, 1)
+        )
+        writer.addSpectrum(
+            np.array([50.0, 200.0, 2000.0]), np.array([4.0, 5.0, 6.0]), (2, 1, 1)
+        )
+        writer.addSpectrum(
+            np.array([100.0, 200.0, 300.0]), np.array([7.0, 8.0, 9.0]), (3, 1, 1)
+        )
+    text = path.read_text(encoding="latin-1")
+    path.write_text(
+        text.replace(
+            '"IMS:1000031" name="processed"', '"IMS:1000030" name="continuous"'
+        ),
+        encoding="latin-1",
+    )
+
+
+class TestAContinuousDeclarationOverOwnBlocks:
+    """Measured from the offsets, the file is processed (D82).
+
+    Spectrum 0's block gave the whole file its mass range and its
+    ``--no-resample`` axis, so m/z 50 and 2000 of spectrum 1 were dropped.
+    Replacing the block test with ``True`` passed every test before these.
+    """
+
+    def test_the_reader_reads_every_spectrum_at_its_own_m_z(self, tmp_path):
+        path = tmp_path / "mislabelled.imzML"
+        _write_mislabelled(path)
+        with ImzMLReader(path) as reader:
+            assert reader.has_shared_mass_axis is False
+            assert reader.is_continuous is True
+            assert not reader._continuous_uniform
+            spectra = list(reader.iter_spectra())
+            axis = reader.get_common_mass_axis()
+        np.testing.assert_array_equal(spectra[1][1], [50.0, 200.0, 2000.0])
+        np.testing.assert_array_equal(axis, [50.0, 100.0, 200.0, 300.0, 2000.0])
+
+    def test_the_mass_range_covers_every_spectrum(self, tmp_path):
+        path = tmp_path / "mislabelled.imzML"
+        _write_mislabelled(path)
+        with ImzMLReader(path) as reader:
+            assert reader.get_essential_metadata().mass_range == (50.0, 2000.0)
+
+    def test_a_true_continuous_file_still_reads_one_spectrum(self, tmp_path):
+        path = tmp_path / "cont.imzML"
+        _write_continuous(path)
+        with ImzMLReader(path) as reader:
+            assert reader.has_shared_mass_axis is True
+            assert reader.get_essential_metadata().mass_range == (100.0, 900.0)
+
+
 def test_two_passes_agree(tmp_path):
     """The streaming converters iterate twice; both passes must match."""
     path = tmp_path / "cont.imzML"

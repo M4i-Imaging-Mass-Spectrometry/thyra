@@ -435,9 +435,19 @@ class SiblingTables:
         allows neither gets no table, said by name rather than silently.
         """
         if not self._write_mobility_table:
+            self._say_no_grid(
+                "--no-mobility-table writes no mobility-resolved table, and "
+                "the grid is one"
+            )
             return None
         try:
             if not self.reader.has_ion_mobility:
+                self._say_no_grid(
+                    f"{type(self.reader).__name__} gives this source no ion "
+                    "mobility dimension to bin (a Bruker TSF file, a run "
+                    "without drift bins, or mobility values that are not "
+                    "finite numbers)"
+                )
                 return None
             shared = bool(self.reader.has_shared_mobility_axis)
         except Exception as e:  # pragma: no cover - reader-defined
@@ -451,7 +461,8 @@ class SiblingTables:
                 self._mobility_grid_resolved = True
                 logger.warning(
                     "--mobility-grid is ignored: %s shares one set of (m/z, "
-                    "mobility) features across pixels, so the mobility table "
+                    "mobility) features across pixels (every spectrum at one "
+                    "m/z block and one mobility array), so the mobility table "
                     "is written from those features rather than binned onto "
                     "a grid; --mobility-bins, --mobility-min and "
                     "--mobility-max are ignored with it.",
@@ -472,6 +483,33 @@ class SiblingTables:
         if self._mobility_grid is None:
             return None
         return mobility_table_key(table_key)
+
+    def _say_no_grid(self, reason: str) -> None:
+        """Say once why a grid that was asked for is not written.
+
+        Silent before: ``--mobility-grid`` on a source with no mobility, or
+        beside ``--no-mobility-table``, wrote no table and logged nothing,
+        and the sizing options given with it were dropped unsaid (issue
+        #517). Nothing is said when no grid was asked for.
+        """
+        if not self._mobility_grid_enabled or self._mobility_grid_resolved:
+            return
+        self._mobility_grid_resolved = True
+        lower, upper = self._mobility_bounds
+        given = [
+            spelling
+            for spelling, value in (
+                ("--mobility-bins", self._mobility_bins),
+                ("--mobility-min", lower),
+                ("--mobility-max", upper),
+            )
+            if value is not None
+        ]
+        logger.warning(
+            "--mobility-grid is ignored%s: %s. No mobility grid table is " "written.",
+            "" if not given else ", and with it " + ", ".join(given),
+            reason,
+        )
 
     def _grid_channels(
         self,
@@ -534,8 +572,11 @@ class SiblingTables:
             )
             return None
         try:
+            # A stated bound drops the points beyond it; a range read off
+            # the values clips the overhang into its edge channels (D82).
             grid = build_mobility_grid(
-                *self._grid_channels(measured, mobility_grid_plan(self.reader))
+                *self._grid_channels(measured, mobility_grid_plan(self.reader)),
+                clips=lower is None and upper is None,
             )
         except ValueError as e:
             logger.warning("No mobility-resolved table: %s", str(e))
@@ -549,12 +590,13 @@ class SiblingTables:
         if axis is not None and axis.unit_name:
             unit = str(axis.unit_name)
         logger.info(
-            "Mobility grid: %d %s channels over [%.5f, %.5f]%s",
+            "Mobility grid: %d %s channels over [%.5f, %.5f]%s%s",
             grid.n_channels,
             grid.law,
             grid.lower,
             grid.upper,
             "" if unit is None else f" {unit}",
+            "" if grid.clips else "; points outside the stated range are dropped",
         )
         report_channel_width(
             grid, kind_accession=None if axis is None else axis.kind_accession
@@ -1125,8 +1167,9 @@ class SiblingTables:
             "bin: on a Bruker TDF, under the default --tdf-spectrum "
             "scan_sum, and on Waters under --waters-spectrum profile. A "
             "peak-picked spectrum (the vendor centroid) keeps "
-            "less of the current, and a resampling that spreads a point "
-            "over bins (tic_preserving) moves it.",
+            "less of the current, a resampling that spreads a point "
+            "over bins (tic_preserving) moves it, and a stated "
+            "--mobility-min/--mobility-max leaves out the points beyond it.",
             block["current_ratio"],
             block["current_ratio_pixel_min"],
             block["current_ratio_pixel_max"],
