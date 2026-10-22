@@ -6516,7 +6516,7 @@ axis and instrument.
   and every configuration, as it does for polarity and MS levels, so it can
   report another type or instrument than a conversion of the same file.
 
-## D82. Waters m/z can be lock-mass corrected, without writing to the run
+## D83. Waters m/z can be lock-mass corrected, without writing to the run
 
 **Status:** Implemented (2026-10-22).
 
@@ -6609,7 +6609,7 @@ left for later.
 `off` on a run with a saved correction, every m/z value. Omitted, nothing
 (the warning is new). The `lock_mass` block is new.
 
-## D83. A pixel one Waters function acquired twice
+## D84. A pixel one Waters function acquired twice
 
 **Status:** Implemented (2026-10-22).
 

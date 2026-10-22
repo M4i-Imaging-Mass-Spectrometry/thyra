@@ -566,7 +566,7 @@ def _waters_calibration(acquisition: Dict[str, Any]) -> Dict[str, Any]:
     """The section from a Waters source, or nothing.
 
     ``is_lockmass_corrected`` is whether the stored m/z carry a lock-mass
-    correction: the one Thyra applied or kept (D82), or else the library's
+    correction: the one Thyra applied or kept (D83), or else the library's
     answer for the whole file. Either way False is a statement and not a
     default. ``lockmass_function`` is not used:
     on a raster MassLynx split across functions it names the last chunk

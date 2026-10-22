@@ -1,4 +1,4 @@
-"""``--waters-lock-mass`` is a transport for ``WatersReader(lock_mass=...)`` (D82).
+"""``--waters-lock-mass`` is a transport for ``WatersReader(lock_mass=...)`` (D83).
 
 Omitted, nothing is forwarded and the store keeps what the run carries.
 Given, it is a reference m/z or ``off``, checked before anything is read.

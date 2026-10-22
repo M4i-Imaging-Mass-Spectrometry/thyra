@@ -1,9 +1,9 @@
-"""Lock-mass correction of Waters m/z values, without writing to the run (D82).
+"""Lock-mass correction of Waters m/z values, without writing to the run (D83).
 
 A Waters run can carry a lock-mass function: scans of a reference compound
 taken at intervals during the acquisition. MassLynx corrects the m/z of
 every other scan against them, and an uncorrected run drifts. On the
-SYNAPT XS MALDI image measured for D82 the stored m/z of known brain
+SYNAPT XS MALDI image measured for D83 the stored m/z of known brain
 lipids ran +11.6 ppm high at the start and +20.6 ppm at the end of a
 three-hour raster, while the corrected values stayed within 1 to 3 ppm.
 
@@ -247,7 +247,7 @@ def measure_lock_mass(
 
 
 # ----------------------------------------------------------------------
-# What an uncorrected run's reference scans say (D82)
+# What an uncorrected run's reference scans say (D83)
 #
 # Thyra does not pick a reference for the user: one that matches the wrong
 # peak would shift every m/z by up to the search window, as badly as no
@@ -266,7 +266,7 @@ _ELECTRON = 0.00054858
 _LEUCINE_ENKEPHALIN = {False: 556.2766, True: 554.2620}
 
 #: How far from a reference ion an uncorrected peak may sit and still be
-#: that ion. Uncorrected runs measured for D82 were 8 to 28 ppm off.
+#: that ion. Uncorrected runs measured for D83 were 8 to 28 ppm off.
 _MATCH_PPM = 50.0
 
 #: How tightly the red phosphorus ions must agree with each other to be

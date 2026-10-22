@@ -1332,7 +1332,7 @@ acquisition ran under.
 | `software`, `software_version` | What made the calibration, in the source's words; Bruker tsf/tdf |
 | `n_reference_peaks` | How many reference peaks the calibration was fitted to; Bruker tsf/tdf and PHI |
 | `mz_standard_deviation_ppm` | The reference peaks' residual after the calibration: the square root of their summed squared m/z errors in ppm over one less than their number. Never zero and never over fewer than two peaks: neither is a measurement, and vendors write both where they have nothing to state |
-| `lock_mass_corrected` | Whether the stored m/z values carry a lock-mass correction; Waters. It describes the store, not the run folder: true when a correction MassLynx saved in the run was kept or `--waters-lock-mass` applied one, false with `--waters-lock-mass off`. The Waters-specific `lock_mass` block names the reference and the size of the correction (D82) |
+| `lock_mass_corrected` | Whether the stored m/z values carry a lock-mass correction; Waters. It describes the store, not the run folder: true when a correction MassLynx saved in the run was kept or `--waters-lock-mass` applied one, false with `--waters-lock-mass off`. The Waters-specific `lock_mass` block names the reference and the size of the correction (D83) |
 
 Which calibration a conversion applied is not in the section, because a
 conversion can be told to apply one the source does not consider current;
