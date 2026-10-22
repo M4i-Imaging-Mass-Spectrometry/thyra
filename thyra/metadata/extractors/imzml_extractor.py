@@ -186,7 +186,7 @@ def instrument_info_from_configurations(configs: List[Any]) -> Dict[str, Any]:
 
     Each configuration is resolved on its own. A fact the configurations
     state differently is left unset, with a warning: no one of them
-    describes every spectrum (D78).
+    describes every spectrum (D81).
 
     Returns:
         ``instrument_model``, ``instrument_serial_number``, ``analyzer`` and
@@ -210,7 +210,14 @@ def instrument_info_from_configurations(configs: List[Any]) -> Dict[str, Any]:
                 "The instrument configurations the spectra use state "
                 "different %s (%s); none is recorded.",
                 key.replace("_", " "),
-                ", ".join(repr(value) for value in sorted(values, key=str)),
+                ", ".join(
+                    (
+                        "no family the axis chain tells apart"
+                        if value is None
+                        else repr(value)
+                    )
+                    for value in sorted(values, key=str)
+                ),
             )
     return info
 
@@ -1239,7 +1246,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         run's default; a name the list does not hold counts as none, so the
         default decides for it (the pyimzml writer names one that does not
         exist). Configurations no converted spectrum uses describe nothing
-        that is stored (D78). When nothing names a listed configuration,
+        that is stored (D81). When nothing names a listed configuration,
         every one is used, and the facts they disagree on stay unset.
         """
         metadata = getattr(self.parser, "metadata", None)
@@ -1356,7 +1363,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
             return None
 
     def _detect_centroid_spectrum(self) -> Optional[str]:
-        """The spectrum type every converted spectrum states (D78).
+        """The spectrum type every converted spectrum states (D81).
 
         An explicit ``spectrum_type`` override wins over everything, so a
         user can correct a file that states the wrong thing. Otherwise the
@@ -1491,7 +1498,7 @@ class ImzMLMetadataExtractor(MetadataExtractor):
         names of ``MS:1000127`` and ``MS:1000128``, which is what
         ``param_by_name`` is keyed on. A declaration naming both is
         returned as both, in no order: which one is listed first says
-        nothing (D78).
+        nothing (D81).
         """
         params = self._file_description_params()
         if params is None:

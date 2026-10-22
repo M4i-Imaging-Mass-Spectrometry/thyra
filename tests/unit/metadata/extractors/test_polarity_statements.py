@@ -220,7 +220,7 @@ class TestMislabelledPositiveScan:
         assert _conversion_polarity(path) is None
 
     def test_it_is_not_read_as_the_spectrum_type(self, tmp_path):
-        """On a spectrum, in a file whose ``fileContent`` states no type (D78)."""
+        """On a spectrum, in a file whose ``fileContent`` states no type (D81)."""
         path = _write_imzml(
             tmp_path / "untyped.imzML", spectrum_terms=[MISLABELLED_POSITIVE_TERM] * 6
         )

@@ -1,4 +1,4 @@
-"""The instrument comes from the configuration the converted spectra use (D78).
+"""The instrument comes from the configuration the converted spectra use (D81).
 
 An imzML spectrum uses the configuration its scan names, else the run's
 default; an mzPeak spectrum the one its scan's ``instrument_configuration_id``

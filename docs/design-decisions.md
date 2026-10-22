@@ -2610,7 +2610,7 @@ measured is 0.005 ppm, and the store says which encoding it came from.
 
 **Status:** Implemented (2026-09-30), issue #422. Amended by D69
 (2026-10-19): an embedded image with no alignment sits only in a
-coordinate system of its own. Amended by D70. Amended by D78 (2026-10-22):
+coordinate system of its own. Amended by D70. Amended by D81 (2026-10-22):
 the instrument comes from the configuration the converted spectra use, and
 the spectrum type follows the converted spectra on both routes, which lifts
 the chilli known limit below.
@@ -6322,7 +6322,7 @@ used to be attempted.
 
 ---
 
-## D78. The spectrum type and the instrument follow the spectra that are converted
+## D81. The spectrum type and the instrument follow the spectra that are converted
 
 **Status:** Implemented (2026-10-22), issue #526. Amends D29 (the
 instrument, and its chilli known limit); relates to D45.
@@ -6349,7 +6349,7 @@ spectra it holds, not from the file's summary or from list order.
   routes.
 - **The instrument** (model, serial number, analyzer, axis family) comes
   from the configuration the converted spectra use: on imzML the one each
-  scan names, else the run's default; on mzPeak the scans'
+  spectrum's first scan names, else the run's default; on mzPeak the scans'
   `instrument_configuration_id`, else `run.default_instrument_id`. A name
   the list does not hold counts as none, so the default decides for it
   (the pyimzml writer names one that does not exist). Each configuration
@@ -6414,3 +6414,7 @@ axis and instrument.
   parameter group, used or not.
 - No real file with two instrument configurations has been seen. The rule
   is tested on constructed imzML files and archives.
+- A pyimzml parser a caller builds without Thyra's reader records nothing
+  per spectrum. `ImzMLMetadataExtractor` over it falls back to `fileContent`
+  and every configuration, as it does for polarity and MS levels, so it can
+  report another type or instrument than a conversion of the same file.

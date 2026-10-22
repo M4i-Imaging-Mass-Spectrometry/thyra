@@ -203,7 +203,7 @@ class ImzMLHeaderParser:
         conversion runs over every spectrum. The metadata-only route then
         follows the first spectrum; a conversion follows all of them, so
         the two differ only for a file whose later spectra say otherwise
-        (D78, as D35 for polarity).
+        (D81, as D35 for polarity).
         """
         prefix = root.tag[: root.tag.index("}") + 1] if root.tag.startswith("{") else ""
         spectrum = root.find(f"{prefix}run/{prefix}spectrumList/{prefix}spectrum")

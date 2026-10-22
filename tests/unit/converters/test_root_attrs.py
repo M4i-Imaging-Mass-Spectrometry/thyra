@@ -219,7 +219,7 @@ class TestTheTwoSectionsRescuedFromTheDeadMethod:
         }
 
     def test_a_store_without_a_volume_records_no_z_spacing(self):
-        """Nothing applied it, and the log says it is not recorded (D78)."""
+        """Nothing applied it, and the log says it is not recorded (D81)."""
         attrs = _builder(handle_3d=True).build(
             _context(z_spacing_um=25.0, is_volume=False)
         )

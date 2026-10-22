@@ -34,7 +34,7 @@ What it reports differently, and why that is not a drift:
   on the conversion path reaches this class.
 - The spectrum type and the instrument configuration follow what the
   first spectrum states, where a conversion follows every converted
-  spectrum (D78). They differ only for a file whose later spectra say
+  spectrum (D81). They differ only for a file whose later spectra say
   otherwise, as for polarity (D35).
 """
 
@@ -169,7 +169,7 @@ class ImzMLHeaderExtractor(ImzMLMetadataExtractor):
         The spectrum type and the instrument configuration follow the
         first spectrum here; a conversion follows every converted
         spectrum, so the two differ only for a file whose later spectra
-        say otherwise (D78, as D35 for polarity).
+        say otherwise (D81, as D35 for polarity).
         """
         return None
 

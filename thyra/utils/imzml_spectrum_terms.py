@@ -1,7 +1,7 @@
 """What each imzML spectrum states about its representation and instrument.
 
 The spectrum type and the instrument follow the spectra that are converted,
-not the file's summary (D78). So two things are recorded per spectrum, by
+not the file's summary (D81). So two things are recorded per spectrum, by
 the hook in :mod:`thyra.readers.imzml._pyimzml_compat` during pyimzml's one
 pass over the spectra:
 

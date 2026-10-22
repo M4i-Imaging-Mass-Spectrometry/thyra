@@ -532,7 +532,7 @@ class MzPeakMetadataExtractor(MetadataExtractor):
 
         Otherwise the type is the one the converted spectra state in their
         ``spectrum_representation`` column, by the rule the imzML route
-        applies (D78); see :meth:`_stated_spectrum_type`.
+        applies (D81); see :meth:`_stated_spectrum_type`.
         """
         if self.archive.signal_kind() == "peaks":
             return SpectrumType.CENTROID
@@ -740,7 +740,7 @@ class MzPeakMetadataExtractor(MetadataExtractor):
 
         A spectrum uses the configuration its scan names in
         ``instrument_configuration_id``, else ``run.default_instrument_id``;
-        an id the list does not hold counts as none, as on imzML (D78).
+        an id the list does not hold counts as none, as on imzML (D81).
         When nothing names a listed configuration, every one is used.
         """
         listed = [

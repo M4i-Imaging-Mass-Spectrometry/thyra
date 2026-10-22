@@ -1,4 +1,4 @@
-"""The spectrum type is the one every converted spectrum states (D78).
+"""The spectrum type is the one every converted spectrum states (D81).
 
 On imzML a spectrum states it through its own terms and the parameter groups
 it references; a group no spectrum references counts for nothing. On mzPeak

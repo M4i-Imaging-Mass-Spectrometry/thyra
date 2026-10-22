@@ -175,7 +175,7 @@ def ensure_spectrum_check() -> None:
       and the instrument configuration its scan names are recorded as one
       byte each (:mod:`thyra.utils.imzml_spectrum_terms`). The spectrum
       type and the instrument follow the converted spectra from these
-      (D78).
+      (D81).
     - A spectrum pyimzml fails on raises :class:`ConversionRefused` that
       names the spectrum and the cause, instead of the ``TypeError``,
       ``ValueError`` or ``AttributeError`` it raised from deep inside its
@@ -300,7 +300,7 @@ def spectrum_representation(
     ``MS:1000128`` named "positive scan" states a polarity, not a
     representation (D55); pyimzml corrects that pair in the groups itself.
     A group no spectrum references states nothing about any spectrum
-    (D78).
+    (D81).
     """
     stated = REPRESENTATION_UNSTATED
     refs: List[str] = []

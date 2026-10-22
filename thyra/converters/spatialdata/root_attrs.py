@@ -214,7 +214,7 @@ class RootAttrsBuilder:
         # save after both passes (issue #519). handle_3d as a plain bool
         # for the same reason. The z spacing only on a volume of more than
         # one plane, as in coordinate_systems: anywhere else nothing applied
-        # it, and the log says it is not recorded (D78).
+        # it, and the log says it is not recorded (D81).
         options: Dict[str, Any] = {
             "handle_3d": bool(self._handle_3d),
             "pixel_size_um": float(px),
