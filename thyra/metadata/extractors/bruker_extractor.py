@@ -313,12 +313,14 @@ class BrukerMetadataExtractor(MetadataExtractor):
         When a region is selected, only frames from that region are
         included in the bounds and count.
 
-        The bounds come from the frames whose position is a whole number:
-        the reader skips the others, and a text ``MAX`` ended in ``int()``
+        The bounds come from the frames whose position and region number
+        are whole numbers: the reader skips the others, and a text ``MAX`` ended in ``int()``
         while a REAL just below a whole number was cut down (issue #527).
         The count stays every frame, as it was.
         """
-        whole = f"{whole_sql('XIndexPos')} AND {whole_sql('YIndexPos')}"
+        whole = " AND ".join(
+            whole_sql(column) for column in ("XIndexPos", "YIndexPos", "RegionNumber")
+        )
         bounds = (
             f"MIN(CASE WHEN {whole} THEN XIndexPos END), "
             f"MAX(CASE WHEN {whole} THEN XIndexPos END), "

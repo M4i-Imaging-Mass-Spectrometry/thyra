@@ -191,3 +191,25 @@ class TestRegionNumberPastInt32:
         obs = ad.read_zarr(out / "tables" / "msi_dataset_z0").obs
         assert str(obs["region_number"].dtype) == "int64"
         assert set(obs["region_number"]) == {number, 0}
+
+
+class TestEmptyIndexEntries:
+    def test_an_empty_source_index_is_named_as_empty(self, tmp_path):
+        """Not as 'nan', which is what an integer column with nulls reads as."""
+        archive = build_mzpeak(tmp_path / "a.mzpeak", grid_spectra(3, 2))
+
+        def edit(table):
+            values = table.column("source_index").to_pylist()
+            values[2] = None
+            index = table.column_names.index("source_index")
+            return table.set_column(
+                index,
+                table.schema.field(index),
+                pa.array(values, table.schema.field(index).type),
+            )
+
+        rewrite_table(archive, SCANS_MEMBER, edit)
+
+        message = _refusal(archive)
+        assert "1 of 6 scan source indices" in message
+        assert "are empty" in message

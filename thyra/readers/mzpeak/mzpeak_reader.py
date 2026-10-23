@@ -86,6 +86,7 @@ from .chunk_decoding import (
     LOSSY_ENCODINGS,
     decode_chunks,
     describe_term,
+    index_numbers,
     refuse_intensity_transform,
     validate_chunk_columns,
     validate_encodings,
@@ -1112,10 +1113,8 @@ class MzPeakArchive:
         metadata = member.read(
             columns=["index", column] + ([MS_LEVEL_COLUMN] if has_levels else [])
         )
-        spectrum_index = whole_numbers(
-            np.asarray(metadata.column("index").to_numpy()),
-            "spectrum indices",
-            self.path,
+        spectrum_index = index_numbers(
+            metadata.column("index"), "spectrum indices", self.path
         )
         counts = _integers_or_zero(
             metadata.column(column), f"{column} values", self.path
@@ -1423,10 +1422,8 @@ class MzPeakArchive:
             ]
         )
         self._report_ion_mobility(scans_member)
-        source = whole_numbers(
-            np.asarray(scans.column("source_index").to_numpy()),
-            "scan source indices",
-            self.path,
+        source = index_numbers(
+            scans.column("source_index"), "scan source indices", self.path
         )
         xs, has_x = _positions(
             self._position_numbers(scans, x_column), "x positions", self.path

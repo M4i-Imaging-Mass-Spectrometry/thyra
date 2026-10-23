@@ -231,18 +231,20 @@ def _get_frame_coordinates(
             # Check if this is MALDI data
             try:
                 cursor.execute(
-                    "SELECT XIndexPos, YIndexPos FROM MaldiFrameInfo WHERE "
-                    "Frame = ?",
+                    "SELECT XIndexPos, YIndexPos, RegionNumber FROM "
+                    "MaldiFrameInfo WHERE Frame = ?",
                     (frame_id,),
                 )
                 result = cursor.fetchone()
                 if result:
-                    # A position that is text, NULL or not a whole number
-                    # places the frame nowhere: it is skipped and counted
-                    # with the other frames without coordinates, where
-                    # int() used to cut 100.9999999 onto pixel 100 (#527).
+                    # A position or region number that is text, NULL or
+                    # not a whole number places the frame nowhere: it is
+                    # skipped and counted with the other frames without
+                    # coordinates, where int() used to cut 100.9999999
+                    # onto pixel 100 (#527). The same rule as _WHOLE, so
+                    # the region map holds exactly these frames.
                     x, y = whole_number(result[0]), whole_number(result[1])
-                    if x is None or y is None:
+                    if x is None or y is None or whole_number(result[2]) is None:
                         return None
                     # Apply coordinate offsets if provided (Bruker-specific
                     # normalization)
@@ -1585,7 +1587,7 @@ class BrukerReader(BrukerBaseMSIReader):
             cursor = self._database().cursor()
             cursor.execute(
                 "SELECT RegionNumber, COUNT(*) as n_frames "
-                "FROM MaldiFrameInfo "
+                f"FROM MaldiFrameInfo WHERE {_WHOLE} "  # nosec B608
                 "GROUP BY RegionNumber "
                 "ORDER BY COUNT(*) DESC"
             )
@@ -3162,18 +3164,20 @@ class BrukerReader(BrukerBaseMSIReader):
             # Check if this is MALDI data
             try:
                 cursor.execute(
-                    "SELECT XIndexPos, YIndexPos FROM MaldiFrameInfo WHERE "
-                    "Frame = ?",
+                    "SELECT XIndexPos, YIndexPos, RegionNumber FROM "
+                    "MaldiFrameInfo WHERE Frame = ?",
                     (frame_id,),
                 )
                 result = cursor.fetchone()
                 if result:
-                    # A position that is text, NULL or not a whole number
-                    # places the frame nowhere: it is skipped and counted
-                    # with the other frames without coordinates, where
-                    # int() used to cut 100.9999999 onto pixel 100 (#527).
+                    # A position or region number that is text, NULL or
+                    # not a whole number places the frame nowhere: it is
+                    # skipped and counted with the other frames without
+                    # coordinates, where int() used to cut 100.9999999
+                    # onto pixel 100 (#527). The same rule as _WHOLE, so
+                    # the region map holds exactly these frames.
                     x, y = whole_number(result[0]), whole_number(result[1])
-                    if x is None or y is None:
+                    if x is None or y is None or whole_number(result[2]) is None:
                         return None
                     # Apply coordinate offsets if provided (Bruker-specific
                     # normalization)

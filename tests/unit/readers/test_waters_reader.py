@@ -1089,6 +1089,39 @@ class TestWatersReaderDamagedFunctionFiles:
         assert len(list(reader.iter_spectra())) == 9
         reader.close()
 
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_an_index_no_known_record_size_divides_is_warned_about(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data, thyra_logs
+    ):
+        """A MassLynx version not measured is not refused for its records."""
+        reader, _ = self._three_functions(
+            mock_ml_cls, mock_build_grid, mock_waters_data
+        )
+        (mock_waters_data / "_FUNC002.IDX").write_bytes(b"\x00" * 25 * 3)
+
+        with thyra_logs("thyra.readers.waters", logging.WARNING) as records:
+            assert len(list(reader.iter_spectra())) == 9
+        reader.close()
+        assert "_FUNC002.IDX of mock.raw is 75 bytes" in records.text
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_a_refusal_closes_the_run(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        reader, mock_ml = self._three_functions(
+            mock_ml_cls, mock_build_grid, mock_waters_data
+        )
+        mock_ml.get_number_of_scans_in_function.side_effect = lambda _h, f: (
+            1 if f == 1 else 3
+        )
+
+        with pytest.raises(ConversionRefused):
+            reader._ensure_initialized()
+        mock_ml.close_file.assert_called_once()
+        assert reader._handle is None
+
 
 class TestWatersReaderOffRasterFunctions:
     """The #210 rescue rule assumed what it did not check.

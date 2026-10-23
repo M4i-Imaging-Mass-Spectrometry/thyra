@@ -65,3 +65,27 @@ def test_the_region_boxes_leave_the_frame_out(tmp_path):
         reader.close()
     assert all(max(box) < 10 for box in boxes)
     assert essential.dimensions[0] <= 3
+
+
+def test_a_frame_whose_region_number_is_not_whole_is_skipped_too(tmp_path, thyra_logs):
+    """One rule for the frame loop and the region map and list."""
+    run = tmp_path / "run.d"
+    shutil.copytree(_TDF, run)
+    con = sqlite3.connect(str(run / "analysis.tdf"))
+    con.execute("UPDATE MaldiFrameInfo SET RegionNumber = 0.5 WHERE Frame = 2")
+    con.commit()
+    con.close()
+    out = tmp_path / "out.zarr"
+    with thyra_logs("thyra.readers", logging.WARNING) as records:
+        assert convert_msi(
+            str(run),
+            str(out),
+            pixel_size_um=20.0,
+            include_optical=False,
+            reader_options={"tdf_spectrum": "scan_sum"},
+        )
+
+    table = next(iter(spatialdata.read_zarr(out).tables.values()))
+    assert table.n_obs == 5
+    assert -1 not in set(table.obs["region_number"])
+    assert "Dropped 1 of 6 frames with no usable coordinates" in records.text

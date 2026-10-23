@@ -611,13 +611,12 @@ class SolarixReader(BrukerBaseMSIReader):
             raise RuntimeError("Reader has been closed")
 
         x_min, y_min, _ = self.coordinate_offsets
-        # Positions from the checked index, not the raw row: a REAL just
-        # below a whole number was cut onto its neighbour by int() here.
-        # Both walks are ORDER BY Id, so row i is index entry i.
-        index = self._load_spectra_index()
-        xs, ys = index["x"].tolist(), index["y"].tolist()
+        # Checked first, so the file is refused in one line before any
+        # spectrum is read; each row is then read as the index read it.
+        self._load_spectra_index()
         cursor = self._conn.execute(
-            "SELECT Id, PeakMzValues, PeakIntensityValues FROM Spectra ORDER BY Id"
+            "SELECT Id, XIndexPos, YIndexPos, NumPeaks, PeakMzValues, "
+            "PeakIntensityValues FROM Spectra ORDER BY Id"
         )
 
         pbar = tqdm(
@@ -629,9 +628,10 @@ class SolarixReader(BrukerBaseMSIReader):
             disable=getattr(self, "_quiet_mode", False),
         )
         try:
-            for row, (spectrum_id, mz_blob, intensity_blob) in enumerate(pbar):
-                num_peaks = int(index["num_peaks"][row])
-                x, y = xs[row], ys[row]
+            for spectrum_id, *values, mz_blob, intensity_blob in pbar:
+                spectrum_id, x, y, num_peaks = self._whole(
+                    [spectrum_id, *values], "Spectra row values"
+                ).tolist()
                 if num_peaks == 0:
                     continue
                 mzs = self._decode_blob(
@@ -663,7 +663,7 @@ class SolarixReader(BrukerBaseMSIReader):
 
                 yield (
                     (x - x_min, y - y_min, 0),
-                    int(index["id"][row]),
+                    spectrum_id,
                     mzs,
                     intensities,
                 )

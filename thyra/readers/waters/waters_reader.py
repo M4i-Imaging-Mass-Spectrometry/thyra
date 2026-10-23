@@ -338,8 +338,10 @@ class WatersReader(BaseMSIReader):
         #527): measured, a 9-scan function cut to 40% returns 3 scans and
         still reads as imaging; cut to nothing it returns 0. The ``.IDX``
         holds one fixed-size record per scan -- 22 bytes on the Synapt G1
-        runs measured, 30 on Xevo and Cyclic -- so a library count that
-        matches neither record size is a function that lost scans.
+        runs measured, 30 on Xevo and Cyclic. A size those records explain
+        and a library count that matches none of them is a function that
+        lost scans, and refused. A size neither record explains may be a
+        MassLynx version not measured: it is warned about, not refused.
         """
         assert self._ml is not None
         indexes = self._function_dat_files(".IDX")
@@ -349,17 +351,27 @@ class WatersReader(BaseMSIReader):
                 continue
             size = idx.stat().st_size
             returned = self._ml.get_number_of_scans_in_function(self._handle, f)
-            if any(returned * record == size for record in _IDX_RECORD_SIZES):
+            listed = [size // r for r in _IDX_RECORD_SIZES if size % r == 0]
+            if not listed:
+                logger.warning(
+                    "_FUNC%03d.IDX of %s is %d bytes, which no known index "
+                    "record size divides; the %d scans the library returned "
+                    "for function %d could not be checked against it.",
+                    f + 1,
+                    self.data_path.name,
+                    size,
+                    returned,
+                    f + 1,
+                )
                 continue
-            listed = next(
-                (size // r for r in _IDX_RECORD_SIZES[::-1] if size % r == 0), None
-            )
+            if returned in listed:
+                continue
             raise ConversionRefused(
                 f"{self.data_path.name}: the library returned {returned} scans "
-                f"of function {f + 1}, but _FUNC{f + 1:03d}.IDX "
-                + (f"lists {listed}" if listed is not None else f"is {size} bytes")
-                + f". Is the run complete? Restore _FUNC{f + 1:03d}.DAT and "
-                f"_FUNC{f + 1:03d}.IDX from the acquisition."
+                f"of function {f + 1}, but _FUNC{f + 1:03d}.IDX lists "
+                f"{max(listed)}. Is the run complete? Restore "
+                f"_FUNC{f + 1:03d}.DAT and _FUNC{f + 1:03d}.IDX from the "
+                "acquisition."
             )
 
     def _validate_function_files(self, n_functions: int) -> None:
@@ -490,8 +502,13 @@ class WatersReader(BaseMSIReader):
         # nothing downstream notices: on a raster MassLynx split across
         # functions, one missing chunk file silently drops its rows of the
         # image (issue #229).
-        self._validate_function_files(n_funcs)
-        self._validate_scan_counts(n_funcs)
+        try:
+            self._validate_function_files(n_funcs)
+            self._validate_scan_counts(n_funcs)
+        except ConversionRefused:
+            self._ml.close_file(self._handle)
+            self._handle = None
+            raise
 
         # Build the imaging grid from the MS functions alone. They are what
         # defines the raster; everything else is measured against it. The
