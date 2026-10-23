@@ -59,6 +59,11 @@ from .masslynx_lib import FunctionType, MassLynxLib, ScanInfoData
 
 logger = logging.getLogger(__name__)
 
+#: Bytes per scan record in a ``_FUNCnnn.IDX``: 22 on the Synapt G1 runs
+#: measured (``_FUNC003.IDX`` of 28050 bytes for its 1275 scans), 30 on
+#: Xevo DESI and Cyclic runs.
+_IDX_RECORD_SIZES = (22, 30)
+
 #: What the fragmentation schedule names as its origin.
 FRAGMENTATION_SOURCE = "waters_masslynx"
 
@@ -329,21 +334,99 @@ class WatersReader(BaseMSIReader):
                 "Is this a valid Waters .raw directory?"
             )
 
-    def _function_dat_files(self) -> Dict[int, Path]:
-        """The ``_FUNC*.DAT`` files present, keyed by 0-based function index.
+    def _function_dat_files(self, suffix: str = ".DAT") -> Dict[int, Path]:
+        """The ``_FUNC*<suffix>`` files present, keyed by 0-based function index.
 
         MassLynx numbers the files from one, so ``_FUNC001.DAT`` holds
-        function 0.
+        function 0. ``suffix`` is matched without regard to case, as the
+        files are written either way.
         """
         found: Dict[int, Path] = {}
         for path in self.data_path.iterdir():
             name = path.name.upper()
-            if not (name.startswith("_FUNC") and name.endswith(".DAT")):
+            if not (name.startswith("_FUNC") and name.endswith(suffix)):
                 continue
-            stem = name[len("_FUNC") : -len(".DAT")]
+            stem = name[len("_FUNC") : -len(suffix)]
             if stem.isdigit():
                 found[int(stem) - 1] = path
         return found
+
+    def _validate_function_companions(self) -> None:
+        """Refuse a function whose index or status file is gone.
+
+        Each ``_FUNCnnn.DAT`` comes with ``_FUNCnnn.IDX`` (one record per
+        scan) and ``_FUNCnnn.STS`` (per-scan status). Without either, or
+        with an empty ``.IDX``, the library reports the run as "not a
+        Waters imaging file" (measured on a damaged copy of a Cyclic ROI
+        export, issue #527). Checked before the file is opened, so the
+        refusal names the file that is missing.
+        """
+        dats = self._function_dat_files()
+        indexes = self._function_dat_files(".IDX")
+        missing = [
+            f"_FUNC{f + 1:03d}{suffix} is missing"
+            for suffix in (".IDX", ".STS")
+            for f in sorted(set(dats) - set(self._function_dat_files(suffix)))
+        ]
+        # An empty index beside a data file that holds scans reads as "not
+        # imaging" too: the library finds no scans through it.
+        missing += [
+            f"_FUNC{f + 1:03d}.IDX is empty"
+            for f, dat in sorted(dats.items())
+            if f in indexes
+            and indexes[f].stat().st_size == 0
+            and dat.stat().st_size > 0
+        ]
+        if missing:
+            raise ConversionRefused(
+                f"{self.data_path.name}: {', '.join(sorted(missing))}. "
+                "Each _FUNCnnn.DAT needs its .IDX and .STS beside it; restore "
+                "them from the acquisition."
+            )
+
+    def _validate_scan_counts(self, n_functions: int) -> None:
+        """Refuse a function whose data file holds fewer scans than its index.
+
+        A ``_FUNCnnn.DAT`` cut short or emptied, as an unfinished copy
+        leaves it, gave fewer scans and a smaller image at exit 0 (issue
+        #527): measured, a 9-scan function cut to 40% returns 3 scans and
+        still reads as imaging; cut to nothing it returns 0. The ``.IDX``
+        holds one fixed-size record per scan -- 22 bytes on the Synapt G1
+        runs measured, 30 on Xevo and Cyclic. A size those records explain
+        and a library count that matches none of them is a function that
+        lost scans, and refused. A size neither record explains may be a
+        MassLynx version not measured: it is warned about, not refused.
+        """
+        assert self._ml is not None
+        indexes = self._function_dat_files(".IDX")
+        for f in range(n_functions):
+            idx = indexes.get(f)
+            if idx is None:
+                continue
+            size = idx.stat().st_size
+            returned = self._ml.get_number_of_scans_in_function(self._handle, f)
+            listed = [size // r for r in _IDX_RECORD_SIZES if size % r == 0]
+            if not listed:
+                logger.warning(
+                    "_FUNC%03d.IDX of %s is %d bytes, which no known index "
+                    "record size divides; the %d scans the library returned "
+                    "for function %d could not be checked against it.",
+                    f + 1,
+                    self.data_path.name,
+                    size,
+                    returned,
+                    f + 1,
+                )
+                continue
+            if returned in listed:
+                continue
+            raise ConversionRefused(
+                f"{self.data_path.name}: the library returned {returned} scans "
+                f"of function {f + 1}, but _FUNC{f + 1:03d}.IDX lists "
+                f"{max(listed)}. Is the run complete? Restore "
+                f"_FUNC{f + 1:03d}.DAT and _FUNC{f + 1:03d}.IDX from the "
+                "acquisition."
+            )
 
     def _validate_function_files(self, n_functions: int) -> None:
         """Refuse a .raw directory that has lost one of its function files.
@@ -382,14 +465,28 @@ class WatersReader(BaseMSIReader):
         if self._closed:
             raise RuntimeError("Reader has been closed and cannot be reused")
 
+        # Before the library sees the run: without its .IDX or .STS it
+        # answers "not an imaging file" or reads fewer scans.
+        self._validate_function_companions()
+
         # Load the native library (singleton)
         self._ml = MassLynxLib.get_instance(lib_dir=Path(__file__).parent / "lib")
 
         # Open the .raw directory
         self._handle = self._ml.open_file(str(self.data_path))
 
-        # Verify this is an imaging file
+        # Verify this is an imaging file. A data file cut to nothing also
+        # reads as "not imaging", so the scan counts are checked first: that
+        # refusal names the function and its missing scans.
         if not self._ml.is_imaging_file(self._handle):
+            try:
+                self._validate_scan_counts(
+                    self._ml.get_number_of_functions(self._handle)
+                )
+            except ConversionRefused:
+                self._ml.close_file(self._handle)
+                self._handle = None
+                raise
             self._ml.close_file(self._handle)
             self._handle = None
             raise ConversionRefused(
@@ -459,7 +556,13 @@ class WatersReader(BaseMSIReader):
         # nothing downstream notices: on a raster MassLynx split across
         # functions, one missing chunk file silently drops its rows of the
         # image (issue #229).
-        self._validate_function_files(n_funcs)
+        try:
+            self._validate_function_files(n_funcs)
+            self._validate_scan_counts(n_funcs)
+        except ConversionRefused:
+            self._ml.close_file(self._handle)
+            self._handle = None
+            raise
 
         # Build the imaging grid from the MS functions alone. They are what
         # defines the raster; everything else is measured against it. The
@@ -498,6 +601,7 @@ class WatersReader(BaseMSIReader):
             allow_single_position=self._metadata_only,
             pattern=self._pattern,
             region=self._region,
+            fitted_to=ms_functions,
         )
 
         # Nothing so far has read a spectrum: the grid and the function

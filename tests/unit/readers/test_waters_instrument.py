@@ -150,6 +150,10 @@ def _raw_dir(tmp_path, extern=None, header=None):
     raw = tmp_path / "run.raw"
     raw.mkdir(parents=True)
     (raw / "_FUNC001.DAT").write_bytes(b"\x00" * 64)
+    # The index and status files every function file comes with; three
+    # 30-byte scan records, for a mocked library that reports 3 scans.
+    (raw / "_FUNC001.IDX").write_bytes(b"\x00" * 30 * 3)
+    (raw / "_FUNC001.STS").write_bytes(b"\x00" * 64)
     if extern is not None:
         (raw / "_extern.inf").write_text(extern, encoding="latin-1")
     if header is not None:
@@ -353,6 +357,7 @@ class TestReaderDefault:
         mock_ml.open_file.return_value = "handle"
         mock_ml.is_imaging_file.return_value = True
         mock_ml.get_number_of_functions.return_value = 1
+        mock_ml.get_number_of_scans_in_function.return_value = 3
         mock_ml.classify_function.return_value = FunctionType.MS
         mock_build_grid.return_value = _grid_one_pixel()
 

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ...core.base_extractor import MetadataExtractor
+from ...core.positions import whole_sql
 from ...errors import ConversionRefused
 from ..types import ComprehensiveMetadata, EssentialMetadata
 
@@ -28,6 +29,19 @@ _CALIBRATION_INFO_TEXT = (
     ("CalibrationSoftware", "calibration_software"),
     ("CalibrationSoftwareVersion", "calibration_software_version"),
 )
+
+
+def _mismatch_reading(raster: Tuple[float, float], beam: Tuple[float, float]) -> str:
+    """What a Raster step that differs from BeamScanSize says, by direction.
+
+    Oversampled only when the beam scans more than one step, on some axis
+    and on none less; a step larger than the beam leaves gaps between spots.
+    """
+    if all(b >= r for r, b in zip(raster, beam)):
+        return "The beam scan is larger than the step: the acquisition is oversampled."
+    if all(b <= r for r, b in zip(raster, beam)):
+        return "The beam scan is smaller than the step: the spots leave gaps."
+    return "The beam scan is larger than the step on one axis and smaller on the other."
 
 
 def _float64_count(blob: Any) -> Optional[int]:
@@ -298,26 +312,30 @@ class BrukerMetadataExtractor(MetadataExtractor):
 
         When a region is selected, only frames from that region are
         included in the bounds and count.
+
+        The bounds come from the frames whose position and region number
+        are whole numbers: the reader skips the others, and a text ``MAX`` ended in ``int()``
+        while a REAL just below a whole number was cut down (issue #527).
+        The count stays every frame, as it was.
         """
+        whole = " AND ".join(
+            whole_sql(column) for column in ("XIndexPos", "YIndexPos", "RegionNumber")
+        )
+        bounds = (
+            f"MIN(CASE WHEN {whole} THEN XIndexPos END), "
+            f"MAX(CASE WHEN {whole} THEN XIndexPos END), "
+            f"MIN(CASE WHEN {whole} THEN YIndexPos END), "
+            f"MAX(CASE WHEN {whole} THEN YIndexPos END), "
+            "COUNT(*) as frame_count"
+        )
         if self._region is not None:
-            frame_query = """
-            SELECT
-                MIN(XIndexPos), MAX(XIndexPos),
-                MIN(YIndexPos), MAX(YIndexPos),
-                COUNT(*) as frame_count
-            FROM MaldiFrameInfo
-            WHERE RegionNumber = ?
-            """
-            cursor.execute(frame_query, (self._region,))
+            where = " WHERE RegionNumber = ?"
+            cursor.execute(
+                f"SELECT {bounds} FROM MaldiFrameInfo{where}",  # nosec B608
+                (self._region,),
+            )
         else:
-            frame_query = """
-            SELECT
-                MIN(XIndexPos), MAX(XIndexPos),
-                MIN(YIndexPos), MAX(YIndexPos),
-                COUNT(*) as frame_count
-            FROM MaldiFrameInfo
-            """
-            cursor.execute(frame_query)
+            cursor.execute(f"SELECT {bounds} FROM MaldiFrameInfo")  # nosec B608
         return cursor.fetchone()
 
     def _query_frame_count(self, cursor) -> int:
@@ -581,6 +599,33 @@ class BrukerMetadataExtractor(MetadataExtractor):
         mis_path = find_mis_file_for_d_folder(self.data_path)
         return parse_mis_file(mis_path) if mis_path is not None else None
 
+    def _beam_scan_size(
+        self, beam_x: object, beam_y: object
+    ) -> Optional[Tuple[float, float]]:
+        """The beam scan size as two finite numbers above zero, or ``None``.
+
+        sqlite stores whatever was written, so a column declared REAL can
+        hold ``'20 um'``. A value that is not a number is treated like a
+        missing one, with a warning naming it, instead of ending the
+        conversion in ``float()`` even when ``--pixel-size`` was given.
+        """
+        if not beam_x or not beam_y:
+            return None
+        try:
+            beam = (float(beam_x), float(beam_y))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            beam = (math.nan, math.nan)
+        if all(math.isfinite(v) and v > 0 for v in beam):
+            return beam
+        logger.warning(
+            "MaldiFrameLaserInfo BeamScanSize (%r, %r) in %s is not two numbers "
+            "above zero, so it is treated as missing",
+            beam_x,
+            beam_y,
+            self.data_path.name,
+        )
+        return None
+
     def _resolve_pixel_size_um(
         self,
         beam_x: Optional[float],
@@ -612,20 +657,19 @@ class BrukerMetadataExtractor(MetadataExtractor):
             ):
                 raster = (float(raster_xy[0]), float(raster_xy[1]))
 
-        beam: Optional[Tuple[float, float]] = (
-            (float(beam_x), float(beam_y)) if beam_x and beam_y else None
-        )
+        beam = self._beam_scan_size(beam_x, beam_y)
 
         if raster is not None and beam is not None:
             if raster != beam:
                 logger.warning(
                     "Pixel size mismatch: .mis Raster=(%g, %g) um, "
-                    "BeamScanSize=(%g, %g) um. Acquisition is oversampled. "
+                    "BeamScanSize=(%g, %g) um. %s "
                     "Using Raster step. Override with --pixel-size if needed.",
                     raster[0],
                     raster[1],
                     beam[0],
                     beam[1],
+                    _mismatch_reading(raster, beam),
                 )
             return raster
 

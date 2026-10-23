@@ -385,7 +385,8 @@ class TestDirectCoordinateExtraction:
             mock_cursor.fetchone.return_value = (
                 15,
                 25,
-            )  # X=15, Y=25 for frame
+                0,
+            )  # X=15, Y=25, region 0 for frame
 
             db_path = Path("/fake/analysis.tsf")
             coordinate_offsets = (5, 15, 0)  # Offsets from metadata
@@ -413,7 +414,8 @@ class TestDirectCoordinateExtraction:
             mock_cursor.fetchone.return_value = (
                 15,
                 25,
-            )  # X=15, Y=25 for frame
+                0,
+            )  # X=15, Y=25, region 0 for frame
 
             db_path = Path("/fake/analysis.tsf")
             coords = _get_frame_coordinates(db_path, 1)  # No offsets provided
@@ -436,9 +438,11 @@ class TestDirectCoordinateExtraction:
             mock_connect.return_value = mock_conn
             mock_conn.cursor.return_value = mock_cursor
 
-            # Mock no MALDI table
+            # Mock no MALDI table: the lookup with RegionNumber and the
+            # one without both find no table.
             mock_cursor.execute.side_effect = [
-                sqlite3.OperationalError("no such table")
+                sqlite3.OperationalError("no such table"),
+                sqlite3.OperationalError("no such table"),
             ]
 
             db_path = Path("/fake/analysis.tsf")

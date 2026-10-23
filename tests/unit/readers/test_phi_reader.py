@@ -5,6 +5,7 @@ be exercised without a multi-hundred-megabyte vendor file.
 """
 
 import json
+import logging
 import struct
 
 import numpy as np
@@ -634,3 +635,105 @@ class TestRegistryDetection:
         path.write_bytes(b"XXXX" + b"\x00" * 64)
         with pytest.raises(ConversionRefused, match="Unrecognised .raw file"):
             detect_format(path)
+
+
+class TestHeaderAndEventValues:
+    """Issue #527: PHI header values and event records that cannot be used."""
+
+    @pytest.mark.parametrize("pixels", ["inf", "-inf", "1e400", "nan"])
+    def test_an_unreadable_image_pixels_is_refused_in_one_line(self, tmp_path, pixels):
+        path = write_raw(
+            tmp_path / "px.raw", events_block([event(0, 0, 3_000_000)]), pixels=pixels
+        )
+        with pytest.raises(ConversionRefused, match="non-positive ImagePixels"):
+            parse_phi_header(path)
+
+    def test_an_infinite_frame_count_falls_back_to_its_default(self, tmp_path):
+        path = write_raw(
+            tmp_path / "fr.raw", events_block([event(0, 0, 3_000_000)]), frames="inf"
+        )
+        assert parse_phi_header(path).n_frames == 1
+
+    def test_a_calibration_too_flat_to_rise_is_refused(self, tmp_path):
+        path = write_raw(
+            tmp_path / "flat.raw",
+            events_block([event(0, 0, 3_000_000)]),
+            slope="1e-300",
+            offset="3",
+        )
+        with pytest.raises(ConversionRefused, match="does not give an m/z axis"):
+            PhiReader(path).mass_axis
+
+    def test_a_nan_header_slope_is_refused_as_non_positive(self, tmp_path):
+        path = write_raw(
+            tmp_path / "nan.raw", events_block([event(0, 0, 3_000_000)]), slope="nan"
+        )
+        with pytest.raises(ConversionRefused, match="non-positive Mass/Time"):
+            parse_phi_header(path)
+
+    @pytest.mark.parametrize("slope", [b"0", b"-1", b"nan"])
+    def test_an_appended_slope_that_is_not_positive_is_refused(self, tmp_path, slope):
+        appended = (
+            b"AppendedBlockType: AsciiInfoBlock01\r\nMass/Time: "
+            + slope
+            + b"\r\nMassOffset: 3\r\n"
+        )
+        blocks = events_block([event(0, 0, 3_000_000)]) + block(14, appended)
+        path = write_raw(tmp_path / "appended.raw", blocks)
+        with pytest.raises(ConversionRefused, match="appended recalibration"):
+            PhiReader(path).mass_axis
+
+    def test_a_file_of_invalid_records_says_they_failed_the_validity_test(
+        self, tmp_path
+    ):
+        invalid = [
+            (5 << 32) | 3_000_000,  # bit 31 clear
+            (1 << 58) | event(0, 0, 3_000_000),  # high bits set
+            0xADADADADADADADAD,  # uninitialised-heap fill
+        ]
+        path = write_raw(tmp_path / "invalid.raw", events_block(invalid))
+        with pytest.raises(ConversionRefused) as refused:
+            PhiReader(path).occupied_channel_counts()
+        message = str(refused.value)
+        assert "of 3 records, 3 failed the validity test" in message
+        assert "0 lay outside the 4x4 pixel raster" in message
+
+    def test_events_off_the_raster_are_warned_about_apart_from_off_axis(
+        self, tmp_path, thyra_logs
+    ):
+        on = [event(0, 0, 3_000_000), event(1, 2, 5_000_000)]
+        off_grid = [event(5, 1, 3_000_000)] * 3
+        off_axis = [event(1, 1, 50_000_000)] * 2
+        path = write_raw(tmp_path / "off.raw", events_block(on + off_grid + off_axis))
+        with thyra_logs("thyra.readers.phi", logging.INFO) as records:
+            with PhiReader(path) as reader:
+                coords = sorted(c for c, _, _ in reader.iter_spectra())
+        assert coords == [(0, 0, 0), (1, 2, 0)]
+        warnings = [r.getMessage() for r in records if r.levelno == logging.WARNING]
+        assert warnings == [
+            "3 of 7 ion events lie outside the 4x4 pixel raster the header "
+            "declares (4 pixels per tile) and were dropped"
+        ]
+        assert any(
+            "5 records dropped: 0 failed the validity test, 3 lay outside the "
+            "4x4 pixel raster, 2 fell outside the mass axis" in m
+            for m in records.messages
+        )
+
+    def test_a_mosaic_event_past_its_tile_does_not_land_on_the_next_tile(
+        self, tmp_path, thyra_logs
+    ):
+        # Tile 0 holds an event at x = 5, past its 4-pixel raster; offset
+        # into the 8-wide mosaic it would sit on tile 1's pixel (5, 1).
+        blocks = (
+            events_block([event(5, 1, 3_000_000), event(0, 0, 3_000_000)])
+            + block(6, struct.pack("<II", 1, 0))
+            + events_block([event(1, 1, 3_000_000), event(4, 0, 3_000_000)])
+        )
+        path = write_raw(tmp_path / "mosaic.raw", blocks, tiles_x=2, tiles_y=1)
+        with thyra_logs("thyra.readers.phi", logging.WARNING) as records:
+            with PhiReader(path) as reader:
+                assert reader.dimensions == (8, 4, 1)
+                coords = sorted(c for c, _, _ in reader.iter_spectra())
+        assert coords == [(0, 0, 0), (5, 1, 0)]
+        assert [r.getMessage().split(" ion events")[0] for r in records] == ["2 of 4"]

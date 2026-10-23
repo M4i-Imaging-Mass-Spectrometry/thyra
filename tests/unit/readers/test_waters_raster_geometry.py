@@ -317,6 +317,31 @@ class TestGridFromConvertedFunctionsOnly:
         assert refitted.pixel_size_x == pytest.approx(30.0)
         assert "re-fitted to the converted functions" in records.text
 
+    def test_a_grid_grown_by_a_rescued_chunk_blames_no_exclusion(self, thyra_logs):
+        """#527 F106: the warning blamed excluded functions for any change."""
+        scan_map = _raster(10, 5, 30.0, func=0)
+        tail = _raster(10, 2, 30.0, func=1, origin_mm=(0.0, 0.15))
+        scan_map.update(tail)
+        grid = _grid_from_scan_map(scan_map, functions=[0])
+
+        with thyra_logs("thyra.readers", logging.WARNING) as records:
+            grown = regrid_for_functions(grid, [0, 1], fitted_to=[0])
+
+        assert (grown.pixel_count_x, grown.pixel_count_y) == (10, 7)
+        assert "Function(s) 1 hold part of the raster" in records.text
+        assert "excluded" not in records.text
+
+    def test_a_grid_shrunk_by_an_exclusion_still_names_it(self, thyra_logs):
+        scan_map = _raster(10, 5, 30.0, func=0)
+        scan_map.update(_raster(10, 5, 30.0, func=1, origin_mm=(0.015, 0.0)))
+        grid = _grid_from_scan_map(scan_map)
+
+        with thyra_logs("thyra.readers", logging.WARNING) as records:
+            regrid_for_functions(grid, [0], fitted_to=[0, 1])
+
+        assert "excluded function(s) 1 were part of the raster" in records.text
+        assert "hold part of the raster" not in records.text
+
 
 class TestScansByFunction:
     """One pass instead of a re-sort per query (#235)."""

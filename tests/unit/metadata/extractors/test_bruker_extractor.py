@@ -56,7 +56,7 @@ class TestBrukerMetadataExtractor:
                 return ("D:\\Methods\\imaging_pos.m",)
             elif "BeamScanSizeX, BeamScanSizeY, SpotSize" in query:
                 return sample_data.get("laser_info", (25.0, 25.0, 1.0))
-            elif "MIN(XIndexPos)" in query and "COUNT(*)" in query:
+            elif "MIN(CASE WHEN" in query and "COUNT(*)" in query:
                 return (0, 2, 0, 4, 400)
 
             return sample_data["essential"]
@@ -256,6 +256,55 @@ class TestBrukerMetadataExtractor:
         messages = [r.getMessage() for r in records]
         assert any(f"Unusable Raster {raster!r}" in m for m in messages), messages
         assert any("pixel size is BeamScanSize (15, 15)" in m for m in messages)
+
+    def _laser_info_extractor(self, tmp_path, beam, raster=None):
+        """An extractor over a mock .d with BeamScanSize ``beam``."""
+        sample_data = {
+            "essential": (16.0, 16.0, 5.0, 0, 2, 0, 4, 400, 100.0, 1000.0),
+            "comprehensive": [],
+            "laser_info": (*beam, 5.0),
+        }
+        d_folder = tmp_path / "run.d"
+        d_folder.mkdir()
+        if raster is not None:
+            (tmp_path / "run.mis").write_text(
+                f"<ImagingSequence><Raster>{raster}</Raster></ImagingSequence>"
+            )
+        return BrukerMetadataExtractor(
+            self.create_mock_connection(sample_data), d_folder
+        )
+
+    @pytest.mark.parametrize("raster", [None, "20,20"])
+    def test_a_text_beamscansize_is_treated_as_missing(
+        self, tmp_path, thyra_logs, raster
+    ):
+        """#527 F146: '20 um' in a REAL column ended in float()."""
+        extractor = self._laser_info_extractor(tmp_path, ("20 um", 16.0), raster)
+        with thyra_logs("thyra", logging.WARNING) as records:
+            essential = extractor.get_essential()
+
+        assert essential.pixel_size == (None if raster is None else (20.0, 20.0))
+        assert any("BeamScanSize ('20 um', 16.0)" in m for m in records.messages)
+
+    @pytest.mark.parametrize(
+        "raster, reading",
+        [
+            ("8,8", "the acquisition is oversampled"),
+            ("20,20", "the spots leave gaps"),
+            ("20,8", "larger than the step on one axis and smaller on the other"),
+        ],
+    )
+    def test_the_mismatch_warning_says_which_way_it_goes(
+        self, tmp_path, thyra_logs, raster, reading
+    ):
+        """#527 F160: it always said 'oversampled'."""
+        extractor = self._laser_info_extractor(tmp_path, (16.0, 16.0), raster)
+        with thyra_logs("thyra", logging.WARNING) as records:
+            extractor.get_essential()
+
+        (mismatch,) = [m for m in records.messages if "mismatch" in m]
+        assert reading in mismatch
+        assert ("oversampled" in mismatch) == (raster == "8,8")
 
     def test_the_readers_parse_is_used_and_the_file_not_read_again(
         self, tmp_path, thyra_logs
@@ -644,7 +693,7 @@ class TestBrukerMetadataExtractor:
                     return (1,)
                 if "BeamScanSizeX, BeamScanSizeY, SpotSize" in query:
                     return (25.0, 25.0, 1.0)
-                elif "MIN(XIndexPos)" in query and "COUNT(*)" in query:
+                elif "MIN(CASE WHEN" in query and "COUNT(*)" in query:
                     return (10, 40, 5, 25, 100)
             return None
 
@@ -736,7 +785,7 @@ class TestBrukerMetadataExtractor:
                     return (1,)
                 if "BeamScanSizeX, BeamScanSizeY, SpotSize" in query:
                     return (25.0, 25.0, 1.0)
-                elif "MIN(XIndexPos)" in query and "COUNT(*)" in query:
+                elif "MIN(CASE WHEN" in query and "COUNT(*)" in query:
                     return (0, 0, 0, 0, 1)
             return None
 
@@ -784,7 +833,7 @@ class TestBrukerMetadataExtractor:
                     return (1,)
                 if "BeamScanSizeX, BeamScanSizeY, SpotSize" in query:
                     return (20.0, 30.0, 1.0)
-                elif "MIN(XIndexPos)" in query and "COUNT(*)" in query:
+                elif "MIN(CASE WHEN" in query and "COUNT(*)" in query:
                     return (0, 100, 0, 200, 400)
             return None
 
@@ -862,7 +911,7 @@ class TestBrukerMetadataExtractor:
                     return (1,)
                 if "BeamScanSizeX, BeamScanSizeY, SpotSize" in query:
                     return (1.0, 1.0, 1.0)
-                elif "MIN(XIndexPos)" in query and "COUNT(*)" in query:
+                elif "MIN(CASE WHEN" in query and "COUNT(*)" in query:
                     return (0, 10000, 0, 10000, 100000000)
             return None
 

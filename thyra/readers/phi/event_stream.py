@@ -67,6 +67,10 @@ _X_SHIFT = np.uint64(32)
 _Y_SHIFT = np.uint64(43)
 _HIGH_SHIFT = np.uint64(_VALID_HIGH_SHIFT)
 
+#: X given to an event that lies past its own mosaic tile's raster: no pixel
+#: grid holds it, so the reader drops it as an off-raster event.
+OFF_RASTER = -1
+
 #: Appended ASCII blocks are small; cap the read rather than trusting the size.
 _ASCII_INFO_LIMIT = 1 << 16
 
@@ -316,11 +320,17 @@ def iter_event_batches(
             tile = pending_tile or (0, 0)
             pending, pending_tile, pending_count = [], None, 0
             x, y, tof = decode_events(words)
+            # An event past its own tile's raster would land on the next
+            # tile's pixels in a mosaic, so it is moved off every grid
+            # instead and the caller counts it with the other off-raster
+            # events. Tile (0, 0) included: its neighbour starts at x = stride.
+            stride = index.pixels_per_tile
+            off_tile = (x >= stride) | (y >= stride)
             if tile != (0, 0):
                 # Block 6 carries tile indices, not pixel offsets.
-                stride = index.pixels_per_tile
                 x = x + np.int32(tile[0] * stride)
                 y = y + np.int32(tile[1] * stride)
+            x[off_tile] = OFF_RASTER
             return x, y, tof
 
         for span in index.data_spans:

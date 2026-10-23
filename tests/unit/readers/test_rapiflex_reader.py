@@ -2,6 +2,7 @@
 Tests for the Rapiflex reader.
 """
 
+import logging
 import struct
 
 import numpy as np
@@ -531,3 +532,86 @@ class TestRasterOrigin:
         assert min(x for x, _, _ in coords) == 0
         assert min(y for _, y, _ in coords) == 0
         reader.close()
+
+
+def _set_info_line(folder, key, value):
+    """Replace one ``key: value`` line of the acquisition's ``_info.txt``."""
+    info = folder / "sample_info.txt"
+    lines = [
+        f"{key}: {value}\n" if line.startswith(f"{key}:") else line
+        for line in info.read_text().splitlines(keepends=True)
+    ]
+    info.write_text("".join(lines))
+
+
+class TestInfoValues:
+    """Issue #527: ``_info.txt`` values that are not the numbers they name."""
+
+    @pytest.mark.parametrize("raster", ["10,5,10,5", "20 um,20 um", "20", "0,20"])
+    def test_a_raster_that_is_not_two_positive_numbers_is_missing(
+        self, create_mock_rapiflex_data, thyra_logs, raster
+    ):
+        folder = create_mock_rapiflex_data[0]
+        _set_info_line(folder, "Raster", raster)
+        with thyra_logs("thyra.readers", logging.WARNING) as records:
+            with RapiflexReader(folder) as reader:
+                essential = reader._create_metadata_extractor().get_essential()
+        assert essential.pixel_size is None
+        assert f"Unusable Raster {raster!r}" in records.text
+        assert "declares no raster step" in records.text
+
+    def test_an_exponent_mass_end_converts_like_its_decimal(
+        self, create_mock_rapiflex_data
+    ):
+        folder = create_mock_rapiflex_data[0]
+        _set_info_line(folder, "Mass Start", "100")
+        _set_info_line(folder, "Mass End", "5e2")
+        with RapiflexReader(folder) as reader:
+            axis = reader.get_common_mass_axis()
+            essential = reader._create_metadata_extractor().get_essential()
+        assert (axis[0], axis[-1]) == (100.0, 500.0)
+        assert essential.mass_range == (100.0, 500.0)
+
+    @pytest.mark.parametrize("end", ["nan", "inf", "100,5", "five hundred"])
+    def test_an_unreadable_mass_end_is_refused_in_one_line(
+        self, create_mock_rapiflex_data, end
+    ):
+        folder = create_mock_rapiflex_data[0]
+        _set_info_line(folder, "Mass End", end)
+        with RapiflexReader(folder) as reader:
+            with pytest.raises(
+                ConversionRefused, match="no usable Mass Start/Mass End"
+            ):
+                reader.get_common_mass_axis()
+
+
+class TestDatLength:
+    """Issue #527 (F182): a ``.dat`` shorter than its offset table says."""
+
+    @pytest.mark.parametrize("cut", [400, 120, 121])
+    def test_a_cut_short_dat_is_refused_naming_the_spot(
+        self, create_mock_rapiflex_data, cut
+    ):
+        folder = create_mock_rapiflex_data[0]
+        dat = folder / "sample.dat"
+        dat.write_bytes(dat.read_bytes()[:-cut])
+        with pytest.raises(ConversionRefused, match=r"spot \(2, 2\).*copy complete"):
+            RapiflexReader(folder)
+
+    def test_an_offset_past_the_end_is_refused(self, create_mock_rapiflex_data):
+        folder = create_mock_rapiflex_data[0]
+        dat = folder / "sample.dat"
+        data = bytearray(dat.read_bytes())
+        struct.pack_into("<I", data, 48 + 5 * 4, len(data) + 4000)
+        dat.write_bytes(bytes(data))
+        with pytest.raises(ConversionRefused, match=r"1 of its 9 spectra.*\(2, 1\)"):
+            RapiflexReader(folder)
+
+    def test_a_dat_that_ends_inside_its_offset_table_is_refused(
+        self, create_mock_rapiflex_data
+    ):
+        folder = create_mock_rapiflex_data[0]
+        dat = folder / "sample.dat"
+        dat.write_bytes(dat.read_bytes()[: 48 + 13])
+        with pytest.raises(ConversionRefused, match="ends inside its offset table"):
+            RapiflexReader(folder)
