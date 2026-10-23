@@ -52,6 +52,7 @@ from typing import Any, Dict, NamedTuple, Optional, Sequence, Tuple
 import numpy as np
 from numpy.typing import NDArray
 
+from ...core.positions import whole_numbers
 from ...errors import ConversionRefused
 
 #: Chunk encodings this module decodes, with their CV names.
@@ -1014,7 +1015,14 @@ def decode_chunks(chunk: Any, source: str) -> DecodedChunks:
     # stored, so it is padding whatever its m/z says.
     mz[np.isnan(intensity)] = np.nan
     return DecodedChunks(
-        spectrum_index=np.repeat(_numbers(chunk, "spectrum_index", np.int64), counts),
+        spectrum_index=np.repeat(
+            whole_numbers(
+                chunk.field("spectrum_index").to_numpy(zero_copy_only=False),
+                "spectrum indices",
+                source,
+            ),
+            counts,
+        ),
         mz=mz,
         intensity=intensity,
     )

@@ -75,6 +75,7 @@ from numpy.typing import NDArray
 
 from ...core.base_reader import BaseMSIReader, OpticalImageLabel
 from ...core.mass_axis import MassAxisAccumulator
+from ...core.positions import whole_numbers
 from ...core.region_map import build_region_map
 from ...core.registry import register_reader
 from ...errors import ConversionRefused
@@ -423,20 +424,33 @@ def _numbers(column: Any, name: str, member: str, path: Path) -> Any:
     )
 
 
-def _positions(column: Any) -> Tuple[NDArray[np.int64], NDArray[np.bool_]]:
+def _positions(
+    column: Any, what: str = "positions", source: Any = None
+) -> Tuple[NDArray[np.int64], NDArray[np.bool_]]:
     """Read one position column, keeping apart the scans that have none.
 
     A null is a scan that belongs to no pixel. Cast straight to an integer
     it becomes the smallest one there is, and the minimum of the column
     would then put the origin of the grid at that scan.
 
+    A stated position goes through :func:`whole_numbers`: a float such as
+    ``2.9999999999999996`` is the 3 it means, where a cast used to cut it to
+    2 and sum the spectrum into its neighbour, and a ``uint64`` of ``2**63``
+    or more is refused, where it used to wrap negative (issue #527).
+
     Args:
         column: The position column of the scans member, as pyarrow reads
             it, holding numbers (see :func:`_numbers`).
+        what: What the column holds, for the refusal.
+        source: The archive, for the refusal.
 
     Returns:
         The positions as integers, 0 where there is none, and a mask that is
         ``True`` where the scan has a position.
+
+    Raises:
+        ConversionRefused: If a stated position is not a whole number
+            within int64.
     """
     if column.null_count == len(column):
         # Nothing to fill, and a column of the null type cannot be filled.
@@ -446,25 +460,32 @@ def _positions(column: Any) -> Tuple[NDArray[np.int64], NDArray[np.bool_]]:
     if values.dtype.kind == "f":
         finite = np.isfinite(values)
         present = present & finite
-        values = np.where(finite, values, 0)
-    return values.astype(np.int64), present
+    out = np.zeros(values.size, dtype=np.int64)
+    out[present] = whole_numbers(values[present], what, source)
+    return out, present
 
 
-def _integers_or_zero(column: Any) -> NDArray[np.int64]:
+def _integers_or_zero(
+    column: Any, what: str = "values", source: Any = None
+) -> NDArray[np.int64]:
     """Read an integer column of the metadata member, 0 where it has a null.
 
     A column with no value at all may have the null type, which cannot be
     filled with 0. It reads as the same column typed as an integer would.
+    The values go through :func:`whole_numbers`, so a ``uint64`` past int64
+    is refused rather than wrapped negative (issue #527).
 
     Args:
         column: One column of the spectrum metadata member.
+        what: What the column holds, for the refusal.
+        source: The archive, for the refusal.
 
     Returns:
         One integer per row.
     """
     if column.null_count == len(column):
         return np.zeros(len(column), dtype=np.int64)
-    return np.asarray(column.fill_null(0).to_numpy(), dtype=np.int64)
+    return whole_numbers(np.asarray(column.fill_null(0).to_numpy()), what, source)
 
 
 def _integer_parameter(
@@ -520,7 +541,10 @@ def _integer_parameter(
     )
     integers = value.field("integer").filter(matched)
     stated = np.asarray(integers.is_valid().to_numpy(zero_copy_only=False), dtype=bool)
-    numbers = np.asarray(integers.fill_null(0).to_numpy(), dtype=np.int64)
+    numbers = whole_numbers(
+        np.asarray(integers.fill_null(0).to_numpy()),
+        f"{name or accession} values",
+    )
     # The first such parameter of a scan is its value.
     rows, first = np.unique(rows, return_index=True)
     values = np.zeros(len(column), dtype=np.int64)
@@ -1088,10 +1112,16 @@ class MzPeakArchive:
         metadata = member.read(
             columns=["index", column] + ([MS_LEVEL_COLUMN] if has_levels else [])
         )
-        spectrum_index = np.asarray(metadata.column("index").to_numpy(), dtype=np.int64)
-        counts = _integers_or_zero(metadata.column(column))
+        spectrum_index = whole_numbers(
+            np.asarray(metadata.column("index").to_numpy()),
+            "spectrum indices",
+            self.path,
+        )
+        counts = _integers_or_zero(
+            metadata.column(column), f"{column} values", self.path
+        )
         levels = (
-            _integers_or_zero(metadata.column(MS_LEVEL_COLUMN))
+            _integers_or_zero(metadata.column(MS_LEVEL_COLUMN), "MS levels", self.path)
             if has_levels
             else np.zeros(spectrum_index.size, dtype=np.int64)
         )
@@ -1240,7 +1270,9 @@ class MzPeakArchive:
             if table.num_rows == 0:
                 continue
             yield (
-                _point_field(table, "spectrum_index").astype(np.int64, copy=False),
+                whole_numbers(
+                    _point_field(table, "spectrum_index"), "spectrum indices", self.path
+                ),
                 _point_field(table, "mz"),
                 _point_field(table, "intensity"),
             )
@@ -1391,9 +1423,17 @@ class MzPeakArchive:
             ]
         )
         self._report_ion_mobility(scans_member)
-        source = np.asarray(scans.column("source_index").to_numpy(), dtype=np.int64)
-        xs, has_x = _positions(self._position_numbers(scans, x_column))
-        ys, has_y = _positions(self._position_numbers(scans, y_column))
+        source = whole_numbers(
+            np.asarray(scans.column("source_index").to_numpy()),
+            "scan source indices",
+            self.path,
+        )
+        xs, has_x = _positions(
+            self._position_numbers(scans, x_column), "x positions", self.path
+        )
+        ys, has_y = _positions(
+            self._position_numbers(scans, y_column), "y positions", self.path
+        )
 
         # The imaging profile sets both positions of a scan or neither. A
         # scan that belongs to no pixel, a calibration scan for instance, has
@@ -1632,7 +1672,9 @@ class MzPeakArchive:
             ``scans``, or ``None`` when the archive states z nowhere.
         """
         if z_column is not None:
-            return _positions(self._position_numbers(scans, z_column))
+            return _positions(
+                self._position_numbers(scans, z_column), "z positions", self.path
+            )
         member = self.parquet("spectrum", "scans")
         if SCAN_PARAMETERS_COLUMN not in member.schema_arrow.names:
             return None

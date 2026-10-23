@@ -10,6 +10,7 @@ parsed directly, so it works identically on every platform.
 """
 
 import logging
+import math
 from pathlib import Path
 from typing import Any, Dict, Generator, Optional, Tuple
 
@@ -117,6 +118,11 @@ class PhiReader(BaseMSIReader):
             if appended is not None:
                 slope, offset = appended
                 self._calibration_source = "appended"
+                if not slope > 0 or not math.isfinite(slope):
+                    raise ConversionRefused(
+                        "PHI appended recalibration declares a non-positive "
+                        f"Mass/Time ({slope}): {self.data_path}"
+                    )
                 logger.info(
                     "Using appended recalibration (Mass/Time=%s, MassOffset=%s) "
                     "in place of the header values (%s, %s)",
@@ -227,15 +233,21 @@ class PhiReader(BaseMSIReader):
 
         n_x, n_y, _ = self.dimensions
         n_channels = len(self._axis)
-        keys = np.empty(self._index.n_records, dtype=np.int64)
+        n_records = self._index.n_records
+        keys = np.empty(n_records, dtype=np.int64)
         filled = 0
-        dropped = 0
+        decoded = 0
+        off_raster = 0
+        off_axis = 0
 
         for x, y, tof in iter_event_batches(self.data_path, self._index):
+            decoded += tof.size
+            on_grid = (x >= 0) & (x < n_x) & (y >= 0) & (y < n_y)
             channel, ok = self._axis.to_channel(tof)
-            ok &= (x >= 0) & (x < n_x) & (y >= 0) & (y < n_y)
+            off_raster += int(np.count_nonzero(~on_grid))
+            off_axis += int(np.count_nonzero(on_grid & ~ok))
+            ok &= on_grid
             n_ok = int(ok.sum())
-            dropped += ok.size - n_ok
             if n_ok == 0:
                 continue
             pixel = y[ok].astype(np.int64) * n_x + x[ok].astype(np.int64)
@@ -245,11 +257,30 @@ class PhiReader(BaseMSIReader):
             keys[filled : filled + n_ok] = batch
             filled += n_ok
 
+        # Records that fail the validity test never leave decode_events.
+        invalid = n_records - decoded
+        dropped = invalid + off_raster + off_axis
+        why = (
+            f"{invalid} failed the validity test, {off_raster} lay outside the "
+            f"{n_x}x{n_y} pixel raster, {off_axis} fell outside the mass axis"
+        )
         keys = keys[:filled]
         if keys.size == 0:
             raise ConversionRefused(
-                f"No usable ion events in {self.data_path}. All {dropped} records "
-                "fell outside the mass axis or the pixel grid."
+                f"No usable ion events in {self.data_path}: of {n_records} "
+                f"records, {why}."
+            )
+        if off_raster:
+            # Unlike the routine off-axis count, an event beyond the raster
+            # says the header and the event stream disagree on the grid.
+            logger.warning(
+                "%d of %d ion events lie outside the %dx%d pixel raster the "
+                "header declares (%d pixels per tile) and were dropped",
+                off_raster,
+                n_records,
+                n_x,
+                n_y,
+                self._index.pixels_per_tile,
             )
         keys.sort()
 
@@ -276,11 +307,12 @@ class PhiReader(BaseMSIReader):
 
         logger.info(
             "Aggregated %d ion events into %d peaks across %d occupied pixels "
-            "(%d records dropped)",
+            "(%d records dropped: %s)",
             filled,
             self._channels.size,
             self._pixel_ids.size,
             dropped,
+            why,
         )
 
     # --------------------------------------------------------- reader interface

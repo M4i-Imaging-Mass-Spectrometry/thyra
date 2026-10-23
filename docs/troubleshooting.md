@@ -78,9 +78,8 @@ stays, [ask for help](#ask-for-help).
 Thyra checks an imzML file before converting it, and stops if it could not
 read the data correctly. The message names the problem.
 
-- **The message says the `.ibd` is truncated.** The `.ibd` file is
-  incomplete, usually because a copy did not finish. Copy it again and
-  compare the file size with the original.
+- **The message says the `.ibd` is truncated.** See
+  [A file is refused as incomplete](#a-file-is-refused-as-incomplete).
 - **Any other message.** Export the data again from your instrument
   software, choosing uncompressed data and 64-bit floating-point m/z values.
 
@@ -102,6 +101,10 @@ read the data correctly. The message names the problem.
     Some unusual files are fine and only produce a warning: extra bytes at the
     end of the `.ibd`, offsets out of order, and more than one
     `<scanSettings>` block. 32-bit integer arrays are allowed.
+
+### A file is refused as incomplete
+
+An unfinished copy leaves a file short or missing. Copy the folder again.
 
 ### The conversion failed and left a folder ending in `.failed`
 

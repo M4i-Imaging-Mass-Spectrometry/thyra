@@ -39,6 +39,7 @@ from tqdm import tqdm
 
 from ....core.base_extractor import MetadataExtractor
 from ....core.mass_axis import MassAxisAccumulator
+from ....core.positions import whole_numbers
 from ....core.region_map import build_region_map
 from ....core.registry import register_reader
 from ....errors import ConversionRefused
@@ -261,14 +262,28 @@ class SolarixReader(BrukerBaseMSIReader):
             raise ConversionRefused(
                 f"peaks.sqlite holds no spectra in {self.data_path}"
             )
+        x_min, x_max, y_min, y_max = self._whole(row[1:5], "position bounds")
         return {
             "n_spectra": n_spectra,
-            "x_min": int(row[1]),
-            "x_max": int(row[2]),
-            "y_min": int(row[3]),
-            "y_max": int(row[4]),
+            "x_min": int(x_min),
+            "x_max": int(x_max),
+            "y_min": int(y_min),
+            "y_max": int(y_max),
             "total_peaks": int(row[5] or 0),
         }
+
+    def _whole(self, values: Any, what: str) -> NDArray[np.int64]:
+        """``peaks.sqlite`` values as whole numbers, or a one-line refusal.
+
+        sqlite stores what was written: a position column can hold text,
+        ``NULL``, a REAL just below a whole number or one past int64. Each
+        used to end in a traceback or be cut onto the neighbouring pixel
+        (issue #527). The columns are declared INTEGER, so no tolerance: a
+        REAL that is not whole is damage, not writer noise.
+        """
+        return whole_numbers(
+            np.array(list(values), dtype=object), what, self._peaks_path, tolerance=0.0
+        )
 
     def _load_spectra_index(self) -> Dict[str, NDArray]:
         """Load the per-spectrum index (no blobs). Idempotent."""
@@ -284,21 +299,23 @@ class SolarixReader(BrukerBaseMSIReader):
                 f"peaks.sqlite holds no spectra in {self.data_path}"
             )
 
-        arr = np.asarray(rows, dtype=np.int64)
+        columns = list(zip(*rows))
+        x = self._whole(columns[1], "XIndexPos values")
+        y = self._whole(columns[2], "YIndexPos values")
         self._spectra_index = {
-            "id": arr[:, 0],
-            "x": arr[:, 1],
-            "y": arr[:, 2],
-            "num_peaks": arr[:, 3],
-            "region": arr[:, 4],
+            "id": self._whole(columns[0], "spectrum Ids"),
+            "x": x,
+            "y": y,
+            "num_peaks": self._whole(columns[3], "NumPeaks values"),
+            "region": self._whole(columns[4], "RegionNumber values"),
         }
         self._summary = {
-            "n_spectra": int(arr.shape[0]),
-            "x_min": int(arr[:, 1].min()),
-            "x_max": int(arr[:, 1].max()),
-            "y_min": int(arr[:, 2].min()),
-            "y_max": int(arr[:, 2].max()),
-            "total_peaks": int(arr[:, 3].sum()),
+            "n_spectra": len(rows),
+            "x_min": int(x.min()),
+            "x_max": int(x.max()),
+            "y_min": int(y.min()),
+            "y_max": int(y.max()),
+            "total_peaks": int(self._spectra_index["num_peaks"].sum()),
         }
         return self._spectra_index
 
@@ -594,9 +611,13 @@ class SolarixReader(BrukerBaseMSIReader):
             raise RuntimeError("Reader has been closed")
 
         x_min, y_min, _ = self.coordinate_offsets
+        # Positions from the checked index, not the raw row: a REAL just
+        # below a whole number was cut onto its neighbour by int() here.
+        # Both walks are ORDER BY Id, so row i is index entry i.
+        index = self._load_spectra_index()
+        xs, ys = index["x"].tolist(), index["y"].tolist()
         cursor = self._conn.execute(
-            "SELECT Id, XIndexPos, YIndexPos, NumPeaks, PeakMzValues, "
-            "PeakIntensityValues FROM Spectra ORDER BY Id"
+            "SELECT Id, PeakMzValues, PeakIntensityValues FROM Spectra ORDER BY Id"
         )
 
         pbar = tqdm(
@@ -608,8 +629,9 @@ class SolarixReader(BrukerBaseMSIReader):
             disable=getattr(self, "_quiet_mode", False),
         )
         try:
-            for spectrum_id, x, y, num_peaks, mz_blob, intensity_blob in pbar:
-                num_peaks = int(num_peaks)
+            for row, (spectrum_id, mz_blob, intensity_blob) in enumerate(pbar):
+                num_peaks = int(index["num_peaks"][row])
+                x, y = xs[row], ys[row]
                 if num_peaks == 0:
                     continue
                 mzs = self._decode_blob(
@@ -640,8 +662,8 @@ class SolarixReader(BrukerBaseMSIReader):
                     continue
 
                 yield (
-                    (int(x - x_min), int(y - y_min), 0),
-                    int(spectrum_id),
+                    (x - x_min, y - y_min, 0),
+                    int(index["id"][row]),
                     mzs,
                     intensities,
                 )
@@ -680,19 +702,24 @@ class SolarixReader(BrukerBaseMSIReader):
             "MIN(XIndexPos), MIN(YIndexPos), MAX(XIndexPos), MAX(YIndexPos) "
             "FROM Spectra GROUP BY region ORDER BY region"
         ).fetchall()
-        return [
-            {
-                "region_number": int(region),
-                "n_spectra": int(count),
-                "bounds": (
-                    int(lo_x - x_min),
-                    int(lo_y - y_min),
-                    int(hi_x - x_min),
-                    int(hi_y - y_min),
-                ),
-            }
-            for region, count, lo_x, lo_y, hi_x, hi_y in rows
-        ]
+        info = []
+        for region, count, *box in rows:
+            lo_x, lo_y, hi_x, hi_y = self._whole(box, "position bounds")
+            info.append(
+                {
+                    "region_number": int(
+                        self._whole([region], "RegionNumber values")[0]
+                    ),
+                    "n_spectra": int(count),
+                    "bounds": (
+                        int(lo_x - x_min),
+                        int(lo_y - y_min),
+                        int(hi_x - x_min),
+                        int(hi_y - y_min),
+                    ),
+                }
+            )
+        return info
 
     def close(self) -> None:
         """Close the database connection and drop caches."""

@@ -1154,6 +1154,7 @@ def regrid_for_functions(
     allow_single_position: bool = False,
     pattern: Optional[StagePattern] = None,
     region: Optional[int] = None,
+    fitted_to: Optional[Iterable[int]] = None,
 ) -> ImagingGrid:
     """Re-fit the raster to the stage readings of ``functions`` alone.
 
@@ -1165,7 +1166,10 @@ def regrid_for_functions(
     same way :meth:`ImagingGrid.lies_on_raster` takes it.
     ``allow_single_position`` is passed on as :func:`build_imaging_grid`
     takes it. ``pattern`` and ``region`` default to the ones ``grid`` was
-    built with.
+    built with. ``fitted_to`` names the functions ``grid`` was fitted to,
+    so the message can say which way the grid changed: a function left
+    out, or a rescued raster chunk added (issue #527). Without it the
+    message names neither.
     """
     if grid.x_lattice is None or grid.y_lattice is None:
         return grid
@@ -1189,9 +1193,8 @@ def regrid_for_functions(
     if same:
         return grid
     logger.warning(
-        "The imaging grid was re-fitted to the converted functions alone: "
-        "%dx%d at %.4f x %.4f um, was %dx%d at %.4f x %.4f um. The excluded "
-        "functions' stage readings were part of the raster Thyra measured.",
+        "The imaging grid was re-fitted to the converted functions: "
+        "%dx%d at %.4f x %.4f um, was %dx%d at %.4f x %.4f um.%s",
         refitted.pixel_count_x,
         refitted.pixel_count_y,
         refitted.pixel_size_x,
@@ -1200,5 +1203,31 @@ def regrid_for_functions(
         grid.pixel_count_y,
         grid.pixel_size_x,
         grid.pixel_size_y,
+        _regrid_reason(functions, fitted_to),
     )
     return refitted
+
+
+def _regrid_reason(functions: Iterable[int], fitted_to: Optional[Iterable[int]]) -> str:
+    """Why the grid changed, from the functions that came and went.
+
+    The sentence about excluded functions used to be said whatever
+    happened, also when nothing was excluded and a rescued raster chunk
+    had made the grid grow.
+    """
+    if fitted_to is None:
+        return ""
+    now, before = set(functions), set(fitted_to)
+    added, removed = sorted(now - before), sorted(before - now)
+    reasons = []
+    if added:
+        reasons.append(
+            f" Function(s) {', '.join(map(str, added))} hold part of the raster "
+            "and were added to it."
+        )
+    if removed:
+        reasons.append(
+            f" The stage readings of excluded function(s) "
+            f"{', '.join(map(str, removed))} were part of the raster Thyra measured."
+        )
+    return "".join(reasons)

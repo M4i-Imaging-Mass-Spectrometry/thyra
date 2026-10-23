@@ -748,3 +748,26 @@ class TestPeopleStayOutOfTheStore:
         mis = table.uns["raw_metadata"]["mis_metadata"]
         assert mis["Method"] == "lipids.m"
         assert mis["OriginalImage"] == "slide.tif"
+
+
+class TestSolarixPositionValues:
+    """Issue #527: positions sqlite holds as text, NULL, past int64 or not whole."""
+
+    @staticmethod
+    def _with_x(tmp_path, x):
+        spectra = [dict(spec) for spec in DEFAULT_SPECTRA]
+        spectra[2]["x"] = x
+        return make_solarix_d(tmp_path, spectra=spectra)
+
+    @pytest.mark.parametrize("bad", ["1240a", None, 1.0e19, 1239.5, 1239.9999999])
+    def test_an_unusable_position_is_refused_in_one_line(self, tmp_path, bad):
+        d_dir = self._with_x(tmp_path, bad)
+        with pytest.raises(ConversionRefused, match="not whole numbers within int64"):
+            with SolarixReader(d_dir) as reader:
+                list(reader.iter_spectra())
+
+    def test_a_whole_real_keeps_its_pixel(self, tmp_path):
+        d_dir = self._with_x(tmp_path, 1240.0)
+        with SolarixReader(d_dir) as reader:
+            coords = sorted(c for c, _, _ in reader.iter_spectra())
+        assert coords == [(0, 0, 0), (1, 0, 0), (1, 1, 0)]
