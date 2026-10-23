@@ -386,8 +386,10 @@ and leaves that row empty, rather than inflating the pitch and shifting every
 row past the gap up by one. Positions that do not lie on the fitted raster
 are refused, naming the axis and how far off the worst reading sits, instead
 of becoming a grid with a pixel per stage wobble. A scan reporting a
-non-finite position is unpositioned; two scans reporting the same position
-are summed into one pixel and the log names it.
+non-finite position is unpositioned. A pixel that one function acquired
+twice is handled as described under
+[A pixel acquired twice](#a-pixel-acquired-twice); scans of two functions on
+the same pixel are summed, and the log names it.
 
 **Regions.** A run whose method file (`<run>.xml` inside the `.raw`)
 declares a `MultiRegions` table has regions, numbered 1, 2, ... in table
@@ -617,6 +619,72 @@ every chunk and records no mobility: the bins would not cover the image. The cos
 about 13 ms per scan for 200 bins on a Synapt G2-Si; there is no single-read
 record as there is for TDF, so the heatmap and a grid table each take their
 own pass. `--no-mobility-heatmap` skips the heatmap's.
+
+### Lock-mass correction
+
+Many Waters runs measure a reference ion at intervals during the
+acquisition, in a separate lock-mass function. MassLynx and HDImaging use
+those measurements to correct the m/z of every scan. Without the correction
+the m/z drift as the instrument warms: on a three-hour SYNAPT XS MALDI image
+(MSV000092638) known lipid ions read 12 ppm high at the start and 21 ppm
+high at the end, and 1 to 2 ppm off after correction.
+
+Thyra corrects the m/z when you give the reference ion's m/z:
+
+```bash
+# A MALDI run with a red phosphorus lock-mass spot: the P17- cluster anion
+thyra run.raw output.zarr --waters-lock-mass 526.5545
+```
+
+The Waters library measures the reference in the lock-mass scans, and every
+scan is corrected by the measurement nearest to it in time, blended
+smoothly between measurements. The library does this on a small temporary
+copy of the run, because it saves its correction into the folder it works
+on. **Thyra never writes to your run.**
+
+Without the option the store keeps what the run carries. If MassLynx already
+saved a correction in the run folder (a file called `lmgt.inf`), the m/z come
+back corrected and stay that way. If it did not, and the run has lock-mass
+scans, Thyra warns that the m/z are uncorrected. `--waters-lock-mass off`
+stores them uncorrected in every case.
+
+The warning says what the lock-mass scans show, so you can decide with facts:
+
+- **How far their strongest peak moved during the run.** This needs no
+  knowledge of the reference, so it is always reported. A few ppm or more
+  means the uncorrected m/z drift by about that much across the image.
+- **What the scans look like**, but only when that leaves no doubt: a ladder
+  of red phosphorus ions that all agree, or leucine enkephalin as the
+  strongest peak. The warning then names the `--waters-lock-mass` value to
+  use.
+
+Thyra never applies a reference it recognised by itself. A wrong reference
+would shift every m/z without any sign of it, so the choice stays yours. The
+same facts are stored in the metadata of an uncorrected store.
+
+Which reference m/z to give depends on what was measured in the lock-mass
+scans. The run itself usually does not say. Common ones are red phosphorus
+cluster anions on MALDI (P17- 526.5545, P23- 712.3971) and leucine
+enkephalin on electrospray (556.2766 positive, 554.2620 negative).
+
+The store records what was done in its metadata: whether the m/z are
+corrected, the reference m/z, and how large the correction was.
+
+### A pixel acquired twice
+
+Sometimes one function records two scans at the same stage position. Thyra
+handles the two cases this happens in differently:
+
+- **The first scan was cut short.** The instrument paused the raster to
+  measure the lock-mass reference, then measured that pixel again. The
+  first scan holds almost nothing (0 to 2% of a normal scan), so it is left
+  out and the pixel keeps the complete scan. HDImaging does the same.
+- **Both scans are complete.** The pixel stores their average, so it is not
+  brighter than its neighbours for having been measured twice.
+
+Both decisions are listed in the store's metadata. Scans from two different
+functions on the same pixel, such as two mass ranges of one acquisition, are
+added together as before.
 
 ## PHI SmartSoft-TOF (ToF-SIMS)
 

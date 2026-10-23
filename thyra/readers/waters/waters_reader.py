@@ -6,6 +6,7 @@ and MLReader native C libraries via ctypes. The spatial pixel grid is
 reconstructed from laser X/Y positions stored in each scan's metadata.
 """
 
+import bisect
 import ctypes
 import logging
 import math
@@ -46,6 +47,14 @@ from .instrument import (
     read_cyclic_sequence,
     read_stage_pattern,
 )
+from .lockmass import (
+    LockMassCorrection,
+    LockMassSurvey,
+    find_lmgt,
+    measure_lock_mass,
+    read_lmgt,
+    survey_reference_scans,
+)
 from .masslynx_lib import FunctionType, MassLynxLib, ScanInfoData
 
 logger = logging.getLogger(__name__)
@@ -62,6 +71,28 @@ _DRIFT_STEP_TOLERANCE = 1e-4
 #: ``MSMSMode`` values of a function that fragments nothing: a full scan,
 #: and a quadrupole selection (selected ion monitoring).
 _NOT_FRAGMENTED_MODES = frozenset({"MS", "SIM"})
+
+#: The ``lock_mass`` value that stores the m/z uncorrected (D84).
+LOCK_MASS_OFF = "off"
+
+
+def _interrupted(rt_min: float, next_rt_min: float, interruptions: List[float]) -> bool:
+    """Whether a lock-mass scan was taken strictly between two scans (D85)."""
+    at = bisect.bisect_right(interruptions, rt_min)
+    return at < len(interruptions) and interruptions[at] < next_rt_min
+
+
+def _check_lock_mass(value: Union[None, float, str]) -> Union[None, float, str]:
+    """``None``, ``"off"`` or a positive reference m/z; refuse anything else."""
+    if value is None or value == LOCK_MASS_OFF:
+        return value
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConversionRefused(
+            f"lock_mass must be a reference m/z or {LOCK_MASS_OFF!r}, not {value!r}"
+        )
+    if not math.isfinite(value) or value <= 0:
+        raise ConversionRefused(f"lock_mass must be a positive m/z, not {value!r}")
+    return float(value)
 
 
 def _equal_step(values: NDArray[np.float64]) -> Optional[float]:
@@ -137,6 +168,7 @@ class WatersReader(BaseMSIReader):
         data_path: Path,
         use_centroid: Optional[bool] = None,
         intensity_threshold: Optional[float] = None,
+        lock_mass: Union[None, float, str] = None,
         region: Optional[Union[int, str]] = None,
         **kwargs,
     ) -> None:
@@ -151,6 +183,15 @@ class WatersReader(BaseMSIReader):
                 trace resolves, and the vendor centroid on every other
                 Waters instrument. See :mod:`thyra.readers.waters.instrument`.
             intensity_threshold: Minimum intensity value to include.
+            lock_mass: The lock-mass correction of the stored m/z (D84).
+                ``None`` (the default) keeps what the run carries: the
+                correction an ``lmgt.inf`` in the run folder applies, or
+                none, with a warning when the run has reference scans it
+                was not corrected against. A reference m/z has the Waters
+                library measure the lock-mass scans against it, on a copy
+                of the run, and corrects every scan by the result
+                (replacing an ``lmgt.inf`` correction). ``"off"`` stores the
+                m/z uncorrected, undoing an ``lmgt.inf`` one.
             region: Convert only this region of a run whose method declares
                 regions (numbered from 1 in the method's table). A run that
                 declares none is region 1 as a whole. ``None`` (the
@@ -217,6 +258,19 @@ class WatersReader(BaseMSIReader):
         #: or ``False`` when the converted functions give none.
         self._mobility_axis: Any = None
         self._use_centroid = use_centroid
+        self._lock_mass_option = _check_lock_mass(lock_mass)
+        #: The correction the library applies to every read of this run
+        #: (an ``lmgt.inf`` in its folder), and the one the store carries.
+        #: A scan's m/z are multiplied by target / applied (D84).
+        self._lock_mass_applied: Optional[LockMassCorrection] = None
+        self._lock_mass_target: Optional[LockMassCorrection] = None
+        #: What the reference scans of an uncorrected run show (D84).
+        self._lock_mass_survey: Optional[LockMassSurvey] = None
+        #: Scans whose spectrum is weighted when its pixel holds more than
+        #: one scan of the same function: (function, scan) -> weight, 0.0
+        #: for a scan left out (D85). Absent scans weigh 1.
+        self._scan_weights: Dict[Tuple[int, int], float] = {}
+        self._repeated_pixels: Dict[str, Any] = {}
         self._closed = False
 
     def _checked_region(self, region: object) -> Optional[int]:
@@ -452,6 +506,18 @@ class WatersReader(BaseMSIReader):
         # the last point a refusal can be said.
         self._refuse_unreadable_mobility()
 
+        # Which lock-mass correction the stored m/z carry (D84), and how
+        # scans one function took on the same pixel are combined (D85).
+        # Neither reads a spectrum from the run: the first works on a
+        # throwaway copy of it, the second on scan records.
+        try:
+            self._resolve_lock_mass()
+        except ConversionRefused:
+            self._ml.close_file(self._handle)
+            self._handle = None
+            raise
+        self._resolve_repeated_pixels()
+
         # A single-pixel grid is refused by build_imaging_grid() above rather
         # than warned about here: "this may not be true imaging data,
         # proceeding anyway" produced a 1x1 store with a 0.0 um pitch and
@@ -464,6 +530,269 @@ class WatersReader(BaseMSIReader):
             f"{len(self._ms_functions)} MS functions, "
             f"grid {self._imaging_grid.pixel_count_x}x{self._imaging_grid.pixel_count_y}"
         )
+
+    # ------------------------------------------------------------------
+    # Lock mass (D84)
+    #
+    # The library applies the correction an lmgt.inf in the run folder
+    # holds to every read, so the m/z it hands back are already corrected
+    # by that one. A scan's m/z are multiplied by target / applied: 1 when
+    # the store keeps what the run carries.
+    # ------------------------------------------------------------------
+
+    def _reference_function(self) -> Optional[int]:
+        """The lock-mass function when it holds reference scans, else ``None``.
+
+        MassLynx also names the tail of a raster it split across functions
+        the lockmass function (D7); that one is image data, converted, and
+        no reference to correct against.
+        """
+        ml, handle, grid = self._ml, self._handle, self._imaging_grid
+        if ml is None or grid is None:
+            return None
+        function = ml.get_lockmass_function(handle)
+        if not isinstance(function, int) or function < 0:
+            return None
+        if function in (self._ms_functions or ()):
+            return None
+        if not any(f == function for f, _scan in grid.scan_map):
+            return None
+        return function
+
+    def _resolve_lock_mass(self) -> None:
+        """Decide the correction the store carries, from ``lock_mass``."""
+        found = find_lmgt(self.data_path)
+        self._lock_mass_applied = read_lmgt(found) if found is not None else None
+        option = self._lock_mass_option
+
+        if option is None:
+            self._lock_mass_target = self._lock_mass_applied
+            if self._lock_mass_applied is None:
+                self._warn_uncorrected()
+            return
+        if option == LOCK_MASS_OFF:
+            self._lock_mass_target = None
+            if self._lock_mass_applied is not None:
+                logger.info(
+                    "%s: storing the m/z without lock-mass correction, as "
+                    "asked; the correction in its %s is undone.",
+                    self.data_path.name,
+                    found.name if found is not None else "lmgt.inf",
+                )
+            return
+
+        reference = self._reference_function()
+        if reference is None:
+            raise ConversionRefused(
+                f"A lock-mass reference m/z was given, but {self.data_path.name} "
+                "has no lock-mass function holding reference scans to measure "
+                "it in. (MassLynx names the tail of a split raster the lockmass "
+                "function too; that one is image data.)"
+            )
+        ml = self._ml
+        if ml is None:
+            raise RuntimeError("The Waters library is not loaded")
+        target = measure_lock_mass(ml, self.data_path, reference, float(option))
+        self._lock_mass_target = target
+        report = target.report()
+        logger.info(
+            "%s: lock-mass corrected against m/z %g in function %d: %d "
+            "measurements, correction %+.1f to %+.1f ppm.",
+            self.data_path.name,
+            float(option),
+            reference,
+            report["n_measurements"],
+            report["correction_ppm_min"],
+            report["correction_ppm_max"],
+        )
+
+    def _survey_reference_scans(self, reference: int) -> Optional[LockMassSurvey]:
+        """Read the reference scans as stored and say what they show (D84).
+
+        Skipped on a run whose mobility functions the library cannot read
+        (an access violation there ends the process), and on any read error:
+        the survey only informs a warning.
+        """
+        ml, handle, grid = self._ml, self._handle, self._imaging_grid
+        if ml is None or grid is None:
+            return None
+        if (
+            reference in self._drift_functions
+            and not self._instrument.mobility_readable
+        ):
+            return None
+        records = sorted(
+            (scan, info) for (f, scan), info in grid.scan_map.items() if f == reference
+        )
+        if not records:
+            return None
+        try:
+            scans = [
+                (info.rt, *ml.read_spectrum(handle, reference, scan))
+                for scan, info in records
+            ]
+        except Exception as error:  # noqa: BLE001 -- a survey never stops a read
+            logger.debug("Lock-mass scans not surveyed: %s", error)
+            return None
+        return survey_reference_scans(scans, negative=records[0][1].polarity < 0)
+
+    def _warn_uncorrected(self) -> None:
+        """Say so when reference scans exist and the m/z were not corrected.
+
+        The warning carries what the reference scans show, so the user
+        decides with facts: how far their strongest peak moved over the run
+        (no identification needed), and what they look like when that is
+        unambiguous. Thyra never applies a reference it recognised itself.
+        """
+        reference = self._reference_function()
+        if reference is None or self._imaging_grid is None:
+            return
+        n_scans = sum(1 for f, _scan in self._imaging_grid.scan_map if f == reference)
+        survey = self._survey_reference_scans(reference)
+        self._lock_mass_survey = survey
+        facts = ""
+        advice = "Pass --waters-lock-mass with the reference ion's m/z to correct it."
+        if survey is not None and survey.n_groups > 1:
+            facts = (
+                f" Their strongest peak, m/z {survey.peak_mz:.4f}, moved by "
+                f"{survey.drift_ppm:+.1f} ppm over the run ({survey.n_groups} "
+                "groups of reference scans)."
+            )
+        if survey is not None and survey.looks_like is not None:
+            facts += (
+                f" They look like {survey.looks_like} ({survey.matched_ions} "
+                f"ion(s) found, stored {survey.offset_ppm:+.1f} ppm from theory)."
+            )
+            advice = (
+                f"If that is the reference, pass --waters-lock-mass "
+                f"{survey.suggested_mz:.4f} to correct against it."
+            )
+        logger.warning(
+            "%s: the m/z are stored without lock-mass correction, although "
+            "function %d holds %d lock-mass reference scan(s).%s %s",
+            self.data_path.name,
+            reference,
+            n_scans,
+            facts,
+            advice,
+        )
+
+    def _mz_scale(self, rt_min: float) -> float:
+        """The multiplier for the m/z of a scan at ``rt_min`` (D84)."""
+        applied, target = self._lock_mass_applied, self._lock_mass_target
+        if target is applied:
+            return 1.0
+        scale = 1.0
+        if target is not None:
+            scale *= target.factor_at(rt_min)
+        if applied is not None:
+            scale /= applied.factor_at(rt_min)
+        return scale
+
+    def lock_mass_report(self) -> Dict[str, Any]:
+        """What the metadata records about the lock-mass correction."""
+        self._require_initialized()
+        target, applied = self._lock_mass_target, self._lock_mass_applied
+        report: Dict[str, Any] = {
+            "corrected": target is not None,
+            "reference_function": self._reference_function(),
+        }
+        if target is not None:
+            report.update(target.report())
+        if applied is not None and applied is not target:
+            report["undone"] = applied.report()
+        if target is None and self._lock_mass_survey is not None:
+            report["reference_scans"] = self._lock_mass_survey.report()
+        return report
+
+    # ------------------------------------------------------------------
+    # Scans one function took on the same pixel (D85)
+    # ------------------------------------------------------------------
+
+    def _resolve_repeated_pixels(self) -> None:
+        """Weigh the scans of a function that share a pixel.
+
+        Two cases, from the stage reporting one position twice:
+
+        * The first scan was cut short: a lock-mass acquisition fell between
+          it and the next scan on the same pixel. MassLynx stops the raster
+          for the reference, and resumes it by acquiring that pixel again.
+          On the SYNAPT XS run of D85 all nine such first scans hold 0 to 2%
+          of a normal scan's ion current. It is left out, as HDImaging does.
+        * Otherwise both are complete acquisitions of the pixel, and it
+          stores their mean, so it does not come out brighter than its
+          neighbours for having been measured twice.
+
+        Pixels two *different* functions share are untouched: that is two
+        mass ranges or channels of one acquisition, summed as before.
+        """
+        grid = self._imaging_grid
+        if grid is None:
+            return
+        reference = self._reference_function()
+        interruptions = sorted(
+            info.rt for (f, _scan), info in grid.scan_map.items() if f == reference
+        )
+        converted = set(self._ms_functions or ())
+        by_pixel: Dict[Tuple[int, Tuple[int, int, int]], List[Tuple[float, int]]] = {}
+        for (func, scan), info in grid.scan_map.items():
+            if func not in converted or not info.has_position:
+                continue
+            coords = grid.get_coordinates(info)
+            if coords is not None:
+                by_pixel.setdefault((func, coords), []).append((info.rt, scan))
+
+        weights: Dict[Tuple[int, int], float] = {}
+        dropped: List[Dict[str, Any]] = []
+        averaged: List[Dict[str, Any]] = []
+        for (func, coords), scans in sorted(by_pixel.items()):
+            if len(scans) < 2:
+                continue
+            scans.sort()
+            kept = []
+            for (rt, scan), (next_rt, _next) in zip(scans, scans[1:]):
+                if _interrupted(rt, next_rt, interruptions):
+                    weights[(func, scan)] = 0.0
+                    dropped.append(
+                        {"function": func, "scan": scan, "pixel": coords[:2]}
+                    )
+                else:
+                    kept.append(scan)
+            kept.append(scans[-1][1])
+            if len(kept) > 1:
+                for scan in kept:
+                    weights[(func, scan)] = 1.0 / len(kept)
+                averaged.append({"function": func, "scans": kept, "pixel": coords[:2]})
+
+        self._scan_weights = weights
+        self._repeated_pixels = {
+            "interrupted_scans_left_out": dropped,
+            "pixels_averaged": averaged,
+        }
+        if dropped:
+            logger.warning(
+                "%s: %d scan(s) were cut short by a lock-mass acquisition and "
+                "acquired again on the same pixel; the cut-short scan is left "
+                "out and the pixel keeps the complete one (D85).",
+                self.data_path.name,
+                len(dropped),
+            )
+        if averaged:
+            logger.warning(
+                "%s: %d pixel(s) were acquired more than once by the same "
+                "function; each stores the mean of its scans (D85).",
+                self.data_path.name,
+                len(averaged),
+            )
+
+    def _scan_weight(self, func: int, scan: int) -> float:
+        """How much of a scan's spectrum reaches its pixel (D85)."""
+        return self._scan_weights.get((func, scan), 1.0)
+
+    def repeated_pixels_report(self) -> Dict[str, Any]:
+        """What the metadata records about scans sharing a pixel."""
+        self._require_initialized()
+        return dict(self._repeated_pixels)
 
     def _unreadable_mobility_message(self, drift: List[int]) -> str:
         """Why a run's mobility functions are not read (see :meth:`_ensure_initialized`)."""
@@ -1039,6 +1368,10 @@ class WatersReader(BaseMSIReader):
                 if self._instrument.is_cyclic_ims
                 else None
             ),
+            lock_mass=self.lock_mass_report(),
+            repeated_pixels=self.repeated_pixels_report(),
+            mz_scale=self._mz_scale,
+            scan_weights=self._scan_weights,
             stage_pattern=self._pattern,
         )
 
@@ -1127,8 +1460,11 @@ class WatersReader(BaseMSIReader):
                     if scan_info is None or not scan_info.has_position:
                         continue
                     # A scan the grid gives no pixel (another region, under
-                    # region=) adds nothing to the store, nor to its axis.
+                    # region=) adds nothing to the store, nor to its axis,
+                    # and neither does a scan left out of its pixel (D85).
                     if imaging_grid.locate(scan_info) is None:
+                        continue
+                    if self._scan_weight(func, scan) == 0.0:
                         continue
 
                     try:
@@ -1138,6 +1474,7 @@ class WatersReader(BaseMSIReader):
                             f"Error reading spectrum func={func} scan={scan}: {e}"
                         )
                         continue
+                    mzs = mzs * self._mz_scale(scan_info.rt)
 
                     # Outside the read's try/except, deliberately: a
                     # max_mass_axis_length refusal is a ConversionRefused,
@@ -1244,6 +1581,9 @@ class WatersReader(BaseMSIReader):
                     coords = imaging_grid.get_coordinates(scan_info)
                     if coords is None:
                         continue
+                    weight = self._scan_weight(func, scan)
+                    if weight == 0.0:
+                        continue
 
                     try:
                         mzs, intensities = ml.read_spectrum(handle, func, scan)
@@ -1252,6 +1592,9 @@ class WatersReader(BaseMSIReader):
                         mzs, intensities = self._apply_intensity_filter(
                             mzs, intensities
                         )
+                        mzs = mzs * self._mz_scale(scan_info.rt)
+                        if weight != 1.0:
+                            intensities = intensities * weight
 
                         if mzs.size > 0 and intensities.size > 0:
                             yield coords, first_of_function + scan, mzs, intensities
@@ -1454,6 +1797,10 @@ class WatersReader(BaseMSIReader):
                 coords = imaging_grid.get_coordinates(scan_info)
                 if coords is None:
                     continue
+                weight = self._scan_weight(func, scan)
+                if weight == 0.0:
+                    continue
+                scale = self._mz_scale(scan_info.rt)
                 # Never past the function's own count: an out-of-range
                 # bin index is the kind of call this library answers
                 # with an exception it raises in C++.
@@ -1468,7 +1815,7 @@ class WatersReader(BaseMSIReader):
                     mobility_parts.append(np.full(mzs.size, drift_times[b]))
                 if not mz_parts:
                     continue
-                mzs = np.concatenate(mz_parts)
+                mzs = np.concatenate(mz_parts) * scale
                 mobility = np.concatenate(mobility_parts)
                 intensities = np.concatenate(intensity_parts)
                 if self._intensity_threshold is not None:
@@ -1478,6 +1825,10 @@ class WatersReader(BaseMSIReader):
                         mobility[keep],
                         intensities[keep],
                     )
+                # After the threshold, as in the summed spectra: it judges
+                # the scan as measured, not its share of the pixel.
+                if weight != 1.0:
+                    intensities = intensities * weight
                 if mzs.size > 0:
                     yield coords, mzs, mobility, intensities
 

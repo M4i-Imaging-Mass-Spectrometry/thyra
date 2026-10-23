@@ -511,6 +511,7 @@ def _build_reader_options(
     spectrum_type: str = "auto",
     tdf_spectrum: Optional[str] = None,
     waters_spectrum: Optional[str] = None,
+    waters_lock_mass: Optional[float | str] = None,
 ) -> dict[str, bool | float | str]:
     """Build reader options dictionary from CLI parameters.
 
@@ -534,7 +535,30 @@ def _build_reader_options(
         options["tdf_spectrum"] = tdf_spectrum
     if waters_spectrum is not None:
         options["use_centroid"] = waters_spectrum == "centroid"
+    if waters_lock_mass is not None:
+        options["lock_mass"] = waters_lock_mass
     return options
+
+
+def _parse_lock_mass(
+    _ctx: Optional[click.Context],
+    _param: Optional[click.Parameter],
+    value: Optional[str],
+) -> Optional[float | str]:
+    """``--waters-lock-mass``: a positive reference m/z, or ``off``."""
+    if value is None:
+        return None
+    if value.strip().lower() == "off":
+        return "off"
+    try:
+        mz = float(value)
+    except ValueError:
+        raise click.BadParameter(
+            f"{value!r} is neither a reference m/z nor 'off'"
+        ) from None
+    if not isfinite(mz) or mz <= 0:
+        raise click.BadParameter(f"{value!r} is not a positive m/z")
+    return mz
 
 
 def _reader_formats(key: str) -> Tuple[str, ...]:
@@ -560,6 +584,7 @@ def _reader_formats(key: str) -> Tuple[str, ...]:
 IGNORED_ELSEWHERE: dict[str, Tuple[str, Tuple[str, ...]]] = {
     "tdf_spectrum": ("--tdf-spectrum", _reader_formats("tdf_spectrum")),
     "waters_spectrum": ("--waters-spectrum", _reader_formats("use_centroid")),
+    "waters_lock_mass": ("--waters-lock-mass", _reader_formats("lock_mass")),
     "use_recalibrated": (
         "--use-recalibrated/--no-recalibrated",
         _reader_formats("use_recalibrated_state"),
@@ -801,7 +826,7 @@ class GroupedCommand(click.Command):
             "--intensity-threshold",
             "--tdf-spectrum",
         ],
-        "Waters-specific": ["--waters-spectrum"],
+        "Waters-specific": ["--waters-spectrum", "--waters-lock-mass"],
         "Other": ["--dataset-id", "--sample-id", "--handle-3d", "--z-spacing"],
         "General": ["--version", "--help"],
     }
@@ -1160,6 +1185,21 @@ class GroupedCommand(click.Command):
         "on every other Waters instrument. Waters .raw only."
     ),
 )
+@click.option(
+    "--waters-lock-mass",
+    default=None,
+    callback=_parse_lock_mass,
+    metavar="MZ|off",
+    help=(
+        "Correct the stored m/z against the run's lock-mass reference scans. "
+        "Give the reference ion's m/z: the Waters library measures it in "
+        "those scans, on a temporary copy of the run (the run itself is "
+        "never written to), and every scan is corrected by the result. "
+        "'off' stores the m/z uncorrected. Without it the store keeps what "
+        "the run carries: a correction MassLynx saved in the run folder, or "
+        "none. Waters .raw only."
+    ),
+)
 # -- Other --
 @click.option(
     "--dataset-id",
@@ -1228,6 +1268,7 @@ def main(
     intensity_threshold: Optional[float],
     tdf_spectrum: Optional[str],
     waters_spectrum: Optional[str],
+    waters_lock_mass: Optional[float | str],
     streaming: str,
     region: Optional[str],
 ):
@@ -1361,6 +1402,7 @@ def main(
         spectrum_type,
         tdf_spectrum,
         waters_spectrum,
+        waters_lock_mass,
     )
     # Only the options that reach this source: the ones that do not were
     # named above, with the flag's own spelling, and convert_msi would name

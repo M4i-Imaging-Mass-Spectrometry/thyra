@@ -565,8 +565,10 @@ def _phi_calibration(raw_metadata: Dict[str, Any]) -> Dict[str, Any]:
 def _waters_calibration(acquisition: Dict[str, Any]) -> Dict[str, Any]:
     """The section from a Waters source, or nothing.
 
-    MassLynx answers ``isLockmassCorrected`` for the whole file, so False
-    is a statement and not a default. ``lockmass_function`` is not used:
+    ``is_lockmass_corrected`` is whether the stored m/z carry a lock-mass
+    correction: the one Thyra applied or kept (D84), or else the library's
+    answer for the whole file. Either way False is a statement and not a
+    default. ``lockmass_function`` is not used:
     on a raster MassLynx split across functions it names the last chunk
     of the image, not a reference channel.
     """

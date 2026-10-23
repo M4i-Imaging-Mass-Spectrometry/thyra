@@ -487,12 +487,13 @@ thyra tims_data.d output.zarr --tdf-spectrum vendor_centroid
 
 ## Waters-Specific
 
-This option only applies when converting Waters `.raw` directories; on any
-other input it is logged as ignored.
+These options only apply when converting Waters `.raw` directories; on any
+other input they are logged as ignored.
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--waters-spectrum {centroid,profile}` | `profile` on a SELECT SERIES MRT, `centroid` on every other Waters instrument | What MassLynx hands back for one pixel: the vendor peak picker, or the sampled trace behind it |
+| `--waters-lock-mass MZ\|off` | keep what the run carries | Correct the m/z against the run's lock-mass reference scans, given the reference ion's m/z; `off` stores them uncorrected. The run itself is never written to. See [Lock-mass correction](supported-formats.md#lock-mass-correction) |
 
 ### Examples
 
@@ -505,6 +506,9 @@ thyra mrt_run.raw output.zarr --waters-spectrum centroid
 
 # A Synapt run's profile trace; the bin width follows its own digitiser
 thyra synapt_run.raw output.zarr --waters-spectrum profile
+
+# A MALDI run corrected against its red phosphorus lock-mass spot
+thyra synapt_run.raw output.zarr --waters-lock-mass 526.5545
 ```
 
 !!! note "When the profile is worth its size"

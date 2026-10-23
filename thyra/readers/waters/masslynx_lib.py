@@ -576,8 +576,25 @@ class MassLynxLib:
         return bool(self._ensure_loaded().isLockmassCorrected(handle) > 0)
 
     def apply_auto_lockmass_correction(self, handle) -> bool:
-        """Apply automatic lockmass correction. Returns True if successful."""
+        """Apply automatic lockmass correction. Returns True if successful.
+
+        Writes ``lmgt.inf`` into the opened folder when it succeeds, like
+        :meth:`apply_custom_lockmass_correction`; never call it on a user's
+        run (D84).
+        """
         return bool(self._ensure_loaded().applyAutoLockmassCorrection(handle) > 0)
+
+    def apply_custom_lockmass_correction(self, handle, reference_mz: float) -> bool:
+        """Correct against ``reference_mz``. Returns True if it was applied.
+
+        The library writes the correction to ``lmgt.inf`` in the folder the
+        handle was opened on, and every later open of that folder applies
+        it (measured, D84). Never call this on a user's run:
+        :func:`thyra.readers.waters.lockmass.measure_lock_mass` calls it on
+        a throwaway copy.
+        """
+        api = self._ensure_loaded()
+        return bool(api.applyCustomLockmassCorrection(handle, reference_mz) > 0)
 
     def get_lockmass_function(self, handle) -> int:
         """Get the lockmass function index, or -1 if none."""
