@@ -31,14 +31,21 @@ from ...core.msms import (
     FragmentationSchedule,
     IsolationWindow,
 )
+from ...core.region_map import (
+    build_region_map,
+    checked_region_number,
+    summarize_regions,
+)
 from ...core.registry import register_reader
 from ...errors import ConversionRefused
 from ...metadata.extractors.waters_extractor import WatersMetadataExtractor
 from .imaging_grid import ImagingGrid, build_imaging_grid, regrid_for_functions
 from .instrument import (
+    StagePattern,
     WatersInstrument,
     identify_waters_instrument,
     read_cyclic_sequence,
+    read_stage_pattern,
 )
 from .lockmass import (
     LockMassCorrection,
@@ -148,7 +155,13 @@ class WatersReader(BaseMSIReader):
     spectra and says so through :meth:`get_fragmentation`, unless the
     function declares an ``MSMSMode`` that fragments nothing (``MS``,
     ``SIM``; D72).
+
+    A run whose method declares regions (a ``MultiRegions`` table) is
+    gridded region by region, and ``region=`` converts one of them; see
+    :mod:`thyra.readers.waters.imaging_grid`.
     """
+
+    selects_regions = True
 
     def __init__(
         self,
@@ -156,6 +169,7 @@ class WatersReader(BaseMSIReader):
         use_centroid: Optional[bool] = None,
         intensity_threshold: Optional[float] = None,
         lock_mass: Union[None, float, str] = None,
+        region: Optional[Union[int, str]] = None,
         **kwargs,
     ) -> None:
         """Initialize a Waters MSI reader.
@@ -178,6 +192,10 @@ class WatersReader(BaseMSIReader):
                 of the run, and corrects every scan by the result
                 (replacing an ``lmgt.inf`` correction). ``"off"`` stores the
                 m/z uncorrected, undoing an ``lmgt.inf`` one.
+            region: Convert only this region of a run whose method declares
+                regions (numbered from 1 in the method's table). A run that
+                declares none is region 1 as a whole. ``None`` (the
+                default) converts everything.
             **kwargs: Additional arguments passed to BaseMSIReader.
                 ``metadata_only=True`` also opens a run whose scans all
                 report one stage position, which a conversion refuses:
@@ -194,6 +212,11 @@ class WatersReader(BaseMSIReader):
         # Read from the side files, so it costs no native-library call and
         # is known before the handle is opened.
         self._instrument: WatersInstrument = identify_waters_instrument(self.data_path)
+        # The stage pattern the method declares (pixel steps, regions), also
+        # read from a side file. A requested region is checked against it
+        # here, before the library opens anything.
+        self._pattern: Optional[StagePattern] = read_stage_pattern(self.data_path)
+        self._region: Optional[int] = self._checked_region(region)
         if use_centroid is None:
             use_centroid = not self._instrument.is_mrt
             logger.info(
@@ -249,6 +272,37 @@ class WatersReader(BaseMSIReader):
         self._scan_weights: Dict[Tuple[int, int], float] = {}
         self._repeated_pixels: Dict[str, Any] = {}
         self._closed = False
+
+    def _checked_region(self, region: object) -> Optional[int]:
+        """The ``region=`` request as a region number the run declares.
+
+        Raises:
+            ConversionRefused: For a value that is no region number, or a
+                number the method does not declare. A run that declares no
+                regions is region 1 as a whole.
+        """
+        try:
+            number = checked_region_number(region)
+        except ValueError as error:
+            raise ConversionRefused(
+                f"region takes a region number (a whole number, from 1) or "
+                f"None, {error}."
+            ) from None
+        if number is None:
+            return None
+        declared = [r.number for r in self._pattern.regions] if self._pattern else []
+        if declared and number not in declared:
+            raise ConversionRefused(
+                f"region={number} is not a region of {self.data_path.name}. "
+                f"Its method declares region(s) "
+                f"{', '.join(str(n) for n in declared)}."
+            )
+        if not declared and number != 1:
+            raise ConversionRefused(
+                f"region={number} is not a region of {self.data_path.name}. "
+                f"Its method declares no regions, so the whole run is region 1."
+            )
+        return number
 
     def _validate_raw_directory(self) -> None:
         """Validate that data_path is a Waters .raw directory with _FUNC*.DAT files."""
@@ -419,6 +473,8 @@ class WatersReader(BaseMSIReader):
             self._function_types,
             include_functions=ms_functions,
             allow_single_position=self._metadata_only,
+            pattern=self._pattern,
+            region=self._region,
         )
 
         # Which functions hold the image: the raster chunks MassLynx named
@@ -440,6 +496,8 @@ class WatersReader(BaseMSIReader):
             self._imaging_grid,
             self._ms_functions,
             allow_single_position=self._metadata_only,
+            pattern=self._pattern,
+            region=self._region,
         )
 
         # Nothing so far has read a spectrum: the grid and the function
@@ -901,10 +959,13 @@ class WatersReader(BaseMSIReader):
                 off_raster.append(f)
                 continue
             new_pixels = self._function_pixels(f, grid) - covered
-            if not new_pixels:
+            # Scans in a declared region the grid does not hold yet have no
+            # pixel until the regrid, but they are new ground all the same.
+            unplaced = sum(1 for s in scans if grid.locate(s) is None)
+            if not new_pixels and not unplaced:
                 continue
             if self._use_centroid and not self._comes_back_centroided(f, grid):
-                uncentroidable.append((f, len(new_pixels)))
+                uncentroidable.append((f, len(new_pixels) + unplaced))
             else:
                 extra.append(f)
 
@@ -1311,7 +1372,46 @@ class WatersReader(BaseMSIReader):
             repeated_pixels=self.repeated_pixels_report(),
             mz_scale=self._mz_scale,
             scan_weights=self._scan_weights,
+            stage_pattern=self._pattern,
         )
+
+    def _placed_scans(self) -> Generator[Tuple[int, int, int], None, None]:
+        """``(x, y, region)`` of every placed scan, in acquisition order.
+
+        Only meaningful on a grid that uses regions. A scan of a function
+        outside the converted set, or of a region the grid does not hold,
+        is left out, as the spectrum iteration leaves it out.
+        """
+        _ml, _handle, grid, _types, ms_functions = self._require_initialized()
+        for func in ms_functions:
+            for info in grid.scans_by_function.get(func, []):
+                coords = grid.locate(info)
+                region = grid.region_of(info)
+                if coords is not None and region is not None:
+                    yield coords[0], coords[1], region
+
+    def get_region_map(self) -> Optional[Dict[Tuple[int, int], int]]:
+        """Map 0-based ``(x, y)`` to the declared region, or ``None``.
+
+        ``None`` when the run's method declares no regions or its scans do
+        not lie in them. Under ``region=`` only that region is mapped.
+        """
+        _ml, _handle, grid, _types, _ms = self._require_initialized()
+        if not grid.regions:
+            return None
+        return build_region_map(self._placed_scans()) or None
+
+    def get_region_info(self) -> Optional[list]:
+        """Region number, spectrum count and box of each declared region.
+
+        The same keys and box frame as the timsTOF reader, without a name:
+        the method numbers its regions and names none. ``None`` when the
+        run uses no regions.
+        """
+        _ml, _handle, grid, _types, _ms = self._require_initialized()
+        if not grid.regions:
+            return None
+        return summarize_regions(self._placed_scans()) or None
 
     def get_common_mass_axis(self) -> NDArray[np.float64]:
         """Build common mass axis from all unique m/z values across all spectra.
@@ -1358,6 +1458,11 @@ class WatersReader(BaseMSIReader):
 
                     scan_info = imaging_grid.scan_map.get((func, scan))
                     if scan_info is None or not scan_info.has_position:
+                        continue
+                    # A scan the grid gives no pixel (another region, under
+                    # region=) adds nothing to the store, nor to its axis,
+                    # and neither does a scan left out of its pixel (D85).
+                    if imaging_grid.locate(scan_info) is None:
                         continue
                     if self._scan_weight(func, scan) == 0.0:
                         continue

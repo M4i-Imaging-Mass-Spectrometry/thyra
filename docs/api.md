@@ -85,7 +85,9 @@ region: its `uns["regions"]` entry and its MS/MS schedule.
 
 Thyra logs the RegionNumber-to-Area-Name mapping at `INFO` when it opens a
 multi-region dataset. See [`--region`](cli.md#conversion) for the detail.
-Only the timsTOF reader can select a region. Every other format refuses
+The timsTOF reader and the Waters reader can select a region. On Waters the
+regions are the ones the run's method file declares, numbered from 1; a run
+that declares none accepts only `region=1`. Every other format refuses
 `region`, and the call returns `False`.
 
 ### Large datasets

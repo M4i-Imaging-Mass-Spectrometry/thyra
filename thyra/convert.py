@@ -1027,10 +1027,12 @@ def convert_msi(
             say when it was misspelled, and ``0`` -- which reads as
             ``False`` but is not it -- used to convert in silence.
         region: Select one region of a multi-region Bruker timsTOF
-            ``.d``. Accepts an int (DB RegionNumber) or a str (matched
-            against .mis Area Name, falling back to integer parse).
-            None (default) converts all regions. Every other format
-            refuses it: no other reader can select a region.
+            ``.d`` or Waters ``.raw``. On timsTOF it accepts an int (DB
+            RegionNumber) or a str (matched against .mis Area Name,
+            falling back to integer parse); on Waters the number of a
+            region the method file declares, counted from 1. None
+            (default) converts all regions. Every other format refuses
+            it: no other reader can select a region.
             :func:`thyra.list_regions` lists the regions of any input.
             Passed to the reader as reader_options["region"].
         sample_id: Your identifier for the sample, written to

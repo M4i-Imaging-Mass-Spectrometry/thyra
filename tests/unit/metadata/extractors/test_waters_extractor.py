@@ -8,7 +8,12 @@ import numpy as np
 import pytest
 
 from thyra.metadata.extractors.waters_extractor import WatersMetadataExtractor
-from thyra.readers.waters.imaging_grid import AxisLattice, ImagingGrid
+from thyra.readers.waters.imaging_grid import (
+    AxisLattice,
+    ImagingGrid,
+    _grid_from_scan_map,
+)
+from thyra.readers.waters.instrument import DeclaredRegion, StagePattern
 from thyra.readers.waters.masslynx_lib import FunctionType, ScanInfoData
 
 
@@ -739,3 +744,116 @@ class TestTheCalibrationTime:
             "calibration_datetime": "2019-08-15T11:50",
             "lock_mass_corrected": False,
         }
+
+
+class TestRegionRuns:
+    """A line scan takes its short axis from the method; regions are reported."""
+
+    @staticmethod
+    def _grid(region=None, spot=False):
+        pattern = StagePattern(
+            x_step_um=20.1,
+            y_step_um=20.0,
+            regions=(
+                DeclaredRegion(1, 66500.0, 74100.0, 500.0, 10.0),
+                DeclaredRegion(2, 66670.0, 63940.0, 500.0, 10.0),
+            ),
+        )
+        scan_map = {}
+        for k in range(25):
+            scan_map[(0, k)] = _make_scan_info((66500.0 + k * 20.1) / 1000.0, 74.1)
+            scan_map[(0, 25 + k)] = _make_scan_info(
+                (66670.0 + k * 20.1) / 1000.0, 63.94
+            )
+        if spot:
+            scan_map = {
+                (0, 0): _make_scan_info(1.0, 2.0),
+                (0, 1): _make_scan_info(1.0, 2.0),
+            }
+            pattern = StagePattern(20.1, 20.0, ())
+        grid = _grid_from_scan_map(
+            scan_map, allow_single_position=spot, pattern=pattern, region=region
+        )
+        mock_ml, handle, _grid0, ft, ms = _make_grid_and_ml()
+        mock_ml.get_number_of_scans_in_function.return_value = len(scan_map)
+        return (
+            WatersMetadataExtractor(
+                mock_ml,
+                handle,
+                Path("/test/data.raw"),
+                grid,
+                ft,
+                ms,
+                stage_pattern=pattern,
+            ),
+            grid,
+        )
+
+    def test_a_line_scan_states_the_declared_step_as_its_pixel_size(self):
+        extractor, _grid = self._grid(region=1)
+
+        essential = extractor.get_essential()
+
+        assert essential.dimensions == (25, 1, 1)
+        assert essential.pixel_size == pytest.approx((20.1, 20.0))
+        assert essential.n_spectra == 25
+
+    def test_where_the_pixel_size_came_from_is_recorded(self):
+        extractor, _grid = self._grid(region=1)
+
+        specific = extractor.get_comprehensive().format_specific
+        raw = extractor.get_comprehensive().raw_metadata["imaging_grid"]
+
+        assert specific["pixel_size_source"] == {
+            "x": "stage positions",
+            "y": "method step",
+        }
+        assert raw["declared_step_x_um"] == pytest.approx(20.1)
+        assert raw["declared_step_y_um"] == pytest.approx(20.0)
+
+    def test_a_single_region_grid_reports_its_origin_and_placement(self):
+        extractor, _grid = self._grid(region=2)
+
+        specific = extractor.get_comprehensive().format_specific
+
+        assert extractor.get_essential().stage_origin_um == pytest.approx(
+            (66670.0, 63940.0)
+        )
+        (entry,) = specific["regions"]
+        assert entry["region_number"] == 2
+        assert entry["grid_offset_px"] == [0, 0]
+        assert entry["placement_shift_um"] == [0.0, 0.0]
+
+    def test_a_two_region_grid_reports_each_regions_placement(self):
+        extractor, _grid = self._grid()
+
+        essential = extractor.get_essential()
+        regions = extractor.get_comprehensive().format_specific["regions"]
+
+        assert essential.dimensions == (33, 509, 1)
+        assert essential.stage_origin_um == pytest.approx((66500.0, 63940.0))
+        assert [r["region_number"] for r in regions] == [1, 2]
+        assert regions[0]["grid_offset_px"] == [0, 508]
+        assert regions[1]["grid_offset_px"] == [8, 0]
+        assert regions[1]["placement_shift_um"][0] == pytest.approx(9.2, abs=0.01)
+        assert regions[1]["stage_origin_um"] == pytest.approx([66670.0, 63940.0])
+
+    def test_a_run_without_regions_reports_none(self):
+        mock_ml, handle, grid, ft, ms = _make_grid_and_ml()
+        extractor = WatersMetadataExtractor(
+            mock_ml, handle, Path("/test/data.raw"), grid, ft, ms
+        )
+
+        specific = extractor.get_comprehensive().format_specific
+
+        assert "regions" not in specific
+        assert specific["pixel_size_source"] == {
+            "x": "stage positions",
+            "y": "stage positions",
+        }
+
+    def test_a_spot_run_still_states_no_pixel_size(self):
+        extractor, grid = self._grid(spot=True)
+
+        assert grid.no_raster_reason is not None
+        assert extractor.get_essential().pixel_size is None

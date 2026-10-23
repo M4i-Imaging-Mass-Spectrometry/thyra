@@ -909,9 +909,10 @@ class GroupedCommand(click.Command):
     type=str,
     default=None,
     help=(
-        "Convert one region of a timsTOF .d (default: all regions). "
-        "Accepts a .mis Area Name (e.g. '03') or an integer DB "
-        "RegionNumber. Refused for every other format."
+        "Convert one region of a timsTOF .d or a Waters .raw (default: "
+        "all regions). On timsTOF it accepts a .mis Area Name (e.g. '03') "
+        "or an integer DB RegionNumber; on Waters the number of a region "
+        "the method file declares, from 1. Refused for every other format."
     ),
 )
 @click.option(

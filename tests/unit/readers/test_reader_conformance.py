@@ -298,6 +298,7 @@ class TestCapabilityConventions:
             "has_fragmentation",
             "has_precursor_spectra",
             "has_acquisition_order",
+            "selects_regions",
         ],
     )
     def test_every_predicate_is_a_bool(self, reader, predicate):

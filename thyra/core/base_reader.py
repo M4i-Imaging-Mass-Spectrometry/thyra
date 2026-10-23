@@ -55,6 +55,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
+    ClassVar,
     Dict,
     Generator,
     List,
@@ -188,9 +189,10 @@ class BaseMSIReader(ABC):
                 to ``None``, no cap, everywhere except imzML, which sets its
                 own documented default. A reader that does not build a raw
                 axis simply never consults it.
-                ``region`` is refused here: only the timsTOF reader can
-                select a region, and it takes the option as a named
-                parameter, so it never arrives in these kwargs.
+                ``region`` is refused here: only a reader with
+                :attr:`selects_regions` (timsTOF, Waters) can select a
+                region, and it takes the option as a named parameter, so
+                it never arrives in these kwargs.
                 Any other key is ignored here. ``convert_msi`` refuses a
                 key that is not in :data:`thyra.reader_options.
                 READER_OPTION_FORMATS` before it builds a reader, and
@@ -206,9 +208,10 @@ class BaseMSIReader(ABC):
         if kwargs.get("region") is not None:
             raise ConversionRefused(
                 f"Selecting a region (region={kwargs['region']!r}) is only "
-                f"supported for Bruker timsTOF data. Convert the whole "
-                f"dataset; obs['region_number'] tells its regions apart, and "
-                f"thyra.list_regions() lists them."
+                f"supported for Bruker timsTOF data and for Waters runs that "
+                f"declare regions; this format's reader does not select "
+                f"regions. Convert the whole dataset; obs['region_number'] "
+                f"tells its regions apart, and thyra.list_regions() lists them."
             )
         if isinstance(
             intensity_threshold, (int, float, np.integer, np.floating)
@@ -723,6 +726,11 @@ class BaseMSIReader(ABC):
         raise NotImplementedError(
             f"{type(self).__name__} cannot separate the precursors of a pixel"
         )
+
+    #: Whether the reader takes a ``region=`` request and converts only that
+    #: region. A reader that sets it names ``region`` as its own parameter;
+    #: every other reader refuses the option in :meth:`__init__`.
+    selects_regions: ClassVar[bool] = False
 
     def get_region_map(self) -> Optional[dict]:
         """Get per-pixel region mapping for multi-region datasets.

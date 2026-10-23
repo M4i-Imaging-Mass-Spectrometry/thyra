@@ -3557,7 +3557,9 @@ exist. The new check refuses a conversion; it writes nothing.
 
 **Status:** Implemented (2026-10-13). Superseded in part by D57
 (2026-10-16): one region now gives a region map, so a single-region store
-keeps the source's region number and name.
+keeps the source's region number and name. Superseded in part by D83
+(2026-10-22): the Waters reader selects a region too, and the gate is a
+reader attribute (`selects_regions`), not a timsTOF check.
 
 **Decision.** `region` selects one region, and only the timsTOF reader can do
 that. Every other reader refuses it, through the API as well as the CLI. The
@@ -4675,7 +4677,10 @@ they were accepted.
 
 ## D57. A store keeps its source's regions, and a region store describes only its own
 
-**Status:** Implemented (2026-10-16), issue #496.
+**Status:** Implemented (2026-10-16), issue #496. Superseded in part by
+D83 (2026-10-22): a Waters run with a `MultiRegions` table in its method
+file keeps those regions; "Region 1 stays only for ... Waters" now holds
+only for a Waters run that declares none.
 
 **Decision.** A store describes the regions it holds, with the numbers and
 names its source states. Under `region=`, everything the timsTOF reader
@@ -5814,7 +5819,8 @@ values. On the plan route, the refusal of an m/z 0 bound names the
 
 ## D72. A Cyclic IMS run is read on its own drift axis, and a declared full scan is MS1
 
-**Status:** Implemented (2026-10-19). Amends D7 and D53.
+**Status:** Implemented (2026-10-19). Amends D7 and D53. The known limit
+on regions that do not share one lattice is lifted by D83 (2026-10-22).
 
 **Decision.** Three rules for Waters runs, each read from the run's own side
 files:
@@ -6637,6 +6643,110 @@ whose spectra share one block, and from `.d` folders, do not change.
   agree (issue #371).
 - No MS-Numpress archive from `mzpeak-convert` 0.16.0 was converted for
   this entry; the tolerance rests on the encoding's own error bound.
+
+## D83. A Waters run keeps the regions its method declares, on one grid as on timsTOF
+
+**Status:** Implemented (2026-10-22). Supersedes in part D44 and D57, and
+D72's known limit on regions. Amends the one-lattice rule of the Waters
+raster fit.
+
+**Decision.** A Waters run whose method file (`<run>.xml` inside the
+`.raw`) holds a `MultiRegions` table has regions, and the store keeps them
+the way a timsTOF store does.
+
+- **Numbers.** Regions are numbered 1, 2, ... in table order. The table
+  states no number. Starting at 1 keeps region 1 on every Waters store
+  without a table, and on a run whose scans all lie in the first box.
+- **Membership.** A scan belongs to the declared box (start and length,
+  in mm) that holds it, widened by half the declared step on each side.
+  The widening is needed: a line scan's box is 0.01 mm tall and its step
+  0.02 mm. If any positioned scan lies in no box or in two, the regions are
+  not used, a warning says why, and the run is read as one raster, as
+  before; `region=` is then refused. A scan of a later function chunk that
+  lies in no box is off the raster; one in a declared box counts as on it,
+  so a region acquired only in the tail chunk of a split raster is kept.
+- **Placement.** Each region holding scans gets its own lattice, so the
+  off-raster refusal is tested within one region. All regions sit on one
+  grid at their stage positions. The pitch is the regions' shared fitted
+  pitch, which must agree within 1 %; on an axis no region can measure,
+  it is the declared step. The grid starts at the smallest region origin
+  on each axis. Each region's origin is rounded to the nearest grid line,
+  and `format_specific.regions` records its stage origin, grid offset and
+  `placement_shift_um`: how far its stage origin lies from the grid line
+  it was placed on.
+- **Summary.** `obs["region_number"]`, `uns["regions"]` (number, scan count,
+  box), `uns["average_spectrum_per_region"]` and `thyra.list_regions` follow
+  D57. A declared region with no scan is not listed.
+- **Selection.** `region=N` (`--region N`) converts one declared region
+  alone, and the store describes only that region (D57). A run without a
+  table accepts `region=1`, the whole run, as `list_regions` reports it. A
+  run whose declared regions could not be used refuses every `region=`.
+  Readers now state whether they select regions (`selects_regions`); the
+  base reader refuses `region` for every reader that does not.
+- **Line scans.** An axis with one stage position takes its pixel size
+  from the method's `MaldiXStep` or `MaldiYStep`, where declared, instead
+  of asking for `--pixel-size`. `format_specific.pixel_size_source` says,
+  per axis, whether the size came from the stage positions or the method
+  step. `--pixel-size` still overrides. A single-spot run still has no
+  pixel size and is still refused as no image.
+
+`thyra/core/region_map.py` gains `summarize_regions`, which builds the
+region entries from `(x, y, region)` per scan. The rapifleX reader uses it
+too; its entries are unchanged.
+
+**Why.** A lipid-standard run with two 25-pixel line scans, one on each
+standard's spot, was refused: the two lines sit 10.16 mm apart in y, and
+the second starts 170 um (8.46 pitches) to the right of the first, so no
+one lattice holds both. The method file states the two boxes and the
+steps, so placing the regions needs no guess beyond the rounding of one
+origin, and that is recorded. The same file states the y step of every
+line scan, which Thyra asked the user to type.
+
+timsTOF's region selection was kept as is; only its gate moved to the
+reader. The SQL paths of timsTOF and solariX stay, because they keep the
+metadata-only preview cheap. The helper serves the readers that build
+regions from a list of scans.
+
+**What changes in a store.**
+
+- The two-line run now converts: 33 x 509 pixels at 20.1 x 20.0 um, 50 of
+  them with spectra. Region 1 is row 508, columns 0-24; region 2 is row 0,
+  columns 8-32, and its stage origin lies +9.2 um (46 % of a pitch) in x
+  from column 8.
+  `--region 2` gives a 25 x 1 store of region 2 alone.
+- A Waters line scan with a declared step now converts without
+  `--pixel-size`; its y pixel size is the method's step (20.0 um on the
+  lipid standards, whose x pitch is 20.1 um).
+- Every Waters store gains `format_specific.pixel_size_source`, and a run
+  with a method file gains `declared_step_x_um` and `declared_step_y_um`
+  in `raw_metadata.imaging_grid`.
+- A run whose table declares two regions with scans in only one (an HDSIM
+  run) keeps `region_number` 1; its `uns["regions"]` entry gains a box, and
+  `format_specific.regions` holds its placement.
+- Measured against main on a 25 x 25 run without a table and on the
+  HDSIM run: every array is identical, and only the keys above differ.
+
+**Alternatives.**
+
+- "Refuse a run whose regions do not share a lattice, and only accept
+  `--region`." Two conversions for one run, and no store holding both
+  standards.
+- "Pack the regions next to each other." The grid stays small, but one
+  affine no longer places every region (D75), and the stage geometry is
+  lost.
+- "Number the regions from 0, as Bruker does." Bruker numbers are the
+  source's; Waters states none, and 0 would change region 1 on every
+  Waters store with one region.
+
+**Known limits.**
+
+- Regions far apart give a large, mostly empty grid: two 1.5 mm regions
+  7 mm and 43 mm apart would span about 430 x 2230 pixels. Only filled
+  pixels hold spectra.
+- A rounded region can sit up to half a pitch from its true place relative
+  to the others. Within a region nothing moves.
+- Only Cyclic IMS runs carry the method file. No Synapt or Xevo run has
+  been seen with one.
 
 ## D84. Waters m/z can be lock-mass corrected, without writing to the run
 
