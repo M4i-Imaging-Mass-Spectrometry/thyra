@@ -1044,20 +1044,19 @@ def _grid_from_scan_map(
 def _warn_on_shared_pixels(
     grid: ImagingGrid, functions: Optional[Iterable[int]]
 ) -> None:
-    """Say so when more than one scan lands on the same pixel.
+    """Say so when scans of different functions land on the same pixel.
 
-    Two scans reporting the same stage position are summed into one pixel
-    by the converter, which is a defensible choice and was a silent one:
-    measured on the registry's 100 um MALDI set, function 2 holds 1275
-    positioned scans on 1274 distinct pixels, the stage having stopped
-    between two consecutive acquisitions 40 ms apart (issue #233). The
-    pixel of each scan is the one the grid gives it, so on a grid of
-    several regions two regions can never be mistaken for one pixel.
+    Those are summed into one pixel by the converter: two mass ranges or
+    channels of one acquisition. Scans *one* function took twice on a
+    pixel -- the stage reporting the same position again, as on the
+    registry's 100 um MALDI set, whose function 2 holds 1275 positioned
+    scans on 1274 distinct pixels (issue #233) -- are the reader's to
+    combine, and it reports what it did with them (D85). The pixel of each
+    scan is the one the grid gives it, so on a grid of several regions two
+    regions can never be mistaken for one pixel.
     """
     wanted = None if functions is None else set(functions)
-    seen: Set[Tuple[int, int]] = set()
-    duplicated: Set[Tuple[int, int]] = set()
-    extra = 0
+    functions_on: Dict[Tuple[int, int], Set[int]] = {}
     for (func, _scan), info in grid.scan_map.items():
         if wanted is not None and func not in wanted:
             continue
@@ -1066,29 +1065,20 @@ def _warn_on_shared_pixels(
         coords = grid.locate(info)
         if coords is None:
             continue
-        pixel = (coords[0], coords[1])
-        if pixel in seen:
-            duplicated.add(pixel)
-            extra += 1
-        else:
-            seen.add(pixel)
+        functions_on.setdefault((coords[0], coords[1]), set()).add(func)
 
-    if not duplicated:
+    shared = sorted(p for p, on in functions_on.items() if len(on) > 1)
+    if not shared:
         return
 
-    sample = ", ".join(f"({x}, {y})" for x, y in sorted(duplicated)[:5])
-    if len(duplicated) > 5:
+    sample = ", ".join(f"({x}, {y})" for x, y in shared[:5])
+    if len(shared) > 5:
         sample += ", ..."
     logger.warning(
-        "%d Waters scan(s) land on %d pixel(s) that another scan already "
-        "covers, so those pixels carry the SUM of every scan on them: %s. "
-        "The stage reported the same position twice; the store has "
-        "%d pixels for %d positioned scans.",
-        extra,
-        len(duplicated),
+        "%d pixel(s) hold scans of more than one Waters function, so they "
+        "carry the SUM of those functions' scans: %s.",
+        len(shared),
         sample,
-        len(seen),
-        len(seen) + extra,
     )
 
 

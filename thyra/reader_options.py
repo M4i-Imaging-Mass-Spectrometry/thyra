@@ -23,6 +23,7 @@ READER_OPTION_FORMATS: Dict[str, Optional[Tuple[str, ...]]] = {
     "tdf_spectrum": ("bruker",),
     "region": None,
     "use_centroid": ("waters",),
+    "lock_mass": ("waters",),
     "spectrum_type": ("imzml",),
     "max_mass_axis_length": ("imzml", "mzpeak", "solarix", "waters"),
     "use_appended_calibration": ("phi",),

@@ -6748,6 +6748,130 @@ regions from a list of scans.
 - Only Cyclic IMS runs carry the method file. No Synapt or Xevo run has
   been seen with one.
 
+## D84. Waters m/z can be lock-mass corrected, without writing to the run
+
+**Status:** Implemented (2026-10-22).
+
+**Decision.** `--waters-lock-mass MZ|off` (reader option `lock_mass`)
+chooses the lock-mass correction the stored m/z carry.
+
+- **A reference m/z.** The Waters library measures the run's lock-mass
+  scans against it, on a throwaway copy of the run. The copy holds every
+  side file and the lock-mass function's `.DAT`; the other functions' data
+  files are sparse placeholders of the same size. The library writes its
+  factors (`lmgt.inf`) into the copy, Thyra reads them, and the copy is
+  deleted. Each converted scan's m/z -- the summed spectrum, its drift bins
+  and the shared mass axis -- are multiplied by the factor interpolated
+  linearly at the scan's retention time, held at the first and last
+  measurement outside them.
+- **`off`.** The m/z are stored uncorrected.
+- **Omitted (the default).** The store keeps what the run carries. When
+  the run folder holds an `lmgt.inf` (a correction MassLynx saved), the
+  library applies it to every read, and it is kept. When it holds none
+  but the run has lock-mass reference scans, a warning says so and names
+  the option.
+
+The library applies an `lmgt.inf` in the run folder to every read, so a
+scan's m/z are multiplied by *target / applied*: a reference m/z replaces
+a saved correction, and `off` undoes it. A reference m/z on a run whose
+"lockmass function" is the tail of a split raster (D7) is refused: that
+function is image data, not a reference.
+
+The store records `calibration.lock_mass_corrected` as whether its m/z
+carry a correction, and a `lock_mass` block in the Waters-specific
+metadata: `source` (`lmgt.inf` or `computed`), `reference_mz`,
+`tolerance_da`, `n_measurements`, the correction range in ppm, and under
+`undone` a saved correction that was replaced or turned off.
+
+**Why.** Measured on MSV000092638 (SYNAPT XS, MALDI, negative mode,
+8,475 pixels, about three hours), against known brain lipid ions (PE 38:4,
+PS 40:6, PI 38:4, SHexCer 42:2;O2):
+
+| m/z stored | 0-20 min | 80-100 min | 160-180 min |
+|---|---|---|---|
+| uncorrected (Thyra before this) | +11.6 ppm | +18.3 ppm | +20.6 ppm |
+| corrected against P17- (526.5545) | +1.8 ppm | +1.8 ppm | +1.2 ppm |
+| HDImaging's lock-mass-corrected export | -2 to -4 ppm over the run | | |
+
+Uncorrected, an ion moves by 4 to 5 of the 2 mDa centroid bins between
+the first and last rows of the image.
+
+The library's own correction call writes `lmgt.inf` into the folder it
+was opened on, and every later open of that folder applies it (measured).
+Calling it on the user's run would change what every later reader of the
+run sees, and fails on a read-only share, so it is only ever called on
+the copy. On the run above the copy is 7.6 MB, the measurement takes 2 to
+5 s, and its factors equal those from a full copy of the run digit for
+digit. The interpolation reproduces the library's own application to
+0.03 ppm, the float32 rounding of the stored values.
+
+On a profile read the stored m/z equal what the library returns from a
+corrected copy of the whole run to 0.08 ppm, with identical intensities.
+On a centroid read they do not quite: the library centroids a corrected
+run again rather than scaling its centroids, and on four scans of the run
+above its list held 1 to 20 fewer of about 8,000 peaks, its strong peaks
+sat a median 1 to 2 ppm from the scaled ones, and its total intensity was
+0.3 to 0.7% lower. Thyra stores the vendor centroids of the run scaled by
+the factor, which corrects the m/z by exactly the measured drift and
+leaves the peak list the one the run gives. The lipid accuracy is the same
+either way to 0.5 ppm.
+
+The correction is not applied by default: the run does not name its
+reference ("Experiment Reference Compound Name: N/A" in `_extern.inf`),
+and the library's automatic correction declines it for that reason. A
+guessed reference that matches the wrong peak would shift every m/z, so
+the reference stays the user's statement, and the run says when one is
+missing.
+
+The warning about an uncorrected run says what its reference scans show,
+and the store records the same under `lock_mass.reference_scans`. First,
+how far their strongest peak moved between the first and the last group of
+reference scans. That needs no identification; on the run above it is
++10.9 ppm over 10 groups, against an 11.3 ppm spread of the library's own
+factors. Second, what the scans look like, named only when that is
+unambiguous: at least five red phosphorus cluster ions of the run's
+polarity within 50 ppm whose offsets spread no more than 3 ppm, or leucine
+enkephalin as the strongest peak. On the run above: red phosphorus, 17
+ions, stored +15.5 ppm from theory, P17- (526.5545) suggested. The
+suggestion is printed, never applied. Recognising references
+automatically, and reading the reference from the acquisition method, are
+left for later.
+
+**What changes in a store.** With a reference m/z, every m/z value. With
+`off` on a run with a saved correction, every m/z value. Omitted, nothing
+(the warning is new). The `lock_mass` block is new.
+
+## D85. A pixel one Waters function acquired twice
+
+**Status:** Implemented (2026-10-22).
+
+**Decision.** When scans of one function report the same pixel:
+
+- if a scan of the lock-mass reference function was acquired between two
+  of them, the earlier one was cut short by it and is left out; the pixel
+  keeps the scan acquired after the break;
+- the scans left are complete acquisitions of the pixel, and it stores
+  their mean, each scan weighing 1/n.
+
+Pixels that scans of *different* converted functions share (two mass
+ranges or channels of one acquisition) are summed as before, and the grid
+warns about those only. The Waters-specific metadata records
+`repeated_pixels`: `interrupted_scans_left_out` (function, scan, pixel)
+and `pixels_averaged` (function, scans, pixel). The metadata's peak count
+leaves out the scans left out.
+
+**Why.** On MSV000092638 the raster stops every 20.2 minutes for seven
+lock-mass scans, and the pixel it was on is acquired again after them.
+All nine first scans inside the raster hold 0 to 2% of a normal scan's
+ion current. Summing kept them as a few per cent of extra signal on nine
+pixels; HDImaging's export of the run leaves exactly those nine scans out.
+Two complete acquisitions of one pixel (issue #233: two scans 40 ms apart
+on a 100 um MALDI set) were summed, so the pixel came out up to twice as
+bright as its neighbours; the mean keeps it on their scale.
+
+**What changes in a store.** The intensities of the pixels concerned, and
+the metadata's peak count. Every other pixel is unchanged.
+
 ## D86. A position, index or vendor header value is checked before it is used, and `region_number` is int64
 
 **Status:** Implemented (2026-10-23), issue #527. Supersedes D57's note on
