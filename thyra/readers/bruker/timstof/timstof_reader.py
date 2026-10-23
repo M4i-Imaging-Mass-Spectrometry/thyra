@@ -230,12 +230,7 @@ def _get_frame_coordinates(
 
             # Check if this is MALDI data
             try:
-                cursor.execute(
-                    "SELECT XIndexPos, YIndexPos, RegionNumber FROM "
-                    "MaldiFrameInfo WHERE Frame = ?",
-                    (frame_id,),
-                )
-                result = cursor.fetchone()
+                result = _frame_position_row(cursor, frame_id)
                 if result:
                     # A position or region number that is text, NULL or
                     # not a whole number places the frame nowhere: it is
@@ -264,6 +259,31 @@ def _get_frame_coordinates(
     except Exception as e:
         logger.warning(f"Error getting coordinates for frame {frame_id}: {e}")
         return None
+
+
+def _frame_position_row(cursor: Any, frame_id: int) -> Optional[Tuple[Any, ...]]:
+    """``(XIndexPos, YIndexPos, RegionNumber)`` of one frame, or ``None``.
+
+    A ``MaldiFrameInfo`` without a ``RegionNumber`` column is read for its
+    position alone, with region 0: falling through to the generated
+    coordinates of a non-imaging file would place every frame wrongly.
+    A missing table still raises, as it did, for the caller's fallback.
+    """
+    try:
+        cursor.execute(
+            "SELECT XIndexPos, YIndexPos, RegionNumber FROM MaldiFrameInfo "
+            "WHERE Frame = ?",
+            (frame_id,),
+        )
+    except sqlite3.OperationalError:
+        cursor.execute(
+            "SELECT XIndexPos, YIndexPos FROM MaldiFrameInfo WHERE Frame = ?",
+            (frame_id,),
+        )
+        row = cursor.fetchone()
+        return None if row is None else (row[0], row[1], 0)
+    found: Optional[Tuple[Any, ...]] = cursor.fetchone()
+    return found
 
 
 def _optional_float(value: Any) -> Optional[float]:
@@ -3163,12 +3183,7 @@ class BrukerReader(BrukerBaseMSIReader):
 
             # Check if this is MALDI data
             try:
-                cursor.execute(
-                    "SELECT XIndexPos, YIndexPos, RegionNumber FROM "
-                    "MaldiFrameInfo WHERE Frame = ?",
-                    (frame_id,),
-                )
-                result = cursor.fetchone()
+                result = _frame_position_row(cursor, frame_id)
                 if result:
                     # A position or region number that is text, NULL or
                     # not a whole number places the frame nowhere: it is
