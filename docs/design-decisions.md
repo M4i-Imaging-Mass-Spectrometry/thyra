@@ -6638,7 +6638,7 @@ whose spectra share one block, and from `.d` folders, do not change.
 - No MS-Numpress archive from `mzpeak-convert` 0.16.0 was converted for
   this entry; the tolerance rests on the encoding's own error bound.
 
-## D83. Waters m/z can be lock-mass corrected, without writing to the run
+## D84. Waters m/z can be lock-mass corrected, without writing to the run
 
 **Status:** Implemented (2026-10-22).
 
@@ -6731,7 +6731,7 @@ left for later.
 `off` on a run with a saved correction, every m/z value. Omitted, nothing
 (the warning is new). The `lock_mass` block is new.
 
-## D84. A pixel one Waters function acquired twice
+## D85. A pixel one Waters function acquired twice
 
 **Status:** Implemented (2026-10-22).
 

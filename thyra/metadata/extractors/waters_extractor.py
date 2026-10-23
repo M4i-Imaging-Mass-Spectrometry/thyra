@@ -86,14 +86,14 @@ class WatersMetadataExtractor(MetadataExtractor):
                 (:func:`thyra.readers.waters.instrument.read_cyclic_sequence`),
                 reported as ``format_specific["cyclic_sequence"]``.
             lock_mass: The lock-mass correction the stored m/z carry
-                (``WatersReader.lock_mass_report``, D83), reported as
+                (``WatersReader.lock_mass_report``, D84), reported as
                 ``format_specific["lock_mass"]``. Its ``corrected`` replaces
                 the library's ``isLockmassCorrected``, which describes the
                 run folder and not the store. ``None`` reports the library's
                 answer, as before.
             repeated_pixels: How scans one function took on the same pixel
                 were combined (``WatersReader.repeated_pixels_report``,
-                D84), reported as ``format_specific["repeated_pixels"]``
+                D85), reported as ``format_specific["repeated_pixels"]``
                 when any pixel was.
             mz_scale: A scan's m/z multiplier from its retention time, the
                 one the reader applies, so the observed mass range is that
@@ -505,7 +505,7 @@ class WatersMetadataExtractor(MetadataExtractor):
                 params[f"function_{func}_acq_range_start"] = acq_range[0]
                 params[f"function_{func}_acq_range_end"] = acq_range[1]
 
-        # Lock mass info: what the store carries when the reader said (D83),
+        # Lock mass info: what the store carries when the reader said (D84),
         # else the library's answer about the run folder.
         if self._lock_mass is not None:
             params["is_lockmass_corrected"] = bool(self._lock_mass["corrected"])

@@ -1,4 +1,4 @@
-"""Lock-mass correction of Waters m/z without writing to the run (D83)."""
+"""Lock-mass correction of Waters m/z without writing to the run (D84)."""
 
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -181,7 +181,7 @@ class TestMeasuringOnACopy:
 
 
 # ----------------------------------------------------------------------
-# What an uncorrected run's reference scans show (D83)
+# What an uncorrected run's reference scans show (D84)
 # ----------------------------------------------------------------------
 
 _P = 30.97376163
@@ -200,7 +200,7 @@ def _profile(peaks, offset_ppm):
 
 
 def _red_phosphorus(negative=True, n_values=range(5, 37, 2)):
-    """The cluster ladder, with P17 the strongest ion as on the D83 run."""
+    """The cluster ladder, with P17 the strongest ion as on the D84 run."""
     sign = 1.0 if negative else -1.0
     return [(n * _P + sign * _E, 20000.0 if n == 17 else 2000.0) for n in n_values]
 

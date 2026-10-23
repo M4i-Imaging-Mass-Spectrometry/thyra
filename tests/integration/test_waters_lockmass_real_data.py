@@ -1,4 +1,4 @@
-"""Waters lock-mass correction and repeated pixels against a real run (D83, D84).
+"""Waters lock-mass correction and repeated pixels against a real run (D84, D85).
 
 These tests run only when ``THYRA_WATERS_LOCK_MASS_DATASET`` names the
 MassIVE run MSV000092638 ``20210426_9AA_WTBrain1-1.raw`` (SYNAPT XS, MALDI,
@@ -96,7 +96,7 @@ class TestLockMassOnARealRun:
         report = corrected.lock_mass_report()
         corrected.close()
 
-        # Measured for D83: +12 ppm rising to +21 ppm uncorrected.
+        # Measured for D84: +12 ppm rising to +21 ppm uncorrected.
         assert max(drifting) - min(drifting) > 5.0
         assert max(steady) - min(steady) < 2.0
         assert all(abs(error) < 4.0 for error in steady)
@@ -108,7 +108,7 @@ class TestLockMassOnARealRun:
         report = reader.lock_mass_report()
         reader.close()
 
-        # Measured for D83: P17- the strongest ion, about 11 ppm of drift.
+        # Measured for D84: P17- the strongest ion, about 11 ppm of drift.
         scans = report["reference_scans"]
         assert report["corrected"] is False
         assert scans["looks_like"] == "red phosphorus"

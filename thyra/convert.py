@@ -954,7 +954,7 @@ def convert_msi(
               SELECT SERIES MRT, the vendor centroid on every other
               Waters instrument. The CLI spells it --waters-spectrum.
             - lock_mass: float | "off" - For Waters .raw, the lock-mass
-              correction of the stored m/z (D83). A reference m/z has
+              correction of the stored m/z (D84). A reference m/z has
               the Waters library measure the run's lock-mass scans
               against it, on a throwaway copy of the run, and corrects
               every scan by the result; "off" stores the m/z
