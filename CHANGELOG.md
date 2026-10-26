@@ -2,6 +2,34 @@
 
 <!-- version list -->
 
+## [4.6.0](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/compare/v4.5.1...v4.6.0) (2026-10-23)
+
+
+### Features
+
+* **waters:** keep the regions a Waters method declares, on one grid as on timsTOF ([#549](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/549)) ([2d478ae](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/2d478ae45889e1c10bd5d5b4e3bf558804bb958e))
+* **waters:** lock-mass correction that never writes to the run, and pixels acquired twice ([#548](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/548)) ([a6f1911](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a6f19118578bc231750189c76679e49653f443c2))
+* **waters:** read Cyclic IMS runs on their own drift axis, and a declared full scan as MS1 ([#537](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/537)) ([4ed59af](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/4ed59af82f41fd7bf00980a682067a3267d441fb))
+
+
+### Bug Fixes
+
+* **alignment:** .mis Areas keep their region, the crop follows the regions converted, and one affine places every region ([#541](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/541)) ([0eec83d](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/0eec83d7992135426e39355af3219305ea188742))
+* **cli:** the calibration display marks the state Bruker's library applies ([#538](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/538)) ([a4b4849](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a4b4849b4e7ea98179de1424d66c9dc18b0cb577))
+* **convert:** convert_msi refuses keywords and values the CLI refuses, and records only what it computed ([#540](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/540)) ([272352c](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/272352c7691bcd8682f03df6fcab29909ab6f42d))
+* **convert:** refuse a folder of several runs, check every output file, and write the store under a temporary name ([#545](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/545)) ([4489ba5](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/4489ba55956d3d367fc490c1db575b8051133dcc))
+* **imzml:** judge z on every spectrum, check every array's bytes, refuse unreadable files in one line ([#535](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/535)) ([3371f88](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/3371f88d85a3ba1610b1d80d157909000a295323)), closes [#521](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/521)
+* **imzml:** leave MSn spectra out per pixel, as an mzPeak archive does ([#539](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/539)) ([2921a3b](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/2921a3b6356c2b9cd6e4684642015cb8cd0c5efe))
+* **memory:** refuse what will not fit before it is allocated, on memory and on disk ([#544](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/544)) ([cd509aa](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/cd509aa6aa6c9a2d3090d4f2cad9a186e177c673))
+* **metadata:** the spectrum type and the instrument follow the converted spectra ([#547](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/547)) ([79338f4](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/79338f4fd2c2c973cecf1761ca81e869602dcde0))
+* **mobility:** stated ranges drop instead of clipping, the shared imzML mobility axis is proven on every spectrum, and grid messages say why ([#546](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/546)) ([acadffc](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/acadffc1138c2d470ccdc39dabee8f398b2838b0)), closes [#517](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/517)
+* **mzpeak:** keep every chunk's points, leave MSn out per pixel, and keep left-out spectra off the axis ([#531](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/531)) ([16151a3](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/16151a3baf4ba21f336accad4b5e3e19df194dd4)), closes [#522](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/522)
+* **mzpeak:** refuse damaged archives by name, keep uns keys path-safe, and test only a finite grid ([#542](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/542)) ([d47b627](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/d47b627a7103615cf13aa6eaab66a3749b619987))
+* **optical:** store optical images as their files show them, under valid names, placed only where aligned ([#532](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/532)) ([be6358e](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/be6358e122a194779fb9392518eab5fe21d4c2e2))
+* **resampling:** tic_preserving keeps the current measured inside the window ([#533](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/533)) ([e77002a](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/e77002a10da1dcbe6f0a01fe4ea1a7a35c6e2ae7)), closes [#516](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/516)
+* **timstof:** each frame takes its own 1/K0, the store names only the calibration applied, and MS/MS labels keep the exact precursor m/z ([#534](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/534)) ([6b0d24d](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/6b0d24d382bd90d58859f428ee54d569221ecef4)), closes [#518](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/518)
+* **tools:** refuse bad input in check-ontology and example-data, and never report identity for differing stores ([#543](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/543)) ([38f7dab](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/38f7dab54beeb5a9dbab0f3e6bdccba7220acbf8)), closes [#529](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/529)
+
 ## [4.5.1](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/compare/v4.5.0...v4.5.1) (2026-10-18)
 
 
