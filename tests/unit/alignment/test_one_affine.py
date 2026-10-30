@@ -44,7 +44,9 @@ def test_a_lone_region_is_placed_from_where_the_raster_starts() -> None:
     matrix = result.cell_to_image
     assert matrix is not None
     assert result.transform_point(3, 0) == pytest.approx((50.0, 30.0))
-    assert result.cell_corners(3, 0) == pytest.approx(_cell(matrix, 3, 0))
+    np.testing.assert_allclose(
+        result.cell_corners(3, 0), _cell(matrix, 3, 0), rtol=1e-6
+    )
     assert result.cell_corners(0, 0) is None  # no spot at raster x 97
 
 
@@ -63,7 +65,9 @@ def test_every_region_is_placed_by_the_one_matrix() -> None:
     assert matrix is not None
     for p in positions:
         nx, ny = p["raster_x"] - 100, p["raster_y"] - 10
-        assert result.cell_corners(nx, ny) == pytest.approx(_cell(matrix, nx, ny))
+        np.testing.assert_allclose(
+            result.cell_corners(nx, ny), _cell(matrix, nx, ny), rtol=1e-6
+        )
         centre = (matrix @ np.array([nx + 0.5, ny + 0.5, 1.0]))[:2]
         assert result.transform_point(nx, ny) == pytest.approx(tuple(centre))
 
@@ -82,7 +86,9 @@ def test_a_region_without_an_area_still_gets_its_cells(missing: str) -> None:
     assert [m.region_id for m in result.region_mappings] == [0]
     matrix = result.cell_to_image
     assert matrix is not None
-    assert result.cell_corners(0, 1) == pytest.approx(_cell(matrix, 0, 1))
+    np.testing.assert_allclose(
+        result.cell_corners(0, 1), _cell(matrix, 0, 1), rtol=1e-6
+    )
 
 
 def test_an_area_with_no_width_places_nothing() -> None:
