@@ -617,7 +617,10 @@ def test_reference_archive_converts(tmp_path):
     table = _table(output)
     assert table.n_obs > 0
     assert table.n_vars > 0
-    values = _dense(table)
+    # The stored values only: a reference archive can be wide enough that a
+    # dense copy of X does not fit in memory, while the store is fine.
+    matrix = table.X
+    values = matrix.data if hasattr(matrix, "toarray") else np.asarray(matrix)
     assert np.isfinite(values).all()
     assert np.isfinite(table.var["mz"].to_numpy()).all()
 
