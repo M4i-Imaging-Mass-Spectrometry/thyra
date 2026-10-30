@@ -435,6 +435,12 @@ class TestTheModuleTableMatchesTheDecorators:
             dotted = ".".join(path.relative_to(root).with_suffix("").parts)
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom):
+                    renamed = [a.asname for a in node.names if a.name == function]
+                    assert renamed in ([], [None]), (
+                        f"{dotted}:{node.lineno} imports {function} under "
+                        f"another name, so this test cannot find its calls"
+                    )
                 format_name = cls._registered_format(node, function, dotted)
                 if format_name is None:
                     continue

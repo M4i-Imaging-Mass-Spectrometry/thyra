@@ -90,7 +90,8 @@ The two Bruker variables additionally need the vendor library, which is bundled
 for Windows and Linux only; anywhere it cannot be loaded those tests skip
 rather than fail. A path that exists but is not a Bruker acquisition still
 fails loudly -- the reader rejects it before the library is ever reached. The
-Waters variable needs the Waters vendor library in the same way.
+Waters variable also needs the Waters vendor library, bundled for Windows and
+Linux only.
 
 So a full opt-in run looks like this (POSIX shell; use `$env:NAME = "..."` in
 PowerShell):
