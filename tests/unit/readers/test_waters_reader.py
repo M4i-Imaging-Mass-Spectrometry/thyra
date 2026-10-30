@@ -17,10 +17,13 @@ def _fake_library():
     """A MassLynxLib stand-in for a run with no drift bins.
 
     A bare MagicMock answers every question with a truthy MagicMock, which
-    would make every function look like it carries drift bins.
+    would make every function look like it carries drift bins. It reports
+    the 3 scans the ``mock_waters_data`` index lists, which the reader now
+    checks (issue #527); a test with other counts sets its own.
     """
     mock_ml = MagicMock()
     mock_ml.is_ion_mobility_function.return_value = False
+    mock_ml.get_number_of_scans_in_function.return_value = 3
     return mock_ml
 
 
@@ -324,6 +327,7 @@ class TestWatersReaderIterSpectra:
 
         # Mock 6 scans, each returning a small spectrum
         mock_ml.get_number_of_scans_in_function.return_value = 6
+        _declare_function_files(mock_waters_data, 1, 6)
         mzs = np.array([100.0, 200.0, 300.0])
         intensities = np.array([10.0, 20.0, 30.0])
         mock_ml.read_spectrum.return_value = (mzs, intensities)
@@ -371,6 +375,7 @@ class TestWatersReaderIterSpectra:
         mock_build_grid.return_value = grid
 
         mock_ml.get_number_of_scans_in_function.return_value = 2
+        _declare_function_files(mock_waters_data, 1, 2)
         mock_ml.read_spectrum.return_value = (
             np.array([100.0]),
             np.array([50.0]),
@@ -399,6 +404,7 @@ class TestWatersReaderIterSpectra:
         mock_build_grid.return_value = grid
 
         mock_ml.get_number_of_scans_in_function.return_value = 6
+        _declare_function_files(mock_waters_data, 1, 6)
 
         # First spectrum has data, rest are empty
         empty = (np.array([], dtype=np.float64), np.array([], dtype=np.float64))
@@ -427,6 +433,7 @@ class TestWatersReaderIterSpectra:
         mock_build_grid.return_value = grid
 
         mock_ml.get_number_of_scans_in_function.return_value = 6
+        _declare_function_files(mock_waters_data, 1, 6)
 
         good = (np.array([100.0]), np.array([50.0]))
         mock_ml.read_spectrum.side_effect = [
@@ -462,6 +469,7 @@ class TestWatersReaderMassAxis:
         mock_build_grid.return_value = grid
 
         mock_ml.get_number_of_scans_in_function.return_value = 6
+        _declare_function_files(mock_waters_data, 1, 6)
 
         # Each scan has slightly different m/z values
         mock_ml.read_spectrum.side_effect = [
@@ -494,6 +502,7 @@ class TestWatersReaderMassAxis:
         mock_build_grid.return_value = grid
 
         mock_ml.get_number_of_scans_in_function.return_value = 6
+        _declare_function_files(mock_waters_data, 1, 6)
         mock_ml.read_spectrum.return_value = (
             np.array([100.0, 200.0]),
             np.array([10.0, 20.0]),
@@ -605,13 +614,19 @@ def _chunked_grid(levels, scans_per_function=3, profile_functions=()):
     )
 
 
-def _declare_function_files(raw_dir, n_funcs):
-    """Give a mock .raw directory one _FUNC*.DAT per function.
+def _declare_function_files(raw_dir, n_funcs, scans=3):
+    """Give a mock .raw directory one _FUNC*.DAT, .IDX and .STS per function.
 
-    MassLynx numbers them from one, so function 0 is _FUNC001.DAT.
+    MassLynx numbers them from one, so function 0 is _FUNC001.DAT. The
+    index holds one 30-byte record per scan, as on Xevo and Cyclic runs:
+    ``scans`` is a count for every function, or a list of one per function,
+    and must be what the mocked library returns (issue #527).
     """
     for f in range(n_funcs):
+        n = scans[f] if isinstance(scans, (list, tuple)) else scans
         (raw_dir / f"_FUNC{f + 1:03d}.DAT").write_bytes(b"\x00" * 64)
+        (raw_dir / f"_FUNC{f + 1:03d}.IDX").write_bytes(b"\x00" * 30 * n)
+        (raw_dir / f"_FUNC{f + 1:03d}.STS").write_bytes(b"\x00" * 64)
 
 
 def _open_reader(
@@ -629,7 +644,7 @@ def _open_reader(
     # writes only _FUNC001.DAT, so a test mocking more functions than that
     # has to put their files there too, or it is asserting against a
     # directory MassLynx could not have produced.
-    _declare_function_files(mock_waters_data, n_funcs)
+    _declare_function_files(mock_waters_data, n_funcs, scans_per_function)
 
     mock_ml = _fake_library()
     mock_ml_cls.get_instance.return_value = mock_ml
@@ -989,6 +1004,123 @@ class TestWatersReaderMissingFunctionFiles:
 
         assert len(list(reader.iter_spectra())) == 9
         reader.close()
+
+
+class TestWatersReaderDamagedFunctionFiles:
+    """A cut-short, empty or companion-less function file (issue #527, F16).
+
+    Measured with the real library on a damaged copy of a 9-scan Cyclic
+    export: a .DAT cut to 40% returns 3 scans and still reads as imaging;
+    an empty .DAT, an empty or missing .IDX and a missing .STS all read as
+    "not an imaging file".
+    """
+
+    def _three_functions(self, mock_ml_cls, mock_build_grid, mock_waters_data):
+        return _open_reader(
+            mock_ml_cls,
+            mock_build_grid,
+            mock_waters_data,
+            _chunked_grid({0: 1, 1: 2, 2: 0}),
+            3,
+            types={0: FunctionType.MS, 1: FunctionType.MS, 2: FunctionType.LOCKMASS},
+        )
+
+    @pytest.mark.parametrize("suffix", [".IDX", ".STS"])
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_a_missing_companion_is_refused_before_the_library_opens_it(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data, suffix
+    ):
+        reader, mock_ml = self._three_functions(
+            mock_ml_cls, mock_build_grid, mock_waters_data
+        )
+        (mock_waters_data / f"_FUNC002{suffix}").unlink()
+
+        with pytest.raises(ConversionRefused, match=f"_FUNC002{suffix} is missing"):
+            reader._ensure_initialized()
+        mock_ml.open_file.assert_not_called()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_an_empty_index_is_refused(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        reader, _ = self._three_functions(
+            mock_ml_cls, mock_build_grid, mock_waters_data
+        )
+        (mock_waters_data / "_FUNC002.IDX").write_bytes(b"")
+
+        with pytest.raises(ConversionRefused, match="_FUNC002.IDX is empty"):
+            reader._ensure_initialized()
+
+    @pytest.mark.parametrize("imaging", [True, False])
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_fewer_scans_than_the_index_lists_is_refused(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data, imaging
+    ):
+        reader, mock_ml = self._three_functions(
+            mock_ml_cls, mock_build_grid, mock_waters_data
+        )
+        # A .DAT cut short: the library returns 1 of function 1's 3 scans,
+        # and one cut to nothing also reads as "not imaging".
+        mock_ml.get_number_of_scans_in_function.side_effect = lambda _h, f: (
+            1 if f == 1 else 3
+        )
+        mock_ml.is_imaging_file.return_value = imaging
+
+        with pytest.raises(
+            ConversionRefused,
+            match=r"returned 1 scans of function 2, but _FUNC002.IDX lists 3",
+        ):
+            reader._ensure_initialized()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_a_g1_index_of_22_byte_records_is_read_too(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        reader, _ = self._three_functions(
+            mock_ml_cls, mock_build_grid, mock_waters_data
+        )
+        for f in (1, 2, 3):
+            (mock_waters_data / f"_FUNC00{f}.IDX").write_bytes(b"\x00" * 22 * 3)
+
+        assert len(list(reader.iter_spectra())) == 9
+        reader.close()
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_an_index_no_known_record_size_divides_is_warned_about(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data, thyra_logs
+    ):
+        """A MassLynx version not measured is not refused for its records."""
+        reader, _ = self._three_functions(
+            mock_ml_cls, mock_build_grid, mock_waters_data
+        )
+        (mock_waters_data / "_FUNC002.IDX").write_bytes(b"\x00" * 25 * 3)
+
+        with thyra_logs("thyra.readers.waters", logging.WARNING) as records:
+            assert len(list(reader.iter_spectra())) == 9
+        reader.close()
+        assert "_FUNC002.IDX of mock.raw is 75 bytes" in records.text
+
+    @patch("thyra.readers.waters.waters_reader.MassLynxLib")
+    @patch("thyra.readers.waters.waters_reader.build_imaging_grid")
+    def test_a_refusal_closes_the_run(
+        self, mock_build_grid, mock_ml_cls, mock_waters_data
+    ):
+        reader, mock_ml = self._three_functions(
+            mock_ml_cls, mock_build_grid, mock_waters_data
+        )
+        mock_ml.get_number_of_scans_in_function.side_effect = lambda _h, f: (
+            1 if f == 1 else 3
+        )
+
+        with pytest.raises(ConversionRefused):
+            reader._ensure_initialized()
+        mock_ml.close_file.assert_called_once()
+        assert reader._handle is None
 
 
 class TestWatersReaderOffRasterFunctions:
@@ -1879,6 +2011,7 @@ def _region_reader(mock_ml_cls, mock_build_grid, raw_dir, region=None, method=Tr
     mock_ml.get_number_of_functions.return_value = 1
     mock_ml.classify_function.return_value = FunctionType.MS
     mock_ml.get_number_of_scans_in_function.return_value = 50
+    _declare_function_files(raw_dir, 1, 50)
 
     def spectrum(_handle, _func, scan):
         mzs = [100.0, 200.0] if scan < 25 else [300.0, 400.0]

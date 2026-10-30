@@ -9,7 +9,7 @@ every name here.
 import logging
 import sys
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -370,6 +370,63 @@ def _per_bin_text(n_tables: int, n_regions: int) -> str:
         f"{total} bytes per bin, measured: {AXIS_BYTES_PER_BIN} for one table, "
         + " and ".join(parts)
     )
+
+
+#: What the streaming converter allocates per position of the pixel grid
+#: before a spectrum is read: three ``bool`` arrays (occupancy, measured,
+#: repeats) and the float64 TIC. Positions no spectrum reaches cost the
+#: same, so a sparse grid pays for every one of them.
+GRID_BYTES_PER_POSITION = 3 + 8
+
+#: What a grid position adds when the reader knows the acquisition order:
+#: the int64 smallest order per position.
+GRID_ORDER_BYTES_PER_POSITION = 8
+
+
+def pixel_grid_refusal(
+    dimensions: Sequence[int],
+    n_spectra: int,
+    records_order: bool,
+    available_gb: Optional[float] = None,
+) -> Optional[str]:
+    """Why a pixel grid this large cannot be converted here, or ``None``.
+
+    The grid is the bounding box of the positions, so one spectrum far from
+    the rest -- (1000000, 1000000) beside (1, 1) -- makes it 10**12
+    positions for two spectra, and the per-position arrays ended in a
+    ``MemoryError`` traceback (issue #527). Projected before they are
+    allocated, with the same fractions of free memory as the mass axis.
+    """
+    n_positions = 1
+    for size in dimensions:
+        n_positions *= int(size)
+    per_position = GRID_BYTES_PER_POSITION + (
+        GRID_ORDER_BYTES_PER_POSITION if records_order else 0
+    )
+    gb = n_positions * per_position / 1e9
+    free = available_memory_gb() if available_gb is None else float(available_gb)
+    shape = " x ".join(f"{int(size):,}" for size in dimensions)
+    if gb > free * AXIS_REFUSE_FRACTION:
+        return (
+            f"the pixel grid would be {shape} = {n_positions:,} positions for "
+            f"{int(n_spectra):,} spectra, projected to need {gb:,.1f} GB "
+            f"({per_position} bytes per position) against {free:.1f} GB free, "
+            f"more than the {AXIS_REFUSE_FRACTION:.0%} of free memory a "
+            "conversion may take. A grid this much larger than its spectra "
+            "usually means a few positions lie far from the rest; check the "
+            "positions the source states"
+        )
+    if gb > free * AXIS_WARN_FRACTION:
+        logger.warning(
+            "The pixel grid is %s = %s positions for %s spectra, projected to "
+            "need %.1f GB of the %.1f GB free. It will be attempted.",
+            shape,
+            f"{n_positions:,}",
+            f"{int(n_spectra):,}",
+            gb,
+            free,
+        )
+    return None
 
 
 def mass_axis_refusal(

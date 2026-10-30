@@ -46,6 +46,7 @@ from ....core.msms import (
     IsolationWindow,
     windows_overlap,
 )
+from ....core.positions import whole_number, whole_sql
 from ....core.region_map import build_region_map
 from ....core.registry import register_reader
 from ....errors import ConversionRefused
@@ -69,6 +70,18 @@ from .sdk.sdk_functions import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: The MaldiFrameInfo rows whose position and region number are whole
+#: numbers: the frames the reader places. A frame whose position is text,
+#: NULL or a REAL with a fraction is skipped and counted by the frame loop,
+#: so the region map, the region boxes and the alignment positions leave it
+#: out too, where ``int()`` used to cut it onto a neighbour (issue #527).
+_WHOLE = " AND ".join(
+    whole_sql(column) for column in ("XIndexPos", "YIndexPos", "RegionNumber")
+)
+_WHOLE_M = " AND ".join(
+    whole_sql(f"m.{column}") for column in ("XIndexPos", "YIndexPos", "RegionNumber")
+)
 
 # Module-level dedupe for the "No calibration.sqlite" warning.  The
 # reader is constructed multiple times per dataset open (preview +
@@ -217,21 +230,24 @@ def _get_frame_coordinates(
 
             # Check if this is MALDI data
             try:
-                cursor.execute(
-                    "SELECT XIndexPos, YIndexPos FROM MaldiFrameInfo WHERE "
-                    "Frame = ?",
-                    (frame_id,),
-                )
-                result = cursor.fetchone()
+                result = _frame_position_row(cursor, frame_id)
                 if result:
-                    x, y = result
+                    # A position or region number that is text, NULL or
+                    # not a whole number places the frame nowhere: it is
+                    # skipped and counted with the other frames without
+                    # coordinates, where int() used to cut 100.9999999
+                    # onto pixel 100 (#527). The same rule as _WHOLE, so
+                    # the region map holds exactly these frames.
+                    x, y = whole_number(result[0]), whole_number(result[1])
+                    if x is None or y is None or whole_number(result[2]) is None:
+                        return None
                     # Apply coordinate offsets if provided (Bruker-specific
                     # normalization)
                     if coordinate_offsets:
                         offset_x, offset_y, offset_z = coordinate_offsets
-                        return (int(x) - offset_x, int(y) - offset_y, 0)
+                        return (x - offset_x, y - offset_y, 0)
                     else:
-                        return (int(x), int(y), 0)
+                        return (x, y, 0)
             except sqlite3.OperationalError:
                 # No MALDI table, use generated coordinates
                 pass
@@ -243,6 +259,31 @@ def _get_frame_coordinates(
     except Exception as e:
         logger.warning(f"Error getting coordinates for frame {frame_id}: {e}")
         return None
+
+
+def _frame_position_row(cursor: Any, frame_id: int) -> Optional[Tuple[Any, ...]]:
+    """``(XIndexPos, YIndexPos, RegionNumber)`` of one frame, or ``None``.
+
+    A ``MaldiFrameInfo`` without a ``RegionNumber`` column is read for its
+    position alone, with region 0: falling through to the generated
+    coordinates of a non-imaging file would place every frame wrongly.
+    A missing table still raises, as it did, for the caller's fallback.
+    """
+    try:
+        cursor.execute(
+            "SELECT XIndexPos, YIndexPos, RegionNumber FROM MaldiFrameInfo "
+            "WHERE Frame = ?",
+            (frame_id,),
+        )
+    except sqlite3.OperationalError:
+        cursor.execute(
+            "SELECT XIndexPos, YIndexPos FROM MaldiFrameInfo WHERE Frame = ?",
+            (frame_id,),
+        )
+        row = cursor.fetchone()
+        return None if row is None else (row[0], row[1], 0)
+    found: Optional[Tuple[Any, ...]] = cursor.fetchone()
+    return found
 
 
 def _optional_float(value: Any) -> Optional[float]:
@@ -1566,7 +1607,7 @@ class BrukerReader(BrukerBaseMSIReader):
             cursor = self._database().cursor()
             cursor.execute(
                 "SELECT RegionNumber, COUNT(*) as n_frames "
-                "FROM MaldiFrameInfo "
+                f"FROM MaldiFrameInfo WHERE {_WHOLE} "  # nosec B608
                 "GROUP BY RegionNumber "
                 "ORDER BY COUNT(*) DESC"
             )
@@ -1818,14 +1859,16 @@ class BrukerReader(BrukerBaseMSIReader):
             # sorts after every frame with peaks.
             if self._selected_region is not None:
                 cursor.execute(
-                    "SELECT XIndexPos, YIndexPos, RegionNumber "
-                    "FROM MaldiFrameInfo WHERE RegionNumber = ? ORDER BY Frame",
+                    "SELECT XIndexPos, YIndexPos, RegionNumber "  # nosec B608
+                    f"FROM MaldiFrameInfo WHERE RegionNumber = ? AND {_WHOLE} "
+                    "ORDER BY Frame",
                     (self._selected_region,),
                 )
             else:
                 cursor.execute(
-                    "SELECT m.XIndexPos, m.YIndexPos, m.RegionNumber "
+                    "SELECT m.XIndexPos, m.YIndexPos, m.RegionNumber "  # nosec B608
                     "FROM MaldiFrameInfo m LEFT JOIN Frames f ON f.Id = m.Frame "
+                    f"WHERE {_WHOLE_M} "
                     "ORDER BY COALESCE(f.NumPeaks, 1) = 0, m.Frame"
                 )
 
@@ -1866,9 +1909,9 @@ class BrukerReader(BrukerBaseMSIReader):
         try:
             cursor = self._database().cursor()
             cursor.execute(
-                "SELECT RegionNumber, MIN(XIndexPos), MIN(YIndexPos), "
+                "SELECT RegionNumber, MIN(XIndexPos), MIN(YIndexPos), "  # nosec B608
                 "MAX(XIndexPos), MAX(YIndexPos) "
-                "FROM MaldiFrameInfo GROUP BY RegionNumber"
+                f"FROM MaldiFrameInfo WHERE {_WHOLE} GROUP BY RegionNumber"
             )
             rows = cursor.fetchall()
         except sqlite3.OperationalError as e:
@@ -2118,11 +2161,14 @@ class BrukerReader(BrukerBaseMSIReader):
                 frame_ids = range(1, total + 1)
 
         coordinate_offsets = self._get_coordinate_offsets()
-        tally = DropTally(logger, "frames with no coordinates")
+        tally = DropTally(logger, "frames with no usable coordinates")
         for frame_id in frame_ids:
             coords = self._get_frame_coordinates_cached(frame_id, coordinate_offsets)
             if coords is None:
-                tally.drop(f"frame {frame_id}, which has no coordinates")
+                tally.drop(
+                    f"frame {frame_id}, whose position is missing or not a "
+                    "whole number"
+                )
                 continue
             yield frame_id, coords
             if self.progress_callback:
@@ -3137,21 +3183,24 @@ class BrukerReader(BrukerBaseMSIReader):
 
             # Check if this is MALDI data
             try:
-                cursor.execute(
-                    "SELECT XIndexPos, YIndexPos FROM MaldiFrameInfo WHERE "
-                    "Frame = ?",
-                    (frame_id,),
-                )
-                result = cursor.fetchone()
+                result = _frame_position_row(cursor, frame_id)
                 if result:
-                    x, y = result
+                    # A position or region number that is text, NULL or
+                    # not a whole number places the frame nowhere: it is
+                    # skipped and counted with the other frames without
+                    # coordinates, where int() used to cut 100.9999999
+                    # onto pixel 100 (#527). The same rule as _WHOLE, so
+                    # the region map holds exactly these frames.
+                    x, y = whole_number(result[0]), whole_number(result[1])
+                    if x is None or y is None or whole_number(result[2]) is None:
+                        return None
                     # Apply coordinate offsets if provided (Bruker-specific
                     # normalization)
                     if coordinate_offsets:
                         offset_x, offset_y, offset_z = coordinate_offsets
-                        return (int(x) - offset_x, int(y) - offset_y, 0)
+                        return (x - offset_x, y - offset_y, 0)
                     else:
-                        return (int(x), int(y), 0)
+                        return (x, y, 0)
             except sqlite3.OperationalError:
                 # No MALDI table, use generated coordinates
                 pass
@@ -3504,13 +3553,14 @@ class BrukerReader(BrukerBaseMSIReader):
             use_spotname = False
             try:
                 cursor.execute(
-                    "SELECT XIndexPos, YIndexPos, RegionNumber, SpotName "
-                    "FROM MaldiFrameInfo"
+                    "SELECT XIndexPos, YIndexPos, RegionNumber, SpotName "  # nosec B608
+                    f"FROM MaldiFrameInfo WHERE {_WHOLE}"
                 )
                 use_spotname = True
             except sqlite3.OperationalError:
                 cursor.execute(
-                    "SELECT XIndexPos, YIndexPos, RegionNumber " "FROM MaldiFrameInfo"
+                    "SELECT XIndexPos, YIndexPos, RegionNumber "  # nosec B608
+                    f"FROM MaldiFrameInfo WHERE {_WHOLE}"
                 )
 
             for row in cursor.fetchall():
@@ -3599,8 +3649,8 @@ class BrukerReader(BrukerBaseMSIReader):
                 # Per-region: use actual min from the selected region's frames
                 # This matches BrukerMetadataExtractor's per-region offsets
                 cursor.execute(
-                    "SELECT MIN(XIndexPos), MIN(YIndexPos) "
-                    "FROM MaldiFrameInfo WHERE RegionNumber = ?",
+                    "SELECT MIN(XIndexPos), MIN(YIndexPos) "  # nosec B608
+                    f"FROM MaldiFrameInfo WHERE RegionNumber = ? AND {_WHOLE}",
                     (self._selected_region,),
                 )
                 result = cursor.fetchone()
@@ -3615,7 +3665,8 @@ class BrukerReader(BrukerBaseMSIReader):
                 # Global: ImagingArea from GlobalMetadata, else the frames'.
                 bounds = imaging_area_bounds(cursor)
                 cursor.execute(
-                    "SELECT MIN(XIndexPos), MIN(YIndexPos) FROM MaldiFrameInfo"
+                    "SELECT MIN(XIndexPos), MIN(YIndexPos) FROM MaldiFrameInfo "  # nosec B608
+                    f"WHERE {_WHOLE}"
                 )
                 frames = cursor.fetchone() or (None, None)
                 first_x = bounds.get("ImagingAreaMinXIndexPos", frames[0])

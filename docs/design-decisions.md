@@ -6871,3 +6871,118 @@ bright as its neighbours; the mean keeps it on their scale.
 
 **What changes in a store.** The intensities of the pixels concerned, and
 the metadata's peak count. Every other pixel is unchanged.
+
+## D86. A position, index or vendor header value is checked before it is used, and `region_number` is int64
+
+**Status:** Implemented (2026-10-23), issue #527. Supersedes D57's note on
+the type of `region_number` (D26 is not rewritten). Extends D77 with a
+projection of the pixel grid.
+
+**Decision.** Every value a reader casts to place a spectrum, size a grid
+or build a mass axis is checked first. A value that cannot be used is
+refused in one line, or skipped and counted where the reader already
+skipped bad records. Nothing is cut, wrapped or invented.
+
+- **Positions, indices and region numbers are whole numbers within
+  int64.** One helper, `thyra/core/positions.py`, reads them. A float
+  column, as mzPeak allows for positions, takes a value within 1e-6 of a
+  whole number as that number: `0.3 / 0.1` is 3, not 2. A sqlite column
+  declared INTEGER (timsTOF, solariX) takes no fraction at all: a REAL of
+  `100.9999999` there is damage, not writer noise. Text, NULL, NaN,
+  infinity and a `uint64` of 2**63 or more are never a position.
+- **Refuse or skip, by reader.** mzPeak and solariX refuse the file and
+  name the column, the count and the first bad value. timsTOF already
+  skipped a frame whose position was text or NULL, counted in the "frames
+  with no usable coordinates" total; a frame whose position or region
+  number is not whole now joins it. Its region list, region map, region
+  boxes, alignment positions and metadata bounds leave the same frames
+  out.
+- **`obs["region_number"]` is int64** on every store. A source may number
+  its regions past 2**31, which the int32 column ended in an
+  `OverflowError`.
+- **A pitch must keep the far edge finite.** On each axis,
+  `(|origin| + pixels + 0.5) x pitch` must be a finite number, checked
+  once the grid and every pitch are settled. A finite `--pixel-size` of
+  1e308 um wrote `inf` into `obs` and the pixel boxes at exit 0.
+- **The pixel grid is projected before it is allocated.** The arrays held
+  per grid position cost 11 bytes, plus 8 when the reader knows the
+  acquisition order. Past 50 % of free memory the conversion is refused,
+  past 25 % it warns: D77's fractions, with the free memory read once for
+  both checks. The message names the grid against the spectrum count. The
+  imzML reader reads positions as int64, rebases them, and narrows to
+  int32 only when they fit, so a position of 2**31 reaches this check.
+- **Waters function files.** Each `_FUNCnnn.DAT` needs its `.IDX` and
+  `.STS`, and a non-empty `.IDX`, checked before the library opens the run.
+  The scan count the library returns must equal the `.IDX` size divided
+  by its record size: 22 bytes on the Synapt G1 runs measured, 30 on Xevo
+  and Cyclic. An `.IDX` size neither record size divides is warned about,
+  not refused: it may come from a MassLynx version not measured. The grid
+  re-fit warning says which functions were added or left out.
+- **rapifleX.** `Raster` must be exactly two numbers above zero, else it is
+  treated as missing, as the `.mis` parser treats it. `Mass Start` and
+  `Mass End` are read as finite numbers, so `5e2` converts; `nan` or
+  `100,5` is refused naming the file. The `.dat` must hold its whole offset
+  table and every listed spectrum; a short one is refused naming the spot.
+- **timsTOF pixel size.** A `BeamScanSize` that is not two numbers above
+  zero is treated as missing, with a warning. The Raster/BeamScanSize
+  mismatch warning says which is larger; "oversampled" only when the beam
+  scan is.
+- **PHI.** A header number that is not finite falls back to its default; a
+  required one is then refused. `HeaderSize` must be positive. An appended
+  `Mass/Time` must be finite and above zero. A calibration whose m/z axis
+  does not rise strictly with flight time is refused, whatever its source.
+  Records that fail the validity test, events off the raster and events
+  off the mass axis are counted apart. Events off the raster get a
+  `WARNING`, and each tile's events are tested against that tile's own
+  raster.
+
+**Why.** Each case was a wrong store at exit 0 or a traceback, which
+`docs/cli.md` calls an exception nobody planned for. A cut position put a
+spectrum on its neighbour's pixel; a wrapped one dropped spectra or stored
+a negative `acquisition_order`; a cut-short Waters or rapifleX file lost
+pixels without a word. The real MassLynx library was probed on damaged
+copies of a 9-scan Cyclic export: a `.DAT` cut to 40 % returns 3 scans and
+still reads as imaging; an empty `.DAT`, an empty or missing `.IDX` and a
+missing `.STS` all read as "not an imaging file". The scan-count check
+catches the first; the file checks and the count, asked before the
+"not imaging" refusal, name the others.
+
+The timsTOF frame lookup reads positions at about ten SQL sites. One rule
+in SQL (`col = CAST(col AS INTEGER)`) keeps every one of them on the same
+frames as the frame loop, rather than a check at one site and `int()` at
+the rest.
+
+**What changes in a store.**
+
+- `obs["region_number"]` is int64 on every store (it was int32 in 2D).
+- A source with a bad position, index, header value or a cut-short file
+  is refused where it used to convert or crash. A timsTOF frame with a
+  position that is not whole is left out and counted.
+- A multi-tile PHI store whose events lie past their tile's raster loses
+  those events; they used to land on the next tile's pixels.
+- Measured against main on 19 sources: the 10 default fixtures, two
+  timsTOF runs, a 512-pixel PHI run, two Waters Cyclic runs, a Synapt G1
+  run (22-byte index records), a Xevo DESI run (30-byte), a rapifleX run
+  and a continuous imzML. Every array and attribute is identical except
+  the `region_number` dtype, on every table that has the column (mobility
+  and MS/MS tables included).
+
+**Alternatives.**
+
+- "Round every float position, also from sqlite." A REAL with a fraction
+  in an INTEGER column is not writer noise; rounding it would place a
+  damaged frame on a guessed pixel.
+- "Refuse the timsTOF file for one bad frame." The reader already skipped
+  frames without coordinates and counted them; one rule for text and for
+  fractions keeps that.
+- "Keep `region_number` int32 and refuse a region number past 2**31." The
+  number is the source's (D57); refusing it would refuse a valid file for
+  a storage width.
+
+**Known limits.**
+
+- A Waters `.IDX` cut exactly on a record boundary matches its own scan
+  count, so a run cut that way is not caught; one cut elsewhere is only
+  warned about. The `.DAT` layout is not read.
+- `thyra validate` checks `var`, not `obs`, so a store written by an older
+  Thyra with an infinite `spatial_x` still passes it.

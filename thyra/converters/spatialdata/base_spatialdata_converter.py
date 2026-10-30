@@ -43,6 +43,7 @@ log capture, which is the consumer that met it (issue #249).
 import asyncio
 import errno
 import logging
+import math
 import warnings
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
@@ -637,6 +638,65 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         """Apply :meth:`build_uns_metadata` to an AnnData about to be written."""
         self.uns.apply(adata, self._uns_context())
 
+    def _refuse_a_pitch_past_float(self) -> None:
+        """Refuse a pitch whose product with the grid is not a finite number.
+
+        A finite pitch passes every earlier check, but ``1e308`` um times
+        the third pixel is infinity: ``obs["spatial_x"]``, the pixel boxes
+        and the affines then held ``inf`` at exit 0, and ``thyra validate``
+        passed the store (issue #527). Checked once the grid and every
+        pitch are settled, so a detected pitch and a stated one, 2D and 3D,
+        all meet it. The far edge is the largest index plus half a pixel,
+        counted from the source's own origin, which the store also scales.
+        """
+        assert self._dimensions is not None
+        offsets = tuple(self._source_coordinate_offsets or (0, 0, 0)) + (0, 0, 0)
+        axes = [
+            ("x", "pixel size", self.pixel_size_um, 0),
+            ("y", "pixel size", self.pixel_size_y_um, 1),
+        ]
+        if self.handle_3d:
+            axes.append(("z", "z spacing", self.z_spacing_um, 2))
+        for axis, name, pitch, i in axes:
+            n = int(self._dimensions[i])
+            edge = (abs(float(offsets[i])) + n + 0.5) * float(pitch)
+            if not math.isfinite(edge):
+                raise ConversionRefused(
+                    f"A {name} of {pitch:g} um across {n:,} pixels along {axis} "
+                    "places the far edge of the image past the largest number "
+                    "a float holds. Give a pixel size in micrometres "
+                    "(--pixel-size, --z-spacing)."
+                )
+
+    def _refuse_a_grid_past_memory(self) -> None:
+        """Refuse a pixel grid whose per-position arrays will not fit.
+
+        Asked before the mass axis and the tables, so a grid of 10**12
+        positions for two spectra is refused in one line rather than found
+        by ``np.zeros`` (issue #527). Every plane is counted, as the
+        per-plane route may hold them all at once. The free memory read
+        here is the one the mass-axis check compares with too.
+
+        Raises:
+            ConversionRefused: When the projection exceeds the fraction of
+                free memory a conversion may take.
+        """
+        from ...resampling.memory_guard import available_memory_gb, pixel_grid_refusal
+
+        assert self._dimensions is not None
+        free = getattr(self, "_axis_free_memory_gb", None)
+        if free is None:
+            free = available_memory_gb()
+            self._axis_free_memory_gb = free
+        refusal = pixel_grid_refusal(
+            self._dimensions,
+            int(self._n_spectra or 0),
+            bool(getattr(self.reader, "has_acquisition_order", False)),
+            available_gb=free,
+        )
+        if refusal is not None:
+            raise ConversionRefused(refusal)
+
     def _initialize_conversion(self) -> None:
         """Override parent initialization to preserve resampled mass axis."""
         logger.info("Loading essential dataset information...")
@@ -670,6 +730,8 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
 
             # After pixel size, because the fallback is the pixel size.
             self._resolve_z_spacing(essential)
+            self._refuse_a_pitch_past_float()
+            self._refuse_a_grid_past_memory()
 
             # Handle mass axis setup
             self._setup_mass_axis()
@@ -1021,7 +1083,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         )
         return unique.astype(indices.dtype, copy=False), summed
 
-    def build_region_numbers(self, x_values, y_values) -> NDArray[np.int32]:
+    def build_region_numbers(self, x_values, y_values) -> NDArray[np.int64]:
         """``obs["region_number"]`` for the given pixel positions, in row order.
 
         Written on every dataset for a consistent schema, so a consumer
@@ -1043,16 +1105,18 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             y_values: Pixel y index per obs row.
 
         Returns:
-            Region number per obs row.
+            Region number per obs row, as int64: a source may number its
+            regions past 2**31, which an int32 column ended in an
+            ``OverflowError`` (issue #527).
         """
         n = len(x_values)
         region_map = getattr(self, "_region_map", None)
         if region_map is None:
-            return np.ones(n, dtype=np.int32)
+            return np.ones(n, dtype=np.int64)
 
         keys = zip(x_values.tolist(), y_values.tolist())
         return np.fromiter(
-            (region_map.get(key, -1) for key in keys), dtype=np.int32, count=n
+            (region_map.get(key, -1) for key in keys), dtype=np.int64, count=n
         )
 
     def _create_mass_dataframe(self) -> pd.DataFrame:

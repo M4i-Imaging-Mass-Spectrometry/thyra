@@ -641,9 +641,9 @@ class ImzMLReader(BaseMSIReader):
 
         # Cached properties
         self._common_mass_axis: Optional[NDArray[np.float64]] = None
-        self._coordinates_array: Optional[NDArray[np.int32]] = (
-            None  # Fast numpy array cache
-        )
+        # Fast numpy array cache: int32 when the rebased positions fit,
+        # int64 when they do not (issue #527).
+        self._coordinates_array: Optional[NDArray[np.signedinteger]] = None
         # See _coordinate_bases(): one memoised pass gives all three.
         self._coordinate_bases_value: Optional[Tuple[int, int, int]] = None
 
@@ -1538,12 +1538,21 @@ class ImzMLReader(BaseMSIReader):
 
         # Vectorized conversion using numpy (much faster than Python loop)
         # np.array() on the coordinates list is the main cost here
-        self._coordinates_array = np.array(self.parser.coordinates, dtype=np.int32)
-
-        # Convert to 0-based in place
-        self._coordinates_array[:, 0] -= x_base
-        self._coordinates_array[:, 1] -= y_base
-        self._coordinates_array[:, 2] -= z_base
+        # Read as int64 and rebased before narrowing: imzML allows any
+        # non-negative position, and one of 2**31 or more failed the int32
+        # cast here, before the converter could say the grid is too large
+        # (issue #527). Narrowed to int32 once the rebased values fit.
+        coordinates = np.array(self.parser.coordinates, dtype=np.int64)
+        coordinates -= np.array([x_base, y_base, z_base], dtype=np.int64)
+        info = np.iinfo(np.int32)
+        if (
+            coordinates.size
+            and info.min <= coordinates.min()
+            and coordinates.max() <= info.max
+        ):
+            self._coordinates_array = coordinates.astype(np.int32)
+        else:
+            self._coordinates_array = coordinates
 
         logger.info(f"Cached {n_coords:,} coordinates as numpy array")
 

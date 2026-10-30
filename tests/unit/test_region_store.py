@@ -341,11 +341,12 @@ class TestARegionWithNoRowHasNoMean:
 class TestTheIntegerColumnsD26Names:
     """G7: D26 states the types of ``x``, ``y`` and ``region_number``."""
 
-    def test_a_2d_store_writes_them_as_int32(self, tmp_path):
+    def test_a_2d_store_writes_them_as_int32_and_int64(self, tmp_path):
+        """``region_number`` is int64: a source may number past 2**31 (#527)."""
         table = next(iter(_convert(_TDF, tmp_path / "out.zarr").values()))
 
         dtypes = {c: str(table.obs[c].dtype) for c in ("x", "y", "region_number")}
-        assert dtypes == {"x": "int32", "y": "int32", "region_number": "int32"}
+        assert dtypes == {"x": "int32", "y": "int32", "region_number": "int64"}
         assert str(table.obs["acquisition_order"].dtype) == "int64"
 
 

@@ -379,9 +379,14 @@ def mock_waters_data(temp_dir):
     """Create a mock Waters .raw directory structure.
 
     Creates the minimal structure needed for WatersReader validation:
-    a directory with a _FUNC001.DAT file.
+    a directory with a _FUNC001.DAT file, and the .IDX and .STS every
+    function file comes with. The index holds three 30-byte scan records,
+    so a mocked library must report 3 scans for function 0 unless the
+    test rewrites it (issue #527).
     """
     raw_dir = temp_dir / "mock.raw"
     raw_dir.mkdir()
     (raw_dir / "_FUNC001.DAT").write_bytes(b"\x00" * 64)
+    (raw_dir / "_FUNC001.IDX").write_bytes(b"\x00" * 30 * 3)
+    (raw_dir / "_FUNC001.STS").write_bytes(b"\x00" * 64)
     return raw_dir

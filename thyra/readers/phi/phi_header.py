@@ -14,6 +14,7 @@ usually admits via ``Calibrated: no``.
 """
 
 import logging
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -118,16 +119,19 @@ class PhiHeader:
 
 
 def _to_float(value: Optional[str], default: float = 0.0) -> float:
+    """Read a header number; anything not a finite number gives ``default``."""
     try:
-        return float(str(value).strip())
+        number = float(str(value).strip())
     except (TypeError, ValueError):
         return default
+    return number if math.isfinite(number) else default
 
 
 def _to_int(value: Optional[str], default: int = 0) -> int:
+    """Read a header count; ``nan`` and ``inf`` give ``default`` like text does."""
     try:
         return int(float(str(value).strip()))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -201,6 +205,10 @@ def _parse_raster(
 
 def _validate_header(header: PhiHeader, path: Path) -> None:
     """Reject headers whose numbers cannot describe a real acquisition."""
+    if header.header_size <= 0:
+        raise ConversionRefused(
+            f"PHI header declares a non-positive HeaderSize: {path}"
+        )
     if header.image_pixels <= 0:
         raise ConversionRefused(
             f"PHI header declares a non-positive ImagePixels: {path}"

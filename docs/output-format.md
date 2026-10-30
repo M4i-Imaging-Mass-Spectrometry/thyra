@@ -945,7 +945,7 @@ print("Columns:", list(msi_table.obs.columns))
 | `x`, `y` | int | Raster grid coordinates (pixel indices) |
 | `spatial_x`, `spatial_y` | float | Physical coordinates in micrometers |
 | `region` | categorical | SpatialData annotation target: the key of the pixel shapes element, the same on every row |
-| `region_number` | int | The acquisition region the pixel was measured in |
+| `region_number` | int64 | The acquisition region the pixel was measured in |
 | `acquisition_order` | int64 | The order the pixels were acquired in, when the source records it (see below) |
 | `instance_key` | str | A copy of the index, which SpatialData uses to link each row to its pixel shape |
 

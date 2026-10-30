@@ -16,6 +16,7 @@ File structure expected:
 """
 
 import logging
+import math
 import re
 import struct
 from pathlib import Path
@@ -31,9 +32,20 @@ from ....core.registry import register_reader
 from ....errors import ConversionRefused
 from ....metadata.types import ComprehensiveMetadata, EssentialMetadata
 from ..base_bruker_reader import BrukerBaseMSIReader
-from ..mis_parser import find_mis_file_for_d_folder, parse_mis_file
+from ..mis_parser import _pair, find_mis_file_for_d_folder, parse_mis_file
 
 logger = logging.getLogger(__name__)
+
+
+def _info_number(value: Any) -> Optional[float]:
+    """An ``_info.txt`` value as a finite number, or ``None`` when it is not."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 class RapiflexMetadataExtractor(MetadataExtractor):
@@ -96,8 +108,7 @@ class RapiflexMetadataExtractor(MetadataExtractor):
             pixel_size = (float(pixel_x), float(pixel_y))
 
         # Mass range
-        mass_start = info.get("Mass Start", 0.0)
-        mass_end = info.get("Mass End", 0.0)
+        mass_start, mass_end = self._reader.mass_range
 
         n_spectra = self._reader.n_spectra
         n_datapoints = self._reader.n_datapoints
@@ -234,6 +245,7 @@ class RapiflexReader(BrukerBaseMSIReader):
         self._valid_indices: NDArray[np.int64] = np.where(self._offsets >= data_start)[
             0
         ]
+        self._check_spectra_inside_dat()
 
         # Compute m/z axis
         self._mz_axis: Optional[NDArray[np.float64]] = None
@@ -357,13 +369,23 @@ class RapiflexReader(BrukerBaseMSIReader):
                     except ValueError:
                         metadata[key] = value
 
-        # Parse raster from "20,20" format
+        # Parse raster from "20,20" format: exactly two numbers above zero,
+        # as the .mis parser reads the same text. Anything else ("10,5,10,5",
+        # "20 um,20 um") is treated as missing, and the extractor then warns
+        # and asks for --pixel-size, rather than inventing a step from the
+        # first two fields or ending in float().
         if "Raster" in metadata:
-            raster_str = str(metadata["Raster"])
-            if "," in raster_str:
-                parts = raster_str.split(",")
-                metadata["raster_x"] = float(parts[0])
-                metadata["raster_y"] = float(parts[1])
+            step = _pair(str(metadata["Raster"]))
+            if step is not None and all(v > 0 for v in step):
+                metadata["raster_x"] = float(step[0])
+                metadata["raster_y"] = float(step[1])
+            else:
+                logger.warning(
+                    "Unusable Raster %r in %s: a raster step is two numbers "
+                    "above zero, so this one is not used",
+                    str(metadata["Raster"]),
+                    path.name,
+                )
 
         return metadata
 
@@ -434,16 +456,46 @@ class RapiflexReader(BrukerBaseMSIReader):
             raster_height = self._header["raster_height"]
             n_raster_positions = raster_width * raster_height
 
-            if n_raster_positions > 0:
-                self._offsets = np.frombuffer(
-                    f.read(n_raster_positions * 4), dtype=np.uint32
-                ).copy()
-            else:
+            if n_raster_positions <= 0:
                 raise ConversionRefused("Invalid raster dimensions in header")
+            table = f.read(n_raster_positions * 4)
+            if len(table) != n_raster_positions * 4:
+                raise ConversionRefused(
+                    f"{self._dat_path} ends inside its offset table: "
+                    f"{raster_width} x {raster_height} raster positions need "
+                    f"{n_raster_positions * 4} bytes, {len(table)} are there. "
+                    "Is the copy complete?"
+                )
+            self._offsets = np.frombuffer(table, dtype=np.uint32).copy()
 
         logger.debug(
             f"Parsed .dat header: {self._header['n_datapoints']} datapoints, "
             f"{len(self._offsets)} offset entries"
+        )
+
+    def _check_spectra_inside_dat(self) -> None:
+        """Refuse a ``.dat`` too short for the spectra its offset table lists.
+
+        An unfinished copy ends the file early: a spot past the end read 0
+        bytes and was dropped without a word, and a cut inside a spectrum
+        ended in a raw ``ValueError`` from ``np.frombuffer``. Refused in one
+        line naming the spot, as an imzML whose ``.ibd`` is shorter than its
+        offsets is.
+        """
+        if self._dat_path is None or not self._valid_indices.size:
+            return
+        size = self._dat_path.stat().st_size
+        ends = self._offsets[self._valid_indices].astype(np.int64) + (
+            int(self.n_datapoints) * 4
+        )
+        short = np.nonzero(ends > size)[0]
+        if not short.size:
+            return
+        x, y, _ = self._get_normalized_coordinates(int(self._valid_indices[short[0]]))
+        raise ConversionRefused(
+            f"{self._dat_path} is {size} bytes, too short for {short.size} of "
+            f"its {self._valid_indices.size} spectra (the first is spot ({x}, {y}), "
+            f"which ends at byte {int(ends[short[0]])}). Is the copy complete?"
         )
 
     @property
@@ -473,11 +525,16 @@ class RapiflexReader(BrukerBaseMSIReader):
 
     @property
     def mass_range(self) -> Tuple[float, float]:
-        """Get mass range (start, end) in Da."""
-        return (
-            self._info_metadata.get("Mass Start", 0.0),
-            self._info_metadata.get("Mass End", 0.0),
-        )
+        """Get mass range (start, end) in Da; 0.0 where the value is unusable.
+
+        ``_info.txt`` values stay text unless they look like an int or a
+        float with a point, so ``5e2`` arrives as text; it is read here as
+        the number it is. ``nan``, ``inf`` or ``100,5`` is unusable, as a
+        missing value is, and :meth:`get_common_mass_axis` refuses it.
+        """
+        start = _info_number(self._info_metadata.get("Mass Start"))
+        end = _info_number(self._info_metadata.get("Mass End"))
+        return (0.0 if start is None else start, 0.0 if end is None else end)
 
     def _create_metadata_extractor(self) -> MetadataExtractor:
         """Create format-specific metadata extractor."""
@@ -493,6 +550,14 @@ class RapiflexReader(BrukerBaseMSIReader):
             Array of m/z values
         """
         if self._mz_axis is None:
+            stated = [
+                self._info_metadata.get(key) for key in ("Mass Start", "Mass End")
+            ]
+            if any(_info_number(value) is None for value in stated):
+                raise ConversionRefused(
+                    f"{self._info_path} carries no usable Mass Start/Mass End "
+                    f"(Mass Start={stated[0]!r}, Mass End={stated[1]!r})"
+                )
             mass_start, mass_end = self.mass_range
             n_points = self.n_datapoints
 
@@ -553,7 +618,15 @@ class RapiflexReader(BrukerBaseMSIReader):
         with open(self._dat_path, "rb") as f:
             f.seek(int(offset))
             data = f.read(self.n_datapoints * 4)
-            return np.frombuffer(data, dtype=np.float32).copy()
+        if len(data) != self.n_datapoints * 4:
+            # Checked against the file size when the reader was built; a
+            # file that shrank since then is refused the same way.
+            x, y, _ = self._get_normalized_coordinates(idx)
+            raise ConversionRefused(
+                f"{self._dat_path} ends inside the spectrum of spot ({x}, {y}). "
+                "Is the copy complete?"
+            )
+        return np.frombuffer(data, dtype="<f4").astype(np.float32)
 
     def iter_spectra(self) -> Generator[
         Tuple[Tuple[int, int, int], NDArray[np.float64], NDArray[np.float64]],

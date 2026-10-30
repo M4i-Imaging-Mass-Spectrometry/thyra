@@ -52,6 +52,7 @@ from typing import Any, Dict, NamedTuple, Optional, Sequence, Tuple
 import numpy as np
 from numpy.typing import NDArray
 
+from ...core.positions import whole_numbers
 from ...errors import ConversionRefused
 
 #: Chunk encodings this module decodes, with their CV names.
@@ -963,6 +964,22 @@ def _decode_rows(
     return decode_plain(starts, values, lengths, counts, source), tolerance
 
 
+def index_numbers(column: Any, what: str, source: Any) -> NDArray[np.int64]:
+    """An index column as int64, refusing an empty entry by that name.
+
+    ``to_numpy`` turns an integer column with nulls into float64 with NaN,
+    which :func:`whole_numbers` would then report as ``nan``.
+    """
+    if column.null_count:
+        raise ConversionRefused(
+            f"{column.null_count} of {len(column)} {what} in {source} are "
+            "empty, so their spectra cannot be placed"
+        )
+    return whole_numbers(
+        np.asarray(column.to_numpy(zero_copy_only=False)), what, source
+    )
+
+
 def _numbers(chunk: Any, name: str, kind: Any) -> NDArray[Any]:
     """One child of the ``chunk`` struct, as numpy."""
     return np.asarray(chunk.field(name).to_numpy(zero_copy_only=False), dtype=kind)
@@ -1014,7 +1031,10 @@ def decode_chunks(chunk: Any, source: str) -> DecodedChunks:
     # stored, so it is padding whatever its m/z says.
     mz[np.isnan(intensity)] = np.nan
     return DecodedChunks(
-        spectrum_index=np.repeat(_numbers(chunk, "spectrum_index", np.int64), counts),
+        spectrum_index=np.repeat(
+            index_numbers(chunk.field("spectrum_index"), "spectrum indices", source),
+            counts,
+        ),
         mz=mz,
         intensity=intensity,
     )

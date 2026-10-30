@@ -151,6 +151,14 @@ def build_mass_axis(
     # m/z increases monotonically with flight time once the root is positive,
     # so the usable channels form one contiguous run.
     mz = mz_full[lo : hi + 1]
+    # In exact arithmetic it does; a slope too small to move the root from
+    # one channel to the next (1e-300) gives a constant axis in floating
+    # point, and a non-finite coefficient gives NaN. Neither is an m/z axis.
+    if not (np.all(np.isfinite(mz)) and np.all(np.diff(mz) > 0)):
+        raise ConversionRefused(
+            f"The calibration Mass/Time={slope}, MassOffset={offset} does not "
+            "give an m/z axis that rises with flight time"
+        )
 
     logger.debug(
         "PHI mass axis: %d channels spanning m/z %.4f-%.4f (channels %d-%d of %d)",
