@@ -100,6 +100,17 @@ MZPEAK_PIXEL_SIZE = {
     "unit_contradiction": None,
 }
 
+#: The values ``pixel_size_source`` may take, as the fixture README defines
+#: them, and the one each file's header supports.
+SOURCES = ("declared", "unit_assumed", "derived_from_area", "unknown")
+SOURCE = {
+    "unit_declared": "declared",
+    "unit_absent": "unit_assumed",
+    "area_old_name": "derived_from_area",
+    "area_old_name_no_extent": "unknown",
+    "unit_contradiction": "unknown",
+}
+
 TAG = re.compile(r"<cvParam\b[^>]*>")
 ATTRIBUTE = re.compile(r'(\w+)="([^"]*)"')
 
@@ -241,6 +252,21 @@ class TestTheFilesAreWhatTheReadmeSays:
 
         assert sorted(expected) == sorted(CASES)
         assert expected[case]["pixel_size_um"] in ([50, 50], None)
+
+    def test_the_expected_outcome_is_the_right_one(self, case):
+        """Each answer in ``pixel_size_expected.json`` is the one for its file.
+
+        What can be concluded from the header alone is what the mzPeak path
+        concludes, since that path tests an area against the grid. The source
+        is one of the four the fixture README defines, and the one that says
+        how this file gives its size (issue #530, F73).
+        """
+        entry = json.loads((FIXTURE_DIR / f"{PREFIX}expected.json").read_bytes())[case]
+        size = entry["pixel_size_um"]
+
+        assert (None if size is None else tuple(size)) == MZPEAK_PIXEL_SIZE[case]
+        assert entry.get("pixel_size_source") in SOURCES
+        assert entry["pixel_size_source"] == SOURCE[case]
 
 
 @pytest.mark.parametrize("case", CASES)

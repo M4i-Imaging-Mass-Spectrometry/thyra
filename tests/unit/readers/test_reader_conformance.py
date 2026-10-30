@@ -49,7 +49,7 @@ import numpy as np
 import pytest
 
 from thyra.core.base_reader import BaseMSIReader
-from thyra.core.registry import _READER_MODULES
+from thyra.core.registry import _READER_MODULES, get_reader_class
 from thyra.readers.bruker import SolarixReader
 from thyra.readers.bruker.rapiflex import RapiflexReader
 from thyra.readers.bruker.timstof.timstof_reader import BrukerReader
@@ -162,6 +162,17 @@ class TestTheCaseTableCoversTheRegistry:
 
     def test_every_case_builds_a_reader_subclass(self, reader):
         assert isinstance(reader, BaseMSIReader)
+
+    def test_every_case_builds_the_class_the_registry_serves(self, reader, request):
+        """A case holds the contract only for the class a conversion gets.
+
+        Each factory names its class directly. If the registry served a
+        different class for that format, such as a subclass that breaks the
+        contract, every case here would stay green (issue #530, F69).
+        """
+        format_name = request.node.callspec.params["reader"]
+
+        assert type(reader) is get_reader_class(format_name)
 
     @pytest.mark.parametrize("format_name", sorted(EXEMPT))
     def test_exemptions_name_a_registered_format(self, format_name):

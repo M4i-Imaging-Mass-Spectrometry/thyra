@@ -3,6 +3,7 @@ Tests for the simplified format registry system.
 """
 
 import ast
+import importlib
 import subprocess
 import sys
 import threading
@@ -389,22 +390,41 @@ class TestTheModuleTableMatchesTheDecorators:
     """
 
     @staticmethod
-    def _registered_format(node: ast.AST, function: str) -> Optional[str]:
+    def _registered_format(node: ast.AST, function: str, where: str) -> Optional[str]:
         """The format name in ``function("name")``, or ``None``.
 
         Covers both spellings in the tree: ``@register_reader("imzml")`` on
         a class, and ``register_converter("spatialdata")(cls)`` called
         after the class body. ``ast.walk`` reaches the inner call of the
         second, so one test against ``ast.Call`` catches both.
+
+        A call to ``function`` that does not name its format as one string
+        literal fails rather than being skipped: a constant, a keyword or
+        ``registry.register_reader(...)`` still registers a reader, and a
+        call this test cannot read would leave that reader out of the
+        comparison with the table (issue #530, F103).
         """
         if not isinstance(node, ast.Call):
             return None
-        if not isinstance(node.func, ast.Name) or node.func.id != function:
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else None
+        if isinstance(func, ast.Attribute):
+            name = func.attr
+        if name != function:
             return None
-        if len(node.args) != 1 or not isinstance(node.args[0], ast.Constant):
-            return None
-        value = node.args[0].value
-        return value if isinstance(value, str) else None
+        argument = node.args[0] if len(node.args) == 1 else None
+        literal = (
+            isinstance(func, ast.Name)
+            and not node.keywords
+            and isinstance(argument, ast.Constant)
+            and isinstance(argument.value, str)
+        )
+        assert literal and isinstance(argument, ast.Constant), (
+            f"{where}:{node.lineno}: {ast.unparse(node)} does not name its "
+            f'format as one string literal; write {function}("name") so '
+            f"this test can hold the table to it"
+        )
+        return str(argument.value)
 
     @classmethod
     def _declared(cls, package: str, function: str) -> Dict[str, str]:
@@ -415,7 +435,13 @@ class TestTheModuleTableMatchesTheDecorators:
             dotted = ".".join(path.relative_to(root).with_suffix("").parts)
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
-                format_name = cls._registered_format(node, function)
+                if isinstance(node, ast.ImportFrom):
+                    renamed = [a.asname for a in node.names if a.name == function]
+                    assert renamed in ([], [None]), (
+                        f"{dotted}:{node.lineno} imports {function} under "
+                        f"another name, so this test cannot find its calls"
+                    )
+                format_name = cls._registered_format(node, function, dotted)
                 if format_name is None:
                     continue
                 assert format_name not in declared, (
@@ -444,8 +470,19 @@ class TestTheModuleTableMatchesTheDecorators:
         this one drives the lookup, so an entry naming a module that fails
         to import, or that registers under a different name than the
         decorator literal suggests, fails here.
+
+        The entry's module is imported by name as well (issue #530, F105).
+        The lookup alone imports nothing once the reader is registered, and
+        any test that imports the reader directly registers it, so a broken
+        entry would pass whenever that reader's own tests were collected.
+        The served class must then live in the module the entry names.
         """
-        assert issubclass(get_reader_class(format_name), BaseMSIReader)
+        module_path = registry_module._READER_MODULES[format_name]
+        importlib.import_module(module_path)
+        served = get_reader_class(format_name)
+
+        assert issubclass(served, BaseMSIReader)
+        assert served.__module__ == module_path
 
     def test_the_converter_entry_resolves(self):
         assert issubclass(get_converter_class("spatialdata"), BaseMSIConverter)

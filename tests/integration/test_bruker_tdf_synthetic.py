@@ -987,13 +987,17 @@ class TestAcquisitionOrder:
         assert obs["acquisition_order"].dtype == np.int64
         assert obs["acquisition_order"].tolist() == [1, 2, 3, 6, 5, 4]
 
-    def test_a_selected_region_keeps_the_files_frame_ids(self, tmp_path):
-        # Never renumbered: region 1 holds frames 4-6, not 1-3.
+    @pytest.mark.parametrize(
+        "heatmap", [True, False], ids=["frame-records", "spectrum-iterator"]
+    )
+    def test_a_selected_region_keeps_the_files_frame_ids(self, tmp_path, heatmap):
+        # Never renumbered: region 1 holds frames 4-6, not 1-3, on either route.
         _open("scan_sum").close()
         out = _convert_path(
             _serpentine_copy(tmp_path, split_regions=True),
             tmp_path / "region1.zarr",
             region=1,
+            mobility_heatmap=heatmap,
         )
         obs = _read_table(out).obs
 

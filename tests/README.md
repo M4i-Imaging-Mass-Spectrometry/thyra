@@ -80,12 +80,18 @@ location and no auto-discovery.
 | `THYRA_BRUKER_TDF_DATASET` | a real TIMS `.d` directory containing `analysis.tdf` | `integration/test_bruker_real_data.py` (the whole file) and `TestRealAcquisition` in `integration/test_bruker_tdf_synthetic.py`, which checks every frame is read and the lossless TIC matches the database. One variable serves both files |
 | `THYRA_BRUKER_PASEF_DATASET` | a `.d` directory from a PASEF (MS/MS) acquisition | the demultiplexed-table tests at the end of `integration/test_bruker_tdf_synthetic.py`, including the cross-store comparison of two schedules of differing shape |
 | `THYRA_MZPEAK_REFERENCE_ARCHIVE` | an archive written by the HUPO-PSI reference converter | `test_reference_archive_converts` in `integration/test_convert_mzpeak.py`. Not vendored: that repository publishes no licence, so the check runs against a path the operator supplies |
+| `THYRA_MZPEAK_CHUNKED_ARCHIVE` | one input converted by `mzpeak-convert` in its default chunked layout | `test_converter_archive_reads_as_its_point_twin` in `integration/test_convert_mzpeak.py`, together with the next variable. The test runs only when both are set |
+| `THYRA_MZPEAK_POINT_ARCHIVE` | the same input converted with `--layout point --no-mz-lattice` | the same twin test: pixels, order and intensities must match the chunked archive exactly |
+| `THYRA_MZPEAK_TWIN_TOLERANCE` | a number (default `1e-6`) | how far the twin test lets the m/z of the two layouts differ. Optional; it unlocks nothing on its own |
+| `THYRA_WATERS_LOCK_MASS_DATASET` | a Waters `.raw` MALDI run in negative mode whose lock-mass scans hold red phosphorus, such as `20210426_9AA_WTBrain1-1.raw` from MassIVE MSV000092638 | `integration/test_waters_lockmass_real_data.py` (the whole file), which checks the lock-mass correction and pixels acquired twice on a real run |
 | `THYRA_TEST_DATA` | the directory holding the real imzML corpus (default: `test_data/` at the repository root, which is gitignored -- see below) | the "a real file is still accepted" cases in `unit/readers/test_imzml_parser_state_validation.py`. Unit lane, not integration, but it fails the same way if you expect it to find files on its own |
 
 The two Bruker variables additionally need the vendor library, which is bundled
 for Windows and Linux only; anywhere it cannot be loaded those tests skip
 rather than fail. A path that exists but is not a Bruker acquisition still
-fails loudly -- the reader rejects it before the library is ever reached.
+fails loudly -- the reader rejects it before the library is ever reached. The
+Waters variable also needs the Waters vendor library, bundled for Windows and
+Linux only.
 
 So a full opt-in run looks like this (POSIX shell; use `$env:NAME = "..."` in
 PowerShell):
@@ -94,6 +100,9 @@ PowerShell):
 THYRA_BRUKER_TDF_DATASET=/path/to/acquisition.d \
 THYRA_BRUKER_PASEF_DATASET=/path/to/pasef.d \
 THYRA_MZPEAK_REFERENCE_ARCHIVE=/path/to/reference.mzpeak \
+THYRA_MZPEAK_CHUNKED_ARCHIVE=/path/to/chunked.mzpeak \
+THYRA_MZPEAK_POINT_ARCHIVE=/path/to/point.mzpeak \
+THYRA_WATERS_LOCK_MASS_DATASET=/path/to/run.raw \
   pytest -m integration
 ```
 

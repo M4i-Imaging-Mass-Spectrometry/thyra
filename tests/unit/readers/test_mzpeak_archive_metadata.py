@@ -378,6 +378,20 @@ class TestPositionZ:
 
         assert self._offsets(archive) == (1, 1, 1)
 
+    def test_a_spectrum_on_no_pixel_listed_first_keeps_the_plane(self, tmp_path):
+        """Each spectrum is matched to its own first scan, in spectrum order.
+
+        Here the scans are in order and the spectrum on no pixel comes
+        first. Its missing z must stay with it, not shift onto the spectra
+        on a pixel and refuse a valid archive (issue #530, F67).
+        """
+        spectra = [Spectrum(None, None, [100.0], [1.0])] + grid_spectra(2, 2)
+        archive = build_mzpeak(
+            tmp_path / "offfirst.mzpeak", spectra, position_z=[None, 1, 1, 1, 1]
+        )
+
+        assert self._offsets(archive) == (1, 1, 1)
+
 
 def _z_parameter(z, name="position z", accession="IMS:1000052"):
     """A scan's position z parameter, as mzpeak-convert 0.12.0 and 0.14.0 write it."""
@@ -484,6 +498,13 @@ class TestPositionZInScanParameters:
         spectra = grid_spectra(2, 2) + [Spectrum(None, None, [100.0], [1.0])]
         archive = self._archive(tmp_path, [1, 1, 1, 1, None], spectra=spectra)
         _reverse_scans(archive)
+
+        assert self._offsets(archive) == (1, 1, 1)
+
+    def test_a_spectrum_on_no_pixel_listed_first_keeps_the_plane(self, tmp_path):
+        """The parameters list stays with its spectrum's first scan (F67)."""
+        spectra = [Spectrum(None, None, [100.0], [1.0])] + grid_spectra(2, 2)
+        archive = self._archive(tmp_path, [None, 1, 1, 1, 1], spectra=spectra)
 
         assert self._offsets(archive) == (1, 1, 1)
 
@@ -641,6 +662,128 @@ class TestRegions:
                 assert reader.get_region_map() is None
 
         assert any("regions are not read" in r.getMessage() for r in records)
+
+    def test_an_incomplete_region_stops_the_reading_of_complete_ones(
+        self, tmp_path, thyra_logs
+    ):
+        """Two boxes that place every pixel do not outvote an incomplete entry.
+
+        Above, the one complete box leaves pixels unplaced, so the regions
+        are not read whether the incomplete entry stops the reading or is
+        skipped. Here only stopping gives no regions (issue #530, F79).
+        """
+        archive = _two_regions(
+            tmp_path,
+            [
+                _region(0, 4, (101, 102), (11, 12)),
+                _region(1, 4, (104, 105), (11, 12)),
+                {"region_number": 2, "frames": 2},
+            ],
+        )
+
+        with thyra_logs("thyra.readers.mzpeak", logging.WARNING) as records:
+            with MzPeakReader(archive) as reader:
+                assert reader.get_region_map() is None
+                assert reader.get_region_info() is None
+
+        assert any("regions are not read" in r.getMessage() for r in records)
+
+    def test_the_region_with_most_frames_comes_first(self, tmp_path):
+        """Listed smallest first, read most frames first (issue #530, F81).
+
+        The order is the one the timsTOF reader gives. With equal frame
+        counts, as in :func:`_two_regions`, it cannot be seen.
+        """
+        spectra = [
+            Spectrum(x, y, [100.0, 101.0], [1.0, 2.0])
+            for y in (1, 2)
+            for x in (1, 3, 4)
+        ]
+        archive = build_mzpeak(
+            tmp_path / "unequal.mzpeak",
+            spectra,
+            file_metadata={
+                "imaging": {
+                    "coordinate_base": 1,
+                    "position_offset": {"x": 100, "y": 10},
+                },
+                "bruker_maldi": {
+                    "regions": [
+                        _region(0, 2, (101, 101), (11, 12)),
+                        _region(1, 4, (103, 104), (11, 12)),
+                    ]
+                },
+            },
+        )
+
+        with MzPeakReader(archive) as reader:
+            info = reader.get_region_info()
+
+        assert info is not None
+        assert [(e["region_number"], e["n_spectra"]) for e in info] == [
+            (1, 4),
+            (0, 2),
+        ]
+
+    @pytest.mark.parametrize(
+        "regions",
+        [
+            [
+                _region(0, 4, (1, 2), (1, 2)),
+                _region(1, True, (3, 3), (1, 1)),
+            ],
+            [
+                _region(0, 4, (True, 2), (1, 2)),
+                _region(1, 1, (3, 3), (1, 1)),
+            ],
+            [
+                _region(0, 4, (1, 2), (True, 2)),
+                _region(1, 1, (3, 3), (1, 1)),
+            ],
+            [
+                _region(False, 4, (1, 2), (1, 2)),
+                _region(1, 1, (3, 3), (1, 1)),
+            ],
+            [
+                _region(0, 4, (1, 2), (1, 2)),
+                _region(True, 1, (3, 3), (1, 1)),
+            ],
+        ],
+        ids=["frames", "x-index-end", "y-index-end", "number-false", "number-true"],
+    )
+    def test_a_true_or_false_is_not_a_number(self, tmp_path, regions):
+        """A JSON ``true`` is not the frame count, index or number 1.
+
+        Python reads it as a ``bool``, which is an ``int``. Five pixels, so
+        that ``true`` read as 1 would complete the one-pixel region and the
+        boxes would place every pixel (issue #530, F203).
+        """
+        assert _five_pixel_region_numbers(tmp_path, regions) is None
+
+    def test_the_same_regions_in_integers_are_read(self, tmp_path):
+        """The control for the case above: the layout itself is valid."""
+        regions = [_region(0, 4, (1, 2), (1, 2)), _region(1, 1, (3, 3), (1, 1))]
+
+        assert _five_pixel_region_numbers(tmp_path, regions) == {0, 1}
+
+
+def _five_pixel_region_numbers(tmp_path, regions):
+    """The region numbers read from a 2x2 block plus one pixel beside it."""
+    spectra = [
+        Spectrum(x, y, [100.0, 101.0], [float(x), 1.0])
+        for x, y in [(1, 1), (2, 1), (1, 2), (2, 2), (3, 1)]
+    ]
+    archive = build_mzpeak(
+        tmp_path / "five.mzpeak",
+        spectra,
+        file_metadata={
+            "imaging": {"coordinate_base": 1},
+            "bruker_maldi": {"regions": regions},
+        },
+    )
+    with MzPeakReader(archive) as reader:
+        region_map = reader.get_region_map()
+    return None if region_map is None else set(region_map.values())
 
 
 class TestMsLevels:
@@ -1306,6 +1449,23 @@ class TestRegionNamedByEachScan:
         assert info == [
             {"region_number": 0, "n_spectra": 4, "bounds": (0, 0, 1, 1)},
             {"region_number": 1, "n_spectra": 4, "bounds": (3, 0, 4, 1)},
+        ]
+
+    def test_the_region_with_most_frames_comes_first(self, tmp_path):
+        """Read most frames first, as from the boxes (issue #530, F81).
+
+        Region 0 names two scans and region 1 six. The smaller region has
+        the lower number, so sorting by number alone would put it first.
+        """
+        archive = _named_regions(tmp_path, [0, 1, 1, 1, 0, 1, 1, 1], [])
+
+        with MzPeakReader(archive) as reader:
+            info = reader.get_region_info()
+
+        assert info is not None
+        assert [(e["region_number"], e["n_spectra"]) for e in info] == [
+            (1, 6),
+            (0, 2),
         ]
 
     def test_one_scan_without_a_region_falls_back_to_the_boxes(self, tmp_path):

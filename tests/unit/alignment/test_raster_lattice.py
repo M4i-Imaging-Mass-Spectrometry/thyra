@@ -227,8 +227,8 @@ def test_the_alignment_result_places_measured_pixels_only() -> None:
     assert result.transform_point(nx, ny) == pytest.approx(
         result.lattice.cell_centre(nx, ny)
     )
-    assert result.cell_corners(nx, ny) == pytest.approx(
-        result.lattice.cell_corners(nx, ny)
+    np.testing.assert_allclose(
+        result.cell_corners(nx, ny), result.lattice.cell_corners(nx, ny), rtol=1e-6
     )
     # A node no spot was measured on has no pixel.
     assert result.transform_point(59 - fx, 59 - fy) is None
