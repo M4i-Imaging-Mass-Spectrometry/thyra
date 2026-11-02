@@ -2,6 +2,13 @@
 
 <!-- version list -->
 
+## [4.6.1](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/compare/v4.6.0...v4.6.1) (2026-10-30)
+
+
+### Bug Fixes
+
+* **readers:** positions, pixel sizes and vendor header values are range-checked before use ([#551](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/551)) ([a0dd9bf](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/a0dd9bf968dc0d3d3a4e599d774536d8f56a8a7c))
+
 ## [4.6.0](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/compare/v4.5.1...v4.6.0) (2026-10-23)
 
 
