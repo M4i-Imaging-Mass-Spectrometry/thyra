@@ -241,7 +241,7 @@ dependencies = [
     # Floor is scikit-image's own, which is also comfortably above the 9.5
     # that `Image.has_transparency_data` needs; no upper bound, nothing here
     # has tested one.
-    "pillow>=10.1",                   # tested 12.3.0
+    "pillow>=10.1",                   # tested 13.0.0
 ]
 
 [project.urls]
