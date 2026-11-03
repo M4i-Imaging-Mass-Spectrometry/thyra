@@ -241,14 +241,15 @@ dependencies = [
     # Floor is scikit-image's own, which is also comfortably above the 9.5
     # that `Image.has_transparency_data` needs; no upper bound, nothing here
     # has tested one.
-    "pillow>=10.1",                   # tested 12.3.0
+    "pillow>=10.1",                   # tested 13.0.0
 ]
 
 [project.urls]
 Homepage = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra"
 Repository = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra"
 Documentation = "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/"
-Paper = "https://doi.org/10.1021/jasms.6c00169"
+Paper = "https://doi.org/10.1038/s41592-026-03305-5"
+"Paper (JASMS)" = "https://doi.org/10.1021/jasms.6c00169"
 "Bug Tracker" = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues"
 Discussions = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/discussions"
 Changelog = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/blob/main/CHANGELOG.md"
