@@ -169,7 +169,15 @@ MIT -- see [LICENSE](LICENSE).
 
 ## Citation
 
-If you use Thyra, please cite the paper:
+If you use Thyra, please cite:
+
+> Visvikis, T.; Hendriks, T. F. E.; Vierdag, W.-M.; Marconato, L.; Heeren, R. M. A.;
+> Cuypers, E. Thyra: bridging mass spectrometry imaging and SpatialData for
+> unified multimodal analysis. *Nat. Methods* **2026**.
+> [doi:10.1038/s41592-026-03305-5](https://doi.org/10.1038/s41592-026-03305-5)
+
+If your work relies on how Thyra reads vendor files or keeps memory bounded
+while converting, please also cite:
 
 > Visvikis, T.; Vierdag, W.-M.; Marconato, L.; Birmpili, A.; Heeren, R. M. A.;
 > Cuypers, E. Native, Memory-Bounded Conversion of Mass Spectrometry Imaging
@@ -177,39 +185,19 @@ If you use Thyra, please cite the paper:
 > *37* (10), 2379-2387.
 > [doi:10.1021/jasms.6c00169](https://doi.org/10.1021/jasms.6c00169)
 
-```bibtex
-@article{visvikis2026thyra,
-  title   = {Native, Memory-Bounded Conversion of Mass Spectrometry Imaging Data into the {SpatialData} Ecosystem},
-  author  = {Visvikis, Theodoros and Vierdag, Wouter-Michiel and Marconato, Luca and Birmpili, Angeliki and Heeren, Ron M. A. and Cuypers, Eva},
-  journal = {Journal of the American Society for Mass Spectrometry},
-  year    = {2026},
-  volume  = {37},
-  number  = {10},
-  pages   = {2379--2387},
-  doi     = {10.1021/jasms.6c00169}
-}
-```
-
-The same entry is in [CITATION.cff](CITATION.cff), which GitHub's "Cite this
-repository" button reads. To cite the software itself:
-
-```bibtex
-@software{thyra2024,
-  title = {Thyra: Modern Mass Spectrometry Imaging Data Conversion},
-  author = {Visvikis, Theodoros},
-  year = {2024},
-  url = {https://github.com/M4i-Imaging-Mass-Spectrometry/thyra}
-}
-```
+BibTeX for both is in [CITATION.bib](CITATION.bib). GitHub's "Cite this
+repository" button reads [CITATION.cff](CITATION.cff), which shows the Nature
+Methods paper and lists the JASMS paper under its references.
 
 ### Papers
 
 | Paper | Published | DOI |
 |---|---|---|
+| Thyra: bridging mass spectrometry imaging and SpatialData for unified multimodal analysis (*Nat. Methods*) | 2026-10 | [10.1038/s41592-026-03305-5](https://doi.org/10.1038/s41592-026-03305-5) |
 | Native, Memory-Bounded Conversion of Mass Spectrometry Imaging Data into the SpatialData Ecosystem (*J. Am. Soc. Mass Spectrom.*) | 2026-09 | [10.1021/jasms.6c00169](https://doi.org/10.1021/jasms.6c00169) |
 | Thyra: Bridging Mass Spectrometry Imaging and SpatialData for Unified Multi-Modal Analysis (bioRxiv preprint) | 2026-01 | [10.64898/2026.01.26.700792](https://doi.org/10.64898/2026.01.26.700792) |
 
-Ion mobility and MS/MS support came after both papers. If you use them,
+Ion mobility and MS/MS support came after the JASMS paper and the preprint. If you use them,
 please also name the Thyra version you used.
 
 ## Acknowledgments

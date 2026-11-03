@@ -1,5 +1,8 @@
 cff-version: 1.2.0
-message: "If you use Thyra, please cite the paper below."
+message: >-
+  If you use Thyra, please cite the Nature Methods paper below. If your work
+  relies on how Thyra reads vendor files or keeps memory bounded while
+  converting, please also cite the JASMS paper listed under references.
 title: "Thyra"
 abstract: >-
   Thyra converts mass spectrometry imaging data from imzML, mzPeak and vendor
@@ -8,6 +11,7 @@ type: software
 authors:
   - family-names: Visvikis
     given-names: Theodoros
+    orcid: "https://orcid.org/0009-0003-5579-5488"
 repository-code: "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra"
 url: "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/"
 license: MIT
@@ -21,30 +25,57 @@ keywords:
 preferred-citation:
   type: article
   title: >-
-    Native, Memory-Bounded Conversion of Mass Spectrometry Imaging Data into
-    the SpatialData Ecosystem
+    Thyra: bridging mass spectrometry imaging and SpatialData for unified
+    multimodal analysis
   authors:
     - family-names: Visvikis
       given-names: Theodoros
+      orcid: "https://orcid.org/0009-0003-5579-5488"
+    - family-names: Hendriks
+      given-names: Tim F. E.
     - family-names: Vierdag
       given-names: Wouter-Michiel
+      orcid: "https://orcid.org/0000-0003-1666-5421"
     - family-names: Marconato
       given-names: Luca
-    - family-names: Birmpili
-      given-names: Angeliki
-      orcid: "https://orcid.org/0009-0006-7505-0557"
     - family-names: Heeren
       given-names: Ron M. A.
       orcid: "https://orcid.org/0000-0002-6533-7179"
     - family-names: Cuypers
       given-names: Eva
       orcid: "https://orcid.org/0000-0002-6411-2461"
-  journal: "Journal of the American Society for Mass Spectrometry"
+  journal: "Nature Methods"
   year: 2026
-  month: 9
-  volume: 37
-  issue: 10
-  start: 2379
-  end: 2387
-  doi: "10.1021/jasms.6c00169"
-  url: "https://doi.org/10.1021/jasms.6c00169"
+  month: 10
+  doi: "10.1038/s41592-026-03305-5"
+  url: "https://doi.org/10.1038/s41592-026-03305-5"
+references:
+  - type: article
+    title: >-
+      Native, Memory-Bounded Conversion of Mass Spectrometry Imaging Data into
+      the SpatialData Ecosystem
+    authors:
+      - family-names: Visvikis
+        given-names: Theodoros
+      - family-names: Vierdag
+        given-names: Wouter-Michiel
+      - family-names: Marconato
+        given-names: Luca
+      - family-names: Birmpili
+        given-names: Angeliki
+        orcid: "https://orcid.org/0009-0006-7505-0557"
+      - family-names: Heeren
+        given-names: Ron M. A.
+        orcid: "https://orcid.org/0000-0002-6533-7179"
+      - family-names: Cuypers
+        given-names: Eva
+        orcid: "https://orcid.org/0000-0002-6411-2461"
+    journal: "Journal of the American Society for Mass Spectrometry"
+    year: 2026
+    month: 9
+    volume: 37
+    issue: 10
+    start: 2379
+    end: 2387
+    doi: "10.1021/jasms.6c00169"
+    url: "https://doi.org/10.1021/jasms.6c00169"

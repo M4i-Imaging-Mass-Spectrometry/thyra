@@ -76,8 +76,10 @@ One folder ending in `.zarr`. It holds:
 
 ## Cite Thyra
 
-If Thyra helps your work, please cite the paper: Visvikis et al., *Journal of
-the American Society for Mass Spectrometry* (2026),
+Please cite Visvikis et al., *Nat. Methods* (2026),
+[doi:10.1038/s41592-026-03305-5](https://doi.org/10.1038/s41592-026-03305-5).
+Relying on the vendor readers or the low-memory conversion? Also cite
+Visvikis et al., *J. Am. Soc. Mass Spectrom.* (2026),
 [doi:10.1021/jasms.6c00169](https://doi.org/10.1021/jasms.6c00169).
 
 ---
