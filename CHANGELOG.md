@@ -2,6 +2,13 @@
 
 <!-- version list -->
 
+## [4.6.2](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/compare/v4.6.1...v4.6.2) (2026-11-03)
+
+
+### Build System
+
+* **deps:** clear the security alerts and cite the Nature Methods paper ([#554](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/554)) ([1a228ae](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/1a228ae219a85685373c4673a02b25a61d592955))
+
 ## [4.6.1](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/compare/v4.6.0...v4.6.1) (2026-10-30)
 
 
