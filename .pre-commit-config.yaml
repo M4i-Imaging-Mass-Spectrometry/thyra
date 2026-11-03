@@ -134,7 +134,7 @@ repos:
   # Raising the rev and reformatting is what closed it -- the post-24 style
   # that hugs a parenthesised string is the whole of that diff.
   - repo: https://github.com/psf/black
-    rev: 26.5.1
+    rev: 26.10.1
     hooks:
       - id: black
         language_version: python3
