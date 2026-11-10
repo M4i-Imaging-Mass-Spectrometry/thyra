@@ -11,11 +11,11 @@ assignees: ''
 A clear and concise description of what the bug is.
 
 ## To Reproduce
-Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+The command or the Python code you ran, as you typed it:
+
+```
+thyra ...
+```
 
 ## Expected Behavior
 A clear and concise description of what you expected to happen.
@@ -26,8 +26,8 @@ A clear and concise description of what actually happened.
 ## Environment
  - OS: [e.g. Windows, macOS, Linux]
  - Python version: [e.g. 3.12]
- - MSIConvert version: [e.g. 1.5.0]
- - Input file format: [e.g. ImzML, Bruker .d]
+ - Thyra version: [the output of `thyra --version`]
+ - Input file format: [e.g. imzML, Bruker .d, Waters .raw]
 
 ## Additional Context
 Add any other context about the problem here.

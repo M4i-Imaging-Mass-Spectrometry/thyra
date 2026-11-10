@@ -406,9 +406,12 @@ above:
 | Optical alignment | Part 2, Step 4 |
 | Metadata preservation | `sdata.attrs`, `table.uns` |
 
-The result is a plain SpatialData store. Nothing in it is Thyra-specific --
-`spatialdata.read_zarr` is the only Thyra-aware step, and after that napari,
-squidpy, and scanpy work on it directly.
+The result is a plain SpatialData store. `spatialdata.read_zarr` opens it,
+and each table is an AnnData object.
+[Look at the result](look-at-the-result.md) opens it in napari.
+
+[Analyse the result with scanpy and squidpy](analyse-with-scanpy-and-squidpy.md)
+runs both on the example data from Part 1.
 
 ---
 
@@ -416,6 +419,8 @@ squidpy, and scanpy work on it directly.
 
 - **[Explore the result in Python](explore-the-output.ipynb)**: optical overlays,
   per-pixel spectra, z-slices and metadata
+- **[Analyse the result with scanpy and squidpy](analyse-with-scanpy-and-squidpy.md)**:
+  clusters and spatial patterns
 - **[Troubleshooting](troubleshooting.md)**: common errors and their fixes
 - **[Output format](output-format.md)**: the full element and metadata layout
 - **[Command-line options](cli.md)**: every option

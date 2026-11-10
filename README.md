@@ -10,12 +10,18 @@
 [![Docs](https://img.shields.io/badge/docs-mkdocs-blue)](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra)
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/M4i-Imaging-Mass-Spectrometry/thyra/blob/main/notebooks/Thyra_Validation_Workflow.ipynb)
 
-**Thyra converts imaging mass spectrometry data into one open format.** It
-reads the files your instrument writes (Bruker, Waters, PHI, or imzML from any
-vendor) and saves them in [SpatialData](https://spatialdata.scverse.org/),
-which analysis and viewing tools can read. It keeps ion mobility (TIMS 1/K0)
-and MS/MS (PASEF, iprm-PASEF) data, not only the spectra. You do not need to
-know how to program.
+**Thyra converts imaging mass spectrometry data into one open format: the
+spectra, the ion mobility and the MS/MS.** It reads the MSI files your MALDI,
+DESI or ToF-SIMS instrument writes (Bruker, Waters, PHI, or imzML from any
+vendor) and saves them in [SpatialData](https://spatialdata.scverse.org/), the
+open format of the [scverse](https://scverse.org/) tools. Ion mobility (TIMS
+1/K0, Waters drift time) and MS/MS (PASEF, iprm-PASEF) are kept beside the
+spectra, not dropped. Converting needs no programming.
+
+**What you gain:** your data leaves the vendor format and can sit beside the
+microscopy and spatial transcriptomics data of the same tissue, in a format
+built to hold them together. In Python it opens as an AnnData table, one row
+per pixel, with the optical image next to it.
 
 **[Documentation](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra)** | [Install](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/install/) | [Your first conversion](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/getting-started/) | [Tutorial](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/tutorial/) | [Technical reference](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/technical-reference/)
 
@@ -44,14 +50,15 @@ also converts the published example dataset
 
 ## What you can convert
 
-| Your instrument | Point Thyra at |
-|---|---|
-| Bruker timsTOF or solariX | the folder ending in `.d` |
-| Bruker rapifleX | the acquisition folder |
-| Waters (MassLynx) | the folder ending in `.raw` |
-| PHI nanoTOF (ToF-SIMS) | the file ending in `.raw` |
-| Any instrument that exports imzML | the `.imzML` file, with its `.ibd` file next to it |
-| mzPeak (experimental) | the `.mzpeak` file |
+| Your instrument | Point Thyra at | Kept beside the spectra |
+|---|---|---|
+| Bruker timsTOF | the folder ending in `.d` | ion mobility (1/K0), MS/MS (PASEF, iprm-PASEF), optical image and its alignment, regions |
+| Bruker solariX | the folder ending in `.d` | optical image |
+| Bruker rapifleX | the acquisition folder | optical image and its alignment |
+| Waters (MassLynx) | the folder ending in `.raw` | ion mobility (drift time, Synapt and Cyclic IMS), regions |
+| PHI nanoTOF (ToF-SIMS) | the file ending in `.raw` | mosaic tiles joined into one image |
+| Any instrument that exports imzML | the `.imzML` file, with its `.ibd` file next to it | ion mobility array, 3D data |
+| mzPeak (experimental) | the `.mzpeak` file | |
 
 imzML with a mobility array is read too. In continuous mode, as TIMSImaging
 writes it, the mobility is kept as its own table. In processed mode, as
@@ -65,6 +72,20 @@ PHI mosaic, MS/MS and depth-profiling acquisitions have so far been tested
 only on synthetic files. If you have real data in those modes, please get in
 touch.
 
+### Not supported yet, and how to change that
+
+Only the formats in the table are read natively. Other vendor formats
+(Thermo, Shimadzu, Agilent, SCIEX and others) are not: export imzML from the
+vendor software and convert that.
+
+A gap is there because nobody has needed it yet or because time ran out, not
+because it cannot be done. If your instrument, format or acquisition mode is
+missing,
+[tell us in the discussions](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/discussions).
+A small example dataset is the fastest way to a new reader. Collaborations are
+welcome: on formats, on tools that read the result, and on the metadata
+schema.
+
 ## What you get
 
 One folder ending in `.zarr`, holding:
@@ -73,7 +94,8 @@ One folder ending in `.zarr`, holding:
 - an image of the total ion current (TIC)
 - the optical image of the slide, when the acquisition has one
 - ion mobility and MS/MS data, when the acquisition has them (below)
-- a validated description of the acquisition, ready for METASPACE
+- a validated description of the acquisition, which Thyra can export as a
+  METASPACE submission file
 
 Thyra handles datasets larger than your computer's memory, slides with
 several regions, and 3D data.

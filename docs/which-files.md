@@ -125,6 +125,15 @@ will need `--pixel-size`.
 - Point Thyra at the `.mzpeak` file. Only 2D images are read.
 - Thyra reads the pixel size only when the file records it.
 
+## Is your format missing?
+
+Other vendor formats are not read yet. Most gaps exist because nobody has
+asked, or for lack of time.
+
+- Export imzML from your vendor software, if it can, and convert that.
+- [Tell us what you need](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/discussions).
+  A small example dataset helps most.
+
 ## Go deeper
 
 [Supported formats](supported-formats.md) explains how each format is
