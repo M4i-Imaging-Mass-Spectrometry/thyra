@@ -32,9 +32,13 @@ def _visible_params(ctx):
 
     Hidden options (``--optimize-chunks``) return no help record and are
     excluded, which is correct: they are not shown, so they need no section.
+    Positional arguments are excluded too: they are on the usage line, and
+    whether they have a help record depends on the click version.
     """
     return [
-        p for p in ctx.command.get_params(ctx) if p.get_help_record(ctx) is not None
+        p
+        for p in ctx.command.get_params(ctx)
+        if isinstance(p, click.Option) and p.get_help_record(ctx) is not None
     ]
 
 
@@ -99,6 +103,25 @@ class TestRenderedHelp:
             "one option is missing from GroupedCommand.GROUPS. Rendered "
             "help:\n" + result.output
         )
+
+    def test_positional_arguments_get_no_section(self, monkeypatch):
+        """INPUT and OUTPUT stay on the usage line under every click version.
+
+        click 8.5.1 gives every argument a help record; older versions give
+        none to an argument without help text. Forcing a record here makes
+        the test bite whichever version is installed.
+        """
+        monkeypatch.setattr(
+            click.Argument,
+            "get_help_record",
+            lambda self, ctx: (self.make_metavar(ctx), ""),
+        )
+
+        result = CliRunner().invoke(main, ["--help"])
+
+        assert result.exit_code == 0, result.output
+        assert "\nOptions:\n" not in result.output, result.output
+        assert "Usage: main [OPTIONS] INPUT OUTPUT" in result.output
 
     def test_help_renders_every_declared_section(self):
         result = CliRunner().invoke(main, ["--help"])
