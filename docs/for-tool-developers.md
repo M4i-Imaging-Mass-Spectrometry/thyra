@@ -118,6 +118,20 @@ flight-time axis, so do not assume `mz` is the only one.
 - `obs["spatial_x"]` and `obs["spatial_y"]` are in micrometres. When the
   source states no pixel size, 1 µm is assumed, and
   `uns["msi_metadata"]["provenance"]["pixel_size_source"]` is `"default"`.
+- A table has no `obsm["spatial"]`. A pixel's position is in the `obs`
+  columns above and in the pixel shapes element the table annotates, named
+  in `uns["spatialdata_attrs"]["region"]`. The centroid of a pixel's shape
+  is its position in whichever coordinate system you ask for. The `obs`
+  columns are always micrometres on the MSI raster, while `"global"` is in
+  optical-image pixels when the store applies an optical alignment (see
+  [Coordinate systems](coordinate-systems.md)). squidpy's
+  `spatial_neighbors_grid`, `_knn`, `_radius` and `_delaunay` take the
+  SpatialData object with `elements_to_coordinate_systems` and `table_key`,
+  and fill `obsm["spatial"]` in memory from those centroids.
+  `spatialdata_io.experimental.to_legacy_anndata` returns a copy of the
+  table that carries it.
+  [Analyse the result with scanpy and squidpy](analyse-with-scanpy-and-squidpy.md)
+  shows the first route.
 - A position the instrument never measured has no row. A position measured
   twice has one row holding the sum of both spectra.
 - `X` is stored as CSC on every route, with sorted row indices in each

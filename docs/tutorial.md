@@ -410,12 +410,17 @@ The result is a plain SpatialData store. Nothing in it is Thyra-specific --
 `spatialdata.read_zarr` is the only Thyra-aware step, and after that napari,
 squidpy, and scanpy work on it directly.
 
+[Analyse the result with scanpy and squidpy](analyse-with-scanpy-and-squidpy.md)
+runs both on the example data from Part 1.
+
 ---
 
 ## Where to go next
 
 - **[Explore the result in Python](explore-the-output.ipynb)**: optical overlays,
   per-pixel spectra, z-slices and metadata
+- **[Analyse the result with scanpy and squidpy](analyse-with-scanpy-and-squidpy.md)**:
+  clusters and spatial patterns
 - **[Troubleshooting](troubleshooting.md)**: common errors and their fixes
 - **[Output format](output-format.md)**: the full element and metadata layout
 - **[Command-line options](cli.md)**: every option
