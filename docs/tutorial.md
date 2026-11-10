@@ -406,9 +406,9 @@ above:
 | Optical alignment | Part 2, Step 4 |
 | Metadata preservation | `sdata.attrs`, `table.uns` |
 
-The result is a plain SpatialData store. Nothing in it is Thyra-specific --
-`spatialdata.read_zarr` is the only Thyra-aware step, and after that napari,
-squidpy, and scanpy work on it directly.
+The result is a plain SpatialData store. `spatialdata.read_zarr` opens it,
+and each table is an AnnData object.
+[Look at the result](look-at-the-result.md) opens it in napari.
 
 ---
 

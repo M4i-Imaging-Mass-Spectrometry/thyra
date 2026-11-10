@@ -52,6 +52,10 @@ Thyra works out the file type, the pixel size and the m/z axis for you.
 
 Thyra can also read mzPeak files. That support is experimental.
 
+Is your instrument or format missing? Usually nobody has needed it yet.
+[Tell us](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/discussions),
+and we can add it.
+
 ## What you get
 
 One folder ending in `.zarr`. It holds:
