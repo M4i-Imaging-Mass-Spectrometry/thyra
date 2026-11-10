@@ -1,5 +1,8 @@
 blank_issues_enabled: true
 contact_links:
+  - name: Question, or a format Thyra does not read yet
+    url: https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/discussions
+    about: Ask how to do something, or tell us which instrument, format or acquisition mode you need.
   - name: Troubleshooting
     url: https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/troubleshooting/
     about: Common errors and their fixes. Worth a look before opening a bug report.

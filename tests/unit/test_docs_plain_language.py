@@ -49,7 +49,9 @@ MAX_AVERAGE_WORDS = 20
 #: Set on 2026-09-25 to each page's length then plus about 10%, rounded up to
 #: the next 50.
 WORD_BUDGETS: Dict[str, int] = {
-    "index.md": 360,  # raised for the second paper to cite
+    # Raised for the second paper to cite, then for the line inviting readers
+    # to ask for a format that is missing.
+    "index.md": 380,
     "install.md": 400,
     "getting-started.md": 500,
     "look-at-the-result.md": 350,
