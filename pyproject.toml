@@ -86,7 +86,7 @@ dependencies = [
     # 8.3.1 and passes on what CI resolves. That cost a test on main -- see
     # tests/unit/test_cli_interactive_calibration.py. Green CI is evidence
     # about 8.4.2 and about nothing else in the declared range.
-    "click>=8.1, <9",                 # verified 8.1.8, 8.4.2 and 8.5.0
+    "click>=8.1, <9",                 # verified 8.1.8, 8.4.2 and 8.5.1
     # Secure XML parsing for the shared Bruker `.mis` parser, which every
     # Bruker path goes through: the Rapiflex, timsTOF and solariX readers and
     # BrukerMetadataExtractor. `mis_parser` imports it unconditionally and has
