@@ -2,6 +2,13 @@
 
 <!-- version list -->
 
+## [4.6.3](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/compare/v4.6.2...v4.6.3) (2026-11-10)
+
+
+### Bug Fixes
+
+* **cli:** keep INPUT and OUTPUT out of the help's option sections ([#557](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/557)) ([cbf89e1](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/cbf89e13af77dbb9b63b1ce7ebfc004c1e742c78))
+
 ## [4.6.2](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/compare/v4.6.1...v4.6.2) (2026-11-03)
 
 
