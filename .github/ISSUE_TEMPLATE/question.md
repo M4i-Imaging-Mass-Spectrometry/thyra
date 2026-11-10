@@ -1,6 +1,6 @@
 ---
 name: Question
-about: Ask a question about using MSIConvert
+about: Ask a question about using Thyra or about a converted dataset
 title: '[QUESTION] '
 labels: question
 assignees: ''
@@ -19,7 +19,7 @@ Please provide context about what you're trying to accomplish:
 ## Environment
  - OS: [e.g. Windows, macOS, Linux]
  - Python version: [e.g. 3.12]
- - MSIConvert version: [e.g. 1.5.0]
+ - Thyra version: [the output of `thyra --version`]
 
 ## Additional Information
 Any additional information that might help us answer your question.

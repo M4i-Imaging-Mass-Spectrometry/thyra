@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "thyra"
 version = "4.6.2"
-description = "A modern Python library for converting Mass Spectrometry Imaging (MSI) data into SpatialData/Zarr format - your portal to spatial omics"
+description = "Convert mass spectrometry imaging (MSI) data from Bruker, Waters, PHI and imzML, with ion mobility and MS/MS, into the open SpatialData/Zarr format"
 authors = [{ name = "Theodoros Visvikis", email = "t.visvikis@maastrichtuniversity.nl" }]
 maintainers = [{ name = "Theodoros Visvikis", email = "t.visvikis@maastrichtuniversity.nl" }]
 license = "MIT"
@@ -14,14 +14,23 @@ readme = "README.md"
 requires-python = ">=3.12, <3.15"
 keywords = [
     "mass-spectrometry",
+    "mass-spectrometry-imaging",
     "imaging",
     "spatialdata",
+    "anndata",
+    "scverse",
     "zarr",
     "omics",
+    "metabolomics",
+    "lipidomics",
     "bioinformatics",
     "msi",
+    "maldi",
+    "desi",
+    "tof-sims",
     "imzml",
     "bruker",
+    "waters",
     "timstof",
     "ion-mobility",
     "tims",
@@ -35,7 +44,11 @@ keywords = [
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "Operating System :: OS Independent",
+    # Not "OS Independent": the timsTOF and Waters readers load vendor
+    # libraries that exist for Windows and Linux only.
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -253,8 +266,7 @@ Paper = "https://doi.org/10.1038/s41592-026-03305-5"
 "Bug Tracker" = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues"
 Discussions = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/discussions"
 Changelog = "https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/blob/main/CHANGELOG.md"
-# There is no CONTRIBUTING.md at the repository root; the guide lives at
-# docs/contributing.md and is published as this page.
+# The full guide lives at docs/contributing.md and is published as this page.
 Contributing = "https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/contributing/"
 
 [project.scripts]

@@ -11,11 +11,17 @@
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/M4i-Imaging-Mass-Spectrometry/thyra/blob/main/notebooks/Thyra_Validation_Workflow.ipynb)
 
 **Thyra converts imaging mass spectrometry data into one open format.** It
-reads the files your instrument writes (Bruker, Waters, PHI, or imzML from any
-vendor) and saves them in [SpatialData](https://spatialdata.scverse.org/),
-which analysis and viewing tools can read. It keeps ion mobility (TIMS 1/K0)
-and MS/MS (PASEF, iprm-PASEF) data, not only the spectra. You do not need to
-know how to program.
+reads the MSI files your MALDI, DESI or ToF-SIMS instrument writes (Bruker,
+Waters, PHI, or imzML from any vendor) and saves them in
+[SpatialData](https://spatialdata.scverse.org/), the open format of the
+[scverse](https://scverse.org/) tools. It keeps ion mobility (TIMS 1/K0) and
+MS/MS (PASEF, iprm-PASEF) data, not only the spectra. Converting needs no
+programming.
+
+**What you gain:** your data leaves the vendor format and can sit beside the
+microscopy and spatial transcriptomics data of the same tissue, in a format
+built to hold them together. In Python it opens as an AnnData table, one row
+per pixel, with the optical image next to it.
 
 **[Documentation](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra)** | [Install](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/install/) | [Your first conversion](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/getting-started/) | [Tutorial](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/tutorial/) | [Technical reference](https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/technical-reference/)
 
@@ -73,7 +79,8 @@ One folder ending in `.zarr`, holding:
 - an image of the total ion current (TIC)
 - the optical image of the slide, when the acquisition has one
 - ion mobility and MS/MS data, when the acquisition has them (below)
-- a validated description of the acquisition, ready for METASPACE
+- a validated description of the acquisition, which Thyra can export as a
+  METASPACE submission file
 
 Thyra handles datasets larger than your computer's memory, slides with
 several regions, and 3D data.

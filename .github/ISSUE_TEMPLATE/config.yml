@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Troubleshooting
+    url: https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/troubleshooting/
+    about: Common errors and their fixes. Worth a look before opening a bug report.
+  - name: Documentation
+    url: https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/
+    about: Install, first conversion, tutorial and the technical reference.
