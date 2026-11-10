@@ -128,5 +128,7 @@ Interactive(sdata)
 
 - [Explore the result in Python](explore-the-output.ipynb): optical overlays,
   single spectra, slices and metadata, as a notebook.
+- [Analyse the result with scanpy and squidpy](analyse-with-scanpy-and-squidpy.md):
+  clusters and spatial patterns.
 - [Output format](output-format.md): every part of the result, in full
   detail.

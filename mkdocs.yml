@@ -117,6 +117,7 @@ nav:
       - Describe and share your data: describe-your-data.md
       - Ion mobility and MS/MS: ion-mobility-and-msms.md
       - Explore the result in Python: explore-the-output.ipynb
+      - Analyse the result with scanpy and squidpy: analyse-with-scanpy-and-squidpy.md
   - Technical reference:
       - technical-reference.md
       - Supported formats: supported-formats.md

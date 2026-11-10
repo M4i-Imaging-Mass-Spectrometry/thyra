@@ -410,12 +410,17 @@ The result is a plain SpatialData store. `spatialdata.read_zarr` opens it,
 and each table is an AnnData object.
 [Look at the result](look-at-the-result.md) opens it in napari.
 
+[Analyse the result with scanpy and squidpy](analyse-with-scanpy-and-squidpy.md)
+runs both on the example data from Part 1.
+
 ---
 
 ## Where to go next
 
 - **[Explore the result in Python](explore-the-output.ipynb)**: optical overlays,
   per-pixel spectra, z-slices and metadata
+- **[Analyse the result with scanpy and squidpy](analyse-with-scanpy-and-squidpy.md)**:
+  clusters and spatial patterns
 - **[Troubleshooting](troubleshooting.md)**: common errors and their fixes
 - **[Output format](output-format.md)**: the full element and metadata layout
 - **[Command-line options](cli.md)**: every option

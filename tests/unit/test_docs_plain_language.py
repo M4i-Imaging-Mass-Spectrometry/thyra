@@ -62,6 +62,7 @@ WORD_BUDGETS: Dict[str, int] = {
     "settings.md": 550,
     "describe-your-data.md": 550,
     "ion-mobility-and-msms.md": 400,
+    "analyse-with-scanpy-and-squidpy.md": 450,
 }
 
 _FENCE = re.compile(r"^\s*(```|~~~)")
