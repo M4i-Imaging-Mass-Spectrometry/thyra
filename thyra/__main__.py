@@ -854,9 +854,17 @@ class GroupedCommand(click.Command):
 
     @staticmethod
     def _collect_options(ctx: click.Context) -> tuple:
-        """Collect options and build name-to-record mapping."""
+        """Collect options and build name-to-record mapping.
+
+        Positional arguments are left out, as ``click.Command.format_options``
+        leaves them out: they are on the usage line and in the help text.
+        From click 8.5.1 an argument always has a help record, so without
+        this they would land in the trailing ``Options:`` section.
+        """
         opts = []
         for param in ctx.command.get_params(ctx):
+            if isinstance(param, click.Argument):
+                continue
             rv = param.get_help_record(ctx)
             if rv is not None:
                 opts.append((param, rv))
