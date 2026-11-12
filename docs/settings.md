@@ -215,6 +215,7 @@ run.
     An empty `{}` gives the same automatic choice as the command. The
     [Python API](api.md) page lists every argument. `convert_msi` returns
     `True` when the result was written and `False` when it was not.
+    Add `raise_on_failure=True` to get the reason as an exception.
 
 ## Go deeper
 
