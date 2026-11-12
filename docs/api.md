@@ -104,6 +104,30 @@ The error names each one. A reader option passed as a plain keyword is
 pointed to `reader_options`. A reader option the file type does not use is
 named in a warning, as the command line does.
 
+### Asking why a conversion failed
+
+`convert_msi` returns `False` when a conversion fails, and logs the reason.
+A program that has to show the reason to its own user passes
+`raise_on_failure=True`. The call then raises instead of returning `False`.
+
+```python
+import thyra
+
+try:
+    thyra.convert_msi("slide.d", "slide.zarr", raise_on_failure=True)
+except thyra.ConversionFailed as e:
+    print(f"Not converted: {e}")
+```
+
+Two exceptions can come out. `ConversionRefused` means Thyra declined: a bad
+argument, a path that is missing or taken, or a source it does not accept.
+`ConversionFailed` means the conversion failed for any other reason. The
+first is a kind of the second, and also a `ValueError`. The message is the
+reason that was logged. A partial store is set aside before the exception
+is raised, so the same call can usually be retried at once. When the last
+rename failed, the message names the folder that holds the finished store.
+An interrupt raises `KeyboardInterrupt`.
+
 ### Full signature
 
 ::: thyra.convert.convert_msi

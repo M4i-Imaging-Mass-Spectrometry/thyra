@@ -1440,7 +1440,9 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             # The type when the text is empty: a failed allocation raises
             # a bare MemoryError, and this line read "Error saving
             # SpatialData: " with nothing after it (issue #525).
-            logger.error("Error saving SpatialData: %s", str(e) or type(e).__name__)
+            reason = f"Error saving SpatialData: {str(e) or type(e).__name__}"
+            logger.error("%s", reason)
+            self.note_failure(reason)
             import traceback
 
             logger.debug(f"Detailed traceback:\n{traceback.format_exc()}")
@@ -1471,14 +1473,14 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             retry_on_os_error(rename)
         except OSError as e:
             self._keep_incomplete_name = True
-            logger.error(
-                "The store is complete, but it could not be renamed from %s "
-                "to %s (%s). It is kept under the temporary name; rename it "
-                "yourself, or delete it and convert again.",
-                store,
-                output,
-                e.strerror or str(e) or type(e).__name__,
+            reason = (
+                f"The store is complete, but it could not be renamed from {store} "
+                f"to {output} ({e.strerror or str(e) or type(e).__name__}). It is "
+                "kept under the temporary name; rename it yourself, or delete it "
+                "and convert again."
             )
+            logger.error("%s", reason)
+            self.note_failure(reason)
             return False
         self._writing_to = None
         return True

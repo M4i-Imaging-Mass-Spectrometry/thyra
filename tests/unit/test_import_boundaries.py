@@ -216,6 +216,8 @@ class TestTheLazyNamesStillResolve:
     @pytest.mark.parametrize(
         "name",
         [
+            "ConversionFailed",
+            "ConversionRefused",
             "MsiPreview",
             "SpatialDataConverter",
             "convert_msi",

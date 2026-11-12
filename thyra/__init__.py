@@ -51,6 +51,7 @@ from typing import TYPE_CHECKING, Any, List
 if TYPE_CHECKING:  # pragma: no cover - for type checkers, not at runtime
     from .convert import convert_msi
     from .converters.spatialdata.converter import SpatialDataConverter
+    from .errors import ConversionFailed, ConversionRefused
     from .mass_axis_plan import plan_mass_axis
     from .metadata.document import read_metadata_document
     from .preview import MsiPreview, preview_msi
@@ -74,6 +75,8 @@ __version__ = "4.6.3"
 
 #: Public name -> the module that defines it, imported on first access.
 _LAZY_ATTRS = {
+    "ConversionFailed": ".errors",
+    "ConversionRefused": ".errors",
     "MassAxisPlan": ".resampling.plan",
     "MsiPreview": ".preview",
     "SpatialDataConverter": ".converters.spatialdata.converter",
@@ -97,6 +100,8 @@ __all__ = [
     "list_regions",
     "plan_mass_axis",
     "read_metadata_document",
+    "ConversionFailed",
+    "ConversionRefused",
     "MassAxisPlan",
     "MsiPreview",
     "SpatialDataConverter",

@@ -6986,3 +6986,64 @@ the rest.
   warned about. The `.DAT` layout is not read.
 - `thyra validate` checks `var`, not `obs`, so a store written by an older
   Thyra with an infinite `spatial_x` still passes it.
+
+## D87. `convert_msi` can raise the reason it failed with
+
+**Status:** Implemented (2026-11-12). Extends D10, which left the
+failure convention to `convert_msi`, and D76; neither is rewritten.
+
+**Decision.** `convert_msi` keeps its `bool` return and gains one opt-in
+parameter, `raise_on_failure: bool = False`. By default the return values
+and the log lines are the same, in wording, level, count and order. What
+D10 and D76 say of a refusal, that it is logged once and returns `False`,
+is now the default and no longer the only behaviour. With `True`, every
+path that returns `False` raises instead.
+
+- **Two exceptions, in `thyra.errors` and on `thyra`.** `ConversionFailed`
+  means "`convert_msi` failed, and the message says why".
+  `ConversionRefused` now subclasses it and still subclasses `ValueError`,
+  so `except ValueError` keeps working and `except ConversionFailed`
+  catches both.
+- **Which one.** A refusal raises `ConversionRefused`: a bad argument, an
+  unknown keyword, a bad `resampling_config`, a path that is missing or
+  taken, and anything a reader or the converter refuses. An unexpected
+  error, a failed save or rename, or a converter that returned `False`
+  raises `ConversionFailed`. An interrupt that ended the run raises a new
+  `KeyboardInterrupt`. A flag that is not a bool is itself refused.
+- **Built from the text, never chained.** The exception is new, made from
+  the reason string and raised `from None`, so it has no cause and no
+  context. A retained exception pins the reader and its scratch memmaps
+  (issue #249), which is also why the log calls use `str(e)`.
+- **The store is quarantined first.** The raise comes after the reader is
+  closed and the partial store is set aside, so the caller sees the same
+  disk as a caller who got `False`. That is nearly always an empty output
+  path. Two cases keep a finished store, as they did before: a failed
+  final rename leaves it in the temporary folder the message names, and an
+  error while the source is closed after a finished write leaves it at the
+  output path.
+- **An interrupt during the argument and path checks** is not caught, with
+  or without the flag, as before.
+- **How the reason travels.** A per-call recorder in `thyra/convert.py`
+  (a `ContextVar` holding the reason strings and their kinds) collects the
+  text beside each log line. The converter classes keep returning `bool` and gain two string
+  attributes, `failure_reason` and `failure_kind`, set at the five sites
+  that used to swallow the reason. Several reasons for one call are joined
+  with a newline. A `False` with no reason recorded raises
+  `ConversionFailed("The conversion failed; the log has the details.")`.
+
+**Why.** A program that uses Thyra as a library could not tell its user
+why a call failed: an unknown keyword returned `False` and the reason went
+to the log. The docstring said to use the converter classes for the
+exception, which was wrong: a converter's constructor raises a refusal
+(D10), but its `convert()` logs it and returns `False` too.
+
+**What changes in a store.** Nothing.
+
+**Alternatives.**
+
+- "Return a result object." A `bool` cannot be subclassed, and 50 tests and
+  unknown outside callers assert `is True` and `is False`.
+- "Raise by default." It would break every caller that checks the return
+  value, and the CLI.
+- "Re-raise or chain the original exception." It keeps the traceback alive
+  and with it the reader (issue #249).

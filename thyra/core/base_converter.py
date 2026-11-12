@@ -46,6 +46,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: The kinds of failure :attr:`BaseMSIConverter.failure_kind` takes.
+FAILURE_REFUSED = "refused"
+FAILURE_INTERRUPTED = "interrupted"
+FAILURE_ERROR = "error"
+
 
 def is_usable_pitch(value: Any) -> bool:
     """Whether ``value`` can be a raster pitch: a finite number above 0.
@@ -210,6 +215,20 @@ class BaseMSIConverter(ABC):
         #: rather than moving a finished store to ``.failed`` (issue #500).
         self.store_complete = False
 
+        #: Why :meth:`convert` returned ``False``: the text that was logged,
+        #: as a string only -- never the exception, whose traceback would
+        #: pin the reader (issue #249). ``None`` until a failure sets it.
+        #: ``convert_msi`` reads it to raise the reason on request.
+        self.failure_reason: Optional[str] = None
+        #: What kind of failure :attr:`failure_reason` describes:
+        #: ``FAILURE_REFUSED``, ``FAILURE_INTERRUPTED`` or ``FAILURE_ERROR``.
+        self.failure_kind: Optional[str] = None
+
+    def note_failure(self, reason: str, kind: str = FAILURE_ERROR) -> None:
+        """Record why the conversion failed, as the text that was logged."""
+        self.failure_reason = reason
+        self.failure_kind = kind
+
     def _mark_store_complete(self) -> None:
         """Record that the store is finished and must be kept.
 
@@ -244,6 +263,9 @@ class BaseMSIConverter(ABC):
         Returns:
             True if the conversion succeeded, False otherwise.
         """
+        # A second call must not report the first call's failure.
+        self.failure_reason = None
+        self.failure_kind = None
         try:
             self._initialize_conversion()
             state = self._create_data_structures()
@@ -268,6 +290,7 @@ class BaseMSIConverter(ABC):
 
             logger.error("%s", str(e))
             logger.debug("Refusal raised at:\n%s", traceback.format_exc())
+            self.note_failure(str(e), FAILURE_REFUSED)
             return False
         except KeyboardInterrupt:
             # No ``as e``: the exception is cleared when this block ends,
@@ -278,17 +301,21 @@ class BaseMSIConverter(ABC):
             if self.store_complete:
                 log_interrupt_after_save(self.output_path)
                 return True
-            logger.error(
+            interrupted = (
                 "Conversion interrupted. Nothing usable was written: any "
                 "partial store is moved aside and the scratch directories "
                 "are removed."
             )
+            logger.error(interrupted)
+            self.note_failure(interrupted, FAILURE_INTERRUPTED)
             return False
         except Exception as e:
-            logger.error("Error during conversion: %s", str(e) or type(e).__name__)
+            reason = f"Error during conversion: {str(e) or type(e).__name__}"
+            logger.error("%s", reason)
             import traceback
 
             logger.error(f"Detailed traceback:\n{traceback.format_exc()}")
+            self.note_failure(reason)
             return False
         finally:
             # A second closer, deliberately. ``convert_msi`` owns the reader

@@ -28,6 +28,8 @@ import logging
 import numbers
 import traceback
 import warnings
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from math import isfinite
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
@@ -36,6 +38,9 @@ from uuid import uuid4
 import numpy as np
 
 from .core.base_converter import (
+    FAILURE_ERROR,
+    FAILURE_INTERRUPTED,
+    FAILURE_REFUSED,
     BaseMSIConverter,
     PixelSizeSource,
     is_usable_pitch,
@@ -48,7 +53,7 @@ from .core.registry import (
     get_reader_class,
     resolve_run,
 )
-from .errors import ConversionRefused
+from .errors import ConversionFailed, ConversionRefused
 from .metadata.constants import sample_value_problem
 from .reader_options import (
     READER_OPTION_FORMATS,
@@ -73,16 +78,83 @@ warnings.filterwarnings(
 )
 
 
+@dataclass
+class _FailureRecord:
+    """The reasons one ``convert_msi`` call failed, as text, with their kinds.
+
+    Strings only, never the exceptions: a retained exception pins the
+    reader and its scratch memmaps (issue #249).
+    """
+
+    reasons: List[str] = field(default_factory=list)
+    kinds: List[str] = field(default_factory=list)
+
+
+#: The record of the ``convert_msi`` call in progress, or ``None`` outside
+#: one. A context variable rather than a parameter threaded through twenty
+#: helpers whose return values (``False``) the CLI and the tests pin.
+_FAILURES: ContextVar[Optional[_FailureRecord]] = ContextVar(
+    "thyra_convert_failures", default=None
+)
+
+#: Said when a call returned ``False`` and nothing recorded why.
+_NO_REASON = "The conversion failed; the log has the details."
+
+
+def _note_failure(reason: str, kind: str = FAILURE_REFUSED) -> None:
+    """Record why this call is about to return ``False``, when a call is open.
+
+    Call it beside the log line that says the same thing, with the same
+    text. A no-op outside :func:`convert_msi`, so the CLI's own use of the
+    validators is unchanged.
+    """
+    record = _FAILURES.get()
+    if record is not None:
+        record.reasons.append(reason)
+        record.kinds.append(kind)
+
+
+def _safe_repr(value: Any) -> str:
+    """``repr(value)``, or its type name when that ``repr`` itself raises.
+
+    A refusal names the value it refused. The text is built before it is
+    logged, so a ``__repr__`` that raises would otherwise turn the refusal
+    into a crash, where the lazy ``%r`` it replaced left that to the log
+    handler.
+    """
+    try:
+        return repr(value)
+    except Exception:
+        return f"<{type(value).__name__} object>"
+
+
+def _raise_recorded(record: _FailureRecord) -> None:
+    """Raise what ``record`` holds, as a new exception built from the text.
+
+    New and ``from None``, never the original: see :class:`_FailureRecord`.
+    """
+    if FAILURE_INTERRUPTED in record.kinds:
+        raise KeyboardInterrupt() from None
+    if not record.reasons:
+        raise ConversionFailed(_NO_REASON) from None
+    reason = "\n".join(record.reasons)
+    if all(kind == FAILURE_REFUSED for kind in record.kinds):
+        raise ConversionRefused(reason) from None
+    raise ConversionFailed(reason) from None
+
+
 def _validate_paths_parameters(
     input_path: Union[str, Path], output_path: Union[str, Path]
 ) -> bool:
     """Validate path parameters."""
     if not input_path or not isinstance(input_path, (str, Path)):
         logger.error("Input path must be a valid string or Path object")
+        _note_failure("Input path must be a valid string or Path object")
         return False
 
     if not output_path or not isinstance(output_path, (str, Path)):
         logger.error("Output path must be a valid string or Path object")
+        _note_failure("Output path must be a valid string or Path object")
         return False
 
     return True
@@ -192,6 +264,7 @@ def _validate_sample_parameters(sample_id: Any, sample_name: Any) -> bool:
         problem = sample_value_problem(name, value)
         if problem is not None:
             logger.error(problem)
+            _note_failure(problem)
             return False
     return True
 
@@ -200,11 +273,13 @@ def _validate_string_parameters(format_type: str, dataset_id: str) -> bool:
     """Validate string parameters."""
     if not isinstance(format_type, str) or not format_type.strip():
         logger.error("Format type must be a non-empty string")
+        _note_failure("Format type must be a non-empty string")
         return False
 
     problem = dataset_id_problem(dataset_id)
     if problem is not None:
         logger.error(problem)
+        _note_failure(problem)
         return False
 
     return True
@@ -242,6 +317,7 @@ def _validate_numeric_parameters(
         problem = None if value is None else length_problem(value, label)
         if problem is not None:
             logger.error(problem)
+            _note_failure(problem)
             return False
     return True
 
@@ -254,11 +330,25 @@ def _validate_handle_3d(handle_3d: Any) -> bool:
     """
     if type(handle_3d) in (bool, np.bool_):
         return True
-    logger.error(
-        "handle_3d must be True or False, not %s %r",
-        type(handle_3d).__name__,
-        handle_3d,
+    reason = (
+        "handle_3d must be True or False, not "
+        f"{type(handle_3d).__name__} {_safe_repr(handle_3d)}"
     )
+    logger.error("%s", reason)
+    _note_failure(reason)
+    return False
+
+
+def _validate_raise_on_failure(raise_on_failure: Any) -> bool:
+    """Accept only a bool, numpy's included, as ``handle_3d`` is."""
+    if type(raise_on_failure) in (bool, np.bool_):
+        return True
+    reason = (
+        "raise_on_failure must be True or False, not "
+        f"{type(raise_on_failure).__name__} {_safe_repr(raise_on_failure)}"
+    )
+    logger.error("%s", reason)
+    _note_failure(reason)
     return False
 
 
@@ -280,12 +370,13 @@ def _validate_streaming(streaming: object) -> bool:
     if streaming is True or streaming is False or streaming == "auto":
         return True
 
-    logger.error(
-        "streaming must be True, False or 'auto', got %r. It selects nothing "
-        "either way -- every conversion streams since v3.23 -- so the "
-        "argument can simply be dropped.",
-        streaming,
+    reason = (
+        f"streaming must be True, False or 'auto', got {_safe_repr(streaming)}. "
+        "It selects nothing either way -- every conversion streams since v3.23 "
+        "-- so the argument can simply be dropped."
     )
+    logger.error("%s", reason)
+    _note_failure(reason)
     return False
 
 
@@ -374,7 +465,9 @@ def _validate_keywords(
     """Refuse, in one line, every keyword ``convert_msi`` does not use."""
     problems = keyword_problems(kwargs, reader_options)
     if problems:
-        logger.error("Nothing was converted. %s.", "; ".join(problems))
+        reason = "Nothing was converted. " + "; ".join(problems) + "."
+        logger.error("%s", reason)
+        _note_failure(reason)
         return False
     return True
 
@@ -517,16 +610,21 @@ def _unwritable_directory_problem(output: Path, ancestor: Path) -> Optional[str]
 def _validate_paths(input_path: Path, output_path: Path) -> bool:
     """Validate that input exists and the store can be created at output."""
     if not input_path.exists():
-        logger.error(f"Input path does not exist: {input_path}")
+        reason = f"Input path does not exist: {input_path}"
+        logger.error(reason)
+        _note_failure(reason)
         return False
 
     if output_path.exists():
-        logger.error(f"Destination {output_path} already exists.")
+        reason = f"Destination {output_path} already exists."
+        logger.error(reason)
+        _note_failure(reason)
         return False
 
     problem = output_ancestor_problem(output_path)
     if problem is not None:
         logger.error(problem)
+        _note_failure(problem)
         return False
 
     return True
@@ -572,6 +670,7 @@ def _checked_run(input_path: Path, output_path: Path) -> Optional[Path]:
         return resolve_run(input_path)
     except ConversionRefused as e:
         logger.error("%s", str(e))
+        _note_failure(str(e))
         return None
 
 
@@ -586,14 +685,16 @@ def _report_interrupt(converter: Optional[BaseMSIConverter]) -> None:
     (issue #525).
     """
     if converter is None:
-        logger.error("Conversion interrupted before it started reading.")
+        reason = "Conversion interrupted before it started reading."
+        logger.error(reason)
+        _note_failure(reason, FAILURE_INTERRUPTED)
         return
     finish_cleanup = getattr(converter, "finish_cleanup", None)
     if callable(finish_cleanup):
         finish_cleanup()
-    logger.error(
-        "Conversion interrupted while it cleaned up. Nothing usable was written."
-    )
+    reason = "Conversion interrupted while it cleaned up. Nothing usable was written."
+    logger.error(reason)
+    _note_failure(reason, FAILURE_INTERRUPTED)
 
 
 def _create_reader(
@@ -825,7 +926,22 @@ def _perform_conversion(converter: BaseMSIConverter) -> bool:
     logger.info("Starting conversion...")
     result = converter.convert()
     logger.info(f"Conversion {'completed successfully' if result else 'failed'}")
+    if not result:
+        _note_converter_failure(converter)
     return bool(result)
+
+
+def _note_converter_failure(converter: BaseMSIConverter) -> None:
+    """Record the reason a converter that returned ``False`` set on itself.
+
+    Read with ``getattr`` and kept only when it is a string: a converter
+    stood in by a test, or written before the attribute existed, says
+    nothing, and the caller then gets the generic reason.
+    """
+    reason = getattr(converter, "failure_reason", None)
+    if isinstance(reason, str):
+        kind = getattr(converter, "failure_kind", None)
+        _note_failure(reason, kind if isinstance(kind, str) else FAILURE_ERROR)
 
 
 def _plain_values(
@@ -859,6 +975,7 @@ def _checked_resampling_config(config: Any) -> Tuple[Any, bool]:
         return normalize_resampling_config(config), True
     except ConversionRefused as e:
         logger.error("%s", str(e))
+        _note_failure(str(e))
         return config, False
 
 
@@ -887,6 +1004,177 @@ def _with_region(
     return {**(reader_options or {}), "region": region}
 
 
+def _run_conversion(
+    input_path: Union[str, Path],
+    output_path: Union[str, Path],
+    format_type: str = "spatialdata",
+    dataset_id: str = "msi_dataset",
+    pixel_size_um: Optional[float] = None,
+    handle_3d: bool = False,
+    z_spacing_um: Optional[float] = None,
+    resampling_config: Optional[
+        Union[Dict[str, Any], ResamplingConfig, MassAxisPlan]
+    ] = None,
+    reader_options: Optional[Dict[str, Any]] = None,
+    include_optical: bool = True,
+    apply_optical_alignment: bool = True,
+    streaming: Union[bool, Literal["auto"]] = "auto",
+    region: Optional[Union[int, str]] = None,
+    sample_id: Optional[str] = None,
+    sample_name: Optional[str] = None,
+    **kwargs: Any,
+) -> bool:
+    """Run one conversion and return whether a store was written.
+
+    The body of :func:`convert_msi`, which documents the arguments. Every
+    failure is logged and noted with :func:`_note_failure`, so the public
+    function can raise the reason once the cleanup in the ``finally``
+    below has run.
+    """
+    # Validate input parameters
+    if not _validate_input_parameters(
+        input_path,
+        output_path,
+        format_type,
+        dataset_id,
+        pixel_size_um,
+        z_spacing_um,
+        streaming,
+        sample_id,
+        sample_name,
+    ) or not (
+        _validate_handle_3d(handle_3d) and _validate_keywords(kwargs, reader_options)
+    ):
+        return False
+    handle_3d, pixel_size_um, z_spacing_um = _plain_values(
+        handle_3d, pixel_size_um, z_spacing_um
+    )
+    resampling_config, ok = _checked_resampling_config(resampling_config)
+    if not ok:
+        return False
+    _warn_z_spacing_without_3d(z_spacing_um, handle_3d)
+
+    # Convert to Path objects and validate
+    input_path = Path(input_path).resolve()
+    output_path = Path(output_path).resolve()
+    logger.info(f"Processing input file: {input_path}")
+
+    run = _checked_run(input_path, output_path)
+    if run is None:
+        return False
+    input_path = run
+
+    # A Zarr store's deepest key sits far below the path the caller named,
+    # so a legal-looking output path can still blow the Windows 260
+    # character limit part-way through the write. No-op elsewhere.
+    output_path = prepare_zarr_output_path(output_path, dataset_id)
+    # Past this line the destination has been validated as not existing,
+    # so anything that appears there is this run's own output and this
+    # run is responsible for clearing it away if it fails.
+    succeeded = False
+    # Bound once created, so an interrupt that escapes the converter can
+    # still ask it whether the store was already complete (issue #500).
+    converter: Optional[BaseMSIConverter] = None
+
+    reader_options = _with_region(reader_options, region)
+
+    try:
+        # Create reader with format-specific options. A mobility grid
+        # table decides the summed spectrum's semantics, so it has to be
+        # known before the reader is opened -- the choice is bound into
+        # the SDK handle.
+        reader, input_format = _create_reader(
+            input_path,
+            reader_options,
+            lossless_tables=_lossless_spectrum_for(kwargs),
+        )
+
+        # This function opened the reader, so this function closes it, on
+        # every path out -- including the ones that fail before the
+        # conversion starts. "Pixel size not found in metadata" is the
+        # common one, and it used to leave the source open until the
+        # garbage collector happened to reach it, which on Windows holds a
+        # lock on the file the user is about to retry with (issue #279).
+        with reader:
+            # Determine pixel size
+            final_pixel_size, pixel_size_source, pixel_size_detection_info = (
+                _determine_pixel_size(reader, pixel_size_um, input_format)
+            )
+
+            # Create converter
+            converter = _create_converter(
+                format_type,
+                reader,
+                output_path,
+                dataset_id,
+                final_pixel_size,
+                pixel_size_source,
+                handle_3d,
+                pixel_size_detection_info,
+                resampling_config,
+                include_optical=include_optical,
+                apply_optical_alignment=apply_optical_alignment,
+                streaming=streaming,
+                z_spacing_um=z_spacing_um,
+                sample_id=sample_id,
+                sample_name=sample_name,
+                **kwargs,
+            )
+
+            succeeded = _perform_conversion(converter)
+            return succeeded
+
+    except ConversionRefused as e:
+        # A refusal Thyra wrote: the message is the whole explanation, and
+        # a traceback in front of it reads like a crash the code did not
+        # plan for. The traceback is still there under --log-level DEBUG,
+        # for the cases where the refusal itself is the surprise (#234).
+        #
+        # ``str(e)``, never ``e``: a log handler that retains records --
+        # pytest's capture, Ousia's per-session log -- would otherwise hold
+        # the exception, its traceback and every frame in it, which pins
+        # the reader and leaves its file open (see issue #249).
+        logger.error("%s", str(e))
+        logger.debug("Refusal raised at:\n%s", traceback.format_exc())
+        _note_failure(str(e))
+        return False
+
+    except KeyboardInterrupt:
+        # The converter catches its own interrupt (BaseMSIConverter.convert);
+        # this covers the steps before it -- opening the reader, detecting
+        # the pixel size -- so wherever Ctrl-C lands the caller gets False
+        # and the CLI's post-conversion step runs. Without it click printed
+        # ``Aborted!`` and no partial store was ever moved aside (#245).
+        #
+        # It also catches the ones that land after the converter has
+        # finished the store -- in its scratch release, in closing the
+        # reader on the way out of the ``with``. That store is complete
+        # and opens, so it stays where it is (#500). ``is True`` because
+        # tests stand a mock in for the converter. ``succeeded`` first, so
+        # a second Ctrl-C during the log line cannot reach the quarantine.
+        if converter is not None and converter.store_complete is True:
+            succeeded = True
+            log_interrupt_after_save(output_path)
+            return True
+        _report_interrupt(converter)
+        return False
+
+    except Exception as e:
+        reason = f"Error during conversion: {str(e) or type(e).__name__}"
+        logger.error("%s", reason)
+        logger.error(f"Detailed traceback:\n{traceback.format_exc()}")
+        _note_failure(reason, FAILURE_ERROR)
+        return False
+
+    finally:
+        # Runs after the ``with`` above has closed the reader, so the move
+        # cannot race a handle the source still holds. Covers all five
+        # ``return False`` paths past the path validation plus anything
+        # that escapes this function.
+        if not succeeded:
+            quarantine_partial_output(output_path)
+
+
 def convert_msi(
     input_path: Union[str, Path],
     output_path: Union[str, Path],
@@ -905,6 +1193,7 @@ def convert_msi(
     region: Optional[Union[int, str]] = None,
     sample_id: Optional[str] = None,
     sample_name: Optional[str] = None,
+    raise_on_failure: bool = False,
     **kwargs: Any,
 ) -> bool:
     """Convert MSI data to the specified format.
@@ -1044,14 +1333,18 @@ def convert_msi(
         sample_name: Your name for the sample, written to
             ``msi_metadata.sample.sample_name`` under the same rules as
             ``sample_id``. Default: None.
+        raise_on_failure: If True, a call that would return False raises
+            instead, carrying the reason (see Raises). Default False: the
+            return value and the log are unchanged. Only True or False
+            is accepted, numpy's bool included.
 
     Returns:
         True if the conversion completed and the store was written, False
-        otherwise. Every failure comes back this way, refusals included:
-        a refusal Thyra planned for is logged once at ``ERROR`` with the
-        whole explanation and its traceback kept for ``DEBUG`` (issue
-        #234), so a caller that wants the exception itself has to use the
-        converter classes directly.
+        otherwise. Every failure comes back this way, refusals included,
+        and the reason is logged once at ``ERROR``: a refusal Thyra planned
+        for carries the whole explanation, with its traceback kept for
+        ``DEBUG`` (issue #234). A program that has to tell its own user why
+        passes ``raise_on_failure=True`` and catches the exception.
 
         **The output name holds a finished store or nothing.** The store
         is written as ``<name>.incomplete-<id>`` beside ``output_path``
@@ -1065,7 +1358,7 @@ def convert_msi(
         move to ``.failed`` itself fails -- a live handle on the directory
         is the usual reason on Windows -- the partial store stays under
         its temporary name and the failure says so at ``ERROR``. When the
-        final rename fails, the call returns False and the error names
+        final rename fails, the call fails and the error names
         the temporary folder, whose store is complete. An ``output_path``
         that already existed when the call started is refused untouched,
         never renamed. See :func:`quarantine_partial_output` (issue #293).
@@ -1073,143 +1366,54 @@ def convert_msi(
         A folder that holds several runs (``.d`` folders Thyra reads) is
         refused with one line naming them; a folder holding one run is
         read as that run (issue #525).
+
+    Raises:
+        ConversionRefused: Only with ``raise_on_failure=True``. The call was
+            refused: a bad argument, an unknown keyword, a path that is
+            missing or already taken, a bad ``resampling_config``, or a
+            source Thyra declines. The message is the reason that was
+            logged. It is also a ``ValueError``. Raised after the reader
+            is closed and a partial store is set aside.
+        ConversionFailed: Only with ``raise_on_failure=True``. The call
+            failed for any other reason: an unexpected error, a failed
+            save or rename, or a converter that returned False. The
+            message is the reason that was logged. It is the base class of
+            ``ConversionRefused``, so ``except ConversionFailed`` catches
+            both. Raised after the same cleanup. Both are new exceptions
+            built from the text, without the original error or its
+            traceback. After a failed final rename the finished store is
+            still in the temporary folder the message names.
+        KeyboardInterrupt: With ``raise_on_failure=True``, an interrupt
+            that would have returned False is raised again as a new
+            ``KeyboardInterrupt``, after the same cleanup. An interrupt
+            during the argument and path checks propagates with or without
+            the flag.
     """
-    # Validate input parameters
-    if not _validate_input_parameters(
-        input_path,
-        output_path,
-        format_type,
-        dataset_id,
-        pixel_size_um,
-        z_spacing_um,
-        streaming,
-        sample_id,
-        sample_name,
-    ) or not (
-        _validate_handle_3d(handle_3d) and _validate_keywords(kwargs, reader_options)
-    ):
-        return False
-    handle_3d, pixel_size_um, z_spacing_um = _plain_values(
-        handle_3d, pixel_size_um, z_spacing_um
-    )
-    resampling_config, ok = _checked_resampling_config(resampling_config)
-    if not ok:
-        return False
-    _warn_z_spacing_without_3d(z_spacing_um, handle_3d)
-
-    # Convert to Path objects and validate
-    input_path = Path(input_path).resolve()
-    output_path = Path(output_path).resolve()
-    logger.info(f"Processing input file: {input_path}")
-
-    run = _checked_run(input_path, output_path)
-    if run is None:
-        return False
-    input_path = run
-
-    # A Zarr store's deepest key sits far below the path the caller named,
-    # so a legal-looking output path can still blow the Windows 260
-    # character limit part-way through the write. No-op elsewhere.
-    output_path = prepare_zarr_output_path(output_path, dataset_id)
-    # Past this line the destination has been validated as not existing,
-    # so anything that appears there is this run's own output and this
-    # run is responsible for clearing it away if it fails.
-    succeeded = False
-    # Bound once created, so an interrupt that escapes the converter can
-    # still ask it whether the store was already complete (issue #500).
-    converter: Optional[BaseMSIConverter] = None
-
-    reader_options = _with_region(reader_options, region)
-
+    failures = _FailureRecord()
+    token = _FAILURES.set(failures)
     try:
-        # Create reader with format-specific options. A mobility grid
-        # table decides the summed spectrum's semantics, so it has to be
-        # known before the reader is opened -- the choice is bound into
-        # the SDK handle.
-        reader, input_format = _create_reader(
+        done = _validate_raise_on_failure(raise_on_failure) and _run_conversion(
             input_path,
+            output_path,
+            format_type,
+            dataset_id,
+            pixel_size_um,
+            handle_3d,
+            z_spacing_um,
+            resampling_config,
             reader_options,
-            lossless_tables=_lossless_spectrum_for(kwargs),
+            include_optical,
+            apply_optical_alignment,
+            streaming,
+            region,
+            sample_id,
+            sample_name,
+            **kwargs,
         )
-
-        # This function opened the reader, so this function closes it, on
-        # every path out -- including the ones that fail before the
-        # conversion starts. "Pixel size not found in metadata" is the
-        # common one, and it used to leave the source open until the
-        # garbage collector happened to reach it, which on Windows holds a
-        # lock on the file the user is about to retry with (issue #279).
-        with reader:
-            # Determine pixel size
-            final_pixel_size, pixel_size_source, pixel_size_detection_info = (
-                _determine_pixel_size(reader, pixel_size_um, input_format)
-            )
-
-            # Create converter
-            converter = _create_converter(
-                format_type,
-                reader,
-                output_path,
-                dataset_id,
-                final_pixel_size,
-                pixel_size_source,
-                handle_3d,
-                pixel_size_detection_info,
-                resampling_config,
-                include_optical=include_optical,
-                apply_optical_alignment=apply_optical_alignment,
-                streaming=streaming,
-                z_spacing_um=z_spacing_um,
-                sample_id=sample_id,
-                sample_name=sample_name,
-                **kwargs,
-            )
-
-            succeeded = _perform_conversion(converter)
-            return succeeded
-
-    except ConversionRefused as e:
-        # A refusal Thyra wrote: the message is the whole explanation, and
-        # a traceback in front of it reads like a crash the code did not
-        # plan for. The traceback is still there under --log-level DEBUG,
-        # for the cases where the refusal itself is the surprise (#234).
-        #
-        # ``str(e)``, never ``e``: a log handler that retains records --
-        # pytest's capture, Ousia's per-session log -- would otherwise hold
-        # the exception, its traceback and every frame in it, which pins
-        # the reader and leaves its file open (see issue #249).
-        logger.error("%s", str(e))
-        logger.debug("Refusal raised at:\n%s", traceback.format_exc())
-        return False
-
-    except KeyboardInterrupt:
-        # The converter catches its own interrupt (BaseMSIConverter.convert);
-        # this covers the steps before it -- opening the reader, detecting
-        # the pixel size -- so wherever Ctrl-C lands the caller gets False
-        # and the CLI's post-conversion step runs. Without it click printed
-        # ``Aborted!`` and no partial store was ever moved aside (#245).
-        #
-        # It also catches the ones that land after the converter has
-        # finished the store -- in its scratch release, in closing the
-        # reader on the way out of the ``with``. That store is complete
-        # and opens, so it stays where it is (#500). ``is True`` because
-        # tests stand a mock in for the converter. ``succeeded`` first, so
-        # a second Ctrl-C during the log line cannot reach the quarantine.
-        if converter is not None and converter.store_complete is True:
-            succeeded = True
-            log_interrupt_after_save(output_path)
-            return True
-        _report_interrupt(converter)
-        return False
-
-    except Exception as e:
-        logger.error("Error during conversion: %s", str(e) or type(e).__name__)
-        logger.error(f"Detailed traceback:\n{traceback.format_exc()}")
-        return False
-
     finally:
-        # Runs after the ``with`` above has closed the reader, so the move
-        # cannot race a handle the source still holds. Covers all five
-        # ``return False`` paths past the path validation plus anything
-        # that escapes this function.
-        if not succeeded:
-            quarantine_partial_output(output_path)
+        _FAILURES.reset(token)
+    if not done and raise_on_failure:
+        # After ``_run_conversion`` has closed the reader and set the
+        # partial store aside, and from the text alone (issue #249).
+        _raise_recorded(failures)
+    return done

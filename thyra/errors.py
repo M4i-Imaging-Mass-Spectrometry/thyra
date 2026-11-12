@@ -1,4 +1,4 @@
-"""The exception a refusal is spelled with.
+"""The exceptions a refusal and a failed conversion are spelled with.
 
 Thyra refuses a great deal on purpose: a ``.d`` directory with no
 analysis files, a Waters raster whose stage never moved, a ``tof`` axis
@@ -19,6 +19,11 @@ It subclasses :class:`ValueError` because every one of these sites
 raised a ``ValueError`` before, and callers -- Thyra's own tests
 included -- catch that. Nothing that used to work stops working.
 
+:class:`ConversionFailed` is the base of the two: ``convert_msi`` returns
+``False`` on any failure, and with ``raise_on_failure=True`` it raises this
+instead, so a program using Thyra as a library can tell its user why (D87).
+:class:`ConversionRefused` is a ``ConversionFailed`` and a ``ValueError``.
+
 The distinction is about who the message is for, not about where it is
 raised. An internal invariant ("Common mass axis is not initialized")
 stays a plain ``ValueError``: nobody can act on it, and its traceback is
@@ -26,7 +31,20 @@ the only useful part.
 """
 
 
-class ConversionRefused(ValueError):
+class ConversionFailed(Exception):
+    """``convert_msi`` failed, and the message says why.
+
+    What ``convert_msi(..., raise_on_failure=True)`` raises instead of
+    returning ``False``. It is built from the reason text and carries
+    neither the original exception nor its traceback (issue #249: a
+    retained exception pins the reader and its scratch memmaps), so the
+    message is the whole report. Anything that is not a refusal raises
+    this class itself; a refusal raises the subclass
+    :class:`ConversionRefused`, so ``except ConversionFailed`` catches both.
+    """
+
+
+class ConversionRefused(ConversionFailed, ValueError):
     """Thyra declined to do something, and the message says why.
 
     The message is addressed to the person who ran the conversion and is
@@ -60,4 +78,4 @@ class ConversionRefused(ValueError):
 MALFORMED_METADATA = (AttributeError, KeyError, TypeError, ValueError)
 
 
-__all__ = ["ConversionRefused", "MALFORMED_METADATA"]
+__all__ = ["ConversionFailed", "ConversionRefused", "MALFORMED_METADATA"]
