@@ -71,7 +71,7 @@ warnings.filterwarnings(
     category=FutureWarning,
 )
 
-__version__ = "4.6.3"
+__version__ = "4.7.0"
 
 #: Public name -> the module that defines it, imported on first access.
 _LAZY_ATTRS = {

@@ -2,6 +2,13 @@
 
 <!-- version list -->
 
+## [4.7.0](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/compare/v4.6.3...v4.7.0) (2026-11-12)
+
+
+### Features
+
+* **api:** convert_msi can raise the reason a conversion failed with ([#561](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/561)) ([49c3060](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/49c3060c298056b10d0b284f8fe571e88fa8a54d))
+
 ## [4.6.3](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/compare/v4.6.2...v4.6.3) (2026-11-10)
 
 
