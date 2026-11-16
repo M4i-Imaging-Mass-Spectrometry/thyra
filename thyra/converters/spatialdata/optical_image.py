@@ -85,9 +85,9 @@ file of the right length; tifffile pads that with zeros as well. On an
 uncompressed page the byte count in the header shows it. On a page
 compressed with LZW, deflate, PackBits, LZMA or Zstandard every strip or
 tile the read needs is decompressed once and its samples are counted, a
-few at a time, before the decode (D88).
+few at a time, before the decode (D89).
 
-**Two more readings that do not depend on the tifffile installed** (D88).
+**Two more readings that do not depend on the tifffile installed** (D89).
 Both changed with tifffile 2026.11.12, and each is fixed here to one answer. A
 Predictor tag on a page that is not compressed is ignored, as libtiff and
 Pillow ignore it: the samples are stored as the file holds them. A planar

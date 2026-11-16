@@ -7048,7 +7048,7 @@ exception, which was wrong: a converter's constructor raises a refusal
 - "Re-raise or chain the original exception." It keeps the traceback alive
   and with it the reader (issue #249).
 
-## D88. A short strip, a predictor without compression and an undefined planar layout read the same on every tifffile
+## D89. A short strip, a predictor without compression and an undefined planar layout read the same on every tifffile
 
 **Status:** Implemented (2026-11-16). Extends D69 ("stored as its file
 shows it") and the check for a file cut short that PR #565 added without
