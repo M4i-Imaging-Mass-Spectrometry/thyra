@@ -5537,7 +5537,8 @@ new in the `.d`; `--no-recalibrated` converted.
 
 **Status:** Implemented (2026-10-19), issue #524. Generalises D59's rule for
 the overview photo, and amends D29, D33 and D48 where they place an
-unaligned image.
+unaligned image. Amended by D88 (2026-11-16): planes that share one page
+header are counted as the planes of a multi-page TIFF are.
 
 **Decision.** Four rules for every optical image a conversion stores.
 
@@ -7047,6 +7048,114 @@ exception, which was wrong: a converter's constructor raises a refusal
   value, and the CLI.
 - "Re-raise or chain the original exception." It keeps the traceback alive
   and with it the reader (issue #249).
+
+## D88. The planes of a TIFF are counted from what its header declares, not from its page headers
+
+**Status:** Implemented (2026-11-16). Extends D69, which stores a TIFF
+whose channels span pages with all of them; D69 is not rewritten.
+
+**Decision.** `OpticalTiffSource.probe` counts the planes of a TIFF's first
+series from the series' shape when one page header stands for all of them
+and the pixels follow it in one run. It used to count page headers, found
+one, and stored the first plane as a one-channel image with no warning.
+
+- **Which files.** An uncompressed TIFF written with tifffile's
+  `truncate=True`, as an ImageJ hyperstack or with a shape description;
+  what ImageJ itself writes for a stack above 4 GB; and a MetaMorph STK.
+  tifffile reads each as a series with its full shape, one page and a data
+  offset. The planes are counted by size, the series' against the page's,
+  so a trailing axis of length one does not hide them.
+- **What is stored.** What the same planes give when each has a page header
+  of its own (D69). A channel axis (`C`, `S`, and tifffile's `Q` and `I`)
+  becomes channels. Any other leading axis keeps its first plane, with the
+  warning a z stack gets.
+- **A file that holds fewer planes than it declares.** The planes held are
+  counted from the file's size. When a plane the read needs is missing, the
+  first page is stored alone, as before, and two warnings say so: what the
+  header declares against what the file holds, and how many planes are left
+  out. When every plane the read needs is held (a z stack cut in a later
+  slice), they are stored and the first warning is still given. The read
+  tests the same planes again, so a file cut after its header was read is
+  refused like any other cut file.
+- **A file tifffile reads as fewer pages than it had.** Two more signs in
+  the header are warned about, and the store keeps what tifffile sees. One
+  is an ImageJ description on a file of one page and one plane, whose
+  count of images the file has no room for. The other is the chain of page
+  headers: a pointer to the next header that leads to the end of the file
+  or past it, or a header that starts inside the file and runs past its
+  end. The chain is the only sign a multi-page TIFF without a description
+  keeps.
+- **Each warning states a fact about the header** and adds that the file
+  may have been cut short. A whole file can carry the same fact: one slice
+  saved with its stack's ImageJ description, or a last page header whose
+  pointer was never set to zero. A pointer into bytes that are no page
+  header (more than 4096 entries, tifffile's own limit) is not reported.
+- **A file that ends inside a page header** is skipped, as before, when
+  tifffile cannot read it. The warning now says so, where it gave
+  tifffile's "unpack requires a buffer of 12 bytes".
+
+**Why.** A whole file lost channels without a word. Measured on tifffile
+2026.8.23 and 2026.11.12, on three 40 x 32 planes, with the same result on
+both:
+
+| File | tifffile's first series | Stored before | Stored now |
+|---|---|---|---|
+| ImageJ, 3 channels, `truncate=True` | `CYX (3, 40, 32)`, 1 page | `(1, 40, 32)`, no warning | `(3, 40, 32)` |
+| Shape description, `truncate=True` | `QYX (3, 40, 32)`, 1 page | `(1, 40, 32)`, no warning | `(3, 40, 32)` |
+| ImageJ, 3 slices, `truncate=True` | `ZYX (3, 40, 32)`, 1 page | `(1, 40, 32)`, no warning | `(1, 40, 32)`, z stack warning |
+| ImageJ, 2 slices of 3 channels, `truncate=True` | `ZCYX (2, 3, 40, 32)`, 1 page | `(1, 40, 32)`, no warning | `(3, 40, 32)`, z stack warning |
+| Two RGB planes, `truncate=True` | `QYXS (2, 40, 32, 3)`, 1 page | `(3, 40, 32)`, no warning | `(6, 40, 32)` |
+| ImageJ or shape description, 3 pages, cut behind the pixels | `(3, 40, 32)`, 1 page | `(1, 40, 32)`, no warning | `(3, 40, 32)`, lost-header warning |
+| Shape description, 3 pages, cut inside plane 2 or 3 | `QYX (3, 40, 32)`, 1 page | `(1, 40, 32)`, no warning | `(1, 40, 32)`, two warnings |
+| ImageJ, 3 pages, cut inside plane 2 or 3 | `YX (40, 32)`, 1 page | `(1, 40, 32)`, no warning | `(1, 40, 32)`, ImageJ warning |
+| No description, 3 pages, cut between the end of plane 1 and the end of the pixels | `YX (40, 32)`, 1 page | `(1, 40, 32)`, no warning | `(1, 40, 32)`, lost-header warning |
+| No description, 3 pages, cut so that two page headers are whole | `IYX (2, 40, 32)`, 2 pages | `(2, 40, 32)`, no warning | `(2, 40, 32)`, lost-header warning |
+| ImageJ, 3 pages, cut 4 bytes into the next header | raises `struct.error` | skipped, "unpack requires a buffer" | skipped, "ends inside a page header" |
+| MetaMorph STK built by hand, 3 planes, no z distance | `IYX (3, 40, 32)`, 1 page | `(1, 40, 32)`, no warning | `(3, 40, 32)` |
+| The same with a z distance | `ZYX (3, 40, 32)`, 1 page | `(1, 40, 32)`, no warning | `(1, 40, 32)`, z stack warning |
+
+Cutting the undescribed file at each of the 332 lengths from the end of its
+pixels through its trailing page headers gave 288 that tifffile refuses
+("corrupted IFD structure", skipped as before), 22 that leave two whole
+headers, 20 that leave all three planes and 2 that leave one page. Two
+channels of three were stored before as well; they now come with the
+warning.
+
+tifffile writes the later page headers of an uncompressed file behind all
+the pixels, so a cut removes them first and leaves what `truncate=True`
+writes on purpose. tifffile's zarr adapter reads every plane of such a
+series: checked in whole reads, row bands and windows, for 8-bit, 16-bit
+and float samples, both byte orders, strips of 8 rows and RGB planes.
+
+**What changes in a store.** A file with one page header for several
+planes gets every channel, where it had the first: `(c, y, x)` grows along
+`c`. Nothing else in that image changes. A single-page file and a file
+with a page header for each plane do not change. 21 optical TIFFs of local
+timsTOF and rapifleX acquisitions and 36 TIFFs from installed libraries'
+test data gave the same probe, field for field, before and after, and the
+same pixels where the file is under 30 MB. None of them got a warning.
+
+**Not verified.** A stack above 4 GB written by ImageJ, and an STK written
+by MetaMorph: neither was at hand, and the STK above was built from
+tifffile's reading of the format. A shape description with axes whose
+three pages tifffile still lists after a cut is not touched here: its read
+is refused as a file cut short, and it now gets the lost-header warning
+first.
+
+**Alternatives.**
+
+- "Refuse a file that holds fewer planes than it declares." It matches
+  dropping an image whose pixels are cut. But tifffile reads an ImageJ file
+  and an undescribed file with the same damage as whole one-page TIFFs,
+  where only a warning is possible. One damage would have two outcomes, and
+  the first page is whole in each.
+- "Store the planes the file still holds." Two channels of three are no
+  more the picture than one, and tifffile offers no series of that shape.
+- "Read ImageJ's own counts when tifffile sets its header aside." It
+  repeats tifffile's ImageJ rules for a file that is damaged either way.
+- "Leave the chain of page headers unread." A multi-page TIFF without a
+  description, cut behind its first page, is then a whole one-page TIFF
+  with no sign that anything is gone.
 
 ## D89. A short strip, a predictor without compression and an undefined planar layout read the same on every tifffile
 

@@ -1288,7 +1288,9 @@ def main(
     Subcommands (each has its own --help): 'thyra metadata INPUT'
     writes a raw source's metadata document without converting it;
     'thyra validate PATH' validates MSI metadata against the schema;
-    'thyra export-metaspace PATH' writes the METASPACE submission JSON.
+    'thyra export-metaspace PATH' writes the METASPACE submission JSON;
+    'thyra ion-image STORE MZ' draws one ion image of a converted store;
+    'thyra report STORE' writes an HTML overview of one.
     """
     # Validate all parameters
     _validate_basic_params(pixel_size, dataset_id)
@@ -1475,18 +1477,21 @@ def cli() -> None:
 
     ``thyra INPUT OUTPUT`` converts exactly as it always has; the
     metadata subcommands (``thyra metadata``, ``thyra validate``,
-    ``thyra export-metaspace``) are picked off by their first argument
-    before click sees it.  Dispatch is hand-rolled rather than a
+    ``thyra export-metaspace``) and the two that draw a converted store
+    (``thyra ion-image``, ``thyra report``) are picked off by their first
+    argument before click sees it.  Dispatch is hand-rolled rather than a
     ``click.Group`` because a group cannot carry the two positional
     arguments the conversion interface is documented with.
     """
     import sys
 
     from thyra.metadata.schema.cli import METADATA_SUBCOMMANDS
+    from thyra.quicklook.cli import QUICKLOOK_SUBCOMMANDS
 
+    subcommands = {**METADATA_SUBCOMMANDS, **QUICKLOOK_SUBCOMMANDS}
     args = sys.argv[1:]
-    if args and args[0] in METADATA_SUBCOMMANDS:
-        command = METADATA_SUBCOMMANDS[args[0]]
+    if args and args[0] in subcommands:
+        command = subcommands[args[0]]
         command.main(args[1:], prog_name=f"thyra {args[0]}")
         return
     main()

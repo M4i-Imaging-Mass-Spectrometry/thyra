@@ -93,8 +93,8 @@ Bruker acquisitions and mzPeak archives can carry microscopy images. With
 
 Each image is stored as its file shows it. A file's orientation tag is
 applied, so a camera photo is stored upright. A palette or CMYK TIFF is
-stored as RGB, a 16-bit PNG keeps all 16 bits, and an OME-TIFF keeps every
-channel. The alignment image, and any resampled copy of it, is the
+stored as RGB, a 16-bit PNG keeps all 16 bits, and an OME-TIFF or ImageJ
+TIFF keeps every channel. The alignment image, and any resampled copy of it, is the
 exception to the orientation rule: it is stored as encoded, because the
 teaching points may refer to those pixels. See
 [D69](design-decisions.md#d69-an-optical-image-is-stored-as-its-file-shows-it-and-placed-only-where-the-store-aligns-it).

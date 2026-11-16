@@ -54,8 +54,9 @@ tifffile whatever it is named.
 
 **What is stored is what the file shows** (D69). A TIFF's colour model is
 applied (palette, inverted grey, CMYK and YCbCr become grey or RGB), a TIFF
-whose channels span pages is read as one image, a 16-bit colour PNG keeps
-its 16 bits, and an orientation tag is applied by
+whose channels span pages is read as one image, whether each plane has a
+page header of its own or all of them follow one (D88), a 16-bit colour PNG
+keeps its 16 bits, and an orientation tag is applied by
 :class:`OrientedOpticalSource`, band by band. The alignment image and its
 resampled copies are the exception to the last rule: they stay as encoded.
 
@@ -120,6 +121,7 @@ import itertools
 import logging
 import math
 import os
+import struct
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -649,6 +651,145 @@ class TiffColour:
         return np.clip(np.floor(np.stack([r, g, b]) + 0.5), 0, white)
 
 
+def _planes_declared(series_shape: Tuple[int, ...], page_shape: Tuple[int, ...]) -> int:
+    """Planes a series' shape declares, each the size of its first page.
+
+    Counted by size, not by matching the axes: tifffile keeps a trailing
+    axis of length one in some versions and drops it in others. ``0`` when
+    the series is not a whole number of pages.
+    """
+    page_size = int(np.prod(page_shape, dtype=np.int64))
+    series_size = int(np.prod(series_shape, dtype=np.int64))
+    if page_size <= 0 or series_size % page_size:
+        return 0
+    return series_size // page_size
+
+
+def _planes_held(tif: Any, series: Any, page: Any) -> Tuple[int, int]:
+    """``(planes, held)``: what the first series declares and the file holds.
+
+    Both are the series' pages, unless one header stands for every plane
+    and the pixels follow it in one run: what tifffile's ``truncate``
+    writes, ImageJ above 4 GB, and a file that lost its later headers.
+    tifffile lists one page there and still gives the series its full
+    shape, so the planes are counted from the shape, and from the file's
+    size how many of them it holds.
+    """
+    if series is None:
+        return 1, 1
+    pages = len(series.pages)
+    plane_bytes = int(page.nbytes)
+    if pages != 1 or series.dataoffset is None or plane_bytes <= 0:
+        return pages, pages
+    declared = _planes_declared(
+        tuple(int(n) for n in series.shape), tuple(int(n) for n in page.shape)
+    )
+    if declared <= 1:
+        return pages, pages
+    room = int(tif.filehandle.size) - int(series.dataoffset)
+    return declared, min(declared, max(0, room) // plane_bytes)
+
+
+#: tifffile's own ceiling on the entries of one page header: a count above
+#: it is not a header but whatever bytes a stray pointer landed on.
+_MOST_HEADER_ENTRIES = 4096
+
+
+def _lost_page_header(tif: Any, first: int) -> str:
+    """What the chain of page headers says the file does not hold, in words.
+
+    Every page header (IFD) of a TIFF ends in the offset of the next one,
+    or zero after the last. This follows that chain from ``first`` the way
+    tifffile does. Two ends are told: a pointer to the end of the file or
+    past it, and a header that starts inside the file and runs past its
+    end. tifffile stops at either without a word and reads the file as the
+    pages in front of it. Empty for a chain that ends in zero, and for a
+    pointer into bytes that are not a header at all, which says nothing
+    about what the file holds.
+    """
+    tiff = tif.tiff
+    handle = tif.filehandle
+    size = int(handle.size)
+    count_size, entry_size = int(tiff.tagnosize), int(tiff.tagsize)
+    pointer_size = int(tiff.offsetsize)
+    seen = set()
+    offset = int(first)
+    while offset not in seen:
+        seen.add(offset)
+        entries = _MOST_HEADER_ENTRIES + 1
+        if offset + count_size <= size:
+            handle.seek(offset)
+            (entries,) = struct.unpack(tiff.tagnoformat, handle.read(count_size))
+            if int(entries) > _MOST_HEADER_ENTRIES:
+                return ""
+        pointer = offset + count_size + int(entries) * entry_size
+        if pointer + pointer_size > size:
+            return (
+                f"its page header at byte {offset} runs past the end of "
+                f"the file, at byte {size}"
+            )
+        handle.seek(pointer)
+        (following,) = struct.unpack(tiff.offsetformat, handle.read(pointer_size))
+        offset = int(following)
+        if offset == 0:
+            return ""
+        if offset >= size:
+            return (
+                f"it points to a page header at byte {offset} and ends "
+                f"at byte {size}"
+            )
+    return ""
+
+
+def _imagej_images_missing(tif: Any, series: Any, page: Any) -> str:
+    """An ImageJ header whose images the file has no room for, in words.
+
+    tifffile checks the same thing and then reads the file without the
+    ImageJ header, as the one page it finds. Only that case is told: one
+    page, one plane, and a count of images whose pixels, in one run behind
+    the page's own, would pass the end of the file. A file tifffile reads
+    as an ImageJ series, or as any other series of several pages, holds
+    what it reads.
+    """
+    if not tif.is_imagej or series is None or series.kind == "imagej":
+        return ""
+    images = (tif.imagej_metadata or {}).get("images", 1)
+    if not isinstance(images, int) or images < 2 or len(series.pages) != 1:
+        return ""
+    plane = int(page.nbytes)
+    if not page.is_final or plane <= 0 or len(page.dataoffsets) == 0:
+        return ""
+    held = max(0, int(tif.filehandle.size) - int(page.dataoffsets[0])) // plane
+    if held >= images:
+        return ""
+    return (
+        f"its ImageJ header declares {images} images and the file holds "
+        f"the pixels of {held}"
+    )
+
+
+def _cut_short(tif: Any, series: Any, page: Any, planes: int, held: int) -> str:
+    """What in a TIFF's header says the file holds less than it declares.
+
+    Empty for a file that holds everything. Three signs are read, the most
+    exact first: a series whose planes follow one page header and run past
+    the end of the file; an ImageJ header whose images the file has no
+    room for; a chain of page headers that leaves the file. Each is a fact
+    about the header. See :attr:`OpticalTiffSource.cut_short`.
+    """
+    if held < planes:
+        return (
+            f"its header declares {planes} planes and the file holds "
+            f"the pixels of {held}"
+        )
+    try:
+        return _imagej_images_missing(tif, series, page) or _lost_page_header(
+            tif, int(page.offset)
+        )
+    except (struct.error, OSError, TypeError, ValueError):
+        return ""
+
+
 def _tiff_orientation(page: Any) -> Optional[int]:
     """The page's orientation tag, or ``None`` when it carries none."""
     tag = page.tags.get(ORIENTATION_TAG)
@@ -996,6 +1137,12 @@ class OpticalTiffSource:
     is kept as channels and ``0`` for each that keeps its first plane only;
     ``dropped_planes`` counts the pages left out that way, along
     ``dropped_axes``, so the caller can say so.
+
+    A plane is counted from the series' shape, not from its page headers:
+    a file may hold every plane behind one header (D88). ``cut_short``
+    says, in words for a warning, what in the header shows that the file
+    holds less than it declares; it is empty for a file whose header
+    declares nothing the file lacks.
     """
 
     path: Path
@@ -1009,6 +1156,7 @@ class OpticalTiffSource:
     series_samples_last: bool = False
     dropped_planes: int = 0
     dropped_axes: str = ""
+    cut_short: str = ""
 
     @classmethod
     def probe(cls, path: Union[str, Path]) -> "OpticalTiffSource":
@@ -1019,9 +1167,22 @@ class OpticalTiffSource:
                 a sample format tifffile cannot map to a dtype or a colour
                 model :class:`TiffColour` cannot read -- the cases the
                 whole-page decode used to reject, at the same point, before
-                anything is written.
+                anything is written. Also for a file that ends inside a
+                page header, which tifffile reports as a ``struct.error``
+                about a buffer.
         """
         path = Path(path)
+        try:
+            return cls._read_header(path)
+        except struct.error as error:
+            raise ValueError(
+                f"{path.name}: the file ends inside a page header "
+                f"({error}); it was probably cut short"
+            ) from error
+
+    @classmethod
+    def _read_header(cls, path: Path) -> "OpticalTiffSource":
+        """:meth:`probe`, with tifffile's own errors as they come."""
         with tifffile.TiffFile(path) as tif:
             page: Any = tif.pages[0]
             page_shape = tuple(int(n) for n in page.shape)
@@ -1044,8 +1205,9 @@ class OpticalTiffSource:
             colour = TiffColour.of(page, path.name)
             orientation = _tiff_orientation(page)
             series = tif.series[0] if tif.series else None
-            pages = len(series.pages) if series is not None else 1
-            spread = series is not None and pages > 1
+            planes, held = _planes_held(tif, series, page)
+            cut_short = _cut_short(tif, series, page, planes, held)
+            spread = series is not None and planes > 1
             series_axes = str(series.axes) if spread and series is not None else ""
             series_shape = (
                 tuple(int(n) for n in series.shape)
@@ -1074,22 +1236,43 @@ class OpticalTiffSource:
             strip_rows=max(1, min(strip_rows, shape[1])),
             colour=colour,
             orientation=orientation,
+            cut_short=cut_short,
         )
-        if spread:
-            return source._with_series(series_axes, series_shape, pages)
-        return source
+        if not spread:
+            return source
+        stacked = source._with_series(series_axes, series_shape, planes)
+        if stacked._last_plane_read(series_shape) >= held:
+            # A plane this would read is not in the file: the first page is
+            # read on its own, as it always was, and the rest are counted.
+            return replace(source, dropped_planes=planes - 1)
+        return stacked
+
+    def _last_plane_read(self, series_shape: Tuple[int, ...]) -> int:
+        """The last plane a read of this source touches, in file order.
+
+        Planes follow one another in the order of the series' leading
+        axes, the last of them changing fastest. A source that reads its
+        first page alone touches plane 0.
+        """
+        if self.page_axes != "series":
+            return 0
+        last = 0
+        for kept, size in zip(self.series_index, series_shape):
+            last = last * int(size) + (int(size) - 1 if kept is None else kept)
+        return last
 
     def _with_series(
-        self, axes: str, shape: Tuple[int, ...], pages: int
+        self, axes: str, shape: Tuple[int, ...], planes: int
     ) -> "OpticalTiffSource":
-        """This source over the whole first series, when its pages are channels.
+        """This source over the whole first series, when its planes are channels.
 
-        Each page must be one plane of the same picture: grey or RGB, laid
+        Each plane must be a page of the same picture: grey or RGB, laid
         out ``YX`` or ``YXS``. The leading axes in :data:`_CHANNEL_AXES`
-        become channels, page after page; any other leading axis keeps its
-        first plane. When only one plane is kept, or the pages cannot be
-        stacked, the first page is read on its own and the rest of the
-        series' ``pages`` are counted as left out.
+        become channels, plane after plane; any other leading axis keeps
+        its first plane. When only one plane is kept, or the planes cannot
+        be stacked, the first page is read on its own and the rest of the
+        series' ``planes`` are counted as left out. A plane has a page
+        header of its own, or follows the first one's pixels (D88).
         """
         dims = [int(n) for n in shape]
         position = axes.find("YX")
@@ -1101,7 +1284,7 @@ class OpticalTiffSource:
             or trailing not in ("YX", "YXS")
             or tuple(spatial) != tuple(self.shape[1:])
         ):
-            return replace(self, dropped_planes=pages - 1, dropped_axes=axes)
+            return replace(self, dropped_planes=planes - 1, dropped_axes=axes)
         leading = axes[:position]
         sizes = dims[:position]
         index = tuple(None if a in _CHANNEL_AXES else 0 for a in leading)
@@ -1181,7 +1364,9 @@ class OpticalTiffSource:
         Every page the read decodes is tested: the first page, or for a
         series the pages kept as channels. A plane the series leaves out
         (all but the first of a z stack) is not read, so it is not tested;
-        every page is, should the series not hold one page per plane.
+        every page is, should the series not hold one page per plane. A
+        series with one page header for all its planes (D88) is numbered
+        by plane.
 
         tifffile reads an uncompressed series whose pages follow one
         another as a single run: page ``n`` is page 0's strips, ``n`` pages
@@ -1207,8 +1392,9 @@ class OpticalTiffSource:
         # The series is put together first: tifffile groups pages by what
         # their headers say, the predictor included, and must see them alike.
         series = tif.series[0]
-        numbers = np.arange(len(series))
         leading = tuple(int(n) for n in series.shape[: len(self.series_index)])
+        one_header = len(series) == 1 and series.dataoffset is not None
+        numbers = np.arange(int(np.prod(leading)) if one_header else len(series))
         if int(np.prod(leading)) == numbers.size:
             kept = tuple(slice(None) if i is None else i for i in self.series_index)
             numbers = numbers.reshape(leading)[kept].ravel()
@@ -2673,6 +2859,11 @@ class OpticalImages:
         # per-image guard in add_images turns that into the same
         # "skip with a warning" the whole-page decode used to give.
         probed = probe_optical_source(image_path)
+        if isinstance(probed, OpticalTiffSource) and probed.cut_short:
+            logger.warning(
+                f"  {source_file}: {probed.cut_short}; the file may have "
+                "been cut short, and what it lost is not in the store"
+            )
         if isinstance(probed, OpticalTiffSource) and probed.dropped_planes:
             logger.warning(
                 f"  {source_file}: only the first plane along "

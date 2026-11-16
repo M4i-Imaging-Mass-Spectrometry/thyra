@@ -2,6 +2,13 @@
 
 <!-- version list -->
 
+## [4.7.1](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/compare/v4.7.0...v4.7.1) (2026-11-16)
+
+
+### Bug Fixes
+
+* **optical:** leave out a TIFF cut short on every tifffile ([#565](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/565)) ([d443617](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/d4436174adf0f7379adedbf75756e704fcc3b787))
+
 ## [4.7.0](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/compare/v4.6.3...v4.7.0) (2026-11-12)
 
 
