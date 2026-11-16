@@ -368,7 +368,7 @@ class TestBuilder:
         )
 
         assert meta.ms_analysis.fragmentation is not None
-        assert meta.schema_version == MSI_METADATA_SCHEMA_VERSION == "0.14.0"
+        assert meta.schema_version == MSI_METADATA_SCHEMA_VERSION == "0.15.0"
 
     def test_the_demultiplexed_sibling_is_named_here_too(self):
         """Both sibling kinds must be discoverable from the versioned block.

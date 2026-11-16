@@ -79,7 +79,8 @@ come first, then the mass spectrometry ones.
 
 **TIC (total ion current)**
 : The sum of all intensities in one spectrum. A TIC image shows it for every
-  pixel, and gives a quick overview of the sample.
+  pixel, and gives a quick overview of the sample. The table holds it too,
+  in the `tic` column.
 
 **Ion image**
 : An image of the intensity of one m/z value, or a narrow range around it,

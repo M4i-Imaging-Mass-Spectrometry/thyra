@@ -34,7 +34,7 @@ import spatialdata as sd
 sdata = sd.read_zarr("output.zarr")
 block = sdata.tables["msi_dataset_z0"].uns["msi_metadata"]
 
-print(block["schema_version"])                       # "0.14.0"
+print(block["schema_version"])                       # "0.15.0"
 print(block["ms_analysis"]["pixel_size_um"])         # {"x": 20.0, "y": 20.0}
 print(block["ms_analysis"]["ionisation_source"])     # "MALDI"
 print(block["ms_analysis"]["ionisation_source_term"])
@@ -528,16 +528,25 @@ table of a store, and the `ccs` contract on every table that has one.
 
 ## obs column conventions
 
-One `.obs` name is fixed by the spec as well. The pixel columns beside it
-(`x`, `y`, `spatial_x`, `region_number` and the rest) are described in
+Six `.obs` names are fixed by the spec as well. The pixel columns beside
+them (`x`, `y`, `spatial_x`, `region_number` and the rest) are described in
 [Output Format](output-format.md#pixel-coordinates).
 
 | Column | Written by | Meaning |
 |--------|-----------|---------|
 | `acquisition_order` | the converter, when the reader knows the order; absent otherwise | `int64`, grows with acquisition time and is unique within a table. The source's own spectrum number where it has one (Bruker `Frames.Id`, solariX `Spectra.Id`), else the spectrum's 0-based position in the order the source lists them. A row summed from repeated measurements takes the earliest. Sort by it; it is not a row index. See [Acquisition order](output-format.md#acquisition-order) |
+| `tic` | the converter, on the summed MSI table | `float64`, the sum of the row. The same number as the TIC image at the row's position |
+| `sum_sq` | the converter, on the summed MSI table | `float64`, the sum of the squares of the row's values |
+| `nnz` | the converter, on the summed MSI table | `uint32`, how many stored values of the row are not 0 |
+| `max_intensity` | the converter, on the summed MSI table | `float64`, the largest value of the row over all bins; 0 for a row with no values |
+| `median_all` | the converter, on the summed MSI table | `float64`, the median over all m/z bins of the row, a bin with no stored value counting as 0; the mean of the two middle values for an even bin count |
 
-A missing column means the order is unknown. The name must never be reused
-with a different meaning.
+A missing `acquisition_order` means the order is unknown. The five
+statistics describe the row as `X` stores it and come with
+`uns["spectrum_statistics"]`, a name that is reserved too; see
+[Spectrum statistics](output-format.md#spectrum-statistics). The mobility
+and MS/MS tables do not carry them, and neither does a store written before
+0.15.0. None of these names may be reused with a different meaning.
 
 ---
 
@@ -577,13 +586,16 @@ is unchanged), 0.11.0 (`provenance.mass_axis` added), 0.12.0
 (`sample.sample_id`, `sample.sample_name` and
 `ms_analysis.spectrum_representation` added), 0.13.0 (the `var` column
 `ccs` reserved; the document is unchanged), 0.14.0
-(the coordinate system `"acquisition"` reserved; the document is unchanged).
+(the coordinate system `"acquisition"` reserved; the document is unchanged),
+0.15.0 (the `obs` columns `tic`, `sum_sq`, `nnz`, `max_intensity` and
+`median_all` and the `uns` key `spectrum_statistics` reserved; the document
+is unchanged).
 
 The JSON Schema rendering is published at a fixed, versioned address,
 which is also its `$id`:
 
 ```
-https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.14.0/msi_metadata.schema.json
+https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.15.0/msi_metadata.schema.json
 ```
 
 Every version from 0.6.0 on has its own folder under that path, and a
@@ -593,7 +605,7 @@ program that writes the document without Thyra validates against that
 address; see [Writing the Metadata Document](writing-the-metadata-document.md).
 
 The same file is committed at
-`thyra/metadata/schema/msi_metadata_schema_v0_14.json` and ships in the
+`thyra/metadata/schema/msi_metadata_schema_v0_15.json` and ships in the
 wheel, so a Python consumer can validate documents offline without
 importing Thyra:
 
@@ -603,7 +615,7 @@ import json
 
 schema = json.loads(
     resources.files("thyra.metadata.schema")
-    .joinpath("msi_metadata_schema_v0_14.json")
+    .joinpath("msi_metadata_schema_v0_15.json")
     .read_text()
 )
 ```

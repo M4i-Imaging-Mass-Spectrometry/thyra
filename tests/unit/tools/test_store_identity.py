@@ -98,6 +98,10 @@ def _store(path: Path, **change) -> Path:
     ):
         node = uns.create_array(name, shape=(), dtype=str)
         node[...] = text
+    # The statistics block names the version that computed it (D90).
+    stats = uns.create_group("spectrum_statistics")
+    node = stats.create_array("computed_by", shape=(), dtype=str)
+    node[...] = f"thyra/{values['version']}"
     vendor = uns.create_group("format_specific")
     for key in sorted(LOCATING_KEYS):
         node = vendor.create_array(key, shape=(), dtype=str)
@@ -184,6 +188,12 @@ class TestWhatIsMasked:
         """F112: the version sits in root attrs, in ``produced_by``, in the
         ``thyra_version`` arrays and in the processing list's software."""
         assert _differences(tmp_path, version="9.9.9") == 0
+
+    def test_the_statistics_block_version_is_masked(self, tmp_path):
+        """D90: ``computed_by`` carries the version like ``produced_by``."""
+        assert "computed_by" in si.DEFAULT_MASK_KEYS
+        unmasked = si.DEFAULT_MASK_KEYS - {"computed_by"}
+        assert _differences(tmp_path / "1", mask_keys=unmasked, version="9.9.9") == 1
 
     def test_without_the_masks_it_is_one(self, tmp_path):
         assert _differences(tmp_path, mask_keys=set(), version="9.9.9") > 0

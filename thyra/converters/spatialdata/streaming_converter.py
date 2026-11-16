@@ -9,8 +9,10 @@ plane or one for the volume (``_TableUnit``, ``_plan_tables``,
 (``_process_spectrum``); the refusal of a conversion nothing survived; the
 per-region averages; and the finalize step that turns each unit's memmaps
 into an AnnData, parses it through spatialdata's ``TableModel`` and gives
-it its ``obs``, its shapes and its TIC image (``_finalize_table``,
-``_table_obs``, ``_tic_image``).
+it its ``obs``, its per-spectrum statistics (``tic``, ``sum_sq``, ``nnz``,
+``max_intensity``, ``median_all`` and ``uns["spectrum_statistics"]``, D90),
+its shapes and its TIC image (``_finalize_table``, ``_table_obs``,
+``_tic_image``).
 
 - Pass 1 resamples every spectrum onto the common mass axis, counts the
   entries each m/z column will hold and records which grid positions
@@ -54,10 +56,15 @@ from tqdm import tqdm
 
 from ...core.conversion_state import ConversionState
 from ...errors import ConversionRefused
-from ...metadata.schema import MSI_OBS_ACQUISITION_ORDER_COLUMN
+from ...metadata.schema import (
+    MSI_OBS_ACQUISITION_ORDER_COLUMN,
+    MSI_OBS_SPECTRUM_STATISTICS_COLUMNS,
+    MSI_SPECTRUM_STATISTICS_UNS_KEY,
+)
 from .acquisition_frame import element_transformations
 from .base_spatialdata_converter import BaseSpatialDataConverter
 from .csc_assembly import CscAssembly, index_dtype
+from .spectrum_statistics import RowStatistics, statistics_block
 
 logger = logging.getLogger(__name__)
 
@@ -81,23 +88,34 @@ def _obs_frame(adata: AnnData) -> pd.DataFrame:
     return obs
 
 
-def _column_means(matrix: Any, n_rows: int) -> NDArray[np.float64]:
-    """The mean of each column of ``matrix`` over its ``n_rows`` rows.
+def _column_sums_and_means(
+    matrix: Any, n_rows: int
+) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """The sum and the mean of each column of ``matrix`` over ``n_rows`` rows.
 
     Summed, then divided, so every store with finite column sums keeps the
     values it always had. A column whose sum overflows -- finite values
     near the float64 maximum -- is taken again dividing first, so a
-    matrix of finite values never gets an infinite mean (issue #516).
+    matrix of finite values never gets an infinite mean (issue #516). The
+    sums are returned as summed: such a column keeps its non-finite sum,
+    and its mean keeps the finite value. The matrix is summed once, for
+    both the mean and ``uns["spectrum_statistics"]`` (D90).
     """
     rows = max(n_rows, 1)
-    means = np.asarray(matrix.sum(axis=0), dtype=np.float64).ravel() / rows
+    sums = np.asarray(matrix.sum(axis=0), dtype=np.float64).ravel()
+    means = sums / rows
     overflowed = np.flatnonzero(~np.isfinite(means))
     if overflowed.size:
         columns = matrix[:, overflowed]
         means[overflowed] = np.asarray(
             (columns / rows).sum(axis=0), dtype=np.float64
         ).ravel()
-    return means
+    return sums, means
+
+
+def _column_means(matrix: Any, n_rows: int) -> NDArray[np.float64]:
+    """The mean of each column of ``matrix`` over its ``n_rows`` rows."""
+    return _column_sums_and_means(matrix, n_rows)[1]
 
 
 def _cell_centred_scale(pitches: List[float], axes: Tuple[str, ...]) -> Any:
@@ -120,7 +138,9 @@ class _TableUnit:
     it, each position's acquisition order -- and, once pass 1 is done,
     the row layout: ``kept_grid`` is the grid index of each table row and
     ``row_of_grid`` the table row of each grid position (-1 when dropped
-    as empty).
+    as empty). Pass 2 also hands each row it scatters to ``statistics``
+    (D90), except the rows of repeated positions, which are taken from the
+    finished matrix.
 
     Args:
         key: The table's element key (``{id}_z{z}`` or ``{id}``).
@@ -178,6 +198,9 @@ class _TableUnit:
         self.kept_grid: Optional[NDArray[np.int64]] = None
         self.row_of_grid: Optional[NDArray[np.int64]] = None
         self.n_rows = 0
+        self.n_cols = int(n_cols)
+        #: The per-row statistics, created once the row count is known.
+        self.statistics: Optional[RowStatistics] = None
 
     def count(
         self,
@@ -235,6 +258,7 @@ class _TableUnit:
         self.n_rows = int(self.kept_grid.size)
         self.assembly.n_rows = self.n_rows
         self.assembly.finish_counting()
+        self.statistics = RowStatistics(self.n_rows, self.n_cols)
         n_dropped = self.n_grid - self.n_rows
         if n_dropped:
             # A measured spectrum left empty -- every peak below the
@@ -274,6 +298,37 @@ class _TableUnit:
         if self.row_of_grid is None:
             raise RuntimeError(f"{self.key}: the row layout is not decided yet")
         return int(self.row_of_grid[grid])
+
+    def record_statistics(
+        self, grid: int, row: int, values: NDArray[np.float64]
+    ) -> None:
+        """Pass 2: take the statistics of the row about to be scattered.
+
+        A repeated position is skipped: its stored row is the sum of
+        several spectra and exists only once the assembly merged them, so
+        :meth:`finish_statistics` takes it from the finished matrix.
+        """
+        if self.statistics is None or self.repeats[grid]:
+            return
+        self.statistics.record(row, values)
+
+    def finish_statistics(self, matrix: Any) -> None:
+        """Take the rows of the repeated positions from the finished matrix."""
+        if self.statistics is None or self.row_of_grid is None:
+            return
+        rows = self.row_of_grid[np.flatnonzero(self.repeats)]
+        self.statistics.recompute_rows(matrix, np.sort(rows[rows >= 0]))
+
+    def statistics_columns(self) -> Dict[str, NDArray[Any]]:
+        """The five statistics columns of the table's rows.
+
+        ``tic`` is read off the TIC image's own numbers, pass 1's totals,
+        so a row and its pixel in the image are the same float.
+        """
+        if self.statistics is None or self.kept_grid is None:
+            raise RuntimeError(f"{self.key}: the row layout is not decided yet")
+        tic = self.tic.reshape(-1)[self.kept_grid].astype(np.float64)
+        return self.statistics.columns(tic)
 
     def check_against_pass_one(
         self,
@@ -1198,6 +1253,9 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
                     passes.scatter(frame, row if row >= 0 else None)
                 if row >= 0 and unit is not None:
                     unit.assembly.scatter(row, mz_indices, values)
+                    # The row's final values are in hand here, so its
+                    # statistics need no further pass over the data (D90).
+                    unit.record_statistics(grid, row, values)
 
                 pbar.update(1)
 
@@ -1238,6 +1296,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # memmaps without copying them.
         matrix = unit.assembly.matrix()
         logger.info("%s: %s non-zero entries (CSC)", unit.key, f"{matrix.nnz:,}")
+        unit.finish_statistics(matrix)
 
         adata = AnnData(
             X=matrix,
@@ -1254,7 +1313,11 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         # accumulated alongside it so it *is* ``X.mean(axis=0)``, which is
         # what docs/output-format.md promises and what Ousia reads, rather
         # than a second number that has to be kept in step with it.
-        adata.uns["average_spectrum"] = _column_means(matrix, unit.n_rows)
+        sums, means = _column_sums_and_means(matrix, unit.n_rows)
+        adata.uns["average_spectrum"] = means
+        # The sums the means were divided from, beside the per-row
+        # statistics in obs: together they describe the table as stored.
+        adata.uns[MSI_SPECTRUM_STATISTICS_UNS_KEY] = statistics_block(sums)
         # The per-region means stay dataset-wide, because a region has no
         # z: see _finish_region_averages. On a multi-plane store they
         # therefore describe a wider population than the key above, which
@@ -1274,13 +1337,20 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
         self.siblings.plan(sibling_ctx, unit.key)
         self.siblings.prepare_scans(
             sibling_ctx,
-            _obs_frame(adata),
+            self._sibling_obs(adata),
             z_value=unit.plane,
             has_row=lambda coords: self._has_row(state.units, coords),
         )
 
         # Add MSI metadata to .uns
         self._add_metadata_to_uns(adata)
+
+        # Per-spectrum statistics: after the position columns and
+        # ``acquisition_order``, before ``instance_key``. They describe the
+        # summed table's rows, so the siblings are handed the frame without
+        # them (see _sibling_obs).
+        for name, column in unit.statistics_columns().items():
+            adata.obs[name] = column
 
         # Make sure instance_key is a string column
         adata.obs["instance_key"] = adata.obs.index.astype(str)
@@ -1299,7 +1369,7 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             state.tables,
             unit.key,
             unit.region_key,
-            _obs_frame(adata),
+            self._sibling_obs(adata),
             z_value=unit.plane,
             # A position measured twice is one summed row here; the
             # siblings read the same spectra and must sum them as well,
@@ -1307,6 +1377,19 @@ class StreamingSpatialDataConverter(BaseSpatialDataConverter):
             merge_duplicates=bool(unit.repeats.any()),
         )
         state.images[f"{unit.key}_tic"] = self._tic_image(unit)
+
+    @staticmethod
+    def _sibling_obs(adata: AnnData) -> pd.DataFrame:
+        """The summed table's ``obs`` without the statistics columns.
+
+        A sibling table copies the obs frame it is handed, but its rows
+        are not the summed table's rows: a mobility or MS/MS row holds
+        other values, and a statistic of the summed row would describe the
+        wrong thing there (D90).
+        """
+        return _obs_frame(adata).drop(
+            columns=list(MSI_OBS_SPECTRUM_STATISTICS_COLUMNS), errors="ignore"
+        )
 
     def _table_obs(self, unit: _TableUnit) -> pd.DataFrame:
         """``obs`` for the kept rows of one table.

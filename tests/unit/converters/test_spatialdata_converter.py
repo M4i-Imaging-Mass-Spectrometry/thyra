@@ -285,6 +285,11 @@ class TestSpatialDataConverter:
                 "spatial_x",
                 "spatial_y",
                 "region_number",
+                "tic",
+                "sum_sq",
+                "nnz",
+                "max_intensity",
+                "median_all",
                 "instance_key",
             ]
             assert data_structures.images["test_dataset_z0_tic"].shape == (1, 3, 3)
@@ -313,6 +318,11 @@ class TestSpatialDataConverter:
                 "spatial_y",
                 "spatial_z",
                 "region_number",
+                "tic",
+                "sum_sq",
+                "nnz",
+                "max_intensity",
+                "median_all",
                 "instance_key",
             ]
             assert data_structures.images["msi_dataset_tic"].shape == (1, 2, 3, 3)

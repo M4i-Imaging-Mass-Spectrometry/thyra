@@ -257,3 +257,28 @@ class TestReservedColumnNames:
             "annotation_source",
             "fdr",
         }
+
+
+class TestReservedObsNames:
+    """The obs side of the reserved names: the statistics columns (D90)."""
+
+    def test_spec_reserves_the_spectrum_statistics_columns(self):
+        from thyra.metadata.schema import (
+            MSI_OBS_ACQUISITION_ORDER_COLUMN,
+            MSI_OBS_SPECTRUM_STATISTICS_COLUMNS,
+            MSI_SPECTRUM_STATISTICS_UNS_KEY,
+            MSI_SPECTRUM_STATISTICS_VERSION,
+        )
+
+        assert MSI_OBS_SPECTRUM_STATISTICS_COLUMNS == (
+            "tic",
+            "sum_sq",
+            "nnz",
+            "max_intensity",
+            "median_all",
+        )
+        assert MSI_OBS_ACQUISITION_ORDER_COLUMN not in (
+            MSI_OBS_SPECTRUM_STATISTICS_COLUMNS
+        )
+        assert MSI_SPECTRUM_STATISTICS_UNS_KEY == "spectrum_statistics"
+        assert MSI_SPECTRUM_STATISTICS_VERSION == 1
