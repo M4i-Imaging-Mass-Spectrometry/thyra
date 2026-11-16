@@ -866,6 +866,501 @@ def test_a_z_stack_keeps_its_first_plane_with_a_warning(tmp_path: Path, thyra_lo
     )
 
 
+# ---- every plane behind one page header (D88) ----------------------------
+#
+# tifffile's ``truncate=True`` writes one page header and every plane behind
+# it, and so does ImageJ above 4 GB. A file that lost its later headers looks
+# the same: tifffile writes them behind the pixels, so a cut removes them
+# first. Each test checks what tifffile sees in its file before it asserts.
+
+
+def _planes(shape, seed: int, dtype=np.uint8) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    return rng.integers(1, 250, size=shape).astype(dtype)
+
+
+def _seen_by_tifffile(path: Path):
+    """``(kind, axes, shape, page headers)`` of the first series."""
+    with tifffile.TiffFile(str(path)) as tif:
+        series = tif.series[0]
+        return series.kind, series.axes, tuple(series.shape), len(series.pages)
+
+
+def _cut_after_planes(path: Path, planes: float, extra: int = 0) -> Path:
+    """Cut ``path`` so it holds ``planes`` planes of pixels, plus ``extra`` bytes."""
+    with tifffile.TiffFile(str(path)) as tif:
+        page = tif.pages[0]
+        first, plane = int(page.dataoffsets[0]), int(page.nbytes)
+    path.write_bytes(path.read_bytes()[: first + int(planes * plane) + extra])
+    return path
+
+
+def _warnings_of(records) -> List[str]:
+    return [r.getMessage() for r in records if r.levelno >= logging.WARNING]
+
+
+@pytest.mark.parametrize(
+    "shape, dtype, options",
+    [
+        ((3, 9, 11), np.uint8, {"imagej": True}),
+        ((3, 9, 11), np.uint8, {"photometric": "minisblack"}),
+        ((3, 9, 11), np.uint16, {"photometric": "minisblack"}),
+        (
+            (3, 9, 11),
+            np.uint8,
+            {"photometric": "minisblack", "metadata": {"axes": "CYX"}},
+        ),
+        ((3, 9, 11), np.float32, {"imagej": True, "byteorder": ">"}),
+        ((3, 9, 11), np.uint8, {"photometric": "minisblack", "bigtiff": True}),
+        ((2, 9, 11, 3), np.uint8, {"photometric": "rgb"}),
+    ],
+    ids=["imagej", "shaped", "shaped16", "shaped-axes", "imagej-be", "big", "rgb"],
+)
+def test_planes_behind_one_page_header_are_stored_like_planes_with_their_own(
+    tmp_path: Path, thyra_logs, shape, dtype, options
+):
+    planes = _planes(shape, 21, dtype)
+    one = tmp_path / "one_header.tif"
+    each = tmp_path / "each_header.tif"
+    tifffile.imwrite(str(one), planes, truncate=True, **options)
+    tifffile.imwrite(str(each), planes, **options)
+    assert _seen_by_tifffile(one)[2:] == (shape, 1)
+    assert _seen_by_tifffile(each)[2:] == (shape, shape[0])
+
+    expected = planes if planes.ndim == 3 else np.moveaxis(planes, -1, 1)
+    expected = expected.reshape((-1,) + expected.shape[-2:])
+    probed = probe_optical_source(one)
+    reference = probe_optical_source(each)
+    assert probed.shape == reference.shape == expected.shape
+    assert (probed.page_axes, probed.series_index, probed.dropped_planes) == (
+        reference.page_axes,
+        reference.series_index,
+        reference.dropped_planes,
+    )
+    assert probed.cut_short == reference.cut_short == ""
+
+    with thyra_logs("thyra.converters", logging.WARNING) as records:
+        optical, store, declared = _stored(tmp_path, one)
+    (name,) = declared
+    np.testing.assert_array_equal(_level0(store, name), expected)
+    assert _warnings_of(records) == []
+
+
+def test_planes_behind_one_page_header_are_read_in_bands_and_windows(tmp_path: Path):
+    planes = _planes((3, 40, 17), 22, np.uint16)
+    path = tmp_path / "strips.tif"
+    tifffile.imwrite(
+        str(path), planes, photometric="minisblack", truncate=True, rowsperstrip=8
+    )
+    assert _seen_by_tifffile(path)[2:] == ((3, 40, 17), 1)
+
+    source = OpticalTiffSource.probe(path)
+    assert source.strip_rows == 8
+    bands = list(source.bands(16))
+    assert [start for start, _ in bands] == [0, 16, 32]
+    np.testing.assert_array_equal(np.concatenate([b for _, b in bands], axis=1), planes)
+    (window,) = list(source.bands(40, window=(5, 29, 3, 12)))
+    np.testing.assert_array_equal(window[1], planes[:, 5:29, 3:12])
+
+
+def test_a_z_stack_behind_one_page_header_keeps_its_first_plane_with_a_warning(
+    tmp_path: Path, thyra_logs
+):
+    zyx = _planes((3, 7, 9), 23)
+    path = tmp_path / "stack.tif"
+    tifffile.imwrite(
+        str(path), zyx, imagej=True, truncate=True, metadata={"axes": "ZYX"}
+    )
+    assert _seen_by_tifffile(path) == ("imagej", "ZYX", (3, 7, 9), 1)
+
+    with thyra_logs("thyra.converters", logging.WARNING) as records:
+        optical, store, declared = _stored(tmp_path, path)
+
+    (name,) = declared
+    np.testing.assert_array_equal(_level0(store, name), zyx[:1])
+    assert any(
+        "only the first plane along Z is kept; 2 page(s) are left out" in message
+        for message in _warnings_of(records)
+    )
+
+
+def test_channels_of_the_first_slice_are_kept_behind_one_page_header(tmp_path: Path):
+    zcyx = _planes((2, 3, 7, 9), 24)
+    path = tmp_path / "hyperstack.tif"
+    tifffile.imwrite(
+        str(path), zcyx, imagej=True, truncate=True, metadata={"axes": "ZCYX"}
+    )
+    assert _seen_by_tifffile(path) == ("imagej", "ZCYX", (2, 3, 7, 9), 1)
+
+    probed = probe_optical_source(path)
+    assert (probed.shape, probed.dropped_planes, probed.dropped_axes) == (
+        (3, 7, 9),
+        3,
+        "Z",
+    )
+    optical, store, declared = _stored(tmp_path, path)
+    (name,) = declared
+    np.testing.assert_array_equal(_level0(store, name), zcyx[0])
+
+
+@pytest.mark.parametrize("options", [{"imagej": True}, {"photometric": "minisblack"}])
+def test_a_file_cut_behind_its_pixels_keeps_every_plane_and_says_so(
+    tmp_path: Path, thyra_logs, options
+):
+    """The later page headers are gone and every pixel is still there."""
+    planes = _planes((3, 9, 11), 25)
+    path = tmp_path / "headers_lost.tif"
+    tifffile.imwrite(str(path), planes, **options)
+    assert _seen_by_tifffile(path)[2:] == ((3, 9, 11), 3)
+    _cut_after_planes(path, 3)
+    assert _seen_by_tifffile(path)[2:] == ((3, 9, 11), 1)
+
+    with thyra_logs("thyra.converters", logging.WARNING) as records:
+        optical, store, declared = _stored(tmp_path, path)
+
+    (name,) = declared
+    np.testing.assert_array_equal(_level0(store, name), planes)
+    (warning,) = _warnings_of(records)
+    assert "headers_lost.tif: it points to a page header at byte" in warning
+    assert "may have been cut short" in warning
+
+
+def test_a_file_cut_inside_a_plane_it_declares_keeps_the_first_with_warnings(
+    tmp_path: Path, thyra_logs
+):
+    planes = _planes((3, 9, 11), 26)
+    path = tmp_path / "cut.tif"
+    tifffile.imwrite(str(path), planes, photometric="minisblack")
+    _cut_after_planes(path, 2.5)
+    # tifffile still declares three planes, behind the one header it finds.
+    assert _seen_by_tifffile(path) == ("shaped", "QYX", (3, 9, 11), 1)
+
+    probed = probe_optical_source(path)
+    assert (probed.shape, probed.page_axes, probed.dropped_planes) == (
+        (1, 9, 11),
+        "YX",
+        2,
+    )
+    with thyra_logs("thyra.converters", logging.WARNING) as records:
+        optical, store, declared = _stored(tmp_path, path)
+
+    (name,) = declared
+    np.testing.assert_array_equal(_level0(store, name), planes[:1])
+    messages = _warnings_of(records)
+    assert any(
+        "cut.tif: its header declares 3 planes and the file holds the pixels of 2"
+        in message
+        for message in messages
+    )
+    assert any("2 page(s) are left out" in message for message in messages)
+
+
+@pytest.mark.parametrize(
+    "axes, shape, held, kept, dropped",
+    [
+        # Slices outermost: the first slice's channels are the first planes.
+        ("ZCYX", (2, 3, 7, 9), 4, (slice(0, 1), slice(None)), 3),
+        # Channels outermost: the last channel's first slice is plane 4.
+        ("CZYX", (3, 2, 7, 9), 5, (slice(None), slice(0, 1)), 3),
+        ("CZYX", (3, 2, 7, 9), 4, None, 5),
+    ],
+    ids=["first-planes-held", "last-plane-held", "last-plane-lost"],
+)
+def test_a_cut_file_keeps_its_channels_when_the_planes_read_are_held(
+    tmp_path: Path, axes, shape, held, kept, dropped
+):
+    planes = _planes(shape, 27)
+    path = tmp_path / "cut_stack.tif"
+    tifffile.imwrite(
+        str(path),
+        planes,
+        photometric="minisblack",
+        truncate=True,
+        metadata={"axes": axes},
+    )
+    _cut_after_planes(path, held)
+    assert _seen_by_tifffile(path) == ("shaped", axes, shape, 1)
+
+    probed = probe_optical_source(path)
+    assert f"declares 6 planes and the file holds the pixels of {held}" in (
+        probed.cut_short
+    )
+    assert probed.dropped_planes == dropped
+    read = np.concatenate([band for _, band in probed.bands(4)], axis=1)
+    expected = planes[0, :1] if kept is None else planes[kept].reshape(-1, 7, 9)
+    np.testing.assert_array_equal(read, expected)
+
+
+def test_an_imagej_file_cut_inside_its_pixels_keeps_the_first_page_and_says_so(
+    tmp_path: Path, thyra_logs
+):
+    planes = _planes((3, 9, 11), 28)
+    path = tmp_path / "hyperstack_cut.tif"
+    tifffile.imwrite(str(path), planes, imagej=True)
+    _cut_after_planes(path, 2.5)
+    # tifffile sets the ImageJ header aside: a whole one-page TIFF is left.
+    assert _seen_by_tifffile(path) == ("generic", "YX", (9, 11), 1)
+
+    with thyra_logs("thyra.converters", logging.WARNING) as records:
+        optical, store, declared = _stored(tmp_path, path)
+
+    (name,) = declared
+    np.testing.assert_array_equal(_level0(store, name), planes[:1])
+    (warning,) = _warnings_of(records)
+    assert (
+        "its ImageJ header declares 3 images and the file holds the pixels of 2"
+        in warning
+    )
+
+
+@pytest.mark.parametrize("bigtiff", [False, True], ids=["classic", "bigtiff"])
+def test_pages_lost_from_a_file_with_no_description_are_told_by_the_header_chain(
+    tmp_path: Path, thyra_logs, bigtiff
+):
+    planes = _planes((3, 9, 11), 29)
+    path = tmp_path / "plain_cut.tif"
+    tifffile.imwrite(
+        str(path), planes, photometric="minisblack", metadata=None, bigtiff=bigtiff
+    )
+    assert _seen_by_tifffile(path)[2:] == ((3, 9, 11), 3)
+    assert probe_optical_source(path).cut_short == ""
+    _cut_after_planes(path, 1.5)
+    assert _seen_by_tifffile(path)[2:] == ((9, 11), 1)
+
+    with thyra_logs("thyra.converters", logging.WARNING) as records:
+        optical, store, declared = _stored(tmp_path, path)
+
+    (name,) = declared
+    np.testing.assert_array_equal(_level0(store, name), planes[:1])
+    (warning,) = _warnings_of(records)
+    assert "plain_cut.tif: it points to a page header at byte" in warning
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"photometric": "rgb"},
+        {"photometric": "rgb", "bigtiff": True},
+        {"photometric": "rgb", "compression": "zlib", "tile": (16, 16)},
+    ],
+    ids=["strips", "bigtiff", "tiles"],
+)
+def test_a_whole_file_is_not_called_cut_short(tmp_path: Path, thyra_logs, options):
+    path = tmp_path / "whole.tif"
+    tifffile.imwrite(str(path), _rgb(40, 48), **options)
+    pages = tmp_path / "pages.ome.tif"
+    tifffile.imwrite(
+        str(pages), _planes((3, 7, 9), 30), ome=True, metadata={"axes": "CYX"}
+    )
+
+    assert probe_optical_source(path).cut_short == ""
+    assert probe_optical_source(pages).cut_short == ""
+    with thyra_logs("thyra.converters", logging.WARNING) as records:
+        _declare(tmp_path, path, pages)
+    assert _warnings_of(records) == []
+
+
+def test_a_buffer_error_from_tifffile_becomes_a_reason_in_words(
+    tmp_path: Path, monkeypatch
+):
+    path = tmp_path / "photo.tif"
+    tifffile.imwrite(str(path), _rgb(6, 10))
+
+    def short_read(cls, path):
+        raise struct.error("unpack requires a buffer of 12 bytes")
+
+    monkeypatch.setattr(OpticalTiffSource, "_read_header", classmethod(short_read))
+    with pytest.raises(ValueError, match="photo.tif: the file ends inside a page"):
+        probe_optical_source(path)
+
+
+def test_a_file_that_ends_inside_a_page_header_is_skipped_in_words(
+    tmp_path: Path, thyra_logs
+):
+    path = tmp_path / "header_cut.tif"
+    tifffile.imwrite(str(path), _planes((3, 9, 11), 31), imagej=True)
+    _cut_after_planes(path, 3, extra=4)
+    try:
+        _seen_by_tifffile(path)
+    except struct.error:
+        pass
+    else:
+        pytest.skip("this tifffile reads a page header the file ends inside")
+
+    with thyra_logs("thyra.converters", logging.WARNING) as records:
+        optical = _declare(tmp_path, path)
+
+    assert optical.pending == {}
+    (warning,) = _warnings_of(records)
+    assert "Failed to load optical image header_cut.tif" in warning
+    assert "the file ends inside a page header" in warning
+
+
+def _first_page_header(path: Path):
+    """``(offset, entries, {tag code: entry offset})`` of the first page header."""
+    with tifffile.TiffFile(str(path)) as tif:
+        page = tif.pages[0]
+        entries = {tag.code: tag.offset for tag in page.tags.values()}
+        return int(page.offset), len(page.tags), entries
+
+
+def _point_past_the_last_header(path: Path, target: int) -> Path:
+    """Make a classic TIFF's only page header name a next one at ``target``."""
+    offset, entries, _ = _first_page_header(path)
+    data = bytearray(path.read_bytes())
+    pointer = offset + 2 + entries * 12
+    data[pointer : pointer + 4] = struct.pack("<I", target)
+    path.write_bytes(bytes(data))
+    return path
+
+
+def test_an_ome_tiff_that_also_carries_an_imagej_description_is_whole(
+    tmp_path: Path, thyra_logs
+):
+    """Two descriptions in one page header, as Micro-Manager writes them."""
+    planes = _planes((3, 9, 11), 32)
+    path = tmp_path / "two_descriptions.ome.tif"
+    note = "ImageJ=1.53\nimages=3\nchannels=3\nhyperstack=true\n"
+    tifffile.imwrite(
+        str(path),
+        planes,
+        ome=True,
+        metadata={"axes": "CYX"},
+        extratags=[(271, "s", 0, note, False)],
+    )
+    # Written as tag 271 so tifffile accepts it, then renumbered to 270.
+    _, _, entries = _first_page_header(path)
+    data = bytearray(path.read_bytes())
+    data[entries[271] : entries[271] + 2] = struct.pack("<H", 270)
+    path.write_bytes(bytes(data))
+    with tifffile.TiffFile(str(path)) as tif:
+        assert tif.is_imagej and tif.series[0].kind == "ome"
+
+    assert probe_optical_source(path).cut_short == ""
+    with thyra_logs("thyra.converters", logging.WARNING) as records:
+        optical, store, declared = _stored(tmp_path, path)
+    (name,) = declared
+    np.testing.assert_array_equal(_level0(store, name), planes)
+    assert _warnings_of(records) == []
+
+
+def test_one_page_with_an_imagej_count_it_cannot_hold_is_told_as_it_is(
+    tmp_path: Path, thyra_logs
+):
+    """Nothing says the file was cut: the warning states the two numbers."""
+    plane = _planes((9, 11), 33)
+    path = tmp_path / "one_slice.tif"
+    tifffile.imwrite(
+        str(path), plane, description="ImageJ=1.53\nimages=3\nslices=3\n", metadata=None
+    )
+    assert _seen_by_tifffile(path)[1:] == ("YX", (9, 11), 1)
+
+    with thyra_logs("thyra.converters", logging.WARNING) as records:
+        optical, store, declared = _stored(tmp_path, path)
+
+    (name,) = declared
+    np.testing.assert_array_equal(_level0(store, name), plane[np.newaxis])
+    (warning,) = _warnings_of(records)
+    assert (
+        "its ImageJ header declares 3 images and the file holds the pixels of 1"
+        in warning
+    )
+    assert "may have been cut short" in warning
+
+
+@pytest.mark.parametrize(
+    "target, told",
+    [
+        (1_000_000, "it points to a page header at byte 1000000 and ends at byte"),
+        # Inside the pixels: the bytes there are no page header, so they
+        # say nothing about what the file holds. tifffile drops them too.
+        (300, ""),
+    ],
+    ids=["past-the-end", "into-the-pixels"],
+)
+def test_a_stray_pointer_behind_the_last_page_header(tmp_path: Path, target, told):
+    path = tmp_path / "stray.tif"
+    rgb = np.full((40, 32, 3), 238, dtype=np.uint8)
+    tifffile.imwrite(str(path), rgb, photometric="rgb")
+    whole = probe_optical_source(path)
+    _point_past_the_last_header(path, target)
+
+    probed = probe_optical_source(path)
+    assert told in probed.cut_short and bool(told) == bool(probed.cut_short)
+    assert probed.shape == whole.shape == (3, 40, 32)
+    (band,) = list(probed.bands(40))
+    np.testing.assert_array_equal(band[1], np.moveaxis(rgb, -1, 0))
+
+
+def test_a_trailing_axis_of_one_is_counted_like_planes_with_their_own_headers(
+    tmp_path: Path,
+):
+    """tifffile keeps that axis in some versions and drops it in others."""
+    planes = _planes((3, 9, 11, 1), 34)
+    one = tmp_path / "unit_one.tif"
+    each = tmp_path / "unit_each.tif"
+    tifffile.imwrite(str(one), planes, photometric="minisblack", truncate=True)
+    tifffile.imwrite(str(each), planes, photometric="minisblack")
+    assert _seen_by_tifffile(one)[3] == 1
+    assert _seen_by_tifffile(each)[3] == 3
+
+    probed = probe_optical_source(one)
+    reference = probe_optical_source(each)
+    assert (probed.shape, probed.dropped_planes, probed.dropped_axes) == (
+        reference.shape,
+        reference.dropped_planes,
+        reference.dropped_axes,
+    )
+    # Every plane is stored, or the ones left out are counted: never neither.
+    assert probed.shape[0] == 3 or probed.dropped_planes == 2
+
+
+def test_a_metamorph_stack_keeps_the_planes_behind_its_one_page_header(
+    tmp_path: Path,
+):
+    """Built by hand: one page with the two UIC tags, three planes behind it."""
+    planes = _planes((3, 9, 11), 35, np.uint16)
+    path = tmp_path / "stack.stk"
+    per_plane = [0, 1, 2450000, 1000, 2450000, 1000]
+    tifffile.imwrite(
+        str(path),
+        planes[0],
+        photometric="minisblack",
+        metadata=None,
+        extratags=[
+            (33628, "I", 2, [0, 1], False),
+            (33629, "I", 18, per_plane * 3, False),
+        ],
+    )
+    _, _, entries = _first_page_header(path)
+    data = bytearray(path.read_bytes())
+    uic1, uic2 = entries[33628], entries[33629]
+    data[uic1 + 4 : uic1 + 8] = struct.pack("<I", 1)
+    # UIC2 as six rationals a plane: its count is the number of planes.
+    data[uic2 + 2 : uic2 + 4] = struct.pack("<H", 5)
+    data[uic2 + 4 : uic2 + 8] = struct.pack("<I", 3)
+    path.write_bytes(bytes(data) + planes[1].tobytes() + planes[2].tobytes())
+    assert _seen_by_tifffile(path) == ("stk", "IYX", (3, 9, 11), 1)
+
+    probed = probe_optical_source(path)
+    assert (probed.shape, probed.cut_short) == ((3, 9, 11), "")
+    read = np.concatenate([band for _, band in probed.bands(4)], axis=1)
+    np.testing.assert_array_equal(read, planes)
+
+
+def test_a_one_header_file_cut_after_its_probe_is_refused_at_the_read(tmp_path: Path):
+    """The read tests every plane it needs, not only the one with a header."""
+    planes = _planes((3, 9, 11), 36)
+    path = tmp_path / "cut_later.tif"
+    tifffile.imwrite(str(path), planes, photometric="minisblack", truncate=True)
+    source = OpticalTiffSource.probe(path)
+    assert (source.shape, source.cut_short) == ((3, 9, 11), "")
+
+    _cut_after_planes(path, 2.5)
+    with pytest.raises(ValueError, match="cut short"):
+        list(source.bands(9))
+
+
 # ---- 16-bit PNGs (F136) --------------------------------------------------
 
 
