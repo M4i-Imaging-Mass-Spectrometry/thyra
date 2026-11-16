@@ -267,6 +267,80 @@ mean, so it has no entry. `uns["regions"]` still lists it, with its spectra.
     `average_spectrum` beside it is that plane's alone. On the single-table
     stores that regions actually occur on, the two are over the same rows.
 
+### Spectrum statistics
+
+The summed table carries five numbers for every row in `.obs`. A tool that
+normalises intensities, or checks for empty or sparse spectra, reads them
+there and does not have to read the matrix:
+
+| Column | Type | Value |
+|--------|------|-------|
+| `tic` | float64 | The sum of the row |
+| `sum_sq` | float64 | The sum of the squares of the row's values |
+| `nnz` | uint32 | How many stored values of the row are not 0 |
+| `max_intensity` | float64 | The largest value of the row; 0 for a row with no values |
+| `median_all` | float64 | The median over **all** m/z bins of the row |
+
+```python
+obs = msi_table.obs
+n_bins = msi_table.n_vars
+
+rms = np.sqrt(obs["sum_sq"] / n_bins)      # root mean square over all bins
+filled = obs["nnz"] / n_bins               # share of the bins that hold signal
+```
+
+Each number describes the row as `X` stores it: after resampling, after zeros
+are dropped, and after the spectra of a position measured twice are summed
+into its one row. Each is taken over every m/z bin of the table, and a bin
+the row stores no value for counts as 0.
+
+- `median_all` is the median of `n_vars` numbers, the mean of the two middle
+  ones when `n_vars` is even. It equals `numpy.median` of the dense row. It
+  is 0 whenever fewer than half the bins hold a value, which is most rows of
+  most stores. The median of the non-zero values is a different number, and
+  the store does not carry it.
+- `tic` is the same number as the TIC image at the row's position, exactly.
+  It equals the row sum of `X` to float64 rounding. One case is looser: a
+  Bruker TSF file converted with `--no-resample` has a TIC image summed in
+  32-bit floats. That sum is exact up to a total of 16.7 million counts.
+  Above it, the image and `tic` agree with the row sum of `X` to about 1
+  part in 10 million.
+- The numbers are float64 sums. A row whose squares add up past the largest
+  float64 has `sum_sq` of `inf`.
+
+```python
+X = msi_table.X
+np.allclose(obs["tic"], np.asarray(X.sum(axis=1)).ravel())                 # True
+np.allclose(obs["sum_sq"], np.asarray(X.multiply(X).sum(axis=1)).ravel())  # True
+```
+
+`uns["spectrum_statistics"]` says what was written:
+
+| Key | Value |
+|-----|-------|
+| `version` | `1`. It changes when a definition above changes |
+| `columns` | The five column names, as a JSON string: `json.loads` gives the list |
+| `column_sum` | float64, one per m/z bin: the sum of that column of `X` over the table's rows |
+| `computed_by` | The library that computed them and its version, such as `thyra/4.8.0` |
+
+`uns["average_spectrum"]` is `column_sum` divided by the number of rows. One
+exception: a column whose sum passes the largest float64 is `inf` in
+`column_sum`, while its mean stays finite.
+
+On a multi-slice source converted as 2D, each plane's table has its own
+statistics. A `--handle-3d` volume has one table, and its `tic` is the TIC
+volume at the row's `(z, y, x)`.
+
+!!! note "Not on every table, and not in every store"
+    The mobility and MS/MS tables (`_mobility`, `_msms`) have neither the
+    columns nor the `uns` block. A store written before metadata schema
+    0.15.0 has neither as well, and stays valid. Test for
+    `"spectrum_statistics" in msi_table.uns` before you rely on them. To get
+    them for such a store, convert the source again.
+
+Why these five, and where a conversion computes them, is in
+[design decision D90](design-decisions.md#d90-every-summed-table-carries-per-spectrum-statistics).
+
 ### Intensity Matrix
 
 The intensity matrix is stored as a sparse matrix. Each row is one pixel, each
@@ -478,7 +552,7 @@ half of free memory the table is left out, with a `WARNING`.
 
 | | MSI table `{id}_z0` | mobility table `{id}_z0_mobility` |
 |---|---|---|
-| rows | pixels | the same pixels, same `obs`, same `region` |
+| rows | pixels | the same pixels and `region`, the same `obs` less the [spectrum statistics](#spectrum-statistics) |
 | `var["mz"]` | strictly increasing, unique | **non-decreasing with duplicates** |
 | `var["mobility"]` | absent | the feature's 1/K0 (or drift time) |
 | sort | by `mz` | lexicographic `(mz, mobility)` |
@@ -733,7 +807,7 @@ ion image**, and each column inside the block is one fragment's image:
 
 | | MSI table `{id}_z0` | MS/MS table `{id}_z0_msms` |
 |---|---|---|
-| rows | pixels | the same pixels, same `obs`, same `region` |
+| rows | pixels | the same pixels and `region`, the same `obs` less the [spectrum statistics](#spectrum-statistics) |
 | a column | one m/z bin, all precursors summed | one m/z bin **of one precursor** |
 | `var["mz"]` | strictly increasing, unique | the fragment m/z, **restarting at every precursor** |
 | `var["precursor_mz"]` | absent | the isolated m/z the fragments came from |
@@ -947,6 +1021,7 @@ print("Columns:", list(msi_table.obs.columns))
 | `region` | categorical | SpatialData annotation target: the key of the pixel shapes element, the same on every row |
 | `region_number` | int64 | The acquisition region the pixel was measured in |
 | `acquisition_order` | int64 | The order the pixels were acquired in, when the source records it (see below) |
+| `tic`, `sum_sq`, `nnz`, `max_intensity`, `median_all` | float64; `nnz` is uint32 | One summary of each row's intensities, on the summed table only (see [Spectrum statistics](#spectrum-statistics)) |
 | `instance_key` | str | A copy of the index, which SpatialData uses to link each row to its pixel shape |
 
 The DataFrame index is `instance_id` (a string pixel identifier).
@@ -987,7 +1062,8 @@ but do not use it as a row index.
 A missing column means the order is unknown, not that it is the raster order.
 A position measured twice is one row holding the sum of both spectra, in
 every table, and its `acquisition_order` is the earlier one. The sibling tables (`_mobility`,
-`_msms`) carry the same column, row for row. Why the column looks like this,
+`_msms`) carry the same column, row for row; they do not carry the
+[spectrum statistics](#spectrum-statistics). Why the column looks like this,
 and what else was considered, is in
 [design decision D26](design-decisions.md#d26-the-acquisition-order-is-an-obs-column-when-the-source-has-one).
 
@@ -1304,7 +1380,7 @@ terms, and a schema a validator can hold it to.
 ```python
 block = msi_table.uns["msi_metadata"]
 
-print(block["schema_version"])                    # "0.14.0"
+print(block["schema_version"])                    # "0.15.0"
 print(block["ms_analysis"]["pixel_size_um"])      # {"x": 20.0, "y": 20.0}
 print(block["ms_analysis"].get("spectrum_representation"))  # "profile" / "centroid"
 print(block.get("sample", {}).get("sample_id"))   # only when you named the sample

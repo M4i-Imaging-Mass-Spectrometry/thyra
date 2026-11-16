@@ -7268,3 +7268,205 @@ their Predictor tag are one image for the newer and several for the older.
   before this entry. It cannot see damage inside the file.
 - "Apply the predictor on every version." It would turn plain samples into
   noise, and disagree with libtiff, Pillow and the newer tifffile.
+
+---
+
+## D90. Every summed table carries per-spectrum statistics
+
+**Status:** Implemented (2026-11-16), issue #564. Schema 0.15.0.
+
+**Decision.** The summed MSI table of every sample carries five numbers per
+row in `obs`, and `uns["spectrum_statistics"]` beside them. Each number
+describes the row as `X` stores it: after resampling, after zeros are
+dropped, and after the spectra of a position measured twice are summed. Each
+is taken over all m/z bins of the table, a bin with no stored value counting
+as 0.
+
+| column | dtype | value |
+| --- | --- | --- |
+| `tic` | float64 | the sum of the row |
+| `sum_sq` | float64 | the sum of the squares of the row's values |
+| `nnz` | uint32 | stored values that are not 0 |
+| `max_intensity` | float64 | the largest value over all bins; 0 for a row with no values |
+| `median_all` | float64 | the median over all bins, the mean of the two middle values for an even bin count |
+
+`uns["spectrum_statistics"]` holds `version` (1), `columns` (the five names,
+as a JSON string), `column_sum` (float64 per bin, the sum of each column of
+`X` over the rows written) and `computed_by` (`thyra/<version>`). The
+mobility and MS/MS sibling tables get neither the columns nor the block.
+
+**Why.** A conversion reads every spectrum twice and kept one number per
+spectrum, the TIC, and that only as an image. Any tool that normalises
+intensities (TIC, RMS, median, base peak) or looks for empty or sparse
+spectra had to read the whole matrix again for one value per row. On a
+project of 19 samples and 5.4 million spectra that pass took 65 s and
+1.2 GB. The numbers above are the ones those normalisations and checks
+divide by or test.
+
+**What changes in a store.** The five `obs` columns, placed after the
+position columns and before `instance_key`; the `uns` block; and
+`msi_metadata.schema_version`, now 0.15.0, in the summed table and in its
+siblings. `X`, `var`, the TIC image, the shapes, the root attributes, every
+other `uns` key and the rest of both sibling tables are the same bytes as
+before (see the comparison below). A store written before this has neither
+the columns nor the block and stays valid; converting the source again adds
+them.
+
+**Where they are computed: in the second pass, from the row in hand.** Pass
+2 holds each spectrum resampled and zero-filtered just before it scatters
+it into the matrix (D9), and for a position with one spectrum that is the
+stored row. `sum_sq`, `nnz`, `max_intensity` and `median_all` are taken
+there, in the row's own length, so no further pass over the source or the
+matrix is made and nothing is allocated per bin.
+
+- **A position measured twice is the exception.** Its stored row is the sum
+  of several spectra and exists only once the assembly has merged them
+  (issue #241). Those rows, and only those, are read back from the finished
+  matrix: one count of the entries per row, then the rows in groups of at
+  most 16 million entries. The groups bound the memory, not the work: each
+  group reads the matrix's row indices once, measured at about 1 ns per
+  stored entry. A few repeated positions cost two reads of the indices. A
+  source that measured every position twice, at a billion entries, would
+  cost about 60 groups and roughly a minute (extrapolated from 6 million
+  entries). A source with no repeated position pays
+  nothing for this.
+- **`tic` is the TIC image's own number.** Pass 1 totals each position into
+  the TIC raster, a repeated position included, and `obs["tic"]` is that
+  raster read at the row's position. So the column and the image cannot
+  disagree. It equals the row sum of `X` exactly when the two passes return
+  the same values, as in every conversion compared below, and to rounding
+  at a repeated position. Two cases are looser, and in both the TIC image
+  already held the same number. A reader whose second pass re-associated
+  its arithmetic is tolerated up to a relative 1e-9 (issue #247). And
+  without resampling a spectrum is totalled in the type the reader yields:
+  the Bruker TSF reader yields 32-bit intensities, so a TSF file converted
+  with `--no-resample` has a 32-bit sum in its TIC image. TSF intensities
+  are whole counts, so that sum is exact up to a total of 2^24 (16.7
+  million) and within about 1e-7 of the row sum of `X` above it; on the
+  one TSF file measured that way (33,690 rows, largest total 7.6 million)
+  every row is equal. Totalling pass 1 in float64 would close the case and
+  would change the TIC image of those stores, so it is left to a decision
+  of its own. The other four columns are always those of `X`.
+- **`column_sum` is the sum `average_spectrum` was already divided out of.**
+  The matrix is summed down its columns once, as before, and the sum is
+  now kept. `average_spectrum` is the same bytes as before:
+  `column_sum / n_rows`. A column whose sum passes the largest float64 is
+  the one exception: its mean is taken again dividing first and stays
+  finite (issue #516), while `column_sum` keeps `inf`.
+
+**`median_all`, exactly.** With `n` bins, the median is the mean of the
+values at sorted positions `(n - 1) // 2` and `n // 2`, which are one
+position when `n` is odd. A row with `k` stored values has at least `n - k`
+zeros. When `k <= (n - 1) // 2`, both positions fall among the zeros
+whatever the stored values are, and the median is 0 with nothing read.
+Otherwise the stored values below 0 and at or below 0 are counted, which
+places each middle position among the zeros or at one position of the
+sorted stored values, and only those positions are selected
+(`numpy.partition`); nothing is sorted in full. The result equals
+`numpy.median` of the dense row, and the row is never made dense. Stored
+values are finite and not negative (issue #248), so no NaN can enter and the
+branch for values below 0 is not reached today; it is there so the function
+is right for any row. The mean of the two middle values is taken as
+`0.5 * a + 0.5 * b`, which cannot overflow.
+
+**The other edges.** `max_intensity` is the largest of all bins, so a row
+with fewer stored values than bins never has one below 0. `nnz` counts
+values that are not 0 and not stored entries; the two agree today, because
+zeros are not stored. `sum_sq` is a float64 sum and is `inf` for a row whose
+squares pass the largest float64 (a value near 1e154). `nnz` is uint32
+because a table has at most 268,435,456 bins (issue #528).
+
+**Why `columns` is a JSON string.** Every list of strings in `uns` is stored
+as one JSON string, because a string array read back from `uns` crashed
+readers on numpy 2.1 and 2.2 when a table was copied. `columns` follows the
+rule; `json.loads` gives the list.
+
+**Why `computed_by` and a `version`.** The block's `version` changes when a
+definition changes, so a reader can test for the definitions it was written
+against. `computed_by` names the library and version that did the
+arithmetic, in the spelling of the root attribute `produced_by`. A tool that
+recomputes the columns after editing `X` writes its own name there.
+
+**Readers and validation.** An unknown `obs` column or `uns` key is not an
+error anywhere: `thyra validate` reads `var` and the `msi_metadata` block
+only, and a store written before this change validates with this version.
+The version before it accepts a new store too, with its standing warning
+that the schema is a newer minor. The five names and the `uns` key are
+reserved in the spec beside
+`acquisition_order` (`MSI_OBS_SPECTRUM_STATISTICS_COLUMNS`). Reserving
+optional names is a minor bump by the versioning rule; the 0.15.0 JSON
+Schema differs from 0.14.0 only in its version string. After an AnnData
+round trip, under pandas 3, the columns read back as float64 and `nnz` as
+uint32.
+
+**Measured: the cost.** Windows 11 workstation, `--no-optical`, one
+conversion per process; peak memory is the summed working set of the process
+tree, sampled every 50 ms. The statistics were also timed alone, over every
+row of each converted store at the row's real length.
+
+| dataset | rows x bins | statistics alone | conversion on main | with the statistics |
+| --- | --- | --- | --- | --- |
+| `pea.imzML` | 12,737 x 460,495 | 0.18 s | 31.3 s / 1.15 GB | 25.1 s / 1.15 GB |
+| `bellini.imzML` | 16,384 x 708,847 | 0.14 s | 20.6 s / 0.68 GB | 21.6 s / 0.69 GB |
+| Bruker TSF, 33,690 px | 33,690 x 541,610 | 0.30 s | 48.0 s / 1.53 GB | 47.9 s / 1.53 GB |
+| Bruker TSF, 918,855 px | 918,855 x 313,723 | 7.1 s | 1,909 s / 16.9 GB | 1,327 s / 16.9 GB |
+
+The three small rows are the median of three runs each, taken back to back;
+single runs spread by up to 30 percent on a machine doing other work, and
+the two long runs shared it with different work. So the conversion times
+show no difference that the change explains, and the column that measures
+it is "statistics alone": about 8 microseconds per row, 0.4 to 0.7 percent
+of a conversion. Peak memory does not move.
+
+- **Per bin.** A six-pixel conversion at a forced bin count peaks at 276 MB
+  before and 276 MB after at 200,000 bins, and at 1,137 MB before and
+  1,140 MB after at 5,000,000 bins. Nothing is allocated per bin: the
+  column sums were already taken, and the scratch buffer grows to the
+  longest row, not to the axis.
+- **The worst case is a dense row.** A row with at least half its bins
+  filled needs the selection, 2 ms for 200,000 values. A synthetic profile
+  source with every one of 200,000 bins filled in each of 400 spectra,
+  converted without resampling, took 19.2 and 20.2 s on main and 20.6 and
+  20.9 s with the statistics, about 5 percent. None of the four datasets
+  above has such a row.
+
+**Measured: nothing else changed.** `tests/tools/store_identity.py`
+converted each input from a snapshot of main and of this change and compared
+every array, every attribute block and every other file of the two stores.
+33 conversions: the ten committed fixtures with the defaults and with
+`--no-resample` (imzML continuous and processed, a Bruker TDF fixture, one
+with a mobility sibling table); `pea.imzML` and `bellini.imzML`; two fixtures
+with `--mobility-grid`; and three synthetic imzML files (three planes with
+positions never measured and one spectrum left empty, two positions
+measured twice, rows with most bins filled) as planes, as a `--handle-3d`
+volume and with `--no-resample`. Every difference is one of: the five new
+`obs` arrays, the `obs` column list, the `spectrum_statistics` group,
+`msi_metadata/schema_version` (in the summed tables and in the four sibling
+tables), and the store's consolidated listing of those. In the 37 summed
+tables written (29,542 rows) every column equals its value recomputed from
+the stored `X`: `nnz`, `max_intensity` and `median_all` exactly, `tic` and
+`column_sum` exactly, `sum_sq` to a relative 4e-16; `obs["tic"]` equals the
+TIC image at every row; `average_spectrum` equals `column_sum / n_rows` in
+every table.
+
+**Not measured.** Linux and macOS (CI runs the tests there), Waters, PHI,
+rapifleX, solariX and mzPeak sources (no committed fixture converts through
+them here), a real source with repeated positions, and a real profile source
+with dense rows.
+
+**Alternatives.**
+
+- "Compute them from the finished matrix." The matrix is column-ordered, so
+  a per-row median needs every row gathered: a second read of the whole
+  matrix, which is the pass this removes for the tools downstream.
+- "Take them in pass 1, with the TIC." Pass 1 values are not the stored
+  ones for a reader tolerated by the 1e-9 rule, and the row of a repeated
+  position does not exist yet in either pass.
+- "Recompute `tic` from the stored row." Then the column and the TIC image
+  could differ, and the issue asks that they cannot.
+- "Also store the median of the non-zero values, a histogram, normalised
+  values." Not asked for; each can be added as a column and a new
+  `version`.
+- "Give the sibling tables the columns too." Their rows are other
+  quantities (per mobility channel, per precursor), so the numbers of the
+  summed row would describe a matrix that is not theirs.

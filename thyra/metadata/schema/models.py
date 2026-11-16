@@ -100,7 +100,13 @@ from pydantic import (
 #        the ``coordinate_systems`` root attribute describes it (design
 #        decision D48, issue #446).  The document's fields are unchanged,
 #        so a 0.13.0 document is a valid 0.14.0 one.
-MSI_METADATA_SCHEMA_VERSION = "0.14.0"
+# 0.15.0: reserved the ``obs`` columns ``tic``, ``sum_sq``, ``nnz``,
+#        ``max_intensity`` and ``median_all`` and the ``uns`` key
+#        ``spectrum_statistics`` (additive): one value per row of the summed
+#        table, describing the row as stored (design decision D90, issue
+#        #564).  The document's fields are unchanged, so a 0.14.0 document
+#        is a valid 0.15.0 one.
+MSI_METADATA_SCHEMA_VERSION = "0.15.0"
 
 # Where the block lives inside a converted store:
 # ``table.uns["msi_metadata"]``.  This location is a stable contract
@@ -109,7 +115,7 @@ MSI_METADATA_SCHEMA_VERSION = "0.14.0"
 MSI_METADATA_UNS_KEY = "msi_metadata"
 
 # The committed JSON Schema artifact for this schema version.
-SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_14.json"
+SCHEMA_JSON_FILENAME = "msi_metadata_schema_v0_15.json"
 
 # Where every published version of the schema is served (issue #385).
 # ``docs/schema/<version>/`` is copied verbatim onto the documentation
@@ -199,6 +205,42 @@ MSI_VAR_PRECURSOR_INDEX_COLUMN = "precursor_index"
 # Written only when the reader knows the order; a missing column is how a
 # store says it does not (design decision D26).
 MSI_OBS_ACQUISITION_ORDER_COLUMN = "acquisition_order"
+
+# The per-spectrum statistics of the summed table (0.15.0).  Each ``obs``
+# column holds one value per row and describes the row as it is stored in
+# ``X`` -- after resampling, the zero filter and the sum of a repeated
+# position -- over **all** bins, the implicit zeros of a sparse row
+# included:
+#
+# * ``tic`` (float64): the row's total, the number the TIC image holds.
+# * ``sum_sq`` (float64): the sum of the squares of the row's values.
+# * ``nnz`` (uint32): how many stored values are not 0.
+# * ``max_intensity`` (float64): the largest value over all bins, so 0 for
+#   a sparse row of negative values and for an empty row.
+# * ``median_all`` (float64): the median over all bins, implicit zeros
+#   included (the mean of the two middle values for an even bin count);
+#   0 for a spectrum that is more than half empty.
+#
+# They sit on the summed table only, never on a ``_mobility`` or ``_msms``
+# sibling, after the position columns (and ``acquisition_order``) and
+# before ``instance_key``.  ``uns["spectrum_statistics"]`` names them and
+# keeps the column sums they were taken against.  A store written before
+# 0.15.0 has neither; a missing column is how a store says so (design
+# decision D90).
+MSI_OBS_TIC_COLUMN = "tic"
+MSI_OBS_SUM_SQ_COLUMN = "sum_sq"
+MSI_OBS_NNZ_COLUMN = "nnz"
+MSI_OBS_MAX_INTENSITY_COLUMN = "max_intensity"
+MSI_OBS_MEDIAN_ALL_COLUMN = "median_all"
+MSI_OBS_SPECTRUM_STATISTICS_COLUMNS = (
+    MSI_OBS_TIC_COLUMN,
+    MSI_OBS_SUM_SQ_COLUMN,
+    MSI_OBS_NNZ_COLUMN,
+    MSI_OBS_MAX_INTENSITY_COLUMN,
+    MSI_OBS_MEDIAN_ALL_COLUMN,
+)
+MSI_SPECTRUM_STATISTICS_UNS_KEY = "spectrum_statistics"
+MSI_SPECTRUM_STATISTICS_VERSION = 1
 
 # Imaging concepts this schema needs that have no PSI CV term yet.
 # These are the candidate terms to raise in the mzPeak / PSI-MS imaging

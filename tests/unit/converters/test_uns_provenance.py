@@ -343,6 +343,11 @@ def test_the_plane_table_writes_the_obs_schema(stores):
         "spatial_x",
         "spatial_y",
         "region_number",
+        "tic",
+        "sum_sq",
+        "nnz",
+        "max_intensity",
+        "median_all",
         "instance_key",
     }
 

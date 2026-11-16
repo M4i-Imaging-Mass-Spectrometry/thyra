@@ -6,7 +6,7 @@ See :mod:`thyra.metadata.schema.models` for the schema itself,
 for the CLI.
 
 **What this schema covers, and what it deliberately does not** (issue
-#278). ``uns`` holds sixteen keys and only one of them, ``msi_metadata``,
+#278). ``uns`` holds seventeen keys and only one of them, ``msi_metadata``,
 is built here. That is not two standards of rigour applied to one kind of
 thing; it is three kinds of thing:
 
@@ -22,12 +22,13 @@ thing; it is three kinds of thing:
 * **Computed data** -- ``average_spectrum``, ``mobility_heatmap``,
   ``feature_axis``, ``mobility_grid``, ``mobility_axis``,
   ``mobility_marginal``, ``ccs``, ``msms_schedule``,
-  ``demultiplexed_current``, ``average_spectrum_per_region``. Arrays and tables that live in ``uns``
+  ``demultiplexed_current``, ``average_spectrum_per_region``,
+  ``spectrum_statistics``. Arrays and tables that live in ``uns``
   because anndata puts non-matrix data there. They are outputs, not
   descriptions, and a metadata schema has nothing to say about them.
 
 So the boundary is "can a fixed vocabulary describe this", not "was anyone
-rigorous here". Every one of the sixteen is documented in
+rigorous here". Every one of the seventeen is documented in
 ``docs/output-format.md`` with its storage contract, which is what a
 consumer reads to know what it may rely on.
 """
@@ -39,6 +40,14 @@ from .models import (
     MSI_METADATA_SCHEMA_VERSION,
     MSI_METADATA_UNS_KEY,
     MSI_OBS_ACQUISITION_ORDER_COLUMN,
+    MSI_OBS_MAX_INTENSITY_COLUMN,
+    MSI_OBS_MEDIAN_ALL_COLUMN,
+    MSI_OBS_NNZ_COLUMN,
+    MSI_OBS_SPECTRUM_STATISTICS_COLUMNS,
+    MSI_OBS_SUM_SQ_COLUMN,
+    MSI_OBS_TIC_COLUMN,
+    MSI_SPECTRUM_STATISTICS_UNS_KEY,
+    MSI_SPECTRUM_STATISTICS_VERSION,
     MSI_VAR_PRECURSOR_COLUMN,
     MSI_VAR_PRECURSOR_INDEX_COLUMN,
     MSI_VAR_REQUIRED_COLUMNS,
@@ -75,6 +84,14 @@ __all__ = [
     "MSI_METADATA_SCHEMA_VERSION",
     "MSI_METADATA_UNS_KEY",
     "MSI_OBS_ACQUISITION_ORDER_COLUMN",
+    "MSI_OBS_MAX_INTENSITY_COLUMN",
+    "MSI_OBS_MEDIAN_ALL_COLUMN",
+    "MSI_OBS_NNZ_COLUMN",
+    "MSI_OBS_SPECTRUM_STATISTICS_COLUMNS",
+    "MSI_OBS_SUM_SQ_COLUMN",
+    "MSI_OBS_TIC_COLUMN",
+    "MSI_SPECTRUM_STATISTICS_UNS_KEY",
+    "MSI_SPECTRUM_STATISTICS_VERSION",
     "MSI_VAR_PRECURSOR_COLUMN",
     "MSI_VAR_PRECURSOR_INDEX_COLUMN",
     "MSI_VAR_REQUIRED_COLUMNS",

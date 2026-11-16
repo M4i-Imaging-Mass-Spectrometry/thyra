@@ -112,9 +112,10 @@ files, byte for byte. Attrs are compared as sorted JSON text, so ``1``,
 What is masked before hashing
 ------------------------------
 
-Four keys are dropped because they vary without the store's data changing:
+Five keys are dropped because they vary without the store's data changing:
 ``conversion_timestamp`` changes on every run, and ``thyra_version``,
-``msi_converter_version`` and ``produced_by`` carry the version number, so
+``msi_converter_version``, ``produced_by`` and ``computed_by`` (the
+``spectrum_statistics`` block's) carry the version number, so
 two checkouts that differ only in ``__version__`` compare equal. The same
 version also sits in the ``software`` entries of the ``processing`` list;
 an entry naming ``thyra`` has its ``version`` dropped, and any other
@@ -184,6 +185,7 @@ DEFAULT_MASK_KEYS = {
     "thyra_version",
     "msi_converter_version",
     "produced_by",
+    "computed_by",
 }
 
 # The software entry of a ``processing`` step that names Thyra itself: its

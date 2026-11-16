@@ -96,7 +96,8 @@ flight-time axis, so do not assume `mz` is the only one.
 ### How the tables connect
 
 - A sibling table has the same rows as its MSI table, in the same order,
-  with the same `obs`.
+  with the same `obs` less the spectrum statistics, which only the MSI
+  table has.
 - `mz_index` is the column of the MSI table that a sibling feature belongs
   to. Use it to relate the two mass axes. On a mobility table read from a
   continuous imzML, a feature outside the MSI table's mass range is given
@@ -134,6 +135,14 @@ flight-time axis, so do not assume `mz` is the only one.
   shows the first route.
 - A position the instrument never measured has no row. A position measured
   twice has one row holding the sum of both spectra.
+- The MSI table's `obs` has `tic`, `sum_sq`, `nnz`, `max_intensity` and
+  `median_all`: one value per row, for the row as stored, over all m/z
+  bins. `obs["tic"]` is the TIC image at the row's position, exactly.
+  `uns["spectrum_statistics"]` names the columns and holds the column sums
+  of `X`. You may rely on them wherever that `uns` key is present. A store
+  written before metadata schema 0.15.0 has neither, so test for the key.
+  [Spectrum statistics](output-format.md#spectrum-statistics) defines each
+  one.
 - `X` is stored as CSC on every route, with sorted row indices in each
   column. Every stored value is finite and non-negative. Zeros are not
   stored.
