@@ -239,7 +239,7 @@ dependencies = [
     # metadata asks for zarr >= 3.2 there, but the adapter works on the 3.1.6
     # this project pins (exercised by tests/unit/converters/
     # test_optical_image_streaming.py and on real FlexImaging exports).
-    "tifffile>=2026.5.2",             # tested 2026.8.23
+    "tifffile>=2026.5.2",             # tested 2026.8.23 and 2026.11.12
     "xarray>=2024.10.0",
     # Same category as tifffile and xarray above: imported directly by
     # converters/spatialdata/optical_image.py, and arriving transitively
