@@ -799,6 +799,7 @@ def _fake_page(offsets, counts, **layout) -> SimpleNamespace:
         "planarconfig": 1,
         "dtype": np.dtype(np.uint8),
         "bitspersample": 8,
+        "sampleformat": 1,
         "compression": 1,
         "fillorder": 1,
     }
@@ -862,12 +863,70 @@ def test_only_pixels_the_file_does_not_hold_count_as_cut():
     with pytest.raises(ValueError, match="strip 4 of 4 ends at byte 216"):
         refuse(name, page, everything, 215, shift=100)
 
-    # Samples that are not whole bytes are not counted here: a segment
-    # with some of its bytes is left to the decoder, one with none is not.
-    bilevel = _fake_page((100, 101, 102, 103), (1, 1, 1, 9), bitspersample=1)
-    refuse(name, bilevel, everything, 104)
+    # Samples of mixed widths are not counted here: a segment with some of
+    # its bytes is left to the decoder, one with none is not.
+    mixed = _fake_page((100, 101, 102, 103), (1, 1, 1, 9), bitspersample=(5, 6, 5))
+    refuse(name, mixed, everything, 104)
     with pytest.raises(ValueError, match="strip 4 of 4"):
-        refuse(name, bilevel, everything, 103)
+        refuse(name, mixed, everything, 103)
+
+
+def test_a_count_too_small_for_its_pixels_is_damage_in_a_file_of_any_length():
+    refuse = optical_image._refuse_cut_short
+    name = Path("slide.tif")
+    everything = (0, 4, 0, 4)
+
+    # Every byte is in the file; the third strip declares three of its four.
+    short = _fake_page((100, 104, 108, 112), (4, 4, 3, 4))
+    with pytest.raises(ValueError) as refused:
+        refuse(name, short, everything, 116)
+    assert str(refused.value) == (
+        "slide.tif: the file is damaged: strip 3 of 4 holds 3 bytes, which "
+        "give 3 of the 4 samples its pixels need"
+    )
+    # A read that does not touch that strip is not refused.
+    refuse(name, short, (0, 2, 0, 4), 116)
+    refuse(name, short, (3, 4, 0, 4), 116)
+    # Nor is a read that takes the page as one run and never uses the counts.
+    refuse(name, short, everything, 116, by_count=False)
+    # A cut is still a cut there, and is still named as one.
+    with pytest.raises(ValueError, match="the file is cut short: strip 4 of 4"):
+        refuse(name, short, everything, 115, by_count=False)
+
+    # Two bytes a sample: three bytes hold one sample of two.
+    wide = _fake_page(
+        (100, 108, 116, 124), (8, 8, 3, 8), dtype=np.dtype(np.uint16), bitspersample=16
+    )
+    with pytest.raises(ValueError, match="holds 3 bytes, which give 1 of the 4"):
+        refuse(name, wide, everything, 132)
+
+    # A last strip with fewer rows holds fewer bytes and is whole: five
+    # rows in strips of two.
+    uneven = _fake_page((100, 108, 116), (8, 8, 4), imagelength=5, rowsperstrip=2)
+    refuse(name, uneven, (0, 5, 0, 4), 120)
+    with pytest.raises(ValueError, match="strip 3 of 3 holds 3 bytes"):
+        refuse(
+            name,
+            _fake_page((100, 108, 116), (8, 8, 3), imagelength=5, rowsperstrip=2),
+            (0, 5, 0, 4),
+            120,
+        )
+
+    # So is a tile on the edge that holds only its part of the page.
+    tiles = {"is_tiled": True, "tilelength": 2, "tilewidth": 2}
+    for held in (4, 2, 1):
+        edge = _fake_page(
+            (100, 104, 108, 112), (4, 4, 4, held), imagelength=3, imagewidth=3, **tiles
+        )
+        refuse(name, edge, (0, 3, 0, 3), 120)
+    three = _fake_page(
+        (100, 104, 108, 112), (4, 4, 4, 3), imagelength=3, imagewidth=3, **tiles
+    )
+    with pytest.raises(ValueError, match="tile 4 of 4 holds 3 bytes"):
+        refuse(name, three, (0, 3, 0, 3), 120)
+
+    # A count of 0 stays a segment the file never held.
+    refuse(name, _fake_page((100, 104, 108, 112), (4, 0, 4, 4)), everything, 116)
 
 
 @pytest.mark.parametrize("compression", [None, "lzw", "zlib"])
@@ -995,6 +1054,534 @@ def test_a_series_read_as_one_run_is_tested_where_its_pixels_are(tmp_path: Path)
     assert source.page_axes == "series" and source.shape == (3, 32, 24)
     with pytest.raises(ValueError, match="the file is cut short"):
         list(source.bands(8))
+
+
+# ---- damage inside a file of the right length ----------------------------
+#
+# A strip or tile can decode to fewer samples than it holds while every one
+# of its bytes is in the file. tifffile raised on that until 2026.11.12 and
+# pads it with zeros since. An uncompressed page shows it in its header; a
+# compressed one only when the segment is decompressed and counted.
+
+
+def _set_byte_count(path: Path, index: int, value: int) -> None:
+    """Overwrite one StripByteCounts or TileByteCounts entry in place."""
+    with tifffile.TiffFile(path) as tif:
+        page = tif.pages[0]
+        tag = page.tags.get(279) or page.tags[325]
+        code = {3: "H", 4: "I", 16: "Q"}[int(tag.dtype)]
+        where = tag.valueoffset + index * struct.calcsize(code)
+        order = tif.byteorder
+    data = bytearray(path.read_bytes())
+    struct.pack_into(order + code, data, where, value)
+    path.write_bytes(bytes(data))
+
+
+def _segments_on_disk(path: Path):
+    with tifffile.TiffFile(path) as tif:
+        page = tif.pages[0]
+        return (
+            [int(n) for n in page.dataoffsets],
+            [int(n) for n in page.databytecounts],
+        )
+
+
+#: ``tifffile.imwrite`` arguments for a 64 x 48 RGB page, the segment whose
+#: byte count is halved, and the rows that segment holds.
+_SHORT_LAYOUTS = {
+    "raw strips": ({"rowsperstrip": 8}, 3, (24, 32)),
+    "lzw strips": ({"rowsperstrip": 8, "compression": "lzw"}, 3, (24, 32)),
+    "lzw strips with a predictor": (
+        {"rowsperstrip": 8, "compression": "lzw", "predictor": True},
+        3,
+        (24, 32),
+    ),
+    "packbits strips": ({"rowsperstrip": 8, "compression": "packbits"}, 3, (24, 32)),
+    "lzma strips": ({"rowsperstrip": 8, "compression": "lzma"}, 3, (24, 32)),
+    "deflate strips": ({"rowsperstrip": 8, "compression": "zlib"}, 3, (24, 32)),
+    "raw tiles": ({"tile": (16, 16)}, 4, (16, 32)),
+    "lzw tiles": ({"tile": (16, 16), "compression": "lzw"}, 4, (16, 32)),
+    "raw planar strips": (
+        {"rowsperstrip": 8, "planarconfig": "separate", "photometric": "rgb"},
+        19,
+        (24, 32),
+    ),
+}
+
+
+@pytest.mark.parametrize("layout", sorted(_SHORT_LAYOUTS))
+def test_a_segment_that_decodes_short_is_refused_in_a_file_of_the_right_length(
+    tmp_path: Path, layout: str
+):
+    """Halving one byte count loses rows without shortening the file."""
+    arguments, segment, (first_row, last_row) = _SHORT_LAYOUTS[layout]
+    rng = np.random.default_rng(21)
+    image = rng.integers(1, 256, size=(64, 48, 3), dtype=np.uint8)
+    whole = np.moveaxis(image, -1, 0)
+    path = tmp_path / "short.tif"
+    planar = "planarconfig" in arguments
+    tifffile.imwrite(str(path), whole if planar else image, **arguments)
+    size = path.stat().st_size
+    _, counts = _segments_on_disk(path)
+    _set_byte_count(path, segment, counts[segment] // 2)
+    assert path.stat().st_size == size
+
+    source = OpticalTiffSource.probe(path)
+    kind = "tile" if "tile" in arguments else "strip"
+    refusal = (
+        f"short.tif: the file is damaged: {kind} {segment + 1} of {len(counts)} "
+        f"holds {counts[segment] // 2} bytes, which give "
+    )
+    step = source.strip_rows
+    for rows in (64, step):
+        with pytest.raises(ValueError) as refused:
+            list(source.bands(rows))
+        assert str(refused.value).startswith(refusal)
+        assert str(refused.value).endswith(" samples its pixels need")
+    # The rows around that segment are the picture.
+    np.testing.assert_array_equal(
+        _rows(source, step, (0, first_row, 0, 48)), whole[:, :first_row]
+    )
+    np.testing.assert_array_equal(
+        _rows(source, step, (last_row, 64, 0, 48)), whole[:, last_row:]
+    )
+    with pytest.raises(ValueError, match="the file is damaged"):
+        list(source.bands(step, (0, first_row + 1, 0, 48)))
+
+
+def test_a_small_count_loses_nothing_where_the_page_is_read_as_one_run(
+    tmp_path: Path,
+):
+    """One uncompressed strip: read whole, its byte count is never used.
+
+    tifffile reads such a page from its first offset, on every version. A
+    read of part of it goes through the strip's byte count, and is refused.
+    """
+    rng = np.random.default_rng(22)
+    image = rng.integers(1, 256, size=(64, 48, 3), dtype=np.uint8)
+    whole = np.moveaxis(image, -1, 0)
+    path = tmp_path / "one_strip.tif"
+    tifffile.imwrite(str(path), image)
+    _, counts = _segments_on_disk(path)
+    assert len(counts) == 1
+    _set_byte_count(path, 0, counts[0] // 2)
+
+    source = OpticalTiffSource.probe(path)
+    np.testing.assert_array_equal(_rows(source, 64), whole)
+    with pytest.raises(ValueError, match="the file is damaged: strip 1 of 1"):
+        list(source.bands(64, (8, 40, 4, 44)))
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"rowsperstrip": 16},
+        {"rowsperstrip": 16, "compression": "lzw"},
+        {"rowsperstrip": 16, "compression": "lzw", "predictor": True},
+        {"rowsperstrip": 16, "compression": "zlib"},
+        {"rowsperstrip": 16, "compression": "packbits"},
+        {"rowsperstrip": 16, "compression": "lzma"},
+        {"rowsperstrip": 16, "compression": "zstd"},
+        {"tile": (32, 32)},
+        {"tile": (32, 32), "compression": "lzw"},
+        {"tile": (32, 32), "compression": "zlib", "predictor": True},
+    ],
+    ids=lambda a: " ".join(str(v) for v in a.values()),
+)
+@pytest.mark.parametrize("dtype", [np.uint8, np.uint16])
+def test_counting_the_samples_refuses_no_whole_picture(
+    tmp_path: Path, arguments, dtype
+):
+    """Sizes no strip or tile divides: a short last strip, tiles past the edge."""
+    rng = np.random.default_rng(23)
+    image = rng.integers(1, 255, size=(70, 50, 3)).astype(dtype)
+    whole = np.moveaxis(image, -1, 0)
+    for name, array, extra in (
+        ("together.tif", image, {}),
+        ("planes.tif", whole, {"planarconfig": "separate", "photometric": "rgb"}),
+    ):
+        path = tmp_path / name
+        tifffile.imwrite(str(path), array, **arguments, **extra)
+        source = OpticalTiffSource.probe(path)
+        for rows in (70, source.strip_rows):
+            np.testing.assert_array_equal(_rows(source, rows), whole)
+        np.testing.assert_array_equal(
+            _rows(source, source.strip_rows, (5, 67, 3, 47)), whole[:, 5:67, 3:47]
+        )
+
+
+def test_a_segment_that_decodes_short_in_a_page_of_a_series_is_refused(
+    tmp_path: Path,
+):
+    """Channels across pages: the damage is in the second, the file is whole."""
+    rng = np.random.default_rng(30)
+    cyx = rng.integers(1, 65535, size=(3, 32, 24), dtype=np.uint16)
+    path = tmp_path / "channels.tif"
+    tifffile.imwrite(
+        str(path),
+        cyx,
+        photometric="minisblack",
+        metadata={"axes": "CYX"},
+        rowsperstrip=8,
+        compression="lzw",
+    )
+    with tifffile.TiffFile(path) as tif:
+        # Read as a page of its own, so that it has its tags.
+        tif.pages.useframes = False
+        page = tif.pages[1]
+        tag = page.tags[279]
+        code = {3: "H", 4: "I", 16: "Q"}[int(tag.dtype)]
+        where = tag.valueoffset + 2 * struct.calcsize(code)
+        count = int(page.databytecounts[2])
+        order = tif.byteorder
+    data = bytearray(path.read_bytes())
+    struct.pack_into(order + code, data, where, count // 2)
+    path.write_bytes(bytes(data))
+
+    source = OpticalTiffSource.probe(path)
+    assert source.page_axes == "series" and source.shape == (3, 32, 24)
+    with pytest.raises(ValueError, match="the file is damaged: strip 3 of 4"):
+        list(source.bands(8))
+    np.testing.assert_array_equal(_rows(source, 8, (0, 16, 0, 24)), cyx[:, :16])
+    np.testing.assert_array_equal(_rows(source, 8, (24, 32, 0, 24)), cyx[:, 24:])
+
+
+def test_a_refused_read_leaves_the_file_free(tmp_path: Path):
+    """The count stops with the refusal: no handle or worker outlives it."""
+    rng = np.random.default_rng(31)
+    image = rng.integers(1, 256, size=(64, 48, 3), dtype=np.uint8)
+    path = tmp_path / "held.tif"
+    tifffile.imwrite(str(path), image, rowsperstrip=2, compression="lzw")
+    _, counts = _segments_on_disk(path)
+    _set_byte_count(path, 1, counts[1] // 2)
+    before = threading.active_count()
+    with pytest.raises(ValueError, match="the file is damaged") as refused:
+        list(OpticalTiffSource.probe(path).bands(64))
+    # The exception, and the frames it holds, are still alive here.
+    assert refused.value is not None
+    assert threading.active_count() == before
+    path.rename(tmp_path / "moved.tif")
+
+
+def test_running_out_of_memory_while_counting_is_not_called_damage(
+    tmp_path: Path, monkeypatch
+):
+    rng = np.random.default_rng(32)
+    # Sixty rows in strips of eight: the last strip holds four, so its
+    # samples are counted, which takes unpacking them.
+    grey = rng.integers(0, 16, size=(60, 51)).astype(np.uint8)
+    path = tmp_path / "packed.tif"
+    tifffile.imwrite(
+        str(path), grey, rowsperstrip=8, bitspersample=4, photometric="minisblack"
+    )
+    source = OpticalTiffSource.probe(path)
+    np.testing.assert_array_equal(_rows(source, 8), grey[np.newaxis])
+
+    def no_room(*_args, **_kwargs):
+        raise MemoryError
+
+    monkeypatch.setattr(optical_image.imagecodecs, "packints_decode", no_room)
+    with pytest.raises(MemoryError):
+        list(source.bands(8))
+
+
+def test_the_count_holds_no_more_than_a_band(tmp_path: Path, monkeypatch):
+    """Large strips are counted one at a time, small ones a few together."""
+    rng = np.random.default_rng(33)
+    image = rng.integers(1, 256, size=(64, 48, 3), dtype=np.uint8)
+    path = tmp_path / "strips.tif"
+    tifffile.imwrite(str(path), image, rowsperstrip=8, compression="lzw")
+    alive: List[int] = []
+    peak: List[int] = []
+    lock = threading.Lock()
+    counted = optical_image._samples_in
+
+    def watched(*args, **kwargs):
+        with lock:
+            alive.append(1)
+            peak.append(len(alive))
+        try:
+            return counted(*args, **kwargs)
+        finally:
+            with lock:
+                alive.pop()
+
+    monkeypatch.setattr(optical_image, "_samples_in", watched)
+    source = OpticalTiffSource.probe(path)
+    whole = np.moveaxis(image, -1, 0)
+    np.testing.assert_array_equal(_rows(source, 64), whole)
+    assert len(peak) == 8 and max(peak) <= optical_image.COUNT_WORKERS
+    # One strip decodes to 8 x 48 x 3 bytes; a budget of one strip and a
+    # half lets a single strip through at a time.
+    del peak[:]
+    monkeypatch.setattr(optical_image, "BAND_BUDGET_BYTES", 8 * 48 * 3 * 3 // 2)
+    np.testing.assert_array_equal(_rows(source, 64), whole)
+    assert len(peak) == 8 and max(peak) == 1
+
+
+def _plain_tiff(path: Path, pages) -> None:
+    """A little-endian TIFF holding exactly the tags given, one page each.
+
+    ``pages`` is a list of ``(tags, strips)``: ``tags`` maps a tag code to
+    its values, ``strips`` are the bytes of each strip. The strip offsets
+    and byte counts are added. tifffile does not write every tag (it leaves
+    out a Predictor without a compression, and FillOrder), so the pages
+    that need one are laid out here.
+    """
+    longs = (256, 257, 273, 278, 279)
+    blocks = []
+    position = 8
+    for tags, strips in pages:
+        entries = dict(tags)
+        entries[273] = [0] * len(strips)
+        entries[279] = [len(strip) for strip in strips]
+        packed = {
+            code: struct.pack(f"<{len(values)}{'I' if code in longs else 'H'}", *values)
+            for code, values in entries.items()
+        }
+        outside = sum(len(d) + len(d) % 2 for d in packed.values() if len(d) > 4)
+        values_at = position + 2 + 12 * len(entries) + 4
+        pixels_at = values_at + outside
+        offsets = [
+            pixels_at + sum(len(s) for s in strips[:n]) for n in range(len(strips))
+        ]
+        packed[273] = struct.pack(f"<{len(offsets)}I", *offsets)
+        end = pixels_at + sum(len(strip) for strip in strips)
+        end += end % 2
+        blocks.append((entries, packed, values_at, strips, end))
+        position = end
+    out = bytearray(b"II*\x00" + struct.pack("<I", 8))
+    for number, (entries, packed, values_at, strips, end) in enumerate(blocks):
+        out += struct.pack("<H", len(entries))
+        outside = bytearray()
+        for code in sorted(entries):
+            data = packed[code]
+            kind = 4 if code in longs else 3
+            out += struct.pack("<HHI", code, kind, len(entries[code]))
+            if len(data) <= 4:
+                out += data.ljust(4, b"\x00")
+            else:
+                out += struct.pack("<I", values_at + len(outside))
+                outside += data + b"\x00" * (len(data) % 2)
+        out += struct.pack("<I", end if number + 1 < len(blocks) else 0)
+        out += outside + b"".join(strips)
+        out += b"\x00" * (end - len(out))
+    path.write_bytes(bytes(out))
+
+
+def _plain_tags(width: int, length: int, bits, rows: int, more=None):
+    """Tags of an uncompressed page of ``bits`` (one entry a sample)."""
+    tags = {
+        256: [width],
+        257: [length],
+        258: list(bits),
+        259: [1],
+        262: [2 if len(bits) == 3 else 1],
+        277: [len(bits)],
+        278: [rows],
+        284: [1],
+    }
+    tags.update({code: list(values) for code, values in (more or {}).items()})
+    return tags
+
+
+def _strips(array: np.ndarray, rows: int) -> List[bytes]:
+    return [array[r : r + rows].tobytes() for r in range(0, array.shape[0], rows)]
+
+
+#: Predictor tag values: horizontal differencing, floating point, and one
+#: no version of TIFF defines.
+@pytest.mark.parametrize(
+    "predictor, dtype",
+    [(2, np.uint8), (2, np.uint16), (3, np.float32), (9, np.uint8)],
+)
+@pytest.mark.parametrize("rows", [8, 32])
+def test_an_uncompressed_page_is_read_as_stored_whatever_its_predictor_tag(
+    tmp_path: Path, predictor: int, dtype, rows: int
+):
+    """The tag belongs to a compression; without one the samples are plain.
+
+    tifffile before 2026.11.12 applied the predictor to such a page when it
+    was read in bands and failed when it was read whole.
+    """
+    rng = np.random.default_rng(24)
+    if np.dtype(dtype).kind == "f":
+        image = rng.random((32, 24, 3)).astype(dtype)
+    else:
+        image = rng.integers(1, np.iinfo(dtype).max, size=(32, 24, 3)).astype(dtype)
+    bits = [8 * np.dtype(dtype).itemsize] * 3
+    more = {317: [predictor]}
+    if np.dtype(dtype).kind == "f":
+        more[339] = [3, 3, 3]
+    path = tmp_path / "predictor.tif"
+    _plain_tiff(path, [(_plain_tags(24, 32, bits, rows, more), _strips(image, rows))])
+
+    source = OpticalTiffSource.probe(path)
+    assert source.shape == (3, 32, 24) and source.dtype == np.dtype(dtype)
+    whole = np.moveaxis(image, -1, 0)
+    for band in (32, source.strip_rows):
+        np.testing.assert_array_equal(_rows(source, band), whole)
+    np.testing.assert_array_equal(
+        _rows(source, source.strip_rows, (3, 29, 2, 20)), whole[:, 3:29, 2:20]
+    )
+    # Pillow, and libtiff under it, show the same pixels.
+    if np.dtype(dtype) == np.uint8 and predictor == 2:
+        with PILImage.open(path) as shown:
+            np.testing.assert_array_equal(np.asarray(shown), image)
+
+
+def test_a_predictor_tag_is_ignored_on_every_page_of_an_uncompressed_series(
+    tmp_path: Path,
+):
+    """Channels across pages, each uncompressed with a predictor tag."""
+    rng = np.random.default_rng(25)
+    cyx = rng.integers(1, 65535, size=(3, 32, 24)).astype(np.uint16)
+    tags = _plain_tags(24, 32, [16], 8, {317: [2]})
+    path = tmp_path / "series.tif"
+    _plain_tiff(path, [(tags, _strips(plane, 8)) for plane in cyx])
+
+    source = OpticalTiffSource.probe(path)
+    assert source.page_axes == "series" and source.shape == (3, 32, 24)
+    np.testing.assert_array_equal(_rows(source, 8), cyx)
+    np.testing.assert_array_equal(_rows(source, 32), cyx)
+
+
+@pytest.mark.parametrize("planar", [0, 3])
+def test_a_planar_configuration_tiff_does_not_define_is_refused_at_the_header(
+    tmp_path: Path, planar: int
+):
+    """tifffile read it as one plane per sample until 2026.11.12, and refuses since."""
+    rng = np.random.default_rng(26)
+    image = rng.integers(1, 256, size=(32, 24, 3), dtype=np.uint8)
+    path = tmp_path / "planar.tif"
+    tags = _plain_tags(24, 32, [8, 8, 8], 8, {284: [planar]})
+    _plain_tiff(path, [(tags, _strips(image, 8))])
+    with pytest.raises(ValueError) as refused:
+        OpticalTiffSource.probe(path)
+    assert str(refused.value) == (
+        f"planar.tif: planar configuration {planar} is not one TIFF defines"
+    )
+    # One sample has no planes to arrange: the tag says nothing, and is not read.
+    grey = tmp_path / "grey.tif"
+    _plain_tiff(
+        grey,
+        [(_plain_tags(24, 32, [8], 8, {284: [planar]}), _strips(image[:, :, 0], 8))],
+    )
+    np.testing.assert_array_equal(
+        _rows(OpticalTiffSource.probe(grey), 32), image[np.newaxis, :, :, 0]
+    )
+
+
+# ---- samples that are not whole bytes, and bits stored backwards ----------
+
+
+def _damage_last_and_fourth(path: Path, tmp_path: Path):
+    """The file cut inside its last strip, and with its fourth count halved."""
+    data = path.read_bytes()
+    offsets, counts = _segments_on_disk(path)
+    cut = tmp_path / "cut.tif"
+    cut.write_bytes(data[: offsets[-1] + counts[-1] // 2])
+    short = tmp_path / "short.tif"
+    short.write_bytes(data)
+    _set_byte_count(short, 3, counts[3] // 2)
+    return cut, short
+
+
+@pytest.mark.parametrize(
+    "bits, dtype, compression, byteorder",
+    [
+        (1, bool, None, "<"),
+        (1, bool, "lzw", "<"),
+        (4, np.uint8, None, "<"),
+        (12, np.uint16, None, "<"),
+        (12, np.uint16, None, ">"),
+    ],
+)
+def test_packed_samples_are_counted_like_whole_bytes(
+    tmp_path: Path, bits: int, dtype, compression, byteorder: str
+):
+    """Bilevel, 4-bit and 12-bit pages: a row of 51 samples ends inside a byte."""
+    rng = np.random.default_rng(27)
+    image = rng.integers(0, 2**bits, size=(64, 51)).astype(dtype)
+    path = tmp_path / "packed.tif"
+    arguments = {
+        "rowsperstrip": 8,
+        "compression": compression,
+        "photometric": "minisblack",
+        "byteorder": byteorder,
+    }
+    if bits > 1:
+        arguments["bitspersample"] = bits
+    tifffile.imwrite(str(path), image, **arguments)
+    source = OpticalTiffSource.probe(path)
+    intact = _rows(source, 64)
+    assert intact.shape == (1, 64, 51)
+    if byteorder == "<":
+        # tifffile does not read back the big-endian 12-bit samples it
+        # writes, on any version; there the two routes are only compared.
+        np.testing.assert_array_equal(intact, image[np.newaxis])
+    np.testing.assert_array_equal(_rows(source, 8), intact)
+
+    cut, short = _damage_last_and_fourth(path, tmp_path)
+    for rows in (64, 8):
+        with pytest.raises(ValueError, match="the file is cut short: strip 8 of 8"):
+            list(OpticalTiffSource.probe(cut).bands(rows))
+        with pytest.raises(ValueError, match="the file is damaged: strip 4 of 8"):
+            list(OpticalTiffSource.probe(short).bands(rows))
+    np.testing.assert_array_equal(
+        _rows(OpticalTiffSource.probe(cut), 8, (0, 56, 0, 51)), intact[:, :56]
+    )
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_bits_stored_least_significant_first_are_counted_too(
+    tmp_path: Path, compressed: bool
+):
+    """FillOrder 2: every byte is turned around before anything else reads it."""
+    imagecodecs = pytest.importorskip("imagecodecs")
+    rng = np.random.default_rng(28)
+    image = rng.integers(1, 256, size=(64, 48, 3), dtype=np.uint8)
+    strips = _strips(image, 8)
+    if compressed:
+        strips = [imagecodecs.lzw_encode(strip) for strip in strips]
+    strips = [bytes(imagecodecs.bitorder_encode(strip)) for strip in strips]
+    more = {266: [2], 259: [5 if compressed else 1]}
+    path = tmp_path / "turned.tif"
+    _plain_tiff(path, [(_plain_tags(48, 64, [8, 8, 8], 8, more), strips)])
+
+    source = OpticalTiffSource.probe(path)
+    whole = np.moveaxis(image, -1, 0)
+    for rows in (64, 8):
+        np.testing.assert_array_equal(_rows(source, rows), whole)
+
+    cut, short = _damage_last_and_fourth(path, tmp_path)
+    for rows in (64, 8):
+        with pytest.raises(ValueError, match="the file is cut short: strip 8 of 8"):
+            list(OpticalTiffSource.probe(cut).bands(rows))
+        with pytest.raises(ValueError, match="the file is damaged: strip 4 of 8"):
+            list(OpticalTiffSource.probe(short).bands(rows))
+
+
+def test_the_warning_says_the_file_is_damaged(tmp_path: Path, thyra_logs):
+    """A strip that decodes short drops the image, with Thyra's own reason."""
+    rng = np.random.default_rng(29)
+    image = rng.integers(1, 256, size=(40, 30, 3), dtype=np.uint8)
+    path = tmp_path / "damaged_0000.tiff"
+    tifffile.imwrite(str(path), image, rowsperstrip=4, compression="lzw")
+    _, counts = _segments_on_disk(path)
+    _set_byte_count(path, 6, counts[6] // 2)
+    assert OpticalTiffSource.probe(path).shape == (3, 40, 30)
+
+    output_path = tmp_path / "damaged.zarr"
+    with thyra_logs("thyra.converters", logging.WARNING) as records:
+        _, success = _convert(_mock_reader(path), output_path)
+    assert success is True
+    reasons = [r.message for r in records if "Failed to load optical" in r.message]
+    assert len(reasons) == 1
+    assert "damaged_0000.tiff: the file is damaged: strip 7 of 10 holds " in reasons[0]
+    assert reasons[0].endswith("dropping 'ds_optical_highres' from the store")
+    sdata = SpatialData.read(str(output_path))
+    assert [k for k in sdata.images if "optical" in k] == []
 
 
 def test_the_warning_says_the_file_is_cut_short(

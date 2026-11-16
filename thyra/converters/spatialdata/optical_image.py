@@ -81,7 +81,18 @@ strip or tile the file does not hold with zeros from 2026.11.12 on, where
 it used to raise. :meth:`OpticalTiffSource.bands` compares the byte range
 of every strip or tile it is about to read with the size of the file, from
 the header, and refuses the read when the file ends before one of them has
-the bytes its pixels need.
+the bytes its pixels need. A strip or tile can also hold too little in a
+file of the right length; tifffile pads that with zeros as well. On an
+uncompressed page the byte count in the header shows it. On a page
+compressed with LZW, deflate, PackBits, LZMA or Zstandard every strip or
+tile the read needs is decompressed once and its samples are counted, a
+few at a time, before the decode (D89).
+
+**Two more readings that do not depend on the tifffile installed** (D89).
+Both changed with tifffile 2026.11.12, and each is fixed here to one answer. A
+Predictor tag on a page that is not compressed is ignored, as libtiff and
+Pillow ignore it: the samples are stored as the file holds them. A planar
+configuration TIFF does not define is refused at the header.
 
 **The alignment image is cropped to the section it aligns.** A FlexImaging
 ``.mis`` names one whole-slide scan and every ``.d`` cut from that slide
@@ -120,6 +131,7 @@ from typing import (
     Any,
     Callable,
     Dict,
+    Generator,
     Iterator,
     List,
     Mapping,
@@ -174,6 +186,17 @@ REDUCE_STRIP_ROWS = 512
 #: Pyramid write units reduced concurrently. Each worker holds one source
 #: chunk, one strip accumulator and the unit it is assembling.
 REDUCE_WORKERS = 4
+
+#: Segments of a compressed TIFF page decompressed at a time when their
+#: samples are counted before the decode; see :func:`_refuse_cut_short`.
+COUNT_WORKERS = 4
+
+#: TIFF compressions whose strips and tiles tifffile decompresses to a run
+#: of bytes and then shapes into rows: LZW, deflate (its two codes),
+#: PackBits, LZMA, Zstandard (its two codes) and Pixtiff's deflate. A
+#: segment of one of these can decode to fewer samples than it holds
+#: without the decompressor objecting, so its samples are counted.
+_BYTE_CODECS = (5, 8, 32946, 32773, 34925, 34926, 50000, 50013)
 
 #: The layouts of a TIFF page this module reads: samples interleaved per
 #: pixel (what FlexImaging exports and practically every RGB TIFF use),
@@ -835,51 +858,151 @@ def _whole_sizes(keyframe: Any, position: int) -> Tuple[int, ...]:
     return (tall * wide * samples, rows * wide * samples, rows * columns * samples)
 
 
-def _samples_held(
-    path: Path, keyframe: Any, start: int, held: int, full: int
-) -> Optional[int]:
-    """Samples the ``held`` bytes a file has of one segment decode to.
+def _packed_run(keyframe: Any) -> Optional[int]:
+    """Samples in one row of a segment whose samples are packed into bits.
 
-    Counted the way tifffile counts them before it shapes a segment: the
-    bytes themselves when the page is not compressed, else what its
-    decompressor returns for them, which is 0 when the decompressor refuses
-    them. ``full`` is the segment's full sample count, the size tifffile
-    tells the decompressor to expect.
+    0 when every sample is whole bytes, the usual case. ``None`` when this
+    module does not count the page's samples: a codec other than
+    :data:`_BYTE_CODECS` (JPEG and its kin decode a whole picture, and hand
+    back a full segment or raise, the same on every tifffile), samples of
+    mixed widths (RGB 5-6-5), complex integers and 24-bit floats. Those are
+    left to the decoder.
 
-    ``None`` when the count cannot be taken here: a codec that decodes a
-    whole picture (JPEG and its kin, which hand back a full segment or
-    raise, the same on every tifffile), samples that are not whole bytes,
-    or reversed bit order. Those are left to the decoder.
+    tifffile unpacks bilevel and packed-integer samples a row at a time,
+    each row starting on a byte, and this is the length of that row.
     """
     dtype = keyframe.dtype
+    bits = keyframe.bitspersample
     compression = int(keyframe.compression)
     if (
         dtype is None
-        or keyframe.bitspersample != 8 * dtype.itemsize
-        or int(keyframe.fillorder) == 2
-        or compression in tifffile.TIFF.IMAGE_COMPRESSIONS
+        or not isinstance(bits, int)
+        or int(keyframe.sampleformat) == 5
+        or (compression != 1 and compression not in _BYTE_CODECS)
     ):
         return None
-    if compression == 1:
-        return held // int(dtype.itemsize)
-    try:
-        decompress = tifffile.TIFF.DECOMPRESSORS[compression]
-    except KeyError:
+    if bits in (8, 16, 32, 64, 128):
+        return 0 if bits == 8 * dtype.itemsize else None
+    if bits == 24 and dtype.kind == "f":
         return None
-    with path.open("rb") as handle:
-        handle.seek(start)
-        data = handle.read(held)
+    _, wide, planes, _, _ = _segment_grid(keyframe)
+    return wide * (1 if planes > 1 else int(keyframe.samplesperpixel))
+
+
+def _full_bytes(keyframe: Any) -> Optional[int]:
+    """Bytes a full-size strip or tile of an uncompressed page occupies.
+
+    ``None`` for a compressed page, whose byte counts say nothing about how
+    many samples a segment decodes to, and for samples :func:`_packed_run`
+    does not count.
+    """
+    run = _packed_run(keyframe)
+    if run is None or int(keyframe.compression) != 1:
+        return None
+    tall, wide, planes, _, _ = _segment_grid(keyframe)
+    if run:
+        return tall * -(-run * int(keyframe.bitspersample) // 8)
+    samples = 1 if planes > 1 else int(keyframe.samplesperpixel)
+    return tall * wide * samples * int(keyframe.dtype.itemsize)
+
+
+def _samples_in(
+    keyframe: Any, decompress: Optional[Callable[..., Any]], data: Any, full: int
+) -> int:
+    """Samples the bytes of one segment decode to.
+
+    Counted the way tifffile counts them before it shapes a segment: bits
+    stored least significant first are turned, the page's decompressor is
+    run with the size tifffile tells it to expect (``full`` samples), and
+    packed samples (bilevel, 4-bit, 12-bit) are unpacked by the function
+    tifffile unpacks them with, which keeps whole rows only. 0 when a step
+    refuses the bytes: the decoder is given the same bytes and fails alike.
+    """
+    dtype = keyframe.dtype
+    run = _packed_run(keyframe)
     try:
-        decoded = decompress(data, out=full * int(dtype.itemsize))
-    except Exception:  # the decoder is given the same bytes and fails alike
+        if int(keyframe.fillorder) == 2:
+            data = imagecodecs.bitorder_decode(data)
+        if decompress is not None:
+            data = decompress(data, out=full * int(dtype.itemsize))
+        if run:
+            unpacked = imagecodecs.packints_decode(
+                data, dtype, int(keyframe.bitspersample), runlen=run
+            )
+            return int(unpacked.size)
+    except MemoryError:  # this machine's limit, not the file's fault
+        raise
+    except Exception:
         return 0
-    return memoryview(decoded).nbytes // int(dtype.itemsize)
+    return memoryview(data).nbytes // int(dtype.itemsize)
+
+
+def _sample_counts(
+    path: Path, keyframe: Any, segments: Sequence[Tuple[int, int, int]]
+) -> Generator[Optional[int], None, None]:
+    """Samples each of ``segments`` decodes to, in order.
+
+    A segment is ``(start, held, full)``: where its bytes begin, how many
+    of them the read gets, and its full sample count. ``None`` for each
+    when the page's samples are not counted here; see :func:`_packed_run`.
+
+    An uncompressed page of whole-byte samples is counted from the numbers
+    alone. Anything else needs the bytes: they are read here, a few
+    segments at a time, and decompressed on :data:`COUNT_WORKERS` threads.
+    A batch is that many segments, fewer when they are large: together
+    they decode to no more than :data:`BAND_BUDGET_BYTES`, or it is one
+    segment. So this holds what one band of the read holds, and holds the
+    page only when the page is a single strip.
+    """
+    run = _packed_run(keyframe)
+    compression = int(keyframe.compression)
+    decompress = None
+    if run is not None and compression != 1:
+        try:
+            decompress = tifffile.TIFF.DECOMPRESSORS[compression]
+        except KeyError:  # the codec's library is not installed
+            run = None
+    if run is None:
+        yield from (None for _ in segments)
+        return
+    if decompress is None and not run:
+        whole_bytes = int(keyframe.dtype.itemsize)
+        yield from (held // whole_bytes for _, held, _ in segments)
+        return
+    if not segments:
+        return
+
+    def count(data: bytes, full: int) -> int:
+        return _samples_in(keyframe, decompress, data, full)
+
+    itemsize = int(keyframe.dtype.itemsize)
+    with path.open("rb") as handle, ThreadPoolExecutor(COUNT_WORKERS) as pool:
+        first = 0
+        while first < len(segments):
+            stop, decoded = first, 0
+            while stop < len(segments) and stop - first < COUNT_WORKERS:
+                decoded += segments[stop][2] * itemsize
+                if stop > first and decoded > BAND_BUDGET_BYTES:
+                    break
+                stop += 1
+            batch = segments[first:stop]
+            blobs = []
+            for start, held, _ in batch:
+                handle.seek(start)
+                blobs.append(handle.read(held))
+            yield from pool.map(count, blobs, [full for _, _, full in batch])
+            first = stop
 
 
 def _refuse_cut_short(
-    path: Path, page: Any, window: Window, size: int, shift: int = 0
+    path: Path,
+    page: Any,
+    window: Window,
+    size: int,
+    shift: int = 0,
+    by_count: bool = True,
 ) -> None:
-    """Refuse a read that needs pixels the file ends before.
+    """Refuse a read that needs pixels the file does not hold.
 
     A TIFF copied or downloaded only in part keeps its header, which sits at
     the front, and loses pixel data from the back. The header still says
@@ -898,9 +1021,19 @@ def _refuse_cut_short(
     few bytes more than a segment needs, and a compressed strip that lost
     only its end marker still decodes in full; tifffile reads both, on
     every version. So a segment that starts inside the file is refused only
-    when the bytes that are there give fewer samples than it holds, counted
-    by :func:`_samples_held`; where that cannot be counted, the decoder
+    when the bytes the read gets give fewer samples than it holds, counted
+    by :func:`_sample_counts`; where that cannot be counted, the decoder
     decides. A segment that starts at or past the end has nothing to give.
+
+    A file of the right length can hold too little as well, and tifffile
+    pads that with zeros too where it used to raise. On an uncompressed
+    page the header shows it: a byte count smaller than the segment's
+    pixels need. ``by_count`` is whether the read takes each segment by its
+    byte count; it does not when tifffile reads a whole uncompressed page
+    as one run from its first offset, and there a small count loses
+    nothing. On a page compressed with one of :data:`_BYTE_CODECS` nothing
+    in the header shows it, so every segment the read needs is decompressed
+    once here and its samples counted.
 
     A segment with offset or byte count 0 is one the file never held (a
     sparse page); it reads as fill on every tifffile and is not a cut.
@@ -921,20 +1054,70 @@ def _refuse_cut_short(
     # Offset and count are not added: a damaged offset near the top of the
     # 64-bit range would wrap and look as if it fitted.
     room = end - np.minimum(starts, end)
-    past = (starts > 0) & (lengths > 0) & (lengths > room)
-    for at in np.flatnonzero(past):
-        position, start, held = int(wanted[at]), int(starts[at]), int(room[at])
-        whole = _whole_sizes(keyframe, position)
-        if held:
-            samples = _samples_held(path, keyframe, start, held, whole[0])
-            if samples is None or samples >= whole[0] or samples in whole:
+    stored = (starts > 0) & (lengths > 0)
+    past = stored & (lengths > room)
+    suspect = past
+    if int(keyframe.compression) != 1:
+        if _packed_run(keyframe) is not None:
+            suspect = stored
+    elif by_count:
+        full_bytes = _full_bytes(keyframe)
+        if full_bytes is not None:
+            # A last strip, or a tile on the edge, may hold less and be
+            # whole: the sample count decides, this only picks what to count.
+            suspect = past | (stored & (lengths < np.uint64(full_bytes)))
+    picked = [int(at) for at in np.flatnonzero(suspect)]
+    held = [min(int(lengths[at]), int(room[at])) for at in picked]
+    whole = [_whole_sizes(keyframe, int(wanted[at])) for at in picked]
+    counted = _sample_counts(
+        path,
+        keyframe,
+        [(int(starts[at]), n, w[0]) for at, n, w in zip(picked, held, whole) if n],
+    )
+    kind = "tile" if keyframe.is_tiled else "strip"
+    try:
+        for at, n, sizes in zip(picked, held, whole):
+            samples = next(counted) if n else 0
+            if samples is None or samples >= sizes[0] or samples in sizes:
                 continue
-        kind = "tile" if keyframe.is_tiled else "strip"
-        raise ValueError(
-            f"{path.name}: the file is cut short: {kind} {position + 1} of "
-            f"{listed} ends at byte {start + int(lengths[at])} and the file "
-            f"has {size} bytes"
-        )
+            named = f"{kind} {int(wanted[at]) + 1} of {listed}"
+            if past[at]:
+                raise ValueError(
+                    f"{path.name}: the file is cut short: {named} ends at byte "
+                    f"{int(starts[at]) + int(lengths[at])} and the file has "
+                    f"{size} bytes"
+                )
+            raise ValueError(
+                f"{path.name}: the file is damaged: {named} holds "
+                f"{int(lengths[at])} bytes, which give {samples} of the "
+                f"{sizes[0]} samples its pixels need"
+            )
+    finally:
+        # Stops the reads and the workers when a segment is refused.
+        counted.close()
+
+
+def _ignore_predictor_without_compression(page: Any) -> None:
+    """Read an uncompressed page's samples as stored, whatever its Predictor tag.
+
+    A predictor is a step of a compression scheme: the writer differences
+    the samples so that they compress better, and the reader undoes it
+    after decompressing. On a page that is not compressed there is nothing
+    to undo. libtiff, which most programs read TIFF through, ignores the
+    tag there, and so does Pillow; tifffile refuses to write the tag
+    without a compression. A page that has the tag and no compression
+    holds plain samples, or every one of those readers shows it as noise.
+
+    tifffile ignores the tag on such a page from 2026.11.12 on. Before
+    that it applied the predictor when a page was read in bands, which
+    turned plain samples into noise, and failed when the page was read
+    whole. This gives every version the newer behaviour, the way that
+    release does it: the page is told it has no predictor before anything
+    is decoded.
+    """
+    keyframe = page.keyframe if page.keyframe is not None else page
+    if int(keyframe.compression) == 1 and int(keyframe.predictor) != 1:
+        keyframe.predictor = tifffile.PREDICTOR.NONE
 
 
 @dataclass(frozen=True)
@@ -1009,6 +1192,15 @@ class OpticalTiffSource:
             if dtype is None:
                 raise ValueError(
                     f"{path.name}: sample format not supported by tifffile"
+                )
+            planar = int(page.planarconfig)
+            if int(page.samplesperpixel) > 1 and planar not in (1, 2):
+                # TIFF defines 1 (samples together) and 2 (a plane each).
+                # tifffile read any other value as 2 before 2026.11.12 and
+                # refuses it at the decode since; refused here on both.
+                raise ValueError(
+                    f"{path.name}: planar configuration {planar} is not one "
+                    "TIFF defines"
                 )
             colour = TiffColour.of(page, path.name)
             orientation = _tiff_orientation(page)
@@ -1140,13 +1332,14 @@ class OpticalTiffSource:
         """
         n_rows = self.shape[1]
         y_start, y_stop, x_start, x_stop = window or (0, n_rows, 0, self.shape[2])
+        whole = self.page_axes != "series" and window is None and rows >= n_rows
         with tifffile.TiffFile(self.path) as tif:
-            self._refuse_cut_short(tif, (y_start, y_stop, x_start, x_stop))
+            self._check_pages(tif, (y_start, y_stop, x_start, x_stop), whole)
             if self.page_axes == "series":
                 store = tif.series[0].aszarr(level=0)
             else:
                 page: Any = tif.pages[0]
-                if window is None and rows >= n_rows:
+                if whole:
                     yield 0, self.colour.apply(self._to_cyx(page.asarray()))
                     return
                 store = page.aszarr()
@@ -1165,8 +1358,8 @@ class OpticalTiffSource:
                     decoded = np.asarray(source[start:stop, x_start:x_stop])
                 yield start, self.colour.apply(self._to_cyx(decoded))
 
-    def _refuse_cut_short(self, tif: Any, window: Window) -> None:
-        """Refuse the read when the file ends before the pixels it needs.
+    def _check_pages(self, tif: Any, window: Window, whole: bool) -> None:
+        """Ready every page the read decodes, and refuse what the file lacks.
 
         Every page the read decodes is tested: the first page, or for a
         series the pages kept as channels. A plane the series leaves out
@@ -1180,11 +1373,24 @@ class OpticalTiffSource:
         further on. It is tested the same way, from page 0's tables, and
         not from its own header, which a cut file may have lost while the
         pixels the read needs are all there.
+
+        ``whole`` is whether the first page is decoded in one call. When
+        its pixels also lie in one run, tifffile reads the run from its
+        first offset and never looks at the byte counts, so a count that
+        is too small is not tested there.
+
+        Each page is also told to ignore a predictor it has no compression
+        for; see :func:`_ignore_predictor_without_compression`.
         """
         size = self.path.stat().st_size
         if self.page_axes != "series":
-            _refuse_cut_short(self.path, tif.pages[0], window, size)
+            page = tif.pages[0]
+            _ignore_predictor_without_compression(page)
+            one_run = whole and bool(page.is_contiguous)
+            _refuse_cut_short(self.path, page, window, size, by_count=not one_run)
             return
+        # The series is put together first: tifffile groups pages by what
+        # their headers say, the predictor included, and must see them alike.
         series = tif.series[0]
         leading = tuple(int(n) for n in series.shape[: len(self.series_index)])
         one_header = len(series) == 1 and series.dataoffset is not None
@@ -1199,6 +1405,7 @@ class OpticalTiffSource:
         for number in (int(n) for n in numbers):
             page = first if step else series[number]
             if page is not None:
+                _ignore_predictor_without_compression(page)
                 _refuse_cut_short(self.path, page, window, size, number * step)
 
     def _series_selection(

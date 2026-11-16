@@ -7157,6 +7157,118 @@ first.
   description, cut behind its first page, is then a whole one-page TIFF
   with no sign that anything is gone.
 
+## D89. A short strip, a predictor without compression and an undefined planar layout read the same on every tifffile
+
+**Status:** Implemented (2026-11-16). Extends D69 ("stored as its file
+shows it") and the check for a file cut short that PR #565 added without
+an entry. Neither is rewritten.
+
+**Decision.** Three readings of a TIFF page changed with tifffile 2026.11.12.
+Thyra declares a floor for tifffile and no ceiling, so an install can hold
+either side of that release. Each reading now has one answer, taken in
+`thyra/converters/spatialdata/optical_image.py` before tifffile decodes.
+
+- **A strip or tile that holds too few samples drops the image, wherever
+  its bytes are.** The check for a file cut short compared each strip or
+  tile with the end of the file. It now also covers a file of the right
+  length:
+    - *Not compressed.* The header shows it: a byte count smaller than the
+      strip's or tile's pixels need. Nothing is decompressed.
+    - *LZW, deflate, PackBits, LZMA, Zstandard.* Nothing in the header
+      shows it. Every strip or tile the read needs is decompressed once,
+      with tifffile's own decompressor, and its samples are counted. Up to
+      four at a time, and no more than one band of the read holds. A page
+      that is a single strip is held whole, as its decode holds it.
+    - *Bilevel, 4-bit and 12-bit samples, and bits stored least
+      significant first (FillOrder 2)* are counted too, by the function
+      tifffile unpacks them with. They were left to the decoder before.
+  The image is left out with the usual warning. Its reason reads `the file
+  is damaged: strip 7 of 10 holds 210 bytes, which give 185 of the 360
+  samples its pixels need`, or `the file is cut short: ...` when the file
+  ends first.
+- **A small byte count loses nothing where it is not used.** tifffile
+  reads a whole uncompressed page whose pixels lie in one run from its
+  first offset, and never looks at the counts. That read is not refused.
+  A read of part of such a page goes by the counts, and is.
+- **A Predictor tag on a page that is not compressed is ignored.** The
+  samples are stored as the file holds them. That is what tifffile does
+  from 2026.11.12 on, and what libtiff and Pillow do.
+- **A planar configuration TIFF does not define is refused at the
+  header.** Only 1 (samples together) and 2 (a plane each) exist. A page
+  with one sample has no planes to arrange, and is still read.
+
+**Why.** `uv.lock` holds tifffile 2026.8.23; `pip install thyra` resolves
+the newest. The same file then gave two stores. Measured with small
+generated files, each read whole and in bands, before this change:
+
+| File | tifffile 2026.8.23 | tifffile 2026.11.12 |
+|---|---|---|
+| One byte count halved: uncompressed, LZW, PackBits or LZMA strips or tiles | decoder raises, image left out | **stored, missing rows filled with zeros** |
+| One byte count halved: deflate or Zstandard | decompressor raises | decompressor raises |
+| Bilevel, 4-bit or 12-bit page cut inside its last strip | decoder raises, image left out | **stored, missing rows filled with zeros** |
+| Uncompressed, Predictor 2 or 3, read whole | fails (`invalid axis`), or wrong numbers for floats | stored as the file holds it |
+| Uncompressed, Predictor 2 or 3, read in bands | **predictor applied: plain samples become noise** | stored as the file holds it |
+| Uncompressed, Predictor 9 (not defined) | refused | stored as the file holds it |
+| RGB, planar configuration 0 or 3, read whole | **stored, read as a plane each** | refused at the decode |
+
+After it, every row is the same on both, and on the floor, 2026.5.2.
+
+**The predictor.** A predictor is a step of a compression scheme: the
+writer differences the samples so that they compress better. tifffile
+refuses to write one without a compression. A file with the tag, no
+compression and plain samples was read through libtiff and through
+Pillow: both showed the plain samples, so both ignore the tag. A writer
+that differenced the samples and did not compress them would make a file
+those two show as noise. tifffile before 2026.11.12 was the only reader of
+the three that applied the tag, and only on one of its two routes.
+
+**What changes in a store.** For a whole, well-formed TIFF: nothing. Nine
+real slide scans (eight LZW with a predictor, one uncompressed, strips and
+tiles, up to 37,944 x 12,532) gave the same pixels on both tifffile
+versions, before and after.
+
+- With tifffile 2026.11.12: an image with a strip or tile that decodes
+  short is left out, where it was stored with rows of zeros. An RGB page
+  with a planar configuration of 0 or 3 is refused at the header, where it
+  was refused at the decode.
+- With tifffile before 2026.11.12: an uncompressed page with a Predictor
+  tag is stored as the file holds it, where it was left out or stored as
+  noise. An RGB page with a planar configuration of 0 or 3 is left out,
+  where a whole-page read stored it.
+- On both: the warning for a short strip or tile gives Thyra's reason, not
+  the decoder's.
+
+**Cost.** Nothing for an uncompressed page. For a compressed one the count
+is a second decompression. On the real scans it took 1.3 s of a 7.2 s read
+(12,092 one-row LZW strips, 1.35 GB decoded) and 2.7 s of 13.4 s (27,645
+LZW tiles). On a generated 480 MB page: 0.4 to 0.9 s.
+
+**Not covered.** Samples of mixed widths (RGB 5-6-5), complex integers and
+24-bit floats are not counted, and are left to the decoder. So is a JPEG
+strip or tile cut short: it decodes without an error, with a grey tail, on
+every tifffile. A strip with byte count 0 and a real offset is still taken
+for one the file never held: a read that goes by the counts fills it, on
+every tifffile.
+
+Which pages make up one image is not settled here either. tifffile
+2026.11.8 and 2026.11.12 changed that for some files. An ImageJ file whose
+description promises six planes and holds five is three channels with the
+older tifffile and five with the newer. Pages of one image that differ in
+their Predictor tag are one image for the newer and several for the older.
+
+**Alternatives.**
+
+- "Cap tifffile below 2026.11.12." The cap would have to be lifted one
+  day, and an install that ignores it would store rows of zeros.
+- "Raise the floor to 2026.11.12." It settles the predictor and the planar
+  configuration, and makes the zero padding the only behaviour.
+- "Tell from tifffile's log that it padded." The text of a log line is not
+  an interface.
+- "Count compressed strips only where the file ends." That was the check
+  before this entry. It cannot see damage inside the file.
+- "Apply the predictor on every version." It would turn plain samples into
+  noise, and disagree with libtiff, Pillow and the newer tifffile.
+
 ---
 
 ## D90. Every summed table carries per-spectrum statistics
