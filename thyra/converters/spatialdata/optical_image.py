@@ -642,6 +642,31 @@ def _planes_declared(series_shape: Tuple[int, ...], page_shape: Tuple[int, ...])
     return series_size // page_size
 
 
+def _planes_held(tif: Any, series: Any, page: Any) -> Tuple[int, int]:
+    """``(planes, held)``: what the first series declares and the file holds.
+
+    Both are the series' pages, unless one header stands for every plane
+    and the pixels follow it in one run: what tifffile's ``truncate``
+    writes, ImageJ above 4 GB, and a file that lost its later headers.
+    tifffile lists one page there and still gives the series its full
+    shape, so the planes are counted from the shape, and from the file's
+    size how many of them it holds.
+    """
+    if series is None:
+        return 1, 1
+    pages = len(series.pages)
+    plane_bytes = int(page.nbytes)
+    if pages != 1 or series.dataoffset is None or plane_bytes <= 0:
+        return pages, pages
+    declared = _planes_declared(
+        tuple(int(n) for n in series.shape), tuple(int(n) for n in page.shape)
+    )
+    if declared <= 1:
+        return pages, pages
+    room = int(tif.filehandle.size) - int(series.dataoffset)
+    return declared, min(declared, max(0, room) // plane_bytes)
+
+
 #: tifffile's own ceiling on the entries of one page header: a count above
 #: it is not a header but whatever bytes a stray pointer landed on.
 _MOST_HEADER_ENTRIES = 4096
@@ -988,22 +1013,7 @@ class OpticalTiffSource:
             colour = TiffColour.of(page, path.name)
             orientation = _tiff_orientation(page)
             series = tif.series[0] if tif.series else None
-            pages = len(series.pages) if series is not None else 1
-            # One header for every plane, the pixels in one run behind it:
-            # what tifffile's ``truncate`` writes, ImageJ above 4 GB, and
-            # a file that lost its later headers. tifffile lists one page
-            # and still gives the series its full shape, so the planes are
-            # counted from the shape, and from the file's size how many of
-            # them it holds.
-            planes = held = pages
-            if series is not None and pages == 1 and series.dataoffset is not None:
-                declared = _planes_declared(
-                    tuple(int(n) for n in series.shape), page_shape
-                )
-                if declared > 1 and int(page.nbytes) > 0:
-                    planes = declared
-                    room = int(tif.filehandle.size) - int(series.dataoffset)
-                    held = min(planes, max(0, room) // int(page.nbytes))
+            planes, held = _planes_held(tif, series, page)
             cut_short = _cut_short(tif, series, page, planes, held)
             spread = series is not None and planes > 1
             series_axes = str(series.axes) if spread and series is not None else ""
