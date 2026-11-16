@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## [4.8.0](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/compare/v4.7.1...v4.8.0) (2026-11-16)
+
+
+### Features
+
+* **cli:** ion-image and report subcommands draw a converted store ([#563](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/563)) ([21518d6](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/21518d62dbdd5f7bd32c588e8ce44c02b3113666))
+* **converters:** store per-spectrum statistics with every summed table (schema 0.15.0) ([#572](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/572)) ([f5e3fd7](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/f5e3fd7c568089ff05fe01035242271350ab907f))
+
+
+### Bug Fixes
+
+* **optical:** a short strip and a stale predictor read the same on every tifffile ([#569](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/569)) ([3fa6d69](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/3fa6d6983a13116be7a5ec07f6ac59134d2d3c1f))
+* **optical:** keep every plane of a TIFF that puts them behind one page header ([#567](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/567)) ([184c84c](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/184c84c1fbbbfe8be48e33da843d7650bb0c0d5c))
+
 ## [4.7.1](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/compare/v4.7.0...v4.7.1) (2026-11-16)
 
 
