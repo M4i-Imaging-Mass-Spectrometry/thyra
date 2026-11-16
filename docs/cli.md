@@ -18,7 +18,9 @@ line naming the runs, and exit `1`.
 
 `thyra` also has three metadata subcommands, `thyra metadata`,
 `thyra validate` and `thyra export-metaspace` -- see
-[Metadata subcommands](#metadata-subcommands).
+[Metadata subcommands](#metadata-subcommands). Two more draw a store that is
+already converted, `thyra ion-image` and `thyra report` -- see
+[Look at a converted store](#look-at-a-converted-store).
 
 !!! tip "Grouped help"
     `thyra --help` lists every option under a category heading, in this order:
@@ -701,6 +703,112 @@ supply them with `--merge` or fill them on the submission form.
 ```bash
 thyra export-metaspace output.zarr --merge sample.json
 thyra export-metaspace output.zarr -o -          # print to stdout
+```
+
+---
+
+## Look at a converted store
+
+`ion-image` and `report` take a converted `.zarr` store and write one file
+beside it. They read only what the picture needs, so they take seconds on a
+store of any size, and they write nothing into the store. Neither needs
+Python code or matplotlib.
+
+| Command | Writes |
+|---------|--------|
+| `thyra ion-image STORE MZ` | A PNG of the ion image of one m/z value |
+| `thyra report STORE` | One HTML page: facts, TIC image, mean spectrum, ion images, optical images, tables |
+
+Exit status, for both: `0` when the file was written; `1`, with one line and
+no traceback, when the store cannot be drawn or the file cannot be written;
+`2` for a usage error. A store path that does not exist is a usage error, and
+so is an output path that is a folder, lies under a file or lies inside the
+store.
+
+An input file or folder that is itself named `report` or `ion-image` is still
+converted when it is written with its folder, as in `thyra ./report out.zarr`.
+
+### `thyra ion-image`
+
+```
+thyra ion-image STORE MZ [OPTIONS]
+```
+
+Writes the ion image of **MZ** as a PNG: for each pixel, the sum of every m/z
+bin whose m/z lies within `--ppm` of MZ, the edges of that window included.
+The file holds the image, a colour bar, the window and the number of bins it
+covers.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--ppm FLOAT` | `10` | Half-width of the m/z window, in parts per million of MZ |
+| `-o, --output PATH` | `<store>_mz<MZ>.png` beside the store | Output file. A missing folder is created; a path that is a folder, lies under a file or lies inside the store is refused with exit `2` |
+
+- **Colours.** The colour map is viridis. It runs from zero to the 99th
+  percentile of the pixels that carry signal, so a few very bright pixels do
+  not set the scale. The command prints that value and the highest pixel. A
+  position that was never measured is grey, so it cannot be taken for a
+  measured pixel with no signal.
+- **Size.** The image covers the bounding box of the measured pixels. A small
+  raster is enlarged by a whole factor, each pixel becoming a square block. A
+  large one is written pixel for pixel.
+- **Which table.** The image is read from the table of spectra, which is
+  recognised by its `var` columns and not by its name. The ion mobility and
+  MS/MS tables are never drawn. A store with one table of spectra per slice
+  gives one image per table, and each file name then ends in `_<table>`. A
+  store converted with `--handle-3d` gives one image with its slices side by
+  side, in order, left to right and then top to bottom, with a grey line
+  between them.
+- **Refusals** (exit `1`). The path is not a Thyra store; MZ is outside the
+  mass axis; or no bin lies in the window, in which case the message names
+  the nearest bin and the `--ppm` that reaches it. A window that holds bins
+  but no signal is still written, and the command says the image is blank.
+
+```bash
+thyra ion-image output.zarr 760.513
+thyra ion-image output.zarr 760.513 --ppm 25 -o figures/pc_34_1.png
+```
+
+### `thyra report`
+
+```
+thyra report STORE [OPTIONS]
+```
+
+Writes one self-contained HTML page about the store. The images are embedded
+and the spectrum is drawn inline, so the page loads nothing from the network
+and can be sent as a single file. It follows the browser's light or dark
+theme.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `-o, --output PATH` | `<store>_report.html` beside the store | Output file, under the same rules as for `ion-image` |
+
+The page holds, in this order:
+
+1. The store's name and a table of facts: instrument, pixel size, raster
+   size, measured pixels, m/z range, number of bins, Thyra version and the
+   name of the source file.
+2. The TIC image.
+3. The mean spectrum.
+4. Ion images of the six tallest peaks of the mean spectrum that are at least
+   1.5 m/z apart, each within 10 ppm. The distance keeps an isotope peak from
+   being shown beside its parent.
+5. The optical images, reduced, when the store has any.
+6. Every table with its kind and shape, so ion mobility and MS/MS tables are
+   visible.
+
+A store with one table of spectra per slice repeats items 1 to 4 for each.
+A table whose matrix is not stored column by column, which only old Thyra
+versions wrote, gets items 1 to 3 and a line saying why it has no ion images.
+
+The page prints the source file's name and never its folder, although the
+store records the whole path. It reads no other free-text field of the
+metadata, such as a sample name or a serial number.
+
+```bash
+thyra report output.zarr
+thyra report output.zarr -o overview.html
 ```
 
 ---

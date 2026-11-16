@@ -157,6 +157,13 @@ sdata = sd.read_zarr("output/sample.zarr")
 table = sdata.tables["msi_dataset_z0"]  # one row per pixel, one column per m/z bin
 ```
 
+Two commands show a converted store without any Python:
+
+```bash
+thyra report output.zarr              # one HTML page: TIC image, mean spectrum, ion images
+thyra ion-image output.zarr 760.513   # a PNG of one m/z value
+```
+
 The acquisition description has its own commands:
 
 ```bash

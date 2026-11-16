@@ -14,9 +14,9 @@ and how to open it.
 | **Optical image** | The photo of the slide, when the acquisition has one (Bruker) |
 | **Description** | The instrument, the settings and the pixel size: see [Describe and share your data](describe-your-data.md) |
 
-There are no ion images in the result: you make them from the spectra, as
-shown below. Most pixels have no signal in most m/z bins, so Thyra stores only
-the values that are there, compressed. That keeps the result small.
+There are no ion images in the result: they are made from the spectra, as
+shown below. Thyra stores only the values that are there, so the result stays
+small.
 
 ??? advanced "Advanced: the names of the parts"
     Every part is named after the dataset, `msi_dataset` unless you choose
@@ -41,7 +41,40 @@ The `.zarr` folder is one dataset. Copy it, move it or share it like any
 other folder, but do not take files out of it or rename files inside it. It
 opens on Windows, macOS and Linux alike.
 
-## Open it without writing code: napari
+## See it without Python
+
+Two commands show the result with no Python. Type them where you typed
+`thyra`.
+
+```bash
+thyra report brain_section_1.zarr
+```
+
+This writes `brain_section_1_report.html` beside the folder. Open it in your
+web browser: it shows the TIC image, the mean spectrum and images of the
+tallest peaks.
+
+```bash
+thyra ion-image brain_section_1.zarr 760.513
+```
+
+This writes `brain_section_1_mz760.5130.png`, an image of m/z 760.513:
+
+![Ion image of m/z 760.513 in the example dataset](assets/ion-image-example.png)
+
+??? advanced "Advanced: what the image adds up, and its colours"
+    The image adds up every m/z bin within 10 ppm of the value. `--ppm`
+    changes that, and `-o` chooses the file name.
+
+    The colours run from zero to the 99th percentile of the pixels with
+    signal, so a few very bright pixels do not darken the rest. A position
+    that was never measured is grey.
+
+    Data with several slices gives one image per slice. Data converted with
+    `--handle-3d` gives one image, with the slices side by side. See
+    [Command-line options](cli.md#look-at-a-converted-store).
+
+## Open it in napari
 
 [napari](https://napari.org) is a free image viewer. With the
 napari-spatialdata plugin, it opens Thyra results.
@@ -65,11 +98,12 @@ napari-spatialdata plugin, it opens Thyra results.
 5. The panel now lists the parts of the result. Double-click
    `msi_dataset_z0_tic` to show the TIC image.
 
-napari shows the TIC image, the optical image and the pixel outlines well.
-For an image of one m/z value, use Python, as below.
+napari shows the TIC image, the optical image and the pixel outlines. For an
+image of one m/z value, use `thyra ion-image`.
 
-An optical image that Thyra could not line up with the data is not under
-**global**. Click the coordinate system named after it to see it.
+??? advanced "Advanced: an optical image that is not in the list"
+    An optical image that Thyra could not line up with the data is not under
+    **global**. Click the coordinate system named after it to see it.
 
 ## Open it in Python
 
