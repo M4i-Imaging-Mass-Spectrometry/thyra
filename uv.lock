@@ -4450,7 +4450,7 @@ wheels = [
 
 [[package]]
 name = "thyra"
-version = "4.7.1"
+version = "4.8.0"
 source = { editable = "." }
 dependencies = [
     { name = "anndata" },
