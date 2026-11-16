@@ -74,6 +74,14 @@ header declares more pixel data than the file can hold, and a whole-page
 decode larger than the free memory, are refused at the header, before the
 store declares anything.
 
+A TIFF cut short is one of the images dropped that way, and this module
+says so itself rather than waiting for the decoder to: tifffile fills a
+strip or tile the file does not hold with zeros from 2026.11.12 on, where
+it used to raise. :meth:`OpticalTiffSource.bands` compares the byte range
+of every strip or tile it is about to read with the size of the file, from
+the header, and refuses the read when the file ends before one of them has
+the bytes its pixels need.
+
 **The alignment image is cropped to the section it aligns.** A FlexImaging
 ``.mis`` names one whole-slide scan and every ``.d`` cut from that slide
 names the same one, so a project of eleven sections used to hold eleven
@@ -629,6 +637,165 @@ def _tiff_orientation(page: Any) -> Optional[int]:
         return None
 
 
+def _segment_grid(keyframe: Any) -> Tuple[int, int, int, int, int]:
+    """How a page is cut into strips or tiles.
+
+    Returns ``(tall, wide, planes, down, across)``: the rows and columns one
+    segment covers, how many planes list their segments one after another
+    (the samples, when each has a plane of its own), and how many segments
+    a plane has down and across. A strip is as wide as the page.
+    """
+    length = max(1, int(keyframe.imagelength))
+    width = max(1, int(keyframe.imagewidth))
+    if keyframe.is_tiled:
+        tall = max(1, int(keyframe.tilelength))
+        wide = max(1, int(keyframe.tilewidth))
+    else:
+        tall, wide = max(1, min(int(keyframe.rowsperstrip), length)), width
+    samples = int(keyframe.samplesperpixel)
+    planes = samples if int(keyframe.planarconfig) == 2 and samples > 1 else 1
+    return tall, wide, planes, -(-length // tall), -(-width // wide)
+
+
+def _segments_read(keyframe: Any, window: Window, listed: int) -> NDArray[np.intp]:
+    """Positions, in a page's offset table, of the strips or tiles a read needs.
+
+    A page lists its strips top to bottom, or its tiles row by row, and a
+    page with one plane per sample lists every plane's run after the one
+    before. ``window`` is ``(y_start, y_stop, x_start, x_stop)`` in the
+    page's pixels; every plane is read. ``listed`` is how many segments the
+    table holds: a position past its end is one the file never listed.
+    """
+    y_start, y_stop, x_start, x_stop = window
+    tall, wide, planes, down, across = _segment_grid(keyframe)
+    grid = np.arange(planes * down * across, dtype=np.intp)
+    picked = grid.reshape(planes, down, across)[
+        :,
+        y_start // tall : -(-y_stop // tall),
+        x_start // wide : -(-x_stop // wide),
+    ].ravel()
+    return picked[picked < listed]
+
+
+def _whole_sizes(keyframe: Any, position: int) -> Tuple[int, ...]:
+    """Sample counts at which the strip or tile at ``position`` is whole.
+
+    The first is its full size, and anything above it is whole too. A tile
+    on the bottom or right edge may also hold only the rows, or the rows
+    and columns, that lie inside the page: tifffile reads all three.
+    """
+    tall, wide, planes, down, across = _segment_grid(keyframe)
+    samples = 1 if planes > 1 else int(keyframe.samplesperpixel)
+    row, column = divmod(position % (down * across), across)
+    rows = min(tall, max(1, int(keyframe.imagelength)) - row * tall)
+    if not keyframe.is_tiled:
+        return (rows * wide * samples,)
+    columns = min(wide, max(1, int(keyframe.imagewidth)) - column * wide)
+    return (tall * wide * samples, rows * wide * samples, rows * columns * samples)
+
+
+def _samples_held(
+    path: Path, keyframe: Any, start: int, held: int, full: int
+) -> Optional[int]:
+    """Samples the ``held`` bytes a file has of one segment decode to.
+
+    Counted the way tifffile counts them before it shapes a segment: the
+    bytes themselves when the page is not compressed, else what its
+    decompressor returns for them, which is 0 when the decompressor refuses
+    them. ``full`` is the segment's full sample count, the size tifffile
+    tells the decompressor to expect.
+
+    ``None`` when the count cannot be taken here: a codec that decodes a
+    whole picture (JPEG and its kin, which hand back a full segment or
+    raise, the same on every tifffile), samples that are not whole bytes,
+    or reversed bit order. Those are left to the decoder.
+    """
+    dtype = keyframe.dtype
+    compression = int(keyframe.compression)
+    if (
+        dtype is None
+        or keyframe.bitspersample != 8 * dtype.itemsize
+        or int(keyframe.fillorder) == 2
+        or compression in tifffile.TIFF.IMAGE_COMPRESSIONS
+    ):
+        return None
+    if compression == 1:
+        return held // int(dtype.itemsize)
+    try:
+        decompress = tifffile.TIFF.DECOMPRESSORS[compression]
+    except KeyError:
+        return None
+    with path.open("rb") as handle:
+        handle.seek(start)
+        data = handle.read(held)
+    try:
+        decoded = decompress(data, out=full * int(dtype.itemsize))
+    except Exception:  # the decoder is given the same bytes and fails alike
+        return 0
+    return memoryview(decoded).nbytes // int(dtype.itemsize)
+
+
+def _refuse_cut_short(
+    path: Path, page: Any, window: Window, size: int, shift: int = 0
+) -> None:
+    """Refuse a read that needs pixels the file ends before.
+
+    A TIFF copied or downloaded only in part keeps its header, which sits at
+    the front, and loses pixel data from the back. The header still says
+    where every strip or tile starts and how many bytes it holds, so the
+    loss shows without decoding the page: a segment the read needs runs
+    past the last byte of the file.
+
+    This is checked here because the decoder cannot be relied on to say so.
+    tifffile raised on a short segment before 2026.11.12; from that release
+    it fills what is missing with zeros and returns the page, so a slide cut
+    in half would be stored with its lower half black. Only the segments
+    ``window`` touches are tested: a crop that lies in the part of the file
+    that is there decodes as it always did.
+
+    Running past the end is not enough to refuse. Some writers declare a
+    few bytes more than a segment needs, and a compressed strip that lost
+    only its end marker still decodes in full; tifffile reads both, on
+    every version. So a segment that starts inside the file is refused only
+    when the bytes that are there give fewer samples than it holds, counted
+    by :func:`_samples_held`; where that cannot be counted, the decoder
+    decides. A segment that starts at or past the end has nothing to give.
+
+    A segment with offset or byte count 0 is one the file never held (a
+    sparse page); it reads as fill on every tifffile and is not a cut.
+    ``shift`` is added to every offset, for a page of a series tifffile
+    reads as one contiguous run from its first page.
+
+    Raises:
+        ValueError: naming the first strip or tile the file does not hold.
+    """
+    keyframe = page.keyframe if page.keyframe is not None else page
+    offsets = np.asarray(page.dataoffsets, dtype=np.uint64).ravel()
+    counts = np.asarray(page.databytecounts, dtype=np.uint64).ravel()
+    listed = min(offsets.size, counts.size)
+    wanted = _segments_read(keyframe, window, listed)
+    starts = offsets[wanted] + np.uint64(shift)
+    lengths = counts[wanted]
+    end = np.uint64(size)
+    # Offset and count are not added: a damaged offset near the top of the
+    # 64-bit range would wrap and look as if it fitted.
+    room = end - np.minimum(starts, end)
+    past = (starts > 0) & (lengths > 0) & (lengths > room)
+    for at in np.flatnonzero(past):
+        position, start, held = int(wanted[at]), int(starts[at]), int(room[at])
+        whole = _whole_sizes(keyframe, position)
+        if held:
+            samples = _samples_held(path, keyframe, start, held, whole[0])
+            if samples is None or samples >= whole[0] or samples in whole:
+                continue
+        kind = "tile" if keyframe.is_tiled else "strip"
+        raise ValueError(
+            f"{path.name}: the file is cut short: {kind} {position + 1} of "
+            f"{listed} ends at byte {start + int(lengths[at])} and the file "
+            f"has {size} bytes"
+        )
+
+
 @dataclass(frozen=True)
 class OpticalTiffSource:
     """What an optical TIFF looks like, without decoding it.
@@ -782,9 +949,16 @@ class OpticalTiffSource:
         and ``first_row`` stays in the page's own row numbering. With a
         window the adapter is always used, so a single-strip page decodes
         its one strip and keeps the window of it.
+
+        Raises:
+            ValueError: before the page is decoded, when the file ends
+                before a strip or tile this read needs. See
+                :func:`_refuse_cut_short`.
         """
         n_rows = self.shape[1]
+        y_start, y_stop, x_start, x_stop = window or (0, n_rows, 0, self.shape[2])
         with tifffile.TiffFile(self.path) as tif:
+            self._refuse_cut_short(tif, (y_start, y_stop, x_start, x_stop))
             if self.page_axes == "series":
                 store = tif.series[0].aszarr(level=0)
             else:
@@ -793,7 +967,6 @@ class OpticalTiffSource:
                     yield 0, self.colour.apply(self._to_cyx(page.asarray()))
                     return
                 store = page.aszarr()
-            y_start, y_stop, x_start, x_stop = window or (0, n_rows, 0, self.shape[2])
             source = zarr.open_array(store=store, mode="r")
             for start in range(y_start, y_stop, rows):
                 stop = min(start + rows, y_stop)
@@ -808,6 +981,39 @@ class OpticalTiffSource:
                 else:
                     decoded = np.asarray(source[start:stop, x_start:x_stop])
                 yield start, self.colour.apply(self._to_cyx(decoded))
+
+    def _refuse_cut_short(self, tif: Any, window: Window) -> None:
+        """Refuse the read when the file ends before the pixels it needs.
+
+        Every page the read decodes is tested: the first page, or for a
+        series the pages kept as channels. A plane the series leaves out
+        (all but the first of a z stack) is not read, so it is not tested;
+        every page is, should the series not hold one page per plane.
+
+        tifffile reads an uncompressed series whose pages follow one
+        another as a single run: page ``n`` is page 0's strips, ``n`` pages
+        further on. It is tested the same way, from page 0's tables, and
+        not from its own header, which a cut file may have lost while the
+        pixels the read needs are all there.
+        """
+        size = self.path.stat().st_size
+        if self.page_axes != "series":
+            _refuse_cut_short(self.path, tif.pages[0], window, size)
+            return
+        series = tif.series[0]
+        numbers = np.arange(len(series))
+        leading = tuple(int(n) for n in series.shape[: len(self.series_index)])
+        if int(np.prod(leading)) == numbers.size:
+            kept = tuple(slice(None) if i is None else i for i in self.series_index)
+            numbers = numbers.reshape(leading)[kept].ravel()
+        first = series[0]
+        step = 0
+        if series.dataoffset is not None and first is not None:
+            step = int(first.size) * int(first.dtype.itemsize)
+        for number in (int(n) for n in numbers):
+            page = first if step else series[number]
+            if page is not None:
+                _refuse_cut_short(self.path, page, window, size, number * step)
 
     def _series_selection(
         self, start: int, stop: int, x_start: int, x_stop: int
