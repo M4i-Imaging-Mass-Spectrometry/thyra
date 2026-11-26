@@ -27,16 +27,27 @@ round-trips, ``read_lazy`` still opens it, and the values are all correct --
 only the geometry is catastrophic. Hence a test that asserts geometry, on a
 store big enough for the geometry to be non-degenerate: below ~1 KB of ``data``
 the broken and fixed layouts agree, so a 4-pixel fixture would prove nothing.
+
+**The storage profile of a table.** Locks which parts of Zarr a table uses:
+format 3, little-endian, zstd, the sharding codec, variable-length strings, and
+nothing else (design decision D91, and "Promised: how the tables are stored" in
+docs/for-tool-developers.md). Thyra chooses none of these itself. They are the
+defaults of zarr and anndata, so a dependency bump can change them with no
+change in Thyra, and a reader written against a subset of Zarr would then stop
+reading new stores. The check reads the ``zarr.json`` files as JSON, the way
+such a reader does, and never opens the store with zarr.
 """
 
 from __future__ import annotations
 
 import contextlib
+import json
 from pathlib import Path
 
 import numpy as np
 import pytest
 import zarr
+from zarr.codecs import BloscCodec, BytesCodec, GzipCodec, ZstdCodec
 
 from thyra.converters.spatialdata import _chunking
 from thyra.converters.spatialdata._chunking import (
@@ -218,3 +229,301 @@ class TestConvertedTableGeometry:
         # Fixed this is single digits (each array fits one shard). Broken, the
         # same table is ~400 files: X/data alone shards at 200 elements.
         assert n_files < 100, f"{n_files} files under tables/ds_z0/X"
+
+
+# The storage profile a table is promised to stay inside (D91). The names are
+# the Zarr v3 ones, as they appear in ``zarr.json``.
+_PROFILE_DATA_TYPES = frozenset(
+    {
+        "bool",
+        "int8",
+        "int16",
+        "int32",
+        "int64",
+        "uint8",
+        "uint16",
+        "uint32",
+        "uint64",
+        "float32",
+        "float64",
+        "string",
+    }
+)
+_ONE_BYTE_DATA_TYPES = frozenset({"bool", "int8", "uint8"})
+_ZARR_V2_METADATA = (".zarray", ".zgroup", ".zattrs", ".zmetadata")
+
+
+def _codec(entry) -> tuple[str, dict]:
+    """One codec of a ``zarr.json`` as (name, configuration)."""
+    if isinstance(entry, str):
+        return entry, {}
+    return entry["name"], entry.get("configuration") or {}
+
+
+def _chain_violations(codecs: list, data_type: str) -> list[str]:
+    """What is wrong with the codecs that encode one chunk."""
+    names = [_codec(entry)[0] for entry in codecs]
+    first = "vlen-utf8" if data_type == "string" else "bytes"
+    if names != [first, "zstd"]:
+        return [f"codecs {names}, expected {[first, 'zstd']}"]
+    endian = _codec(codecs[0])[1].get("endian")
+    if first == "bytes" and data_type not in _ONE_BYTE_DATA_TYPES:
+        if endian != "little":
+            return [f"byte order {endian!r}, expected 'little'"]
+    return []
+
+
+def _shard_violations(configuration: dict) -> list[str]:
+    """What is wrong with a sharding codec's own settings."""
+    problems = []
+    location = configuration.get("index_location", "end")
+    if location != "end":
+        problems.append(f"shard index at the {location}, expected the end")
+    index = [_codec(entry) for entry in configuration["index_codecs"]]
+    if [name for name, _ in index] != ["bytes", "crc32c"]:
+        problems.append(f"shard index codecs {[name for name, _ in index]}")
+    elif index[0][1].get("endian") != "little":
+        problems.append("shard index is not little-endian")
+    return problems
+
+
+def _array_violations(meta: dict) -> list[str]:
+    """What takes one array's ``zarr.json`` outside the profile."""
+    problems = []
+    data_type = meta["data_type"]
+    # zarr writes some types (fixed-length bytes, datetimes, records) as a
+    # JSON object, not a name; none of them is in the profile.
+    if not isinstance(data_type, str) or data_type not in _PROFILE_DATA_TYPES:
+        return [f"data type {data_type!r}"]
+    if meta.get("storage_transformers"):
+        problems.append(f"storage transformers {meta['storage_transformers']}")
+    if meta["chunk_grid"]["name"] != "regular":
+        problems.append(f"chunk grid {meta['chunk_grid']['name']!r}")
+    key_name, key_config = _codec(meta["chunk_key_encoding"])
+    if key_name != "default" or key_config.get("separator", "/") != "/":
+        problems.append(f"chunk keys {meta['chunk_key_encoding']}")
+    codecs = meta["codecs"]
+    if [_codec(entry)[0] for entry in codecs] == ["sharding_indexed"]:
+        configuration = _codec(codecs[0])[1]
+        problems += _shard_violations(configuration)
+        codecs = configuration["codecs"]
+    return problems + _chain_violations(codecs, data_type)
+
+
+def _profile_violations(root: Path) -> list[str]:
+    """Every way the Zarr nodes under ``root`` leave the storage profile."""
+    problems = [
+        f"{path.relative_to(root).as_posix()}: Zarr 2 metadata file"
+        for name in _ZARR_V2_METADATA
+        for path in sorted(root.rglob(name))
+    ]
+    for path in sorted(root.rglob("zarr.json")):
+        meta = json.loads(path.read_text(encoding="utf-8"))
+        where = path.parent.relative_to(root).as_posix()
+        if meta.get("zarr_format") != 3:
+            problems.append(f"{where}: zarr_format {meta.get('zarr_format')!r}")
+        elif meta.get("node_type") == "array":
+            problems += [f"{where}: {text}" for text in _array_violations(meta)]
+    return problems
+
+
+def _table_arrays(store: Path) -> dict[str, dict]:
+    """The ``zarr.json`` of every array under ``tables/``, by path."""
+    root = store / "tables"
+    found = {}
+    for path in sorted(root.rglob("zarr.json")):
+        meta = json.loads(path.read_text(encoding="utf-8"))
+        if meta.get("node_type") == "array":
+            found[path.parent.relative_to(root).as_posix()] = meta
+    return found
+
+
+@pytest.fixture(scope="module")
+def mobility_store(tmp_path_factory) -> Path:
+    """The committed mobility fixture, converted: a summed and a sibling table.
+
+    It adds what ``converted_store`` has none of: a second table, and the one
+    table array with two dimensions (``uns/mobility_heatmap/counts``, float32).
+    """
+    from thyra.convert import convert_msi
+
+    source = Path(__file__).parents[2] / "data" / "fixtures"
+    output_path = tmp_path_factory.mktemp("table_profile") / "out.zarr"
+    assert convert_msi(
+        str(source / "mobility_continuous.imzML"),
+        str(output_path),
+        format_type="spatialdata",
+        dataset_id="ds",
+    ), "conversion fixture failed"
+    return output_path
+
+
+_LEFT_THE_PROFILE = (
+    "A table left the promised storage profile. If a dependency bump did this, "
+    "a reader built on a subset of Zarr stops reading new stores: pin the "
+    "dependency or change the profile on purpose (D91, "
+    "docs/for-tool-developers.md).\n"
+)
+
+# One array's metadata, inside the profile, to break one field at a time.
+_SHARDED_FLOAT64 = {
+    "zarr_format": 3,
+    "node_type": "array",
+    "shape": [16],
+    "data_type": "float64",
+    "chunk_grid": {"name": "regular", "configuration": {"chunk_shape": [8]}},
+    "chunk_key_encoding": {"name": "default", "configuration": {"separator": "/"}},
+    "fill_value": 0.0,
+    "storage_transformers": [],
+    "codecs": [
+        {
+            "name": "sharding_indexed",
+            "configuration": {
+                "chunk_shape": [4],
+                "codecs": [
+                    {"name": "bytes", "configuration": {"endian": "little"}},
+                    {"name": "zstd", "configuration": {"level": 0}},
+                ],
+                "index_codecs": [
+                    {"name": "bytes", "configuration": {"endian": "little"}},
+                    {"name": "crc32c"},
+                ],
+                "index_location": "end",
+            },
+        }
+    ],
+}
+
+
+def _broken(path: tuple, value) -> dict:
+    """``_SHARDED_FLOAT64`` with the field at ``path`` set to ``value``."""
+    meta = json.loads(json.dumps(_SHARDED_FLOAT64))
+    node = meta
+    for key in path[:-1]:
+        node = node[key]
+    node[path[-1]] = value
+    return meta
+
+
+class TestConvertedTableStorageProfile:
+    """A table stays inside the storage profile the docs promise (D91)."""
+
+    def test_every_table_array_is_inside_the_profile(self, converted_store):
+        store, _ = converted_store
+        problems = _profile_violations(store / "tables")
+        assert not problems, _LEFT_THE_PROFILE + "\n".join(problems)
+
+    def test_the_sibling_table_is_inside_the_profile_too(self, mobility_store):
+        problems = _profile_violations(mobility_store / "tables")
+        assert not problems, _LEFT_THE_PROFILE + "\n".join(problems)
+
+    def test_the_stores_exercise_every_part_of_the_profile(
+        self, converted_store, mobility_store
+    ):
+        # Guards the fixtures, not the code: the checks above only mean
+        # something for the kinds of array the stores actually hold. Which
+        # arrays are sharded is not promised, so none is named as sharded.
+        store, _ = converted_store
+        arrays = _table_arrays(store)
+        sharded = {
+            path
+            for path, meta in arrays.items()
+            if _codec(meta["codecs"][0])[0] == "sharding_indexed"
+        }
+        strings = {p for p, meta in arrays.items() if meta["data_type"] == "string"}
+        wide = {
+            p for p, m in arrays.items() if m["data_type"] not in _ONE_BYTE_DATA_TYPES
+        }
+
+        # The arrays docs/for-tool-developers.md names for a reader.
+        named = ["X/data", "X/indices", "X/indptr", "var/mz", "obs/x", "obs/y"]
+        assert {f"ds_z0/{name}" for name in named} <= set(arrays)
+        assert sharded & (wide - strings), "no sharded numeric array to check"
+        assert set(arrays) - sharded, "no unsharded array to check"
+        assert strings, "no string array to check"
+
+        siblings = _table_arrays(mobility_store)
+        assert len({path.split("/")[0] for path in siblings}) == 2, "no sibling table"
+        assert any(len(meta["shape"]) == 2 for meta in siblings.values())
+
+    @pytest.mark.parametrize(
+        ("path", "value", "expected"),
+        [
+            (("data_type",), {"name": "numpy.datetime64"}, "data type"),
+            (("data_type",), "float16", "data type 'float16'"),
+            (("storage_transformers",), [{"name": "x"}], "storage transformers"),
+            (("chunk_grid", "name"), "rectilinear", "chunk grid 'rectilinear'"),
+            (("chunk_key_encoding", "name"), "v2", "chunk keys"),
+            (("chunk_key_encoding", "configuration", "separator"), ".", "chunk keys"),
+            (
+                ("codecs", 0, "configuration", "index_location"),
+                "start",
+                "shard index at the start",
+            ),
+            (
+                ("codecs", 0, "configuration", "index_codecs"),
+                [{"name": "bytes", "configuration": {"endian": "little"}}],
+                "shard index codecs ['bytes']",
+            ),
+            (
+                ("codecs", 0, "configuration", "codecs", 0, "configuration"),
+                {"endian": "big"},
+                "byte order 'big'",
+            ),
+            (
+                ("codecs", 0, "configuration", "codecs"),
+                [{"name": "transpose"}, {"name": "bytes"}, {"name": "zstd"}],
+                "codecs ['transpose', 'bytes', 'zstd']",
+            ),
+        ],
+    )
+    def test_the_check_reports_each_field_it_reads(self, path, value, expected):
+        assert _array_violations(_SHARDED_FLOAT64) == []
+        problems = _array_violations(_broken(path, value))
+        assert len(problems) == 1 and expected in problems[0], problems
+
+    @pytest.mark.parametrize(
+        ("kwargs", "expected"),
+        [
+            ({"compressors": GzipCodec()}, "codecs ['bytes', 'gzip']"),
+            ({"compressors": BloscCodec()}, "codecs ['bytes', 'blosc']"),
+            ({"compressors": None}, "codecs ['bytes']"),
+            (
+                {"serializer": BytesCodec(endian="big")},
+                "byte order 'big'",
+            ),
+            ({"dtype": "complex128"}, "data type 'complex128'"),
+            ({"zarr_format": 2, "compressors": None}, "Zarr 2 metadata file"),
+            (
+                {"shards": (8,), "compressors": GzipCodec()},
+                "codecs ['bytes', 'gzip']",
+            ),
+        ],
+    )
+    def test_the_check_reports_an_array_outside_the_profile(
+        self, tmp_path, kwargs, expected
+    ):
+        # The check is the whole guarantee, so it must not be able to pass on
+        # the layouts a changed upstream default would produce.
+        settings = {"dtype": "float64", "compressors": ZstdCodec()}
+        settings.update(kwargs)
+        zarr.create_array(
+            store=str(tmp_path / "a"), shape=(16,), chunks=(4,), **settings
+        )
+        problems = _profile_violations(tmp_path)
+        # A Zarr 2 array is two metadata files, so two lines; the rest are one.
+        assert problems and all(expected in line for line in problems), problems
+
+    @pytest.mark.parametrize("shards", [None, (8,)])
+    @pytest.mark.parametrize("dtype", ["float64", "int8", "str"])
+    def test_the_check_accepts_what_zarr_writes_by_default(
+        self, tmp_path, shards, dtype
+    ):
+        zarr.create_array(
+            store=str(tmp_path / "a"),
+            shape=(16,),
+            chunks=(4,),
+            shards=shards,
+            dtype=dtype,
+        )
+        assert _profile_violations(tmp_path) == []
