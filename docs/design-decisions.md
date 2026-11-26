@@ -7470,3 +7470,99 @@ with dense rows.
 - "Give the sibling tables the columns too." Their rows are other
   quantities (per mobility channel, per precursor), so the numbers of the
   summed row would describe a matrix that is not theirs.
+
+## D91. The arrays of a table stay inside one small part of Zarr
+
+**Status:** Implemented (2026-11-26). No store changes.
+
+**Decision.** Every Zarr array under `tables/` of a store is written inside
+this list, and a reader may rely on it:
+
+- Zarr format 3, with no Zarr 2 metadata files.
+- Data types `bool`, `int8` to `int64`, `uint8` to `uint64`, `float32`,
+  `float64` and `string` (variable-length UTF-8).
+- Little-endian byte order.
+- A chunk is encoded with `bytes` then `zstd`, or with `vlen-utf8` then
+  `zstd` for a `string` array. No other compression and no other codec.
+- An array may wrap those codecs in `sharding_indexed`, with the shard index
+  at the end of the file, encoded with `bytes` (little-endian) then
+  `crc32c`.
+- A regular chunk grid and the default chunk key encoding, with `/` as
+  separator.
+
+Chunk sizes, shard sizes, the compression level and which arrays are sharded
+are not part of it. Neither are the images and the shapes. This replaces the
+line in [For tool developers](for-tool-developers.md) that listed
+compression as not promised.
+
+**Why.** A reader outside Python supports part of Zarr, not all of it: the
+Zarr package of another language, or a reader built into an MSI analysis
+package. Its author has to know which part is enough to read a table. The
+answer was "whatever the libraries under Thyra default to". Thyra sets one
+thing at this seam, the shard size budget (`table_write_config`). The
+format, the byte order, the compression and the sharding come from
+spatialdata, anndata and zarr. That seam has moved before with no change in
+Thyra: anndata 0.13 began to shard the arrays it writes, and a zarr default
+then cut one table into about 400,000 files (see
+`tests/unit/converters/test_chunking_policy.py`). The store still
+read correctly in Python, so nothing reported it. A change of codec would be
+as quiet in Python and would stop a smaller reader outright.
+
+**What changes in a store.** Nothing. The list is what a store already
+holds, measured on two conversions with zarr 3.4.0 and anndata 0.13.2:
+
+| Source | Table arrays | Outside the list |
+| --- | --- | --- |
+| the `mobility_continuous` fixture (a summed table and a mobility table) | 213 | 0 |
+| an imzML of 16,384 pixels, 708,847 m/z bins and 24.3 million stored values | 75 | 0 |
+
+In both, every array with one or more dimensions is sharded, and every
+single value (an array with an empty shape) is not. `X/data` is `float64`;
+`X/indices` and `X/indptr` are `int32`.
+
+**How it is held: by a test, because there is no place to set it.**
+`SpatialData.write` hands a table to anndata and takes no per-array
+settings for it (the reason `table_write_config` goes through zarr's
+configuration, see `_chunking.py`), and zarr 3.4 has no configuration key
+for the default compression. So Thyra cannot pass the codecs itself.
+`TestConvertedTableStorageProfile` converts two sources, reads every
+`zarr.json` under `tables/` as JSON, the way a small reader does, and fails
+with the list of every array outside the profile.
+
+- The two sources are a small imzML written by the test and the committed
+  `mobility_continuous` fixture, which adds a sibling table and the one
+  table array with two dimensions.
+- It also checks that the stores hold each kind of array the list speaks
+  about: sharded and unsharded, numeric and string.
+- It checks the check. Arrays written with gzip, with blosc, with no
+  compression, big-endian, as `complex128` and as Zarr 2 are each reported,
+  and so is each field of the metadata the check reads, changed one at a
+  time.
+- zarr, anndata and spatialdata are each bounded below the next minor
+  version in `pyproject.toml`, so a minor release of one reaches a user only
+  after the pull request that raises the bound has run this test. A patch
+  release inside the bounds reaches a `pip install` at once. The
+  `clean-venv-install` job installs that way and runs the unit tests, so
+  such a release is reported at the next CI run, which can be after a user
+  has it.
+
+**Not covered.** The test converts two imzML sources. An MS/MS sibling
+table, a 3D store and the metadata of the vendor readers go through the same
+write and are not converted by it. The data types are the one line Thyra's
+own code decides: a value of another type placed in `uns` (a `float16`, a
+date, a record) would be written as it is. No reader does that today, and
+only a source the test converts would show it. The measurements above are on
+anndata 0.13.2; a later patch release was not measured.
+
+**Alternatives.**
+
+- "A second output that holds only the arrays." The table group is already
+  a Zarr group that opens on its own, so this would be a second layout to
+  test and to keep equal to the first, for no array a reader lacks today.
+- "An option to write the tables unsharded." One file per chunk is the file
+  count the shard budget exists to avoid. It can be added if a reader that
+  cannot read shards needs it.
+- "Promise the images too." Nobody has asked, and no test of this kind
+  covers the optical images.
+- "Give the list a version number." It is one list. A change to it is a new
+  entry here and a line in the changelog.

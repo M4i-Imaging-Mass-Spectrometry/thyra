@@ -55,6 +55,35 @@ gains `z`, and the TIC image is a volume of shape `(c, z, y, x)`. The
 snippets on this page assume a 2D store. See
 [Output format](output-format.md#3d-data-z-slices).
 
+### Without Python
+
+A table is a plain Zarr group. Its layout is the
+[AnnData on-disk format](https://anndata.readthedocs.io/en/stable/fileformat-prose.html).
+A reader in any language can open `tables/<table name>` on its own and
+ignore the rest of the store. It needs these arrays:
+
+| Array | Holds |
+|---|---|
+| `X/data`, `X/indices`, `X/indptr` | the intensities, as a CSC sparse matrix of pixels x m/z bins |
+| `var/mz` | the mass axis, one value per column |
+| `obs/x`, `obs/y` | the raster position of each row |
+
+- The `shape` attribute of the `X` group is the matrix shape.
+- Column `j` is the ion image of m/z bin `j`. Count columns, rows and
+  entries from 0. The values of column `j` are the entries of `data` from
+  `indptr[j]` up to, but not including, `indptr[j + 1]`. The same entries of
+  `indices` hold the row of each value.
+- Read each array's data type from its `zarr.json`. Do not assume that the
+  index arrays are 32-bit.
+- A string column is a string array, or a group with a `values` and a `mask`
+  array. `obs/region` is a group with `codes` and `categories`. The
+  `encoding-type` attribute of each node says which it is.
+- A reader that wants only spectra, the mass axis and positions can skip
+  every string array.
+
+[How the tables are stored](#promised-how-the-tables-are-stored) lists the
+parts of Zarr such a reader must support.
+
 ## The rules a tool can rely on
 
 ### Which table is which
@@ -215,6 +244,43 @@ To see what made a store:
   value. See
   [design decision D42](design-decisions.md#d42-a-store-records-a-sha-256-of-its-mass-axis).
 
+### Promised: how the tables are stored
+
+Every Zarr array under `tables/` stays inside one small part of Zarr. A
+reader that supports this part can read every table:
+
+| | In every table array |
+|---|---|
+| Zarr format | 3. A table holds no Zarr 2 metadata files. |
+| Data types | `bool`; `int8` to `int64`; `uint8` to `uint64`; `float32` and `float64`; `string` (variable-length UTF-8) |
+| Byte order | little-endian |
+| Compression | `zstd`, and no other |
+| Codecs of a chunk | `bytes` then `zstd`. For a `string` array, `vlen-utf8` then `zstd`. |
+| Sharding | An array may wrap those codecs in `sharding_indexed`. The shard index is at the end of the file, encoded with `bytes` (little-endian) then `crc32c`. |
+| Chunk grid and keys | a regular grid, and the default key encoding with `/` as separator |
+
+Today every array with one or more dimensions is sharded, which includes
+all of `X`, `obs` and `var`. A single value, stored as an array with an
+empty shape, is not. Do not rely on which arrays are sharded: read each
+array's `zarr.json`.
+
+Expect missing chunks. A chunk that holds only the array's `fill_value` may
+not be stored:
+
+- Outside a shard, its file is absent.
+- Inside a shard, the index still has an entry for it. Both numbers of that
+  entry, the offset and the length, are 2^64 - 1.
+- A shard whose chunks are all missing has no file.
+
+A test in the Thyra repository reads the `zarr.json` files of converted
+stores and fails when an array leaves this list. A new release of a library
+Thyra depends on can therefore not change it silently. A deliberate change
+is recorded as a design decision and named in the [changelog](changelog.md).
+See
+[design decision D91](design-decisions.md#d91-the-arrays-of-a-table-stay-inside-one-small-part-of-zarr).
+
+The promise covers the tables only, not the images or the shapes.
+
 ### Not promised
 
 - **Element names.** The dataset id is a user setting. Find tables by their
@@ -231,7 +297,8 @@ To see what made a store:
 - **The source's own vocabulary.** `format_specific`, `acquisition_params`,
   `instrument_info` and `raw_metadata` keep what the source said, so their
   keys differ by format.
-- **Zarr storage details**, such as chunk sizes and compression.
+- **Other Zarr storage details**: chunk and shard sizes, the compression
+  level, which arrays are sharded, and how the images are stored.
 
 ## Recipes
 
