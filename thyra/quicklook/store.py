@@ -12,6 +12,7 @@ dataset id is a user setting.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -313,6 +314,31 @@ class Store:
     def root_attrs(self) -> Dict[str, Any]:
         """The store's root attributes."""
         return dict(self._root.attrs)
+
+    def pixel_size(self) -> Optional[Tuple[float, float]]:
+        """The width and height of one pixel, in micrometres.
+
+        Read from the root attributes ``pixel_size_x_um`` and
+        ``pixel_size_y_um``, which state one size for the whole store.
+
+        Returns:
+            ``(x, y)``, or ``None`` when either attribute is missing or is
+            not a finite number above zero. A picture is then drawn with
+            square pixels, as it would be for a store that states none.
+        """
+        sides: List[float] = []
+        for key in ("pixel_size_x_um", "pixel_size_y_um"):
+            value: Any = self._root.attrs.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return None
+            try:
+                side = float(value)
+            except OverflowError:  # a whole number no float can hold
+                return None
+            if not math.isfinite(side) or side <= 0:
+                return None
+            sides.append(side)
+        return sides[0], sides[1]
 
     def msi_tables(self) -> List[TableSummary]:
         """The tables of spectra: one per slice, or one for a volume.

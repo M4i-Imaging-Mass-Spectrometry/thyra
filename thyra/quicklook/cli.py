@@ -140,6 +140,7 @@ def ion_image_command(
     opened = _open(store, read_path)
     try:
         tables = opened.msi_tables()
+        pixel_size = opened.pixel_size()
         targets = {summary.name: output_path for summary in tables}
         if len(tables) > 1:
             for name in targets:
@@ -150,7 +151,7 @@ def ion_image_command(
         for name, target in targets.items():
             table = opened.open_table(name)
             ion = make_ion_image(table, mz, ppm)
-            figure = ion_image_figure(ion, f"{opened.name}, {name}")
+            figure = ion_image_figure(ion, f"{opened.name}, {name}", pixel_size)
             _write(target, png_bytes(figure))
             window = ion.window
             click.echo(

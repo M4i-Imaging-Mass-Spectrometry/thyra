@@ -30,6 +30,8 @@ from .render import (
     VIRIDIS,
     colourise,
     format_intensity,
+    pixel_size_note,
+    pixel_stretch,
     png_bytes,
     raster_image,
     scale_top,
@@ -346,6 +348,7 @@ def _ion_image_section(
     positions: Positions,
     spectrum: NDArray[np.float64],
     heading: str,
+    stretch: Tuple[float, float],
 ) -> List[str]:
     """Ion images of the tallest peaks of one table's mean spectrum.
 
@@ -365,9 +368,8 @@ def _ion_image_section(
             top = scale_top(ion.image)
             pixels = colourise(ion.image, top)
             caption = f"m/z {target:.4f}, 0 to {format_intensity(top)}"
-            figures.append(
-                _figure(raster_image(pixels, _ION_LONG_SIDE, reduce=True), caption)
-            )
+            image = raster_image(pixels, _ION_LONG_SIDE, reduce=True, stretch=stretch)
+            figures.append(_figure(image, caption))
     except QuicklookError as exc:
         return out + [f'<p class="note">{html.escape(str(exc))}</p>']
     example = _command_example(store, float(table.mz[peaks[0]]))
@@ -385,6 +387,7 @@ def _spectra_sections(store: Store, summary: TableSummary, level: int) -> List[s
     table = store.open_table(summary.name)
     positions = table.positions()
     heading = f"h{level}"
+    stretch = pixel_stretch(store.pixel_size())
     facts = table_facts(table, positions, table.metadata_block())
     out = [_rows([list(pair) for pair in facts])]
 
@@ -392,7 +395,9 @@ def _spectra_sections(store: Store, summary: TableSummary, level: int) -> List[s
     raster = _tic_raster(tic, positions) if tic is not None else None
     if raster is not None:
         top = scale_top(raster)
-        image = raster_image(colourise(raster, top), _TIC_LONG_SIDE, reduce=True)
+        image = raster_image(
+            colourise(raster, top), _TIC_LONG_SIDE, reduce=True, stretch=stretch
+        )
         caption = f"Total ion current of every pixel, 0 to {format_intensity(top)}."
         out += [f"<{heading}>TIC image</{heading}>", _figure(image, caption)]
 
@@ -403,7 +408,7 @@ def _spectra_sections(store: Store, summary: TableSummary, level: int) -> List[s
         f"<{heading}>Mean spectrum</{heading}>",
         spectrum_svg(table.mz, spectrum),
     ]
-    return out + _ion_image_section(store, table, positions, spectrum, heading)
+    return out + _ion_image_section(store, table, positions, spectrum, heading, stretch)
 
 
 def _as_photo(pixels: NDArray[Any]) -> NDArray[np.uint8]:
@@ -482,11 +487,14 @@ def build_report(store: Store) -> str:
     """
     tables = store.msi_tables()
     name = html.escape(store.name)
+    pixels = pixel_size_note(store.pixel_size(), "µm")
     body = [
         f"<h1>{name}</h1>",
         f'<p class="note">What the store {html.escape(store.path.name)} holds. '
         'Colours run from 0 <span class="bar"></span> to the value under each '
-        'image; <span class="swatch"></span> was not measured.</p>',
+        'image; <span class="swatch"></span> was not measured.'
+        + (f" Each pixel is {html.escape(pixels)}." if pixels else "")
+        + "</p>",
     ]
     for summary in tables:
         if len(tables) > 1:

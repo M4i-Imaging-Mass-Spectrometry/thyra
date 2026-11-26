@@ -219,6 +219,37 @@ class TestImages:
         assert open_store(path).image_preview("photo", 100).shape == (3, 34, 100)
 
 
+class TestPixelSize:
+    def _stated(self, tmp_path, attrs):
+        path = write_store(tmp_path / "s.zarr", {"t": make_table()}, attrs=attrs)
+        return open_store(path).pixel_size()
+
+    def test_both_sides_are_read_from_the_root_attributes(self, tmp_path):
+        attrs = {"pixel_size_x_um": 70.0, "pixel_size_y_um": 150}
+
+        assert self._stated(tmp_path, attrs) == (70.0, 150.0)
+
+    @pytest.mark.parametrize(
+        "attrs",
+        [
+            {},
+            {"pixel_size_x_um": 70.0},
+            {"pixel_size_y_um": 150.0},
+            {"pixel_size_x_um": 70.0, "pixel_size_y_um": 0.0},
+            {"pixel_size_x_um": -70.0, "pixel_size_y_um": 150.0},
+            {"pixel_size_x_um": float("nan"), "pixel_size_y_um": 150.0},
+            {"pixel_size_x_um": 70.0, "pixel_size_y_um": float("inf")},
+            {"pixel_size_x_um": "70", "pixel_size_y_um": "150"},
+            {"pixel_size_x_um": True, "pixel_size_y_um": True},
+            {"pixel_size_x_um": [70.0], "pixel_size_y_um": 150.0},
+            {"pixel_size_x_um": 10**400, "pixel_size_y_um": 150.0},
+            {"pixel_size_x_um": None, "pixel_size_y_um": None},
+        ],
+    )
+    def test_a_size_that_is_missing_or_cannot_be_one_is_none(self, tmp_path, attrs):
+        assert self._stated(tmp_path, attrs) is None
+
+
 def test_the_store_name_drops_the_zarr_ending(tmp_path):
     path = write_store(tmp_path / "Brain 1.ZARR", {"t": make_table()})
 

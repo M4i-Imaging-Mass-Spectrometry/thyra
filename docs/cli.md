@@ -750,8 +750,13 @@ covers.
   position that was never measured is grey, so it cannot be taken for a
   measured pixel with no signal.
 - **Size.** The image covers the bounding box of the measured pixels. A small
-  raster is enlarged by a whole factor, each pixel becoming a square block. A
-  large one is written pixel for pixel.
+  raster is enlarged by a whole factor, each pixel becoming one block of its
+  colour. A large one keeps every pixel.
+- **Pixel shape.** A pixel is drawn as wide and as tall as the store's
+  `pixel_size_x_um` and `pixel_size_y_um` say, so the image has the
+  proportions of the measured area. When the two differ, the image states
+  both. A ratio above 1 to 20 is drawn as 1 to 20, and the image says so. A
+  store that states no usable size is drawn with square pixels.
 - **Which table.** The image is read from the table of spectra, which is
   recognised by its `var` columns and not by its name. The ion mobility and
   MS/MS tables are never drawn. A store with one table of spectra per slice
@@ -797,6 +802,9 @@ The page holds, in this order:
 5. The optical images, reduced, when the store has any.
 6. Every table with its kind and shape, so ion mobility and MS/MS tables are
    visible.
+
+The TIC image and the ion images follow the pixel shape as `ion-image` does;
+the line under the store's name states both sizes when they differ.
 
 A store with one table of spectra per slice repeats items 1 to 4 for each.
 A table whose matrix is not stored column by column, which only old Thyra
