@@ -135,7 +135,8 @@ class BaseMSIConverter(ABC):
             pixel_size_um: In-plane pixel pitch in micrometers **along
                 x**. The y pitch starts equal to it and is replaced by
                 the detected one when the source declares an anisotropic
-                raster -- see :attr:`pixel_size_y_um`.
+                raster, or by the one the caller states -- see
+                :attr:`pixel_size_y_um`.
             pixel_size_source: How pixel size was determined
             compression_level: Compression level for output
             handle_3d: Whether to process as 3D data
@@ -173,11 +174,13 @@ class BaseMSIConverter(ABC):
         #: root attrs, the affines, the pixel footprints and
         #: ``obs["spatial_y"]`` all carried the x pitch on both axes --
         #: so an anisotropic raster rendered squashed by y/x and the
-        #: store contradicted itself. Settled from the detected pair (see
+        #: store contradicted itself. Settled from the detected pair or
+        #: from the pair the caller states (see
         #: ``BaseSpatialDataConverter.__init__`` and
-        #: :meth:`_initialize_conversion`); a pitch the caller states with
+        #: :meth:`_initialize_conversion`). One number stated with
         #: ``--pixel-size`` applies to both axes, which is how someone
-        #: declares a raster square whatever the file says.
+        #: declares a raster square whatever the file says; ``40x150``
+        #: states the two apart (issue #570).
         self.pixel_size_y_um: float = float(pixel_size_um)
         self.pixel_size_source = pixel_size_source
         self.compression_level = compression_level
@@ -395,8 +398,8 @@ class BaseMSIConverter(ABC):
 
         ``essential.pixel_size`` is an ``(x, y)`` pair and both halves are
         kept: taking only ``[0]`` is how an anisotropic raster came to be
-        rendered square (issue #228). A pitch the caller stated applies to
-        both axes and is not overridden here.
+        rendered square (issue #228). A pitch the caller stated, one
+        number for both axes or a pair, is not overridden here.
 
         A source pitch that is NaN, infinite or not above 0 is not taken:
         the default stays, and the store says so (#503).
@@ -425,7 +428,10 @@ class BaseMSIConverter(ABC):
                 f"(was default: {old_size} um)"
             )
         elif self.pixel_size_source == PixelSizeSource.USER_PROVIDED:
-            logger.info(f"Using user-specified pixel size: {self.pixel_size_um} um")
+            stated = f"{self.pixel_size_um}"
+            if self.pixel_size_y_um != self.pixel_size_um:
+                stated += f" x {self.pixel_size_y_um}"
+            logger.info(f"Using user-specified pixel size: {stated} um")
         self._log_anisotropic_raster()
 
     def _log_anisotropic_raster(self) -> None:
@@ -436,19 +442,27 @@ class BaseMSIConverter(ABC):
         extent by a position count can land a few ULP apart on two axes
         of a square raster and that is not news. A real anisotropy is a
         percent or more -- a DESI method with ``DesiXStep != DesiYStep``.
+
+        The way to square pixels is offered only for a pitch the source
+        stated: a caller who gave the pair asked for it.
         """
         if math.isclose(
             float(self.pixel_size_um), float(self.pixel_size_y_um), rel_tol=1e-9
         ):
             return
+        stated = self.pixel_size_source == PixelSizeSource.USER_PROVIDED
         logger.info(
             "Anisotropic raster: %g um in x, %g um in y. Both pitches are "
             "carried through the store -- the root attrs, the element "
             "transforms, the pixel footprints, obs['spatial_x']/['spatial_y'] "
-            "and the msi_metadata block. Pass --pixel-size to declare the "
-            "raster square instead.",
+            "and the msi_metadata block.%s",
             self.pixel_size_um,
             self.pixel_size_y_um,
+            (
+                ""
+                if stated
+                else " Pass --pixel-size to declare the raster square instead."
+            ),
         )
 
     def _resolve_z_spacing(self, essential: "EssentialMetadata") -> None:

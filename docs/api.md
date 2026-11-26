@@ -32,6 +32,9 @@ success = convert_msi(
     dataset_id="hippocampus",
     pixel_size_um=10.0,
 )
+
+# Pixels that are not square: x, then y, in micrometers
+success = convert_msi("linescan.imzML", "linescan.zarr", pixel_size_um=(40, 150))
 ```
 
 !!! warning "The Python API does not resample by default"

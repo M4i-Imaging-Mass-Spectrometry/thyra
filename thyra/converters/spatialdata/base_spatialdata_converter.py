@@ -178,6 +178,7 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         msms_table: bool = True,
         sample_id: Optional[str] = None,
         sample_name: Optional[str] = None,
+        pixel_size_y_um: Optional[float] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the base SpatialData converter.
@@ -186,7 +187,8 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
             reader: MSI data reader
             output_path: Path for output file
             dataset_id: Identifier for the dataset
-            pixel_size_um: In-plane size of each pixel in micrometers
+            pixel_size_um: In-plane size of each pixel in micrometers,
+                along x; along y too unless ``pixel_size_y_um`` is given
             pixel_size_source: How pixel size was determined
             handle_3d: Whether to process as 3D data (True) or 2D slices
                 (False)
@@ -262,10 +264,20 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
                 ``conversion_options`` through ``**kwargs``.
             sample_name: The user's sample name, written to
                 ``msi_metadata.sample.sample_name``; same rules.
+            pixel_size_y_um: The pixel size along y in micrometers, for
+                a raster whose pixels are not square. ``None`` (default)
+                takes ``pixel_size_um``, or the detected y pitch that
+                ``pixel_size_detection_info`` holds for a detected size.
+                Kept only with a ``pixel_size_source`` other than the
+                default: with the default, both sizes are replaced by the
+                ones the reader states.
+                An explicit parameter, so it does not reach
+                ``conversion_options`` through ``**kwargs``.
             **kwargs: Additional keyword arguments
 
         Raises:
-            ConversionRefused: If pixel_size_um is not positive, dataset_id
+            ConversionRefused: If pixel_size_um or pixel_size_y_um is not
+                positive, dataset_id
                 is empty, a sample id or name is not a usable label, or
                 ``sparse_format`` is passed
         """
@@ -286,6 +298,11 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         if not is_usable_pitch(pixel_size_um):
             raise ConversionRefused(
                 f"pixel_size_um must be a finite positive number, got {pixel_size_um}"
+            )
+        if pixel_size_y_um is not None and not is_usable_pitch(pixel_size_y_um):
+            raise ConversionRefused(
+                "pixel_size_y_um must be a finite positive number, got "
+                f"{pixel_size_y_um}"
             )
         if not dataset_id.strip():
             raise ConversionRefused("dataset_id cannot be empty")
@@ -365,19 +382,28 @@ class BaseSpatialDataConverter(BaseMSIConverter, ABC):
         self._source_coordinate_offsets: Optional[Tuple[int, int, int]] = None
         self._source_stage_origin_um: Optional[Tuple[float, float]] = None
         self._pixel_size_detection_info = pixel_size_detection_info
-        # ``convert.py`` detects an (x, y) pair, hands the converter the x
-        # half as ``pixel_size_um`` and puts both in the detection info.
-        # Reading the y half back here is what stops the store describing
-        # an anisotropic raster as square (issue #228); everything the
-        # converter writes takes its y pitch from this attribute.
+        # The y pitch. Everything the converter writes takes it from
+        # ``pixel_size_y_um``, which is what stops the store describing an
+        # anisotropic raster as square (issue #228).
         #
-        # Only for a pitch that was actually detected. A caller who states
-        # one gets it on both axes -- that is what stating it means -- and
-        # a source ``convert.py`` could not detect leaves the placeholder,
-        # which :meth:`_adopt_detected_pixel_size` settles from the reader
-        # once its metadata is loaded.
+        # ``convert.py`` hands over both halves of the pair it settled, a
+        # detected one and a stated one alike: x as ``pixel_size_um``, y
+        # as ``pixel_size_y_um`` (issue #570). A stated pair has no other
+        # way in, because its detection info names no pitch.
+        #
+        # Without the argument, the y half is read from the detection
+        # info, and only for a pitch that was actually detected. A caller
+        # who states one number gets it on both axes -- that is what
+        # stating one means -- and a source ``convert.py`` could not
+        # detect leaves the placeholder, which
+        # :meth:`_adopt_detected_pixel_size` settles from the reader once
+        # its metadata is loaded.
         detected_y = (pixel_size_detection_info or {}).get("detected_y_um")
-        if (
+        if pixel_size_y_um is not None:
+            # Said once the conversion starts, by
+            # :meth:`_adopt_detected_pixel_size`, and not here as well.
+            self.pixel_size_y_um = float(pixel_size_y_um)
+        elif (
             detected_y is not None
             and pixel_size_source is PixelSizeSource.AUTO_DETECTED
         ):

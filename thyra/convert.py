@@ -305,16 +305,53 @@ def length_problem(value: Any, label: str) -> Optional[str]:
     return None
 
 
+#: A pixel size as a caller may state it: one number for both axes, or
+#: an ``(x, y)`` pair.
+PixelSize = Union[float, Tuple[float, float], List[float]]
+
+
+def pixel_size_problem(value: Any) -> Optional[str]:
+    """Why ``value`` is not a pixel size in micrometres, or ``None``.
+
+    One number states both axes, as it always did. A tuple or a list of
+    two numbers states x, then y: the pitch of a raster whose pixels are
+    not square (issue #570). Each number passes :func:`length_problem`,
+    so a bool, NaN, infinity, zero and a negative value are refused in a
+    pair as they are alone. Anything that is neither a number nor a tuple
+    or list is told both forms.
+    """
+    if not isinstance(value, (tuple, list)):
+        if isinstance(value, bool) or not isinstance(value, numbers.Real):
+            return (
+                "Pixel size must be one number or an (x, y) pair of two "
+                f"numbers, not {type(value).__name__}"
+            )
+        return length_problem(value, "Pixel size")
+    if len(value) != 2:
+        return (
+            "Pixel size must be one number or an (x, y) pair of two "
+            f"numbers, got {len(value)} values"
+        )
+    for half, axis in zip(value, ("x", "y")):
+        problem = length_problem(half, f"Pixel size {axis}")
+        if problem is not None:
+            return problem
+    return None
+
+
 def _validate_numeric_parameters(
-    pixel_size_um: Optional[float], z_spacing_um: Optional[float] = None
+    pixel_size_um: Optional[PixelSize], z_spacing_um: Optional[float] = None
 ) -> bool:
     """Validate numeric parameters.
 
     The API is validated as well as the CLI because a caller can hand
     these in directly (issue #231).
     """
-    for value, label in ((pixel_size_um, "Pixel size"), (z_spacing_um, "Z spacing")):
-        problem = None if value is None else length_problem(value, label)
+    problems = (
+        None if pixel_size_um is None else pixel_size_problem(pixel_size_um),
+        None if z_spacing_um is None else length_problem(z_spacing_um, "Z spacing"),
+    )
+    for problem in problems:
         if problem is not None:
             logger.error(problem)
             _note_failure(problem)
@@ -516,7 +553,7 @@ def _validate_input_parameters(
     output_path: Union[str, Path],
     format_type: str,
     dataset_id: str,
-    pixel_size_um: Optional[float],
+    pixel_size_um: Optional[PixelSize],
     z_spacing_um: Optional[float] = None,
     streaming: object = "auto",
     sample_id: Any = None,
@@ -793,11 +830,19 @@ def _lossless_spectrum_for(kwargs: Dict[str, Any]) -> List[str]:
 
 
 def _determine_pixel_size(
-    reader: BaseMSIReader, pixel_size_um: Optional[float], input_format: str
-) -> Tuple[float, PixelSizeSource, Dict[str, Any]]:
-    """Determine pixel size either from metadata or user input."""
+    reader: BaseMSIReader,
+    pixel_size_um: Optional[Tuple[float, float]],
+    input_format: str,
+) -> Tuple[Tuple[float, float], PixelSizeSource, Dict[str, Any]]:
+    """Determine the pixel size, from user input or else from metadata.
+
+    Returns the pitch as an ``(x, y)`` pair on both routes, so a stated
+    pair and a detected one reach the converter the same way.
+    """
     if pixel_size_um is not None:
-        # Manual pixel size was provided
+        # Manual pixel size was provided. The record is the same for one
+        # value and for a pair: the values themselves are the root
+        # attributes pixel_size_x_um and pixel_size_y_um.
         pixel_size_detection_info = {
             "method": "manual",
             "source_format": input_format,
@@ -829,8 +874,11 @@ def _determine_pixel_size(
             "--pixel-size (for example --pixel-size 25)."
         )
 
-    final_pixel_size = essential_metadata.pixel_size[0]  # Use X size
-    logger.info(f"Detected pixel size: {final_pixel_size:.1f} um")
+    final_pixel_size = (
+        essential_metadata.pixel_size[0],
+        essential_metadata.pixel_size[1],
+    )
+    logger.info(f"Detected pixel size: {final_pixel_size[0]:.1f} um")
 
     pixel_size_detection_info = {
         "method": "automatic",
@@ -862,6 +910,7 @@ def _create_converter(
     z_spacing_um: Optional[float] = None,
     sample_id: Optional[str] = None,
     sample_name: Optional[str] = None,
+    pixel_size_y_um: Optional[float] = None,
     **kwargs: Any,
 ) -> BaseMSIConverter:
     """Create and return a converter for the specified format.
@@ -872,6 +921,11 @@ def _create_converter(
     selects nothing; it is accepted so existing calls keep working, and
     ``False`` is answered with a note rather than silently. The value is
     checked by ``_validate_streaming`` before the reader is opened.
+
+    ``pixel_size_um`` is the pitch along x and ``pixel_size_y_um`` the one
+    along y. ``convert_msi`` always states both. ``None`` leaves y to the
+    converter: the detected y in ``pixel_size_detection_info`` for a
+    detected size, and x otherwise.
     """
     if streaming is False:
         logger.warning(
@@ -907,6 +961,10 @@ def _create_converter(
         "sample_name": sample_name,
         **kwargs,
     }
+    # Left out when a caller of this function gave none, so the converter
+    # settles y itself, as it did before the argument existed.
+    if pixel_size_y_um is not None:
+        converter_kwargs["pixel_size_y_um"] = pixel_size_y_um
     # The registry's own refusal names the format asked for and the formats
     # there are. This used to go through a wrapper that, for any format_type
     # containing "spatialdata", replaced that with "SpatialData converter
@@ -946,17 +1004,27 @@ def _note_converter_failure(converter: BaseMSIConverter) -> None:
 
 def _plain_values(
     handle_3d: Any, pixel_size_um: Any, z_spacing_um: Any
-) -> Tuple[bool, Optional[float], Optional[float]]:
+) -> Tuple[bool, Optional[Tuple[float, float]], Optional[float]]:
     """The validated arguments as plain Python types, taken once.
 
     An int pitch made an integer ``obs["spatial_x"]`` (issue #519), and a
-    numpy bool is no JSON value.
+    numpy bool is no JSON value. The pixel size leaves as an ``(x, y)``
+    pair however it was stated: one number is that number twice.
     """
     return (
         bool(handle_3d),
-        None if pixel_size_um is None else float(pixel_size_um),
+        _plain_pixel_size(pixel_size_um),
         None if z_spacing_um is None else float(z_spacing_um),
     )
+
+
+def _plain_pixel_size(pixel_size_um: Any) -> Optional[Tuple[float, float]]:
+    """A validated pixel size as ``(x, y)`` floats, or ``None``."""
+    if pixel_size_um is None:
+        return None
+    if isinstance(pixel_size_um, (tuple, list)):
+        return float(pixel_size_um[0]), float(pixel_size_um[1])
+    return float(pixel_size_um), float(pixel_size_um)
 
 
 def _checked_resampling_config(config: Any) -> Tuple[Any, bool]:
@@ -1009,7 +1077,7 @@ def _run_conversion(
     output_path: Union[str, Path],
     format_type: str = "spatialdata",
     dataset_id: str = "msi_dataset",
-    pixel_size_um: Optional[float] = None,
+    pixel_size_um: Optional[PixelSize] = None,
     handle_3d: bool = False,
     z_spacing_um: Optional[float] = None,
     resampling_config: Optional[
@@ -1046,7 +1114,7 @@ def _run_conversion(
         _validate_handle_3d(handle_3d) and _validate_keywords(kwargs, reader_options)
     ):
         return False
-    handle_3d, pixel_size_um, z_spacing_um = _plain_values(
+    handle_3d, stated_pixel_size, z_spacing_um = _plain_values(
         handle_3d, pixel_size_um, z_spacing_um
     )
     resampling_config, ok = _checked_resampling_config(resampling_config)
@@ -1098,7 +1166,7 @@ def _run_conversion(
         with reader:
             # Determine pixel size
             final_pixel_size, pixel_size_source, pixel_size_detection_info = (
-                _determine_pixel_size(reader, pixel_size_um, input_format)
+                _determine_pixel_size(reader, stated_pixel_size, input_format)
             )
 
             # Create converter
@@ -1107,7 +1175,7 @@ def _run_conversion(
                 reader,
                 output_path,
                 dataset_id,
-                final_pixel_size,
+                final_pixel_size[0],
                 pixel_size_source,
                 handle_3d,
                 pixel_size_detection_info,
@@ -1118,6 +1186,7 @@ def _run_conversion(
                 z_spacing_um=z_spacing_um,
                 sample_id=sample_id,
                 sample_name=sample_name,
+                pixel_size_y_um=final_pixel_size[1],
                 **kwargs,
             )
 
@@ -1180,7 +1249,7 @@ def convert_msi(
     output_path: Union[str, Path],
     format_type: str = "spatialdata",
     dataset_id: str = "msi_dataset",
-    pixel_size_um: Optional[float] = None,
+    pixel_size_um: Optional[PixelSize] = None,
     handle_3d: bool = False,
     z_spacing_um: Optional[float] = None,
     resampling_config: Optional[
@@ -1207,14 +1276,18 @@ def convert_msi(
         format_type: Output format type (default: "spatialdata")
         dataset_id: Identifier for the dataset
         pixel_size_um: In-plane pixel size in micrometers (None for auto).
-            Any finite positive real number, numpy's included; a bool is
+            One number applies to both axes. A pair ``(x, y)``, as a
+            tuple or a list, states the two separately, for a raster
+            whose pixels are not square: ``(40, 150)``. Each number is
+            any finite positive real number, numpy's included; a bool is
             refused.
         handle_3d: Whether to process as 3D data (default: False). Only
             True or False is accepted, numpy's bool included.
         z_spacing_um: Distance between consecutive slices in micrometers.
             Only meaningful together with ``handle_3d=True``; ignored
             (with a warning) otherwise. ``None`` (default) means nothing
-            supplied one, in which case the in-plane pitch is reused and
+            supplied one, in which case the in-plane pitch is reused (the
+            x one, when the two differ) and
             the store records ``z_spacing_source="assumed_isotropic"``
             so the guess is not mistaken for a measurement. Supply it
             whenever the section thickness is known -- the in-plane

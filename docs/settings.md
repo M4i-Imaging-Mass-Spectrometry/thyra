@@ -19,11 +19,13 @@ conversion stops before it writes anything. Give the size in micrometres:
 thyra input.imzML output.zarr --pixel-size 20
 ```
 
-The same size is used for both directions.
+One number is used for both directions.
 
 ??? advanced "Advanced: pixels that are not square"
     A pixel size read from the file can differ between x and y, and Thyra
-    keeps both. `--pixel-size` always gives square pixels.
+    keeps both. To give both yourself, join them with the letter x:
+    `--pixel-size 40x150` is 40 along x and 150 along y. In Python that is
+    `pixel_size_um=(40, 150)`.
 
 ## Convert one region
 

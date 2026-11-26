@@ -43,6 +43,14 @@ class TestAPitchPastFloat:
         assert "past the largest number a float holds" in text
         assert not out.exists()
 
+    def test_the_y_half_of_a_stated_pair_is_held_to_it_too(self, tmp_path, thyra_logs):
+        """A column of three: only the y pitch of the pair can overflow."""
+        src = _imzml(tmp_path / "col.imzML", [(1, y, 1) for y in (1, 2, 3)])
+        out = tmp_path / "col.zarr"
+        text = _refusal(thyra_logs, str(src), str(out), pixel_size_um=(10.0, 1e308))
+        assert "pixel size of 1e+308 um across 3 pixels along y" in text
+        assert not out.exists()
+
     def test_a_large_pixel_size_that_stays_finite_converts(self, tmp_path):
         src = _imzml(tmp_path / "row.imzML", [(x, 1, 1) for x in (1, 2, 3)])
         assert convert_msi(str(src), str(tmp_path / "row.zarr"), pixel_size_um=1e300)

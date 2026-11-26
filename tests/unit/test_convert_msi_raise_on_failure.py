@@ -143,6 +143,8 @@ class TestArgumentsAndPaths:
             ({"dataset_id": "a b"}, "Dataset ID"),
             ({"format_type": ""}, "Format type"),
             ({"pixel_size_um": -1.0}, "Pixel size"),
+            ({"pixel_size_um": (40.0, -1.0)}, "Pixel size y"),
+            ({"pixel_size_um": (40.0, 150.0, 10.0)}, "got 3 values"),
             ({"handle_3d": "no"}, "handle_3d must be True or False"),
             ({"streaming": "yes"}, "streaming must be"),
             ({"sample_id": 5}, "sample_id"),
