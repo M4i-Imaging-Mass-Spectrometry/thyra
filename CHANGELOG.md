@@ -2,6 +2,13 @@
 
 <!-- version list -->
 
+## [4.8.1](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/compare/v4.8.0...v4.8.1) (2026-11-26)
+
+
+### Bug Fixes
+
+* **quicklook:** draw pixels at their measured width and height ([#576](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/576)) ([eefd3c2](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/commit/eefd3c2ea648dda5660d67e1b4879989643f1262)), closes [#573](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/issues/573)
+
 ## [4.8.0](https://github.com/M4i-Imaging-Mass-Spectrometry/thyra/compare/v4.7.1...v4.8.0) (2026-11-16)
 
 
