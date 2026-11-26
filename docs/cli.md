@@ -86,7 +86,7 @@ thyra input.imzML output.zarr && python analyse.py output.zarr
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--pixel-size FLOAT` | auto-detect | Pixel size in micrometers, applied to **both** axes. Auto-detection keeps the source's own x and y pitch separately, so an anisotropic raster stays anisotropic; passing this declares it square |
+| `--pixel-size SIZE` | auto-detect | Pixel size in micrometers. One number (`40`) applies to **both** axes and declares the raster square. Two numbers joined by the letter `x` (`40x150`) give x, then y, for pixels that are not square. Auto-detection keeps the source's own x and y pitch separately; a size given here replaces both. Anything else, a zero and a negative value are refused before the source is opened |
 | `--region TEXT` | all | Convert one region of a timsTOF `.d`, by `.mis` Area Name or by DB RegionNumber. Checked against the dataset's own region list whether it has one region or several; a value that matches no Area Name is read as a RegionNumber, and says so. A name two Areas share is refused: pass the RegionNumber. On a Waters `.raw` it takes the number of a region the method file declares, counted from 1. Every other format refuses it; [`list_regions`](api.md#listing-regions) lists the regions of any input |
 | `--resample / --no-resample` | enabled | Mass axis resampling. With `--no-resample`, each resampling option given beside it is logged as ignored |
 | `--include-optical / --no-optical` | enabled | Include optical images in output |
@@ -110,6 +110,9 @@ thyra input.imzML output.zarr
 
 # Specify pixel size manually (when metadata is unavailable)
 thyra input.imzML output.zarr --pixel-size 25
+
+# Pixels that are not square: 40 um along x, 150 um along y
+thyra linescan.imzML output.zarr --pixel-size 40x150
 
 # Convert one region, named the way flexImaging names it
 thyra data.d output.zarr --region 03
@@ -563,7 +566,8 @@ thyra volume.imzML output.zarr --handle-3d --pixel-size 50 --z-spacing 20
 
 ### Set `--z-spacing` whenever you know it
 
-`--pixel-size` is the **in-plane** raster pitch. It says nothing about how far
+`--pixel-size` is the **in-plane** raster pitch, one number or `40x150` for x
+and y. It says nothing about how far
 apart consecutive slices are: that distance is set by the microtome that cut the
 sections, not by the stage that rastered them, and the two match only by
 coincidence.

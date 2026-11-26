@@ -253,6 +253,77 @@ class TestWhereTheYPitchComesFrom:
             "y": 17.0,
         }
 
+    def test_a_stated_pair_is_taken_whole(self, tmp_path):
+        """``--pixel-size 17x91``: the caller's y, not the detected one.
+
+        The pair comes in as ``pixel_size_um`` and ``pixel_size_y_um``
+        (issue #570), and outranks the y half a detection record holds.
+        """
+        converter = StreamingSpatialDataConverter(
+            reader=_AnisotropicReader(_config()),
+            output_path=tmp_path / "pair.zarr",
+            dataset_id="m",
+            pixel_size_um=17.0,
+            pixel_size_y_um=91,
+            pixel_size_source=PixelSizeSource.USER_PROVIDED,
+            pixel_size_detection_info=_detection_info(),
+            include_optical=False,
+        )
+        assert converter.convert() is True
+
+        assert converter.pixel_size_um == 17.0
+        assert converter.pixel_size_y_um == 91.0
+        assert isinstance(converter.pixel_size_y_um, float)
+        attrs = _root_attrs(tmp_path / "pair.zarr")
+        assert attrs["pixel_size_x_um"] == 17.0
+        assert attrs["pixel_size_y_um"] == 91.0
+        assert attrs["conversion_options"]["pixel_size_um"] == 17.0
+        assert attrs["conversion_options"]["pixel_size_y_um"] == 91.0
+        table = spatialdata.SpatialData.read(str(tmp_path / "pair.zarr")).tables[KEY]
+        block = table.uns[MSI_METADATA_UNS_KEY]
+        assert block["ms_analysis"]["pixel_size_um"] == {"x": 17.0, "y": 91.0}
+        assert block["provenance"]["pixel_size_source"] == "manual"
+
+    @pytest.mark.parametrize("y", [0.0, -5.0, float("nan"), float("inf"), True, "50"])
+    def test_an_unusable_stated_y_is_refused(self, tmp_path, y):
+        from thyra.errors import ConversionRefused
+
+        with pytest.raises(ConversionRefused, match="pixel_size_y_um"):
+            StreamingSpatialDataConverter(
+                reader=MockMSIReader(_config()),
+                output_path=tmp_path / "bad.zarr",
+                dataset_id="m",
+                pixel_size_um=17.0,
+                pixel_size_y_um=y,
+                pixel_size_source=PixelSizeSource.USER_PROVIDED,
+                include_optical=False,
+            )
+
+    def test_a_stated_pair_is_not_told_how_to_get_square_pixels(
+        self, tmp_path, thyra_logs
+    ):
+        """The hint is for a size the source stated; this one was asked for.
+
+        And it is said once, when the conversion starts.
+        """
+        with thyra_logs("thyra.core.base_converter") as records:
+            converter = StreamingSpatialDataConverter(
+                reader=MockMSIReader(_config()),
+                output_path=tmp_path / "hint.zarr",
+                dataset_id="m",
+                pixel_size_um=PITCH_X,
+                pixel_size_y_um=PITCH_Y,
+                pixel_size_source=PixelSizeSource.USER_PROVIDED,
+                include_optical=False,
+            )
+            assert converter.convert() is True
+        messages = [r.getMessage() for r in records]
+        said = [line for line in messages if "Anisotropic raster" in line]
+        assert len(said) == 1, messages
+        assert "30 um in x, 50 um in y" in said[0]
+        assert "--pixel-size" not in said[0]
+        assert "Using user-specified pixel size: 30.0 x 50.0 um" in messages
+
     def test_a_square_raster_is_unchanged(self, tmp_path):
         """The ordinary case: one number, everywhere, as before."""
         converter = StreamingSpatialDataConverter(
@@ -281,6 +352,10 @@ class TestWhereTheYPitchComesFrom:
         assert any("Anisotropic raster" in r.getMessage() for r in records), [
             r.getMessage() for r in records
         ]
+        assert any(
+            "Pass --pixel-size to declare the raster square" in r.getMessage()
+            for r in records
+        )
 
     def test_float_noise_is_not_an_anisotropic_raster(self, tmp_path, thyra_logs):
         """A detector dividing an extent by a count can land a few ULP apart.

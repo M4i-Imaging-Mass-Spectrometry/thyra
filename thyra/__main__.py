@@ -30,10 +30,11 @@ rather than a second name for it.
 # Configure dependencies to suppress warnings BEFORE any imports
 import logging  # noqa: E402
 import os  # noqa: E402
+import re  # noqa: E402
 import warnings  # noqa: E402
 from math import isfinite  # noqa: E402
 from pathlib import Path  # noqa: E402
-from typing import Any, Dict, List, Literal, Optional, Tuple  # noqa: E402
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union  # noqa: E402
 
 import click  # noqa: E402
 
@@ -88,11 +89,50 @@ def _is_usable_number(value: float) -> bool:
     return isfinite(value) and value > 0
 
 
-def _validate_basic_params(pixel_size: Optional[float], dataset_id: str) -> None:
+#: The two spellings ``--pixel-size`` takes, as every refusal shows them.
+PIXEL_SIZE_FORMS = (
+    "Give one number for both axes (--pixel-size 40), or x and y joined "
+    "by the letter x (--pixel-size 40x150)."
+)
+
+
+class PixelSizeParam(click.ParamType):
+    """``--pixel-size``: one number, or x and y as one token (``40x150``).
+
+    One token, so a second value left out cannot swallow the input path.
+    One number is returned as a float, as the option always gave it; the
+    pair as an ``(x, y)`` tuple. Only the spelling is judged here: whether
+    the numbers can be a pitch is ``_validate_basic_params``' check.
+    """
+
+    name = "SIZE"
+
+    def convert(
+        self, value: Any, param: Optional[click.Parameter], ctx: Optional[click.Context]
+    ) -> Any:
+        """Read the token, or refuse it naming the accepted forms."""
+        if not isinstance(value, str):
+            return value
+        parts = re.split("[xX]", value)
+        try:
+            if len(parts) == 1:
+                return float(value)
+            if len(parts) == 2 and not any(ch.isspace() for ch in value):
+                return float(parts[0]), float(parts[1])
+        except ValueError:
+            pass
+        self.fail(f"{value!r} is not a pixel size. {PIXEL_SIZE_FORMS}", param, ctx)
+
+
+def _validate_basic_params(
+    pixel_size: Optional[Union[float, Tuple[float, float]]], dataset_id: str
+) -> None:
     """Validate basic conversion parameters."""
-    if pixel_size is not None and not _is_usable_number(pixel_size):
+    halves = pixel_size if isinstance(pixel_size, tuple) else (pixel_size,)
+    if any(half is not None and not _is_usable_number(half) for half in halves):
         raise click.BadParameter(
-            "Pixel size must be a finite positive number", param_hint="pixel_size"
+            f"Pixel size must be a finite positive number. {PIXEL_SIZE_FORMS}",
+            param_hint="'--pixel-size'",
         )
     from thyra.convert import dataset_id_problem
 
@@ -908,9 +948,13 @@ class GroupedCommand(click.Command):
 )
 @click.option(
     "--pixel-size",
-    type=float,
+    type=PixelSizeParam(),
     default=None,
-    help="Pixel size in um (default: auto-detect from metadata)",
+    help=(
+        "Pixel size in um: one number for both axes (40), or x and y for "
+        "pixels that are not square (40x150). Default: auto-detect from "
+        "metadata"
+    ),
 )
 @click.option(
     "--region",
@@ -1234,7 +1278,8 @@ class GroupedCommand(click.Command):
     default=None,
     help=(
         "Distance between consecutive slices in um, for --handle-3d. "
-        "Default: reuse the in-plane pixel size and record it as an "
+        "Default: reuse the in-plane pixel size (the x one, when x and y "
+        "differ) and record it as an "
         "assumption -- correct only if sections happen to be one pixel "
         "width apart. Set this whenever the section thickness is known."
     ),
@@ -1245,7 +1290,7 @@ def main(
     format: str,
     dataset_id: str,
     sample_id: Optional[str],
-    pixel_size: Optional[float],
+    pixel_size: Optional[Union[float, Tuple[float, float]]],
     handle_3d: bool,
     z_spacing: Optional[float],
     optimize_chunks: bool,

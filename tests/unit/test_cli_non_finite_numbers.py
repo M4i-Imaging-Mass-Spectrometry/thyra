@@ -82,6 +82,12 @@ class TestTheApiValidatesToo:
         assert _validate_numeric_parameters(value) is False
 
     @pytest.mark.parametrize("value", NON_FINITE)
+    def test_a_non_finite_half_of_a_pair_is_refused(self, value):
+        assert _validate_numeric_parameters((25.0, value)) is False
+        assert _validate_numeric_parameters((value, 25.0)) is False
+        assert _validate_numeric_parameters((25.0, 60.0)) is True
+
+    @pytest.mark.parametrize("value", NON_FINITE)
     def test_a_non_finite_z_spacing_is_refused(self, value):
         assert _validate_numeric_parameters(25.0, value) is False
 

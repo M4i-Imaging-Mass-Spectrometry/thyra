@@ -1521,5 +1521,6 @@ if "pixel_size_x_um" in sdata.attrs:
     and shapes transforms, `obs["spatial_x"]`/`["spatial_y"]`, the pixel
     footprints and `msi_metadata.ms_analysis.pixel_size_um`. Reading only
     `pixel_size_x_um` as *the* pixel size renders such a raster squashed by
-    y/x. Pass `--pixel-size` to declare the raster square instead, which
-    applies one number to both axes.
+    y/x. Pass `--pixel-size` with one number to declare the raster square
+    instead, or with two (`--pixel-size 40x150`) to state both pitches by
+    hand.

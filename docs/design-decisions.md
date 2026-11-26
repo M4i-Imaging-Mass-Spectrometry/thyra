@@ -7470,3 +7470,121 @@ with dense rows.
 - "Give the sibling tables the columns too." Their rows are other
   quantities (per mobility channel, per precursor), so the numbers of the
   summed row would describe a matrix that is not theirs.
+
+---
+
+## D92. The pixel size override takes an x and y pair
+
+**Status:** Implemented (2026-11-26), issue #570. Amends D12. No schema
+change.
+
+**Decision.** `--pixel-size` and `convert_msi(pixel_size_um=...)` take one
+number or two. One number applies to both axes, as before. Two numbers
+state x, then y: `--pixel-size 40x150` on the command line, a tuple or a
+list `(40, 150)` in the API. A stated pair replaces what the source states
+on both axes. D12 said that `--pixel-size` "keeps its meaning of one number
+applied to both axes"; that now holds for one number only.
+
+**Why.** D12 made the store carry one pitch per axis and left one way to
+state a pitch by hand: a number that makes the raster square. A raster
+whose pixels are not square was then right only when the source stated both
+values correctly. Line scans are the common case. The pitch along a line
+comes from the scan speed and the scan time, the pitch across lines from
+the stage step: 40 by 150 um, for example. An imzML written from such a run
+often carries one value, or none. The only way to convert it was to declare
+it square, which is the false statement D12 named as the cost of refusing
+an anisotropic raster.
+
+**The spelling is one token.** `--pixel-size 40x150`: the letter `x` in
+either case, no spaces. The alternative was two values after the flag
+(`--pixel-size 40 150`). It reads better and cannot keep the single value:
+an option takes a fixed number of values, so `--pixel-size 40 input.imzML`
+would read the input path as y. One token cannot swallow an argument, and
+`--pixel-size 40` means what it always meant. A second flag for y was not
+considered: one flag per concept.
+
+**What a store records: the keys it already had.**
+
+| where | one value, `40` | a pair, `40x150` |
+| --- | --- | --- |
+| root `pixel_size_x_um`, `pixel_size_y_um` | 40, 40 | 40, 150 |
+| root `conversion_options` | `pixel_size_um` 40, `pixel_size_y_um` 40 | `pixel_size_um` 40, `pixel_size_y_um` 150 |
+| root `pixel_size_detection_info` | `method: manual`, `detection_successful: false`, `source_format`, `note` | the same four keys and values |
+| `msi_metadata.ms_analysis.pixel_size_um` | `{x: 40, y: 40}` | `{x: 40, y: 150}` |
+| `msi_metadata.provenance.pixel_size_source` | `manual` | `manual` |
+
+The detection record does not repeat the numbers: the root attributes hold
+them. `pixel_size_um` is `{x, y}` in the metadata schema since before D12,
+so no field is added and no schema version moves. A store does not tell
+`40` from `40x40`, and nothing needs it to.
+
+In a store whose `global` system is in micrometres, everything derived
+takes each axis from its own number, as D12 arranged for a detected pair:
+the pixel shapes, the transformation of the TIC image, `obs["spatial_x"]`
+and `obs["spatial_y"]`, `coordinate_systems.global` with its
+`raster_to_global_affine`, and the origin of the `acquisition` system. The
+root attribute `coordinate_bounds` holds raster coordinates and is not
+scaled by a pitch.
+
+A store that places the MSI on an optical image (a FlexImaging alignment,
+D31) is the exception it always was. There the shapes and the TIC image are
+placed by the teaching points, in image pixels, and no pixel size moves
+them. A size given by hand, one number or a pair, reaches the root
+attributes, `conversion_options`, `obs["spatial_x"]` and `obs["spatial_y"]`
+and the metadata block only. This entry does not change that.
+
+**How the pair travels.** `convert.py` settles the pitch as an `(x, y)`
+pair on both routes, detected and stated, and hands the converter x as
+`pixel_size_um` and y as a new constructor argument, `pixel_size_y_um`.
+Until now the y half of a detected pair reached the converter only inside
+`pixel_size_detection_info["detected_y_um"]`, which is read for a detected
+size and for nothing else, and a stated size has no such entry. The
+converter still reads that key when it is built without the argument, so
+code that builds a converter itself gets the store it got before.
+`pixel_size_y_um` is not a keyword of `convert_msi`, which refuses it as
+unknown: the pair is the one spelling there.
+
+**What is refused, before the source is opened.** On the command line:
+`40x`, `x150`, `40x150x10`, `40,150`, any other text, and a zero, a
+negative, a NaN or an infinite number alone or in a pair. Each ends with
+exit status 2 and one `Error` line that shows both accepted forms. In the
+API: a bool, a tuple or list that does not hold two values, a pair holding
+a value that is not a finite number above 0, and anything that is neither a
+number nor a tuple or list. Each returns `False` with one line at ERROR, or
+is raised as `ConversionRefused` with `raise_on_failure=True` (D87). The
+line names the axis of a bad half, and both accepted forms otherwise. A
+numpy array is not taken as a pair: a tuple or a list is.
+
+**A volume takes the pair the same way.** Nothing in the 3D route assumed
+one in-plane pitch; D12 had seen to that. The z-spacing fallback keeps
+D12's rule: with no `--z-spacing` the x pitch is reused, recorded as
+`assumed_isotropic`, and warned about.
+
+**What does not change, measured.** A conversion with one value and a
+conversion with no override write the store they wrote before. Every
+committed fixture that converts was written by the code before this entry
+and by the code with it, on Windows with Python 3.13, and compared with
+`tests/tools/store_identity.py`: every array hashed, every group's and
+array's attributes compared, and every other file of the store.
+
+| conversion | fixtures | arrays | groups | differences |
+| --- | --- | --- | --- | --- |
+| no `--pixel-size` | 10 (nine imzML, one timsTOF `.d`) | 980 | 423 | 0 |
+| `--pixel-size 40` | 13 (twelve imzML, one timsTOF `.d`) | 1168 | 525 | 0 |
+
+The three further fixtures of the second row state no usable pixel size and
+convert only with one given. The harness leaves out the keys that record a
+version or the time of the run. Read without it, the one value that
+differs between the two sides is the root attribute
+`conversion_timestamp`.
+
+**Not measured.** Linux and macOS (CI runs the tests there). Waters, PHI,
+rapifleX, solariX and mzPeak sources: no committed fixture converts through
+them here, and none of their readers is given the pixel size.
+
+**Not done.** A pixel size per region. One axis stated and the other
+detected. Anything about z.
+
+**Known limit.** No committed fixture is a line scan. The pair is tested on
+fixtures that state 50 by 50 um, where it has to win over the source, and
+on a synthetic volume.
