@@ -1,0 +1,271 @@
+# Draft LinkML rendering of the Thyra MSI metadata schema.
+#
+# STATUS: groundwork, not yet the source of truth.  The pydantic models
+# in models.py remain authoritative for what Thyra writes and validates.
+# This file exists so the schema can be discussed and evolved in
+# LinkML-native settings (the mzPeak / PSI-MS imaging discussions, the
+# planned thyra-spec repository) and so a later migration to
+# LinkML-as-source changes no field names.  A unit test keeps the class
+# and slot inventory, required flags, CV bindings and enum meanings in
+# step with the pydantic models; edit both together.
+id: https://M4i-Imaging-Mass-Spectrometry.github.io/thyra/schema/0.6.0/msi_metadata.linkml.yaml
+name: thyra-msi-metadata
+description: >-
+  Versioned, ontology-mapped metadata for mass spectrometry imaging
+  datasets converted to SpatialData.  Stored in
+  table.uns["msi_metadata"]; base fields mirror the METASPACE
+  submission form.
+version: 0.6.0
+prefixes:
+  linkml: https://w3id.org/linkml/
+  MS: http://purl.obolibrary.org/obo/MS_
+  IMS: http://purl.obolibrary.org/obo/IMS_
+  UO: http://purl.obolibrary.org/obo/UO_
+  NCBITaxon: http://purl.obolibrary.org/obo/NCBITaxon_
+  UBERON: http://purl.obolibrary.org/obo/UBERON_
+  CHEBI: http://purl.obolibrary.org/obo/CHEBI_
+default_range: string
+
+enums:
+  PolarityEnum:
+    description: Ion polarity mode.
+    permissible_values:
+      positive:
+        meaning: MS:1000130
+      negative:
+        meaning: MS:1000129
+  PixelSizeSourceEnum:
+    description: How the pixel size was determined.
+    permissible_values:
+      default: {}
+      manual: {}
+      automatic: {}
+
+classes:
+  OntologyTerm:
+    description: A controlled-vocabulary reference (CURIE plus label).
+    attributes:
+      accession:
+        required: true
+      name:
+        required: true
+  PixelSizeUm:
+    description: In-plane raster pitch in micrometres.
+    attributes:
+      x:
+        range: float
+        required: true
+        slot_uri: IMS:1000046
+      y:
+        range: float
+        required: true
+        slot_uri: IMS:1000047
+  ResolvingPower:
+    description: Mass resolving power quoted at a reference m/z.
+    attributes:
+      value:
+        range: float
+        required: true
+      at_mz:
+        range: float
+        required: true
+  SampleInformation:
+    description: What the sample is (METASPACE Sample_Information).
+    attributes:
+      organism: {}
+      organism_term:
+        range: OntologyTerm
+      organism_part: {}
+      organism_part_term:
+        range: OntologyTerm
+      condition: {}
+      sample_growth_conditions: {}
+  SamplePreparation:
+    description: How the sample was prepared (METASPACE Sample_Preparation).
+    attributes:
+      sample_stabilisation: {}
+      tissue_modification: {}
+      matrix: {}
+      matrix_term:
+        range: OntologyTerm
+      matrix_application: {}
+      solvent: {}
+  MSAnalysis:
+    description: How the data was acquired (METASPACE MS_Analysis).
+    attributes:
+      polarity:
+        range: PolarityEnum
+        slot_uri: MS:1000465
+      polarity_term:
+        range: OntologyTerm
+      ionisation_source:
+        slot_uri: MS:1000008
+      ionisation_source_term:
+        range: OntologyTerm
+      analyzer:
+        slot_uri: MS:1000443
+      analyzer_term:
+        range: OntologyTerm
+      instrument_model:
+        slot_uri: MS:1000031
+      detector_resolving_power:
+        range: ResolvingPower
+        slot_uri: MS:1000800
+      pixel_size_um:
+        range: PixelSizeUm
+        required: true
+      ion_mobility:
+        range: IonMobility
+      fragmentation:
+        range: Fragmentation
+  Fragmentation:
+    description: >-
+      Whether, and of what, the acquisition fragmented its ions; the m/z
+      axis of an MS/MS store is fragment m/z, which the axis cannot say.
+    attributes:
+      present:
+        range: boolean
+        required: true
+      ms_level:
+        range: integer
+        required: true
+        slot_uri: MS:1000511
+      constant_across_pixels:
+        range: boolean
+      merges_precursors:
+        range: boolean
+      dissociation_term:
+        range: OntologyTerm
+      windows:
+        range: IsolationWindow
+        multivalued: true
+      resolved_table: {}
+  IsolationWindow:
+    description: >-
+      One precursor isolation, spanning target minus lower_offset to
+      target plus upper_offset, named as mzPeak names it.
+    attributes:
+      target:
+        range: float
+        required: true
+        slot_uri: MS:1000827
+      lower_offset:
+        range: float
+        slot_uri: MS:1000828
+      upper_offset:
+        range: float
+        slot_uri: MS:1000829
+      collision_energy:
+        range: float
+        slot_uri: MS:1000045
+      scan_begin:
+        range: integer
+      scan_end:
+        range: integer
+  IonMobility:
+    description: >-
+      Whether, and how, the acquisition separated ions by mobility; the
+      MSI table is summed over that dimension.
+    attributes:
+      present:
+        range: boolean
+        required: true
+      separation:
+        slot_uri: MS:1002892
+      separation_term:
+        range: OntologyTerm
+      unit_term:
+        range: OntologyTerm
+      range_lower:
+        range: float
+      range_upper:
+        range: float
+      num_scans:
+        range: integer
+      resolved_table: {}
+      grid:
+        range: MobilityGrid
+  MobilityGrid:
+    description: >-
+      The common mobility grid a mobility-resolved table was binned onto;
+      the heatmap on the summed table shares its channels.
+    attributes:
+      law:
+        required: true
+      lower:
+        range: float
+        required: true
+      upper:
+        range: float
+        required: true
+      n_channels:
+        range: integer
+        required: true
+  Acquisition:
+    description: >-
+      When the acquisition was run and with what laser settings; every
+      field is unset when the source does not report it.
+    attributes:
+      # ISO 8601 date and time; a UTC offset only when the source has one.
+      acquisition_datetime: {}
+      laser_power_percent:
+        range: float
+      laser_frequency_hz:
+        range: float
+        slot_uri: IMS:1006000
+      shots_per_pixel:
+        range: integer
+        slot_uri: IMS:1006001
+      # A file name, never a path.
+      method_file: {}
+  SoftwareRef:
+    description: A software agent, the way mzQC records analysis software.
+    attributes:
+      name:
+        required: true
+      version:
+        required: true
+      uri: {}
+  ProcessingStep:
+    description: One processing action between the raw data and this store.
+    attributes:
+      name:
+        required: true
+      software:
+        range: SoftwareRef
+        required: true
+      # Free-form mapping of parameter name to scalar value; the exact
+      # LinkML rendering is one of the questions for the working group.
+      parameters: {}
+  Provenance:
+    description: Who wrote the block and from what.
+    attributes:
+      thyra_version:
+        required: true
+      source_format: {}
+      source_path: {}
+      pixel_size_source:
+        range: PixelSizeSourceEnum
+  MSIMetadata:
+    description: The versioned MSI metadata document.
+    tree_root: true
+    attributes:
+      # Required on disk; the pydantic model fills it on construction.
+      schema_version:
+        required: true
+      sample:
+        range: SampleInformation
+      preparation:
+        range: SamplePreparation
+      ms_analysis:
+        range: MSAnalysis
+        required: true
+      acquisition:
+        range: Acquisition
+      processing:
+        range: ProcessingStep
+        multivalued: true
+        inlined_as_list: true
+      provenance:
+        range: Provenance
+        required: true
