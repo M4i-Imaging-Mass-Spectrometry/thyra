@@ -145,6 +145,21 @@ class MobilityAxis:
         """Whether every pixel is described by the same ``values`` array."""
         return self.values is not None
 
+    def _finite_range(self) -> Optional[Tuple[float, float]]:
+        """Finite ``(lower, upper)`` span from ``acq_range`` or ``values``."""
+        if self.acq_range is not None:
+            lower, upper = float(self.acq_range[0]), float(self.acq_range[1])
+            if math.isfinite(lower) and math.isfinite(upper):
+                return (lower, upper)
+        if self.values is not None:
+            # Over the finite values only: np.min passes a NaN through, and
+            # the builder would then have no range to write (#503).
+            finite = np.asarray(self.values, dtype=np.float64)
+            finite = finite[np.isfinite(finite)]
+            if finite.size:
+                return (float(finite.min()), float(finite.max()))
+        return None
+
     def to_uns(self) -> Dict[str, Any]:
         """The axis as a plain ``uns`` block: plain-name keys, no colons.
 
@@ -170,9 +185,7 @@ class MobilityAxis:
             # stores written before it are read the same way.
             block["n_scans"] = int(self.values.size)
             block["n_values"] = int(self.values.size)
-        lo_hi = self.acq_range
-        if lo_hi is None and self.values is not None and self.values.size:
-            lo_hi = (float(np.min(self.values)), float(np.max(self.values)))
+        lo_hi = self._finite_range()
         if lo_hi is not None:
             block["acq_range"] = np.array(
                 [float(lo_hi[0]), float(lo_hi[1])], dtype=np.float64
@@ -199,14 +212,7 @@ class MobilityAxis:
             report["unit_accession"] = self.unit_accession
         if self.array_accession is not None:
             report["array_accession"] = self.array_accession
-        lo_hi = self.acq_range
-        if lo_hi is None and self.values is not None:
-            # Over the finite values only: np.min passes a NaN through, and
-            # the builder would then have no range to write (#503).
-            finite = np.asarray(self.values, dtype=np.float64)
-            finite = finite[np.isfinite(finite)]
-            if finite.size:
-                lo_hi = (float(finite.min()), float(finite.max()))
+        lo_hi = self._finite_range()
         if lo_hi is not None:
             report["range"] = [float(lo_hi[0]), float(lo_hi[1])]
         if self.values is not None:
