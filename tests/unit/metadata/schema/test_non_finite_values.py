@@ -153,6 +153,72 @@ class TestTheMobilityRange:
 
         assert "range" not in axis.to_extractor_report()
 
+    def test_uns_block_spans_the_finite_values(self):
+        axis = MobilityAxis(
+            kind_accession="MS:1002476",
+            kind_name="ion mobility drift time",
+            unit_accession="UO:0000028",
+            unit_name="millisecond",
+            values=np.array([np.nan, 0.5, 7.25, np.inf]),
+        )
+
+        block = axis.to_uns()
+
+        np.testing.assert_array_equal(block["acq_range"], [0.5, 7.25])
+        assert (block["range_lower"], block["range_upper"]) == (0.5, 7.25)
+
+    def test_uns_block_omits_range_when_no_value_is_finite(self):
+        axis = MobilityAxis(
+            kind_accession="MS:1002476",
+            kind_name="ion mobility drift time",
+            unit_accession="UO:0000028",
+            unit_name="millisecond",
+            values=np.array([np.nan, np.inf]),
+        )
+
+        block = axis.to_uns()
+
+        assert "acq_range" not in block
+        assert "range_lower" not in block
+        assert "range_upper" not in block
+
+    @pytest.mark.parametrize("value", NON_FINITE, ids=NON_FINITE_IDS)
+    @pytest.mark.parametrize("edge", [0, 1], ids=["lower", "upper"])
+    def test_uns_and_report_drop_non_finite_acq_range(self, value, edge):
+        bounds = [0.9, 1.99]
+        bounds[edge] = value
+        axis = MobilityAxis(
+            kind_accession="MS:1002815",
+            kind_name="inverse reduced ion mobility",
+            unit_accession="MS:1002814",
+            unit_name="volt-second per square centimeter",
+            acq_range=(bounds[0], bounds[1]),
+        )
+
+        block = axis.to_uns()
+
+        assert "acq_range" not in block
+        assert "range_lower" not in block
+        assert "range_upper" not in block
+        assert "range" not in axis.to_extractor_report()
+
+    @pytest.mark.parametrize("value", NON_FINITE, ids=NON_FINITE_IDS)
+    def test_non_finite_acq_range_falls_back_to_finite_values(self, value):
+        axis = MobilityAxis(
+            kind_accession="MS:1002815",
+            kind_name="inverse reduced ion mobility",
+            unit_accession="MS:1002814",
+            unit_name="volt-second per square centimeter",
+            values=np.array([np.nan, 0.9, 1.99]),
+            acq_range=(value, 1.99),
+        )
+
+        block = axis.to_uns()
+
+        np.testing.assert_array_equal(block["acq_range"], [0.9, 1.99])
+        assert (block["range_lower"], block["range_upper"]) == (0.9, 1.99)
+        assert axis.to_extractor_report()["range"] == [0.9, 1.99]
+
     @pytest.mark.parametrize("value", NON_FINITE, ids=NON_FINITE_IDS)
     def test_a_grid_with_a_non_finite_edge_is_dropped(self, value):
         assert (
